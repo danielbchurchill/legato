@@ -1,6 +1,7 @@
 import chokidar, { type FSWatcher } from "chokidar";
 import type Database from "better-sqlite3";
 import { broadcast } from "../ws.js";
+import { isSelfWrite } from "../tagwrite/guard.js";
 import { markMissing, scanFile } from "./scanner.js";
 import { isAudioFile } from "./walk.js";
 
@@ -37,6 +38,16 @@ export function watchLibraryRoot(db: Database.Database, libraryRootId: number, r
   const handleChange = async (filePath: string) => {
     if (!isAudioFile(filePath)) return;
     try {
+      if (await isSelfWrite(db, filePath)) {
+        // Our own write settling, not an external edit — we already know
+        // the new values (we just wrote them), so skip the full re-parse
+        // + re-collapse + re-enrich-check cycle entirely. This is the
+        // actual mechanism behind "no feedback loop," not just a filter
+        // on top of the normal path.
+        db.prepare("UPDATE files SET last_seen_at = datetime('now') WHERE file_path = ?").run(filePath);
+        broadcast("scan:file", { libraryRootId, filePath, outcome: "self-write-settled" });
+        return;
+      }
       const outcome = await scanFile(db, libraryRootId, filePath);
       broadcast("scan:file", { libraryRootId, filePath, outcome });
     } catch (err) {
