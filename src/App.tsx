@@ -8,6 +8,7 @@ import Canvas from './canvas/Canvas'
 import ArticlePanel from './canvas/ArticlePanel'
 import { usePlayback } from './playback/usePlayback'
 import NowPlayingBar from './playback/NowPlayingBar'
+import HygieneView from './hygiene/HygieneView'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -172,6 +173,7 @@ function DebugSpikes() {
 function MainApp() {
   const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
+  const [hygieneOpen, setHygieneOpen] = useState(false)
   const playback = usePlayback()
 
   useEffect(() => {
@@ -202,6 +204,30 @@ function MainApp() {
         onStop={playback.stop}
         onSkip={playback.skip}
       />
+      <button
+        onClick={() => setHygieneOpen(true)}
+        style={{
+          position: 'fixed',
+          top: 12,
+          right: 12,
+          zIndex: 15,
+          padding: '6px 12px',
+          fontFamily: 'monospace',
+          fontSize: 12,
+          cursor: 'pointer',
+        }}
+      >
+        hygiene
+      </button>
+      {hygieneOpen && (
+        <HygieneView
+          onSelectNode={(id) => {
+            setSelectedNodeId(id)
+            setHygieneOpen(false)
+          }}
+          onClose={() => setHygieneOpen(false)}
+        />
+      )}
     </>
   )
 }

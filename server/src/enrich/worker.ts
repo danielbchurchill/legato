@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { broadcast } from "../ws.js";
 import { searchRecording } from "./mbClient.js";
 import { looksSuspicious } from "./sanityCheck.js";
 import { pickBestMatch } from "./textSearch.js";
@@ -84,12 +85,14 @@ async function processJob(db: Database.Database, job: EnrichJob): Promise<void> 
       // nothing will change on retry.
       recordProvenance(db, job.node_id, null, 0, "no local artist tag to search with");
       db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
+      broadcast("hygiene:changed", { nodeId: job.node_id });
       return;
     }
 
     if (looksSuspicious(input.title) || looksSuspicious(input.artist)) {
       recordProvenance(db, job.node_id, null, 0, "tag looks malformed — skipped search, needs a hygiene fix first");
       db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
+      broadcast("hygiene:changed", { nodeId: job.node_id });
       return;
     }
 
@@ -113,6 +116,7 @@ async function processJob(db: Database.Database, job: EnrichJob): Promise<void> 
     }
 
     db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
+    broadcast("hygiene:changed", { nodeId: job.node_id });
   } catch (err) {
     // Network/API failures are transient — back off and retry, unlike the
     // terminal outcomes above (suspicious/ambiguous/no_match are real

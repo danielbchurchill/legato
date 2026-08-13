@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import { collapseFile } from "../match/collapse.js";
 import { deriveLocalEdges } from "../match/edges.js";
+import { broadcast } from "../ws.js";
 
 export function mergeOverridesRoutes(db: Database.Database) {
   return async function routes(app: FastifyInstance) {
@@ -44,6 +45,7 @@ export function mergeOverridesRoutes(db: Database.Database) {
 
         await collapseFile(db, fileId);
         deriveLocalEdges(db, fileId);
+        broadcast("hygiene:changed", { fileId });
 
         return override;
       },
