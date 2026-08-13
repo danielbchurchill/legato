@@ -1,0 +1,65 @@
+import chokidar, { type FSWatcher } from "chokidar";
+import type Database from "better-sqlite3";
+import { broadcast } from "../ws.js";
+import { markMissing, scanFile } from "./scanner.js";
+import { isAudioFile } from "./walk.js";
+
+const activeWatchers = new Map<number, FSWatcher>();
+
+// Started once a library root's initial full scan completes. Reacts to a
+// single changed/added/removed path directly via scanFile()/markMissing()
+// instead of re-walking the whole root — a one-file tag edit produces a
+// one-file incremental scan, not a full rewalk.
+export function watchLibraryRoot(db: Database.Database, libraryRootId: number, rootPath: string): void {
+  if (activeWatchers.has(libraryRootId)) return;
+
+  const watcher = chokidar.watch(rootPath, {
+    ignoreInitial: true,
+    // Wait for writes to settle before reacting — a tag write or an
+    // in-progress copy shouldn't be read mid-write.
+    awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
+    // Filesystem-junk directories chokidar can't (and shouldn't) watch:
+    // ext4's lost+found is root-only (real EACCES hit scanning /mnt/music
+    // on this machine), the rest are the equivalent junk on other OSes/tools.
+    ignored: [/(^|[/\\])lost\+found($|[/\\])/, /(^|[/\\])\.Trash-\d+($|[/\\])/, /System Volume Information/],
+  });
+
+  // An unwatchable subdirectory (permissions, a broken symlink, races with
+  // deletion) must not take the whole server down — chokidar emits 'error'
+  // as a plain EventEmitter event, and Node kills the process on an
+  // unhandled one by default.
+  watcher.on("error", (err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[watcher] ${message}`);
+    broadcast("scan:error", { libraryRootId, error: message });
+  });
+
+  const handleChange = async (filePath: string) => {
+    if (!isAudioFile(filePath)) return;
+    try {
+      const outcome = await scanFile(db, libraryRootId, filePath);
+      broadcast("scan:file", { libraryRootId, filePath, outcome });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      broadcast("scan:error", { libraryRootId, filePath, error: message });
+    }
+  };
+
+  watcher.on("add", handleChange);
+  watcher.on("change", handleChange);
+  watcher.on("unlink", (filePath) => {
+    if (!isAudioFile(filePath)) return;
+    markMissing(db, filePath);
+    broadcast("scan:file", { libraryRootId, filePath, outcome: "missing" });
+  });
+
+  activeWatchers.set(libraryRootId, watcher);
+}
+
+export function unwatchLibraryRoot(libraryRootId: number): void {
+  const watcher = activeWatchers.get(libraryRootId);
+  if (watcher) {
+    void watcher.close();
+    activeWatchers.delete(libraryRootId);
+  }
+}

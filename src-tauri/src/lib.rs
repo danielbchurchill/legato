@@ -1,9 +1,14 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use rodio::{Decoder, OutputStreamBuilder, Sink};
+use tauri::Manager;
+
+mod server_process;
+use server_process::ServerProcess;
 
 // Phase 4 of THE SPIKE (see projects/Legato.md): does native decode +
 // gapless playback via rodio/cpal sidestep the WebKitGTK Web Audio +
@@ -68,6 +73,8 @@ fn play_native_gapless_spike() -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
+    .plugin(tauri_plugin_dialog::init())
+    .manage(ServerProcess(Mutex::new(None)))
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -76,9 +83,28 @@ pub fn run() {
             .build(),
         )?;
       }
+
+      // Embed the server by default — it must start invisibly with the app,
+      // not require a manually-launched second process. See the MVP
+      // roadmap's M0 milestone and Feishin-Competitive-Analysis.md, which
+      // found the lack of this exact behavior to be the load-bearing UX
+      // cost of a client-server split.
+      match server_process::spawn(app.handle()) {
+        Ok(child) => {
+          *app.state::<ServerProcess>().0.lock().unwrap() = Some(child);
+          server_process::install_signal_handler(app.handle());
+        }
+        Err(e) => log::error!("[server] {e}"),
+      }
+
       Ok(())
     })
     .invoke_handler(tauri::generate_handler![play_native_gapless_spike])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+    .build(tauri::generate_context!())
+    .expect("error while building tauri application")
+    .run(|app_handle, event| {
+      if let tauri::RunEvent::Exit = event {
+        server_process::kill(&app_handle.state::<ServerProcess>());
+      }
+    });
 }

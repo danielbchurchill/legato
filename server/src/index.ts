@@ -2,30 +2,92 @@ import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import cors from "@fastify/cors";
+import websocket from "@fastify/websocket";
 import Fastify from "fastify";
+import { openDb } from "./db.js";
+import { PORT } from "./config.js";
+import { healthRoutes } from "./routes/health.js";
+import { settingsRoutes } from "./routes/settings.js";
+import { libraryRootsRoutes } from "./routes/library-roots.js";
+import { scanRoutes } from "./routes/scan.js";
+import { nodesRoutes } from "./routes/nodes.js";
+import { mergeOverridesRoutes } from "./routes/merge-overrides.js";
+import { layoutRoutes } from "./routes/layout.js";
+import { edgesRoutes } from "./routes/edges.js";
+import { searchRoutes } from "./routes/search.js";
+import { wsRoutes } from "./routes/ws.js";
+import { watchLibraryRoot } from "./scan/watcher.js";
 
-const PORT = 8899;
-
-// THE SPIKE: prove server-side "any source -> PCM -> FLAC" transcode +
-// streaming works, before building the real scan/enrich/decode service.
-const MUSIC_ROOT = path.resolve(
-  process.env.LEGATO_SPIKE_MUSIC_ROOT ?? "/mnt/music/Music/The Beatles/Abbey Road",
-);
+const db = openDb();
 
 const app = Fastify({ logger: true });
 
-await app.register(cors, { origin: true });
+// @fastify/cors's actual default methods list is just GET,HEAD,POST — PUT/
+// PATCH/DELETE are silently preflight-rejected by the browser otherwise.
+// Real bug hit live: PATCH /nodes/:id/position failed with a bare
+// "TypeError: Failed to fetch" from the browser (the server-side route
+// itself was always fine — curl bypasses preflight entirely, which is
+// exactly why this needs testing in an actual browser, not just curl).
+await app.register(cors, { origin: true, methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] });
+await app.register(websocket);
 
-app.get("/tracks", async () => {
-  const entries = await readdir(MUSIC_ROOT);
+await app.register(healthRoutes(), { prefix: "/api/v1" });
+await app.register(settingsRoutes(db), { prefix: "/api/v1" });
+await app.register(libraryRootsRoutes(db), { prefix: "/api/v1" });
+await app.register(scanRoutes(db), { prefix: "/api/v1" });
+await app.register(nodesRoutes(db), { prefix: "/api/v1" });
+await app.register(mergeOverridesRoutes(db), { prefix: "/api/v1" });
+await app.register(layoutRoutes(db), { prefix: "/api/v1" });
+await app.register(edgesRoutes(db), { prefix: "/api/v1" });
+await app.register(searchRoutes(db), { prefix: "/api/v1" });
+await app.register(wsRoutes(), { prefix: "/api/v1" });
+
+// Resume watching every already-configured root across restarts — a root
+// added in a previous session shouldn't need a manual re-scan to notice
+// files that changed while the server was down. (A full catch-up scan of
+// changes made while offline is still a manual POST /scan for now — the
+// watcher only sees events that occur while it's running.)
+for (const root of db
+  .prepare("SELECT id, path FROM library_roots WHERE enabled = 1")
+  .all() as { id: number; path: string }[]) {
+  watchLibraryRoot(db, root.id, root.path);
+}
+
+// --- THE SPIKE (debug-only smoke test routes, kept alive for src/PlaybackSpike.tsx) ---
+//
+// Real recursive folder scan + tag extraction lands in M1; these two routes
+// still do the original flat-readdir/ffmpeg-passthrough spike behavior, but
+// now read their root from the first enabled library_roots row instead of a
+// hardcoded default — no shipped code should point at one specific machine's
+// folder layout. If no root is configured yet, they fail closed.
+function activeLibraryRoot(): string | null {
+  const row = db
+    .prepare("SELECT path FROM library_roots WHERE enabled = 1 ORDER BY id LIMIT 1")
+    .get() as { path: string } | undefined;
+  return row?.path ?? null;
+}
+
+app.get("/tracks", async (_request, reply) => {
+  const root = activeLibraryRoot();
+  if (!root) {
+    reply.code(503);
+    return { error: "no library root configured" };
+  }
+  const entries = await readdir(root);
   return entries.filter((f) => f.toLowerCase().endsWith(".flac")).sort();
 });
 
 app.get<{ Params: { filename: string } }>("/stream/:filename", async (request, reply) => {
-  const filename = decodeURIComponent(request.params.filename);
-  const resolved = path.resolve(MUSIC_ROOT, filename);
+  const root = activeLibraryRoot();
+  if (!root) {
+    reply.code(503);
+    return { error: "no library root configured" };
+  }
 
-  if (!resolved.startsWith(MUSIC_ROOT + path.sep)) {
+  const filename = decodeURIComponent(request.params.filename);
+  const resolved = path.resolve(root, filename);
+
+  if (!resolved.startsWith(root + path.sep)) {
     reply.code(400);
     return { error: "invalid filename" };
   }
@@ -65,5 +127,5 @@ app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
     app.log.error(err);
     process.exit(1);
   }
-  app.log.info(`legato-server spike listening at ${address}`);
+  app.log.info(`legato-server listening at ${address}`);
 });

@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import PlaybackSpike from './PlaybackSpike'
+import LibrarySetup, { Centered } from './LibrarySetup'
+import { useServerReady } from './hooks/useServerReady'
+import Canvas from './canvas/Canvas'
+import ArticlePanel from './canvas/ArticlePanel'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -115,7 +119,10 @@ const TABS = {
   playback: { label: 'Playback spike', component: PlaybackSpike },
 } as const
 
-export default function App() {
+// THE SPIKE's two demos, kept alive as manual smoke tests (not deleted) but
+// moved behind ?debug=1 — they're dev tooling, not the app a real library
+// folder points at. See the MVP roadmap's M0 milestone.
+function DebugSpikes() {
   const [tab, setTab] = useState<keyof typeof TABS>('canvas')
   const Active = TABS[tab].component
 
@@ -155,4 +162,45 @@ export default function App() {
       </div>
     </div>
   )
+}
+
+// Once a library root is configured, the canvas is the front door — matches
+// LibrarySetup's own scope note (M0's job is just proving the folder-picker
+// round trip; the canvas taking over from there is M3's).
+function MainApp() {
+  const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
+  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
+
+  useEffect(() => {
+    fetch('http://127.0.0.1:8899/api/v1/library-roots')
+      .then((r) => r.json())
+      .then((roots: unknown[]) => setHasLibrary(roots.length > 0))
+  }, [])
+
+  if (hasLibrary === null) return <Centered>loading library…</Centered>
+  if (!hasLibrary) return <LibrarySetup />
+
+  return (
+    <>
+      <Canvas selectedNodeId={selectedNodeId} onSelectNode={setSelectedNodeId} />
+      {selectedNodeId != null && (
+        <ArticlePanel
+          nodeId={selectedNodeId}
+          onSelectNode={setSelectedNodeId}
+          onClose={() => setSelectedNodeId(null)}
+        />
+      )}
+    </>
+  )
+}
+
+export default function App() {
+  const serverReady = useServerReady()
+  const debug = new URLSearchParams(window.location.search).has('debug')
+
+  if (!serverReady) {
+    return <Centered>starting legato-server…</Centered>
+  }
+
+  return debug ? <DebugSpikes /> : <MainApp />
 }
