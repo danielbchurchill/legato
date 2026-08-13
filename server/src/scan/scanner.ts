@@ -4,6 +4,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type Database from "better-sqlite3";
 import { recomputeAllSeeds } from "../layout/seed.js";
+import { enqueueEnrichmentIfNeeded } from "../enrich/queue.js";
 import { collapseFile } from "../match/collapse.js";
 import { deriveLocalEdges } from "../match/edges.js";
 import { parseTags } from "./tags.js";
@@ -137,6 +138,11 @@ export async function scanFile(
   // holding a SQLite write lock open while it waits on a child process.
   await collapseFile(db, fileId);
   deriveLocalEdges(db, fileId);
+
+  const { recording_node_id: currentNodeId } = db
+    .prepare("SELECT recording_node_id FROM files WHERE id = ?")
+    .get(fileId) as { recording_node_id: number };
+  enqueueEnrichmentIfNeeded(db, currentNodeId);
 
   return outcome;
 }

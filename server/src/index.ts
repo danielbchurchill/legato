@@ -16,7 +16,9 @@ import { layoutRoutes } from "./routes/layout.js";
 import { edgesRoutes } from "./routes/edges.js";
 import { searchRoutes } from "./routes/search.js";
 import { wsRoutes } from "./routes/ws.js";
+import { enrichRoutes } from "./routes/enrich.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
+import { runDueJobs } from "./enrich/worker.js";
 
 const db = openDb();
 
@@ -41,6 +43,7 @@ await app.register(layoutRoutes(db), { prefix: "/api/v1" });
 await app.register(edgesRoutes(db), { prefix: "/api/v1" });
 await app.register(searchRoutes(db), { prefix: "/api/v1" });
 await app.register(wsRoutes(), { prefix: "/api/v1" });
+await app.register(enrichRoutes(db), { prefix: "/api/v1" });
 
 // Resume watching every already-configured root across restarts — a root
 // added in a previous session shouldn't need a manual re-scan to notice
@@ -52,6 +55,16 @@ for (const root of db
   .all() as { id: number; path: string }[]) {
   watchLibraryRoot(db, root.id, root.path);
 }
+
+// Persistent queue, not a fire-and-forget in-memory one: enrich_jobs rows
+// survive a restart, and this poller just needs to notice them again — no
+// separate "resume the queue" step required. mbClient.ts's own throttle
+// keeps every tick's requests at ~1req/sec regardless of how many jobs
+// are due.
+const ENRICH_POLL_INTERVAL_MS = 5000;
+setInterval(() => {
+  void runDueJobs(db);
+}, ENRICH_POLL_INTERVAL_MS);
 
 // --- THE SPIKE (debug-only smoke test routes, kept alive for src/PlaybackSpike.tsx) ---
 //
