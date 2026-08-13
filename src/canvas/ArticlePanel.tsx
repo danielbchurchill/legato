@@ -159,10 +159,12 @@ export default function ArticlePanel({
   nodeId,
   onSelectNode,
   onClose,
+  onPlay,
 }: {
   nodeId: number
   onSelectNode: (id: number) => void
   onClose: () => void
+  onPlay: (nodeId: number, title: string) => void
 }) {
   const [node, setNode] = useState<NodeDetail | null>(null)
 
@@ -221,7 +223,15 @@ export default function ArticlePanel({
           <div style={{ opacity: 0.6, marginBottom: 12 }}>{node.type}</div>
 
           {node.recording && (
-            <div style={{ marginBottom: 8 }}>duration: {formatDuration(node.recording.canonical_duration_ms)}</div>
+            <div style={{ marginBottom: 8 }}>
+              duration: {formatDuration(node.recording.canonical_duration_ms)}{' '}
+              <button
+                onClick={() => onPlay(node.id, node.title)}
+                style={{ fontFamily: 'monospace', fontSize: 11, cursor: 'pointer' }}
+              >
+                ▶ play
+              </button>
+            </div>
           )}
 
           {node.facts.length > 0 && (

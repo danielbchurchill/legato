@@ -6,6 +6,8 @@ import LibrarySetup, { Centered } from './LibrarySetup'
 import { useServerReady } from './hooks/useServerReady'
 import Canvas from './canvas/Canvas'
 import ArticlePanel from './canvas/ArticlePanel'
+import { usePlayback } from './playback/usePlayback'
+import NowPlayingBar from './playback/NowPlayingBar'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -170,6 +172,7 @@ function DebugSpikes() {
 function MainApp() {
   const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
+  const playback = usePlayback()
 
   useEffect(() => {
     fetch('http://127.0.0.1:8899/api/v1/library-roots')
@@ -188,8 +191,17 @@ function MainApp() {
           nodeId={selectedNodeId}
           onSelectNode={setSelectedNodeId}
           onClose={() => setSelectedNodeId(null)}
+          onPlay={playback.playNode}
         />
       )}
+      <NowPlayingBar
+        status={playback.status}
+        title={playback.currentTitle}
+        onPause={playback.pause}
+        onResume={playback.resume}
+        onStop={playback.stop}
+        onSkip={playback.skip}
+      />
     </>
   )
 }

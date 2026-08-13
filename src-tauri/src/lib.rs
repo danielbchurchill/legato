@@ -7,7 +7,9 @@ use std::time::Instant;
 use rodio::{Decoder, OutputStreamBuilder, Sink};
 use tauri::Manager;
 
+mod playback;
 mod server_process;
+use playback::PlaybackState;
 use server_process::ServerProcess;
 
 // Phase 4 of THE SPIKE (see projects/Legato.md): does native decode +
@@ -75,6 +77,7 @@ pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
     .manage(ServerProcess(Mutex::new(None)))
+    .manage(PlaybackState::new())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -99,7 +102,16 @@ pub fn run() {
 
       Ok(())
     })
-    .invoke_handler(tauri::generate_handler![play_native_gapless_spike])
+    .invoke_handler(tauri::generate_handler![
+      play_native_gapless_spike,
+      playback::queue_enqueue,
+      playback::queue_play,
+      playback::queue_pause,
+      playback::queue_stop,
+      playback::queue_seek,
+      playback::queue_skip,
+      playback::queue_status,
+    ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")
     .run(|app_handle, event| {
