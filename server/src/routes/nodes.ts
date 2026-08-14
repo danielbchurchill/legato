@@ -11,10 +11,14 @@ export function nodesRoutes(db: Database.Database) {
       // them — see match/collapse.ts) never get one, so they never show up
       // here. Covers both recording nodes (year-based) and artist/release
       // nodes (centroid-based) — see layout/seed.ts.
+      // has_cover lets the canvas decide which nodes to render as artwork
+      // without probing the cover endpoint once per node and eating a 404 for
+      // every node that never had art.
       return db
         .prepare(
           `SELECT n.id, n.type, n.title, n.mbid, r.canonical_duration_ms,
-                  p.seed_x, p.seed_y, p.user_x, p.user_y
+                  p.seed_x, p.seed_y, p.user_x, p.user_y,
+                  EXISTS (SELECT 1 FROM cover_art ca WHERE ca.node_id = n.id) AS has_cover
            FROM nodes n
            JOIN positions p ON p.node_id = n.id
            LEFT JOIN recordings r ON r.node_id = n.id

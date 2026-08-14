@@ -191,23 +191,12 @@ export default function ArticlePanel({
   const incomingRecordings = node?.edges.filter((e) => e.direction === 'in' && e.other_type === 'recording') ?? []
   const manualEdges = node?.edges.filter((e) => e.source === 'manual') ?? []
 
+  // Renders inside the shell's right-hand Panel, which owns the glass, the
+  // padding and the scrolling. The inline styles below are pre-design-pass
+  // code kept working until the node-detail surface is redesigned — they are
+  // not a pattern to copy. See DESIGN.md.
   return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        right: 0,
-        bottom: 0,
-        width: 340,
-        background: 'rgba(17,17,17,0.97)',
-        borderLeft: '1px solid #333',
-        color: '#fff',
-        fontFamily: 'monospace',
-        fontSize: 13,
-        padding: 16,
-        overflowY: 'auto',
-      }}
-    >
+    <div style={{ color: '#fff', fontFamily: 'monospace', fontSize: 13 }}>
       <button
         onClick={onClose}
         style={{ float: 'right', background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}

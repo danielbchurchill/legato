@@ -47,12 +47,12 @@
 
   /* ---- Graph ---------------------------------------------------------- */
 
-  /* Edge color encodes relationship type. Purple and blue are the same color
-   * hue-rotated (76% sat, 66% light); the green as drawn is not — see DESIGN.md
-   * "Edge palette" for the open question about normalizing it. */
+  /* Edge color encodes relationship type. One family: identical saturation and
+   * lightness, hue rotated ~80deg per step. New relationship types continue
+   * around the wheel at 76%/66% rather than inventing a fourth kind of color. */
   --color-edge-performed-by: #bf68eb; /* 283deg 76% 66% */
   --color-edge-appears-on: #68b6eb; /*   203deg 76% 66% */
-  --color-edge-released-in: #327f2b; /*  115deg 50% 33% */
+  --color-edge-released-in: #68eb79; /*  115deg 76% 66% */
 
   /* Selection ring drawn around a node, not a fill change on it. */
   --color-node-ring: #ffffff;

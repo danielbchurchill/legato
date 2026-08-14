@@ -12,6 +12,8 @@ export type GraphNode = {
   seed_y: number | null
   user_x: number | null
   user_y: number | null
+  /** SQLite EXISTS, so 0 or 1 rather than a boolean. */
+  has_cover: number
 }
 
 export type GraphEdge = {

@@ -45,4 +45,36 @@ describe("computeSeeds", () => {
     const seed = seeds.get(1)!;
     expect(seed.x).toBeLessThan(0);
   });
+
+  // Regression: the unknown-year region used to be a fixed -1200 while real
+  // years derive their x from the calendar year (1960s -> 78,400). One
+  // untagged file then sat ~79,600 units from everything else and stretched
+  // the bounding box 16x, squeezing the whole graph into a corner of the
+  // canvas. The region has to be relative to the actual data.
+  it("keeps the unknown-year region near the real data, not at a fixed origin", () => {
+    const seeds = computeSeeds([
+      { nodeId: 1, year: 1964 },
+      { nodeId: 2, year: 1969 },
+      { nodeId: 3, year: null },
+    ]);
+
+    const xs = [...seeds.values()].map((s) => s.x);
+    const span = Math.max(...xs) - Math.min(...xs);
+
+    // Three decades of margin, not five figures of it.
+    expect(span).toBeLessThan(2000);
+  });
+
+  it("scales the unknown region with the era of the collection", () => {
+    const sixties = computeSeeds([
+      { nodeId: 1, year: 1964 },
+      { nodeId: 2, year: null },
+    ]);
+    const noughties = computeSeeds([
+      { nodeId: 1, year: 2004 },
+      { nodeId: 2, year: null },
+    ]);
+
+    expect(noughties.get(2)!.x).toBeGreaterThan(sixties.get(2)!.x);
+  });
 });

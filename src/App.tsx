@@ -7,8 +7,14 @@ import { useServerReady } from './hooks/useServerReady'
 import Canvas from './canvas/Canvas'
 import ArticlePanel from './canvas/ArticlePanel'
 import { usePlayback } from './playback/usePlayback'
-import NowPlayingBar from './playback/NowPlayingBar'
 import HygieneView from './hygiene/HygieneView'
+import { AppShell } from './shell/AppShell'
+import { Panel } from './shell/Panel'
+import { GraphToggle } from './shell/GraphToggle'
+import type { Granularity } from './shell/granularity'
+import { TransportDock } from './shell/TransportDock'
+import { CollectionPanel } from './panels/CollectionPanel'
+import { NowPlayingPanel } from './panels/NowPlayingPanel'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -174,6 +180,8 @@ function MainApp() {
   const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
   const [hygieneOpen, setHygieneOpen] = useState(false)
+  const [granularity, setGranularity] = useState<Granularity>('albums')
+  const [stats, setStats] = useState({ nodes: 0, edges: 0 })
   const playback = usePlayback()
 
   useEffect(() => {
@@ -185,39 +193,63 @@ function MainApp() {
   if (hasLibrary === null) return <Centered>loading library…</Centered>
   if (!hasLibrary) return <LibrarySetup />
 
+  const nowPlaying =
+    playback.status.currentRecordingNodeId != null
+      ? {
+          nodeId: playback.status.currentRecordingNodeId,
+          title: playback.currentTitle ?? '—',
+          durationMs: null,
+        }
+      : null
+
   return (
-    <>
-      <Canvas selectedNodeId={selectedNodeId} onSelectNode={setSelectedNodeId} />
-      {selectedNodeId != null && (
-        <ArticlePanel
-          nodeId={selectedNodeId}
+    <AppShell>
+      <Canvas
+        selectedNodeId={selectedNodeId}
+        onSelectNode={setSelectedNodeId}
+        onStats={setStats}
+      />
+
+      <GraphToggle value={granularity} onChange={setGranularity} />
+
+      <Panel side="left" title="collection">
+        <CollectionPanel
+          nodeCount={stats.nodes}
+          edgeCount={stats.edges}
           onSelectNode={setSelectedNodeId}
-          onClose={() => setSelectedNodeId(null)}
-          onPlay={playback.playNode}
         />
-      )}
-      <NowPlayingBar
+      </Panel>
+
+      {/* One panel, two modes: the node you selected takes precedence over
+       * what is playing, since selecting is the more recent intent. The
+       * dedicated node-detail surface is a later pass. */}
+      <Panel side="right" title={selectedNodeId != null ? 'selected' : 'now playing'}>
+        {selectedNodeId != null ? (
+          <ArticlePanel
+            nodeId={selectedNodeId}
+            onSelectNode={setSelectedNodeId}
+            onClose={() => setSelectedNodeId(null)}
+            onPlay={playback.playNode}
+          />
+        ) : (
+          <NowPlayingPanel track={nowPlaying} status={playback.status} />
+        )}
+      </Panel>
+
+      <TransportDock
         status={playback.status}
-        title={playback.currentTitle}
+        hasTrack={playback.currentTitle != null}
         onPause={playback.pause}
         onResume={playback.resume}
-        onStop={playback.stop}
-        onSkip={playback.skip}
       />
+
+      {/* Still the old unstyled overlay — the maintenance surface is a later
+       * pass, and the mockup reaches it from the collection panel's pencil. */}
       <button
         onClick={() => setHygieneOpen(true)}
-        style={{
-          position: 'fixed',
-          top: 12,
-          right: 12,
-          zIndex: 15,
-          padding: '6px 12px',
-          fontFamily: 'monospace',
-          fontSize: 12,
-          cursor: 'pointer',
-        }}
+        className="absolute bottom-[14px] left-[14px] z-20 text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
       >
-        hygiene
+        maintenance
       </button>
       {hygieneOpen && (
         <HygieneView
@@ -228,7 +260,7 @@ function MainApp() {
           onClose={() => setHygieneOpen(false)}
         />
       )}
-    </>
+    </AppShell>
   )
 }
 

@@ -182,18 +182,15 @@ Edge color encodes **relationship type**.
 |---|---|---|---|
 | `--color-edge-performed-by` | `#BF68EB` | 283° 76% 66% | Recording → artist |
 | `--color-edge-appears-on` | `#68B6EB` | 203° 76% 66% | Recording → release |
-| `--color-edge-released-in` | `#327F2B` | 115° 50% 33% | Recording → year |
+| `--color-edge-released-in` | `#68EB79` | 115° 76% 66% | Recording → year |
 
 Edges are 1px (Figma: 0.5px — same sub-pixel reasoning as hairlines).
 
-**Open question — the green does not belong to the family.** Purple and blue are the same color hue-rotated: identical 76% saturation, identical 66% lightness, 80° apart. The green as drawn is 50% saturation and 33% lightness, which makes it read as much heavier and darker than its two siblings rather than as a peer.
+**One family, three hues.** Identical saturation and lightness, rotated roughly 80° per step. The mockup drew the green at 50%/33%, which read as much heavier and darker than its two siblings rather than as a peer; it was normalized to 76%/66% to complete the set (decided 2026-08-14).
 
-Two options, and this needs a decision before the graph is rebuilt:
+This is the rule that makes the palette extensible: **a new relationship type continues around the wheel at 76% saturation and 66% lightness.** It does not get a fourth kind of color — no darker tone for "weaker", no grey for "structural". If edges ever need to express strength as well as type, that is opacity or width, not a second color dimension.
 
-1. **Normalize** to `#68EB79` (115° 76% 66%), completing a three-color set at one saturation and lightness. Predictable, extends cleanly to more relationship types by continuing to rotate hue.
-2. **Keep as drawn**, on the grounds that year-edges are the least interesting relationship and should recede.
-
-The type-to-color assignment above is also provisional — the mockup shows three colors but does not label them. It is assigned here by visual frequency (purple is densest in clusters, blue spans long distances, green is sparse). Revisit when edge types widen beyond the current three.
+The type-to-color assignment is provisional — the mockup shows three colors but does not label them, so they are assigned here by visual frequency (purple densest in clusters, blue spanning long distances, green sparse). Revisit when edge types widen beyond the current three.
 
 ---
 

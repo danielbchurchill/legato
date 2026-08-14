@@ -13,10 +13,33 @@ const DECADE_SPACING = 400;
 const YEAR_SPACING = 40;
 const CELL_GRID_SPACING = 8;
 const CELL_GRID_COLS = 5;
-const UNKNOWN_YEAR_REGION_X = -DECADE_SPACING * 3;
+const UNKNOWN_YEAR_MARGIN = DECADE_SPACING * 3;
 
 export type SeedInput = { nodeId: number; year: number | null };
 export type Seed = { x: number; y: number };
+
+function baseXForYear(year: number): number {
+  return Math.floor(year / 10) * 10 * (DECADE_SPACING / 10);
+}
+
+// Where year-less nodes park: three decades to the left of the earliest real
+// data, rather than at a fixed coordinate.
+//
+// This used to be an absolute -1200, which looks reasonable until you notice
+// baseX is derived from the calendar year itself — the 1960s land at 78,400,
+// not at 0. A single untagged file therefore sat ~79,600 units from everything
+// else and stretched the graph's bounding box by 16x, so sigma normalised the
+// entire real library into roughly 6% of the viewport. Found on the real
+// /mnt/music library: 396 of 398 nodes spanned 5,000 units, one node sat at
+// -1200, and the canvas rendered as a tiny unreadable clump.
+export function unknownRegionX(inputs: SeedInput[]): number {
+  const knownBaseXs = inputs
+    .filter((input) => input.year != null && !Number.isNaN(input.year))
+    .map((input) => baseXForYear(input.year as number));
+
+  if (knownBaseXs.length === 0) return -UNKNOWN_YEAR_MARGIN;
+  return Math.min(...knownBaseXs) - UNKNOWN_YEAR_MARGIN;
+}
 
 function packCell(inputs: SeedInput[], baseX: number, baseY: number, result: Map<number, Seed>) {
   const sorted = [...inputs].sort((a, b) => a.nodeId - b.nodeId);
@@ -47,12 +70,11 @@ export function computeSeeds(inputs: SeedInput[]): Map<number, Seed> {
   for (const [yearKey, list] of cells) {
     const year = Number(yearKey);
     const decade = Math.floor(year / 10) * 10;
-    const baseX = decade * (DECADE_SPACING / 10);
     const baseY = (year - decade) * YEAR_SPACING;
-    packCell(list, baseX, baseY, result);
+    packCell(list, baseXForYear(year), baseY, result);
   }
 
-  packCell(unknown, UNKNOWN_YEAR_REGION_X, 0, result);
+  packCell(unknown, unknownRegionX(inputs), 0, result);
 
   return result;
 }
@@ -136,7 +158,9 @@ export function recomputeAllSeeds(db: Database.Database): void {
     otherRows.map((r) => r.node_id),
     connections,
     seeds,
-    { x: UNKNOWN_YEAR_REGION_X, y: 0 },
+    // Same region as year-less recordings, derived from the same data, so a
+    // disconnected artist node cannot drag the bounding box either.
+    { x: unknownRegionX(recordingRows.map((r) => ({ nodeId: r.node_id, year: r.year }))), y: 0 },
   );
   for (const [nodeId, seed] of centroidSeeds) seeds.set(nodeId, seed);
 

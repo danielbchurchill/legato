@@ -13,10 +13,15 @@
     "windows": [
       {
         "title": "Legato",
-        "width": 800,
-        "height": 600,
+        "width": 1440,
+        "height": 960,
+        "minWidth": 1100,
+        "minHeight": 700,
+        "center": true,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "decorations": false,
+        "backgroundColor": "#14181A"
       }
     ],
     "security": {
