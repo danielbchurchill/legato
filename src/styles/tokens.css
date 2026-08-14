@@ -1,0 +1,96 @@
+/* Legato design tokens.
+ *
+ * Every value here is measured from the Figma mockup (file NSaK1N64NwcKzlKpqaYs49,
+ * frame "Desktop - 1", 1440x1024) and cross-checked against the exported render.
+ * DESIGN.md explains the reasoning; this file is the machine-readable half.
+ *
+ * Tailwind v4 CSS-first config — no tailwind.config.js. Names follow Tailwind's
+ * @theme namespaces so they generate utilities: --color-* -> bg-canvas / text-muted,
+ * --radius-* -> rounded-surface, and so on.
+ */
+
+@theme {
+  /* ---- Surfaces ------------------------------------------------------- */
+
+  /* The app backdrop. Also the fill of inset controls: a search field is a hole
+   * punched back through the glass to this layer, not a lighter shade on top of
+   * it. That equivalence is deliberate — keep the two values identical. */
+  --color-canvas: #14181a;
+  --color-inset: #14181a;
+
+  /* Floating glass panels. Composites to #1C2124 over --color-canvas, which is
+   * exactly what the mockup render measures. */
+  --color-surface: rgb(30 36 38 / 0.8);
+
+  /* Opaque fallback for contexts where backdrop-filter is unavailable or too
+   * expensive — same perceived color, no blur cost. See DESIGN.md "Glass". */
+  --color-surface-flat: #1c2124;
+
+  /* ---- Lines ---------------------------------------------------------- */
+
+  /* Figma draws panel edges as 0.25px pure white. A quarter pixel is not a real
+   * width — it vanishes or snaps to 1px depending on DPI. 1px at 30% alpha
+   * composites to rgb(96), which is what the 0.25px line actually measures in
+   * the render, and it renders identically at every scale factor. */
+  --color-hairline: rgb(255 255 255 / 0.3);
+
+  /* In-panel rules under section headers. The mockup uses the label grey at
+   * 0.25px; same reasoning as above, 1px at 35% matches the measured rgb(58). */
+  --color-divider: rgb(113 113 113 / 0.35);
+
+  /* ---- Text ----------------------------------------------------------- */
+
+  /* Two roles, and the split is strict: Rubik grey names a thing, Sometype Mono
+   * white is the thing's value. Never a grey value or a mono label. */
+  --color-ink: #ffffff;
+  --color-muted: #717171;
+
+  /* ---- Graph ---------------------------------------------------------- */
+
+  /* Edge color encodes relationship type. Purple and blue are the same color
+   * hue-rotated (76% sat, 66% light); the green as drawn is not — see DESIGN.md
+   * "Edge palette" for the open question about normalizing it. */
+  --color-edge-performed-by: #bf68eb; /* 283deg 76% 66% */
+  --color-edge-appears-on: #68b6eb; /*   203deg 76% 66% */
+  --color-edge-released-in: #327f2b; /*  115deg 50% 33% */
+
+  /* Selection ring drawn around a node, not a fill change on it. */
+  --color-node-ring: #ffffff;
+
+  /* ---- Controls ------------------------------------------------------- */
+
+  /* Waveform bars and the now-playing page dots share one value. */
+  --color-signal: #d9d9d9;
+
+  /* ---- Type ----------------------------------------------------------- */
+
+  --font-ui: 'Rubik Variable', system-ui, sans-serif;
+  --font-mono: 'Sometype Mono Variable', ui-monospace, monospace;
+  --font-display: 'Luxurious Script', cursive;
+
+  /* The mockup is single-size: every label and every value is 16px. Resisting
+   * the urge to invent a ramp — sizes get added when a real need appears. */
+  --text-base: 16px;
+  --text-wordmark: 40px;
+
+  /* ---- Geometry ------------------------------------------------------- */
+
+  --radius-surface: 25px;
+
+  /* Panels are 360 wide with 24px of side padding, giving 312 of content.
+   * The mockup drifts between 20 and 26; 24 is the value that reconciles it. */
+  --spacing-panel: 24px;
+
+  /* Vertical pitch of a label/value row. Consistent across the overview list
+   * and the metadata list, so it is a real rhythm rather than a coincidence. */
+  --spacing-row: 33px;
+
+  /* Section header -> divider -> first row. */
+  --spacing-header-rule: 31px;
+  --spacing-rule-body: 16px;
+
+  /* ---- Depth ---------------------------------------------------------- */
+
+  --blur-glass: 6.5px;
+  --shadow-surface: 0 4px 4px rgb(0 0 0 / 0.25);
+}
