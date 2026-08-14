@@ -21,6 +21,7 @@ import { filesRoutes } from "./routes/files.js";
 import { queueRoutes } from "./routes/queue.js";
 import { hygieneRoutes } from "./routes/hygiene.js";
 import { tagWritesRoutes } from "./routes/tag-writes.js";
+import { coverRoutes } from "./routes/cover.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { runDueJobs } from "./enrich/worker.js";
 
@@ -37,6 +38,15 @@ const app = Fastify({ logger: true });
 await app.register(cors, { origin: true, methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] });
 await app.register(websocket);
 
+// Manual cover-art uploads arrive as raw image bytes. Fastify only knows how
+// to parse JSON out of the box and 415s anything else, so image/* gets a
+// passthrough parser that hands the route an untouched Buffer.
+app.addContentTypeParser(
+  /^image\/.*/,
+  { parseAs: "buffer", bodyLimit: 20 * 1024 * 1024 },
+  (_request, body, done) => done(null, body),
+);
+
 await app.register(healthRoutes(), { prefix: "/api/v1" });
 await app.register(settingsRoutes(db), { prefix: "/api/v1" });
 await app.register(libraryRootsRoutes(db), { prefix: "/api/v1" });
@@ -52,6 +62,7 @@ await app.register(filesRoutes(db), { prefix: "/api/v1" });
 await app.register(queueRoutes(db), { prefix: "/api/v1" });
 await app.register(hygieneRoutes(db), { prefix: "/api/v1" });
 await app.register(tagWritesRoutes(db), { prefix: "/api/v1" });
+await app.register(coverRoutes(db), { prefix: "/api/v1" });
 
 // Resume watching every already-configured root across restarts — a root
 // added in a previous session shouldn't need a manual re-scan to notice

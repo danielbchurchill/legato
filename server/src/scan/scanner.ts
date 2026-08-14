@@ -5,6 +5,7 @@ import path from "node:path";
 import type Database from "better-sqlite3";
 import { recomputeAllSeeds } from "../layout/seed.js";
 import { enqueueEnrichmentIfNeeded } from "../enrich/queue.js";
+import { attachCoverForFile } from "../cover/extract.js";
 import { collapseFile } from "../match/collapse.js";
 import { deriveLocalEdges } from "../match/edges.js";
 import { parseTags } from "./tags.js";
@@ -40,6 +41,10 @@ export async function scanFile(
   db: Database.Database,
   libraryRootId: number,
   filePath: string,
+  // Non-fatal problems (currently only cover art) surface here rather than
+  // being thrown or silently dropped. Defaulted so every existing caller and
+  // every test keeps working unchanged.
+  onWarn: (message: string) => void = (message) => console.warn(message),
 ): Promise<ScanOutcome> {
   const st = await stat(filePath);
   const mtime = st.mtime.toISOString();
@@ -59,7 +64,8 @@ export async function scanFile(
     return "unchanged";
   }
 
-  const [tags, fileHash] = await Promise.all([parseTags(filePath), hashFilePrefix(filePath)]);
+  const [parsed, fileHash] = await Promise.all([parseTags(filePath), hashFilePrefix(filePath)]);
+  const { tags, picture } = parsed;
   const title = tags.title ?? path.basename(filePath, path.extname(filePath));
 
   const upsert = db.transaction((): { outcome: ScanOutcome; fileId: number } => {
@@ -143,6 +149,20 @@ export async function scanFile(
     .prepare("SELECT recording_node_id FROM files WHERE id = ?")
     .get(fileId) as { recording_node_id: number };
   enqueueEnrichmentIfNeeded(db, currentNodeId);
+
+  // After deriveLocalEdges, so the release node this file belongs to exists
+  // and the art can attach to the album rather than to each track. Failure
+  // here is never fatal: a corrupt embedded image or an unreadable folder
+  // costs the album its artwork, not the file its place in the library.
+  try {
+    await attachCoverForFile(
+      db,
+      { id: fileId, path: filePath, recordingNodeId: currentNodeId },
+      picture,
+    );
+  } catch (err) {
+    onWarn(`cover art failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   return outcome;
 }

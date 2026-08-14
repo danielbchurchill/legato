@@ -1,5 +1,7 @@
 import { parseFile } from "music-metadata";
 import type { ICommonTagsResult, IFormat } from "music-metadata";
+import { pickFrontCover } from "../cover/extract.js";
+import type { EmbeddedPicture } from "../cover/extract.js";
 
 export type NormalizedTags = {
   title: string | null;
@@ -45,7 +47,17 @@ export function normalizeTags(common: ICommonTagsResult, format: IFormat): Norma
   };
 }
 
-export async function parseTags(filePath: string): Promise<NormalizedTags> {
+export type ParsedFile = {
+  tags: NormalizedTags;
+  /** Front cover carried inside the file, if any. Bytes, not a tag — kept out
+   *  of NormalizedTags so tags_raw stays a small JSON blob. */
+  picture: EmbeddedPicture | null;
+};
+
+export async function parseTags(filePath: string): Promise<ParsedFile> {
   const { common, format } = await parseFile(filePath, { duration: true });
-  return normalizeTags(common, format);
+  return {
+    tags: normalizeTags(common, format),
+    picture: pickFrontCover(common.picture),
+  };
 }
