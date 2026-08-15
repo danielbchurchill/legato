@@ -4,6 +4,7 @@ import { CoverArt } from '../ui/CoverArt'
 import { DataRow, SectionHeader } from '../ui/DataRow'
 import { ArticleBody } from '../ui/ArticleBody'
 import { Button } from '../ui/Button'
+import { Tooltip } from '../ui/Tooltip'
 import type { PlaybackStatus, QueueEntry } from '../playback/usePlayback'
 
 const API = 'http://127.0.0.1:8899/api/v1'
@@ -260,15 +261,16 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
               action={
                 !editing &&
                 !pendingWrite && (
-                  <button
-                    type="button"
-                    onClick={startEditing}
-                    aria-label="Edit metadata"
-                    title="Edit metadata"
-                    className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-                  >
-                    <Icon name="pencil" size={24} />
-                  </button>
+                  <Tooltip label="Edit metadata">
+                    <button
+                      type="button"
+                      onClick={startEditing}
+                      aria-label="Edit metadata"
+                      className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                    >
+                      <Icon name="pencil" size={24} />
+                    </button>
+                  </Tooltip>
                 )
               }
             />

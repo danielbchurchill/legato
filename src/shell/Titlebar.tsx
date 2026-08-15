@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon, type IconName } from '../ui/Icon'
+import { Tooltip } from '../ui/Tooltip'
 import { Surface } from './Surface'
 import { appWindow } from './tauriWindow'
 
@@ -13,17 +14,18 @@ type Control = { name: IconName; label: string; action: () => void }
 
 function WindowButton({ control }: { control: Control }) {
   return (
-    <button
-      type="button"
-      onClick={control.action}
-      aria-label={control.label}
-      title={control.label}
-      // Muted at rest so the chrome stays quiet, full white on hover — the
-      // only hover affordance in the titlebar.
-      className="grid h-[32px] w-[32px] place-items-center rounded-[6px] text-[var(--color-muted)] transition-colors duration-150 hover:bg-white/8 hover:text-[var(--color-muted-hi)]"
-    >
-      <Icon name={control.name} size={24} />
-    </button>
+    <Tooltip label={control.label}>
+      <button
+        type="button"
+        onClick={control.action}
+        aria-label={control.label}
+        // Muted at rest so the chrome stays quiet, full white on hover — the
+        // only hover affordance in the titlebar.
+        className="grid h-[32px] w-[32px] place-items-center rounded-[6px] text-[var(--color-muted)] transition-colors duration-150 hover:bg-white/8 hover:text-[var(--color-muted-hi)]"
+      >
+        <Icon name={control.name} size={24} />
+      </button>
+    </Tooltip>
   )
 }
 
