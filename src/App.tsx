@@ -5,7 +5,6 @@ import PlaybackSpike from './PlaybackSpike'
 import LibrarySetup, { Centered } from './LibrarySetup'
 import { useServerReady } from './hooks/useServerReady'
 import Canvas, { type CanvasHandle } from './canvas/Canvas'
-import ArticlePanel from './canvas/ArticlePanel'
 import { usePlayback } from './playback/usePlayback'
 import HygieneView from './hygiene/HygieneView'
 import { AppShell } from './shell/AppShell'
@@ -243,25 +242,19 @@ function MainApp() {
         />
       </Panel>
 
-      {/* One panel, two modes: the node you selected takes precedence over
-       * what is playing, since selecting is the more recent intent. The
-       * dedicated node-detail surface is a later pass. */}
+      {/* P-5: one node-detail surface. The node you selected takes
+       * precedence over what is playing, since selecting is the more
+       * recent intent; playback is an attribute of whatever node is being
+       * shown (isPlaying), not a fork into a separate component. */}
       <Panel side="right" title={selectedNodeId != null ? 'selected' : 'now playing'}>
-        {selectedNodeId != null ? (
-          <ArticlePanel
-            nodeId={selectedNodeId}
-            onSelectNode={selectAndFly}
-            onClose={() => setSelectedNodeId(null)}
-            onPlay={playback.playNode}
-          />
-        ) : (
-          <NowPlayingPanel
-            nodeId={playback.status.currentRecordingNodeId}
-            status={playback.status}
-            upNext={playback.upNext}
-            onSelectNode={selectAndFly}
-          />
-        )}
+        <NowPlayingPanel
+          nodeId={anchorNodeId}
+          isPlaying={anchorNodeId != null && anchorNodeId === playback.status.currentRecordingNodeId}
+          upNext={playback.upNext}
+          onSelectNode={selectAndFly}
+          onPlay={playback.playNode}
+          onClose={selectedNodeId != null ? () => setSelectedNodeId(null) : undefined}
+        />
       </Panel>
 
       <TransportDock

@@ -1,6 +1,11 @@
 import type Database from "better-sqlite3";
 
-export type Fact = { text: string; targetNodeId?: number };
+// groupType carries the raw edge type (e.g. "same_artist") so the client
+// can collapse repeats of the same relationship into one row with a count
+// and a disclosure (P-6) — an artist with fifteen albums otherwise produces
+// fifteen near-identical "Same artist as…" lines with nothing to group by
+// once they're flattened to text.
+export type Fact = { text: string; targetNodeId?: number; groupType?: string };
 
 const EDGE_VERB: Record<string, string> = {
   performed_by: "Performed by",
@@ -41,7 +46,7 @@ export function generateFacts(db: Database.Database, nodeId: number): Fact[] {
 
   for (const edge of outgoing) {
     const verb = EDGE_VERB[edge.type] ?? edge.type;
-    facts.push({ text: `${verb} ${edge.title}`, targetNodeId: edge.target_id });
+    facts.push({ text: `${verb} ${edge.title}`, targetNodeId: edge.target_id, groupType: edge.type });
   }
 
   if (node.type === "recording") {

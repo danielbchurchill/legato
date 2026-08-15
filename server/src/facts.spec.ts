@@ -36,9 +36,9 @@ describe("generateFacts", () => {
 
     const facts = generateFacts(db, recording);
 
-    expect(facts).toContainEqual({ text: "Performed by The Beatles", targetNodeId: artist });
-    expect(facts).toContainEqual({ text: "Released in 1969", targetNodeId: year });
-    expect(facts).toContainEqual({ text: "Appears on Abbey Road", targetNodeId: release });
+    expect(facts).toContainEqual({ text: "Performed by The Beatles", targetNodeId: artist, groupType: "performed_by" });
+    expect(facts).toContainEqual({ text: "Released in 1969", targetNodeId: year, groupType: "released_in" });
+    expect(facts).toContainEqual({ text: "Appears on Abbey Road", targetNodeId: release, groupType: "appears_on" });
   });
 
   it("phrases session 4's widened edge types (label/credit/collaboration), not their raw type strings", () => {
@@ -62,17 +62,17 @@ describe("generateFacts", () => {
     addEdge(albumA, albumB, "same_label");
 
     const recordingFacts = generateFacts(db, recording);
-    expect(recordingFacts).toContainEqual({ text: "Released on Apple Records", targetNodeId: label });
-    expect(recordingFacts).toContainEqual({ text: "Produced by George Martin", targetNodeId: producer });
-    expect(recordingFacts).toContainEqual({ text: "Engineered by Geoff Emerick", targetNodeId: engineer });
-    expect(recordingFacts).toContainEqual({ text: "Featuring Billy Preston", targetNodeId: featured });
+    expect(recordingFacts).toContainEqual({ text: "Released on Apple Records", targetNodeId: label, groupType: "released_on" });
+    expect(recordingFacts).toContainEqual({ text: "Produced by George Martin", targetNodeId: producer, groupType: "produced_by" });
+    expect(recordingFacts).toContainEqual({ text: "Engineered by Geoff Emerick", targetNodeId: engineer, groupType: "engineered_by" });
+    expect(recordingFacts).toContainEqual({ text: "Featuring Billy Preston", targetNodeId: featured, groupType: "featured_artist" });
 
     const artistFacts = generateFacts(db, artistA);
-    expect(artistFacts).toContainEqual({ text: "Collaborated with Billy Preston", targetNodeId: artistB });
+    expect(artistFacts).toContainEqual({ text: "Collaborated with Billy Preston", targetNodeId: artistB, groupType: "collaborated_with" });
 
     const albumFacts = generateFacts(db, albumA);
-    expect(albumFacts).toContainEqual({ text: "Same artist as Let It Be", targetNodeId: albumB });
-    expect(albumFacts).toContainEqual({ text: "Same label as Let It Be", targetNodeId: albumB });
+    expect(albumFacts).toContainEqual({ text: "Same artist as Let It Be", targetNodeId: albumB, groupType: "same_artist" });
+    expect(albumFacts).toContainEqual({ text: "Same label as Let It Be", targetNodeId: albumB, groupType: "same_label" });
   });
 
   it("ignores manual edges when generating facts (local edges only)", () => {

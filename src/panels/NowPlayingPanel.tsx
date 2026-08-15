@@ -5,11 +5,15 @@ import { DataRow, SectionHeader } from '../ui/DataRow'
 import { ArticleBody } from '../ui/ArticleBody'
 import { Button } from '../ui/Button'
 import { Tooltip } from '../ui/Tooltip'
-import type { PlaybackStatus, QueueEntry } from '../playback/usePlayback'
+import type { QueueEntry } from '../playback/usePlayback'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
-/* The right-hand panel's now-playing mode.
+/* P-5: the node-detail surface. Selecting a node and playing a node used to
+ * render two entirely different components (this file, design-system-clean,
+ * versus canvas/ArticlePanel.tsx, pre-design-pass and never touched since
+ * the spike). Collapsed into one: playback is an attribute of whatever node
+ * you're looking at (isPlaying), not a separate surface you fall into.
  *
  * Editable fields are exactly the ones the tag write-back API actually
  * supports (server/src/tagwrite/fields.ts): bpm, label, release type.
@@ -18,23 +22,40 @@ const API = 'http://127.0.0.1:8899/api/v1'
  * date" property distinct from the numeric year and adding one wasn't in
  * scope here. Title/artist/album are display only in this pass; editing
  * those touches match/collapse identity, a different question from
- * fixing a wrong bpm.
+ * fixing a wrong bpm. Editing is file-scoped, so it only ever applies to
+ * recording nodes (the only type with files).
  *
  * Pagination — the three dots — covers metadata, lyrics, and article.
- * Lyrics is fetched lazily (only once the lyrics page is actually opened,
- * not eagerly when a track starts) since GET /nodes/:id/lyrics is a real
+ * Lyrics only applies to recording nodes (LRCLIB keys off title+artist) and
+ * is fetched lazily (only once the lyrics page is actually opened, not
+ * eagerly when a track starts) since GET /nodes/:id/lyrics is a real
  * network round trip to LRCLIB on a cache miss — see migration 0017's
  * comment on why that can't happen during a scan. */
 
-function formatDuration(ms: number | null): string {
+function formatDuration(ms: number | null | undefined): string {
   if (ms == null) return '—'
   const total = Math.round(ms / 1000)
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
-type Edge = { direction: 'in' | 'out'; type: string; other_id: number; other_title: string }
+type Fact = { text: string; targetNodeId?: number; groupType?: string }
+type Edge = {
+  id: number
+  type: string
+  source: string
+  label: string | null
+  note: string | null
+  direction: 'in' | 'out'
+  other_id: number
+  other_title: string
+  other_type: string
+}
 type FileRow = {
   id: number
+  file_path: string
+  format: string | null
+  bitrate: number | null
+  track_no: number | null
   bpm: number | null
   label: string | null
   release_date: string | null
@@ -42,37 +63,256 @@ type FileRow = {
 }
 type NodeDetail = {
   id: number
+  type: string
   title: string
+  mbid: string | null
   recording: { canonical_duration_ms: number | null } | null
   files: FileRow[]
   edges: Edge[]
+  facts: Fact[]
   article: { body_md: string } | null
 }
 type FieldDiff = { field: string; oldValue: string | number; newValue: string | number }
 type TagWriteRow = { id: number; status: string; diff_json: string }
 type LyricsData = { plainLyrics: string | null; syncedLyrics: string | null; instrumental: boolean; found: boolean }
-
 type EditableFields = { bpm?: number; label?: string; releaseType?: string }
+type SearchResult = { id: number; type: string; title: string }
+
+// Mirrors server/src/facts.ts's EDGE_VERB — same duplication pattern as
+// CollectionPanel.tsx's TYPE_LABEL for worklist items. Only needed for the
+// collapsed-group header (P-6); the singular case already has the verb
+// baked into fact.text from the server.
+const EDGE_VERB: Record<string, string> = {
+  performed_by: 'Performed by',
+  released_in: 'Released in',
+  appears_on: 'Appears on',
+  released_on: 'Released on',
+  remix_of: 'Remix of',
+  featured_artist: 'Featuring',
+  produced_by: 'Produced by',
+  engineered_by: 'Engineered by',
+  collaborated_with: 'Collaborated with',
+  same_artist: 'Same artist as',
+  same_label: 'Same label as',
+}
+
+const linkClass =
+  'text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted-hi)]'
+
+// P-6: an artist with fifteen albums used to produce fifteen near-identical
+// "Same artist as…" lines. Facts sharing a groupType collapse into one row;
+// facts with no groupType (the aggregate sentences facts.ts already
+// generates, like "12 recordings in your collection") are singletons by
+// construction and pass through untouched.
+function groupFacts(facts: Fact[]): { key: string; items: Fact[] }[] {
+  const order: string[] = []
+  const map = new Map<string, Fact[]>()
+  for (const fact of facts) {
+    const key = fact.groupType ?? `singleton:${fact.text}`
+    if (!map.has(key)) {
+      map.set(key, [])
+      order.push(key)
+    }
+    map.get(key)!.push(fact)
+  }
+  return order.map((key) => ({ key, items: map.get(key)! }))
+}
+
+function FactLine({ fact, onSelectNode }: { fact: Fact; onSelectNode: (id: number) => void }) {
+  if (fact.targetNodeId != null) {
+    return (
+      <button type="button" onClick={() => onSelectNode(fact.targetNodeId!)} className={`block w-full truncate text-left text-[length:var(--text-base)] ${linkClass}`}>
+        {fact.text}
+      </button>
+    )
+  }
+  return <p className="text-[length:var(--text-base)] text-[var(--color-ink)]">{fact.text}</p>
+}
+
+function FactGroup({ groupType, items, onSelectNode }: { groupType: string; items: Fact[]; onSelectNode: (id: number) => void }) {
+  const [open, setOpen] = useState(false)
+  const verb = EDGE_VERB[groupType] ?? groupType
+
+  if (items.length === 1) return <FactLine fact={items[0]} onSelectNode={onSelectNode} />
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-[8px] py-[1px] text-left text-[length:var(--text-base)] text-[var(--color-ink)] hover:text-[var(--color-muted-hi)]"
+      >
+        <span className="truncate">
+          {verb} — {items.length} others
+        </span>
+        <Icon
+          name="chevron-down"
+          size={16}
+          className={`shrink-0 text-[var(--color-muted)] transition-transform duration-[var(--motion-base)] ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+      <div
+        className={`grid transition-all duration-[var(--motion-base)] ease-[var(--ease-inout)] motion-reduce:transition-none ${
+          open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+        }`}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <ul className="flex flex-col gap-[2px] py-[4px] pl-[12px]">
+            {items.map((fact, i) => (
+              <li key={i}>
+                <FactLine fact={fact} onSelectNode={onSelectNode} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// "Sounds like", "sampled in", "played this at X" — the free-text personal
+// edge layer from Legato.md's edge-types spec. First-class, never
+// overwritten by re-scans (match/edges.ts only ever touches source='local').
+function AddEdgeForm({ nodeId, onAdded }: { nodeId: number; onAdded: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<SearchResult[]>([])
+  const [target, setTarget] = useState<SearchResult | null>(null)
+  const [label, setLabel] = useState('')
+  const [note, setNote] = useState('')
+
+  useEffect(() => {
+    if (!query.trim() || target) {
+      setResults([])
+      return
+    }
+    const handle = setTimeout(() => {
+      fetch(`${API}/search?q=${encodeURIComponent(query)}`)
+        .then((r) => r.json())
+        .then(setResults)
+    }, 200)
+    return () => clearTimeout(handle)
+  }, [query, target])
+
+  const reset = () => {
+    setOpen(false)
+    setQuery('')
+    setResults([])
+    setTarget(null)
+    setLabel('')
+    setNote('')
+  }
+
+  const submit = async () => {
+    if (!target || !label.trim()) return
+    await fetch(`${API}/edges`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fromNode: nodeId, toNode: target.id, type: 'personal', label, note: note || undefined }),
+    })
+    reset()
+    onAdded()
+  }
+
+  if (!open) {
+    return (
+      <Button onClick={() => setOpen(true)} className="mt-[8px]">
+        + add edge
+      </Button>
+    )
+  }
+
+  return (
+    <div className="mt-[8px] flex flex-col gap-[8px] rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-inset)] p-[12px]">
+      {target ? (
+        <div className="flex items-center justify-between gap-[8px]">
+          <span className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+            → {target.title} <span className="text-[var(--color-muted)]">({target.type})</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setTarget(null)}
+            className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]"
+          >
+            change
+          </button>
+        </div>
+      ) : (
+        <>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="search for a node…"
+            className="w-full bg-transparent text-[length:var(--text-base)] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]"
+          />
+          {results.length > 0 && (
+            <ul className="flex max-h-[120px] flex-col overflow-y-auto">
+              {results.map((r) => (
+                <li key={r.id}>
+                  <button
+                    type="button"
+                    onClick={() => setTarget(r)}
+                    className="block w-full truncate py-[2px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] hover:text-[var(--color-muted-hi)]"
+                  >
+                    {r.title} <span className="text-[var(--color-muted)]">({r.type})</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+      <input
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        placeholder="relationship (e.g. sounds like)"
+        className="w-full bg-transparent text-[length:var(--text-base)] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]"
+      />
+      <input
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="note (optional)"
+        className="w-full bg-transparent text-[length:var(--text-base)] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]"
+      />
+      <div className="flex items-center gap-[16px]">
+        <Button onClick={submit} disabled={!target || !label.trim()}>
+          add
+        </Button>
+        <button type="button" onClick={reset} className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]">
+          cancel
+        </button>
+      </div>
+    </div>
+  )
+}
 
 type NowPlayingPanelProps = {
   nodeId: number | null
-  status: PlaybackStatus
+  /** Whether nodeId is the recording currently loaded in the transport —
+   * playback as an attribute of the node being viewed, per P-5, rather
+   * than a fork into a separate component. */
+  isPlaying: boolean
   upNext: QueueEntry[]
   onSelectNode: (id: number) => void
+  onPlay: (nodeId: number, title: string) => void
+  /** Present only when viewing a node the user explicitly selected (as
+   * opposed to whatever's merely playing) — closing clears the selection. */
+  onClose?: () => void
 }
 
-export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPlayingPanelProps) {
+export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPlay, onClose }: NowPlayingPanelProps) {
   const [node, setNode] = useState<NodeDetail | null>(null)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<EditableFields>({})
   const [pendingWrite, setPendingWrite] = useState<{ id: number; diff: FieldDiff[] } | null>(null)
-  const [upNextOpen, setUpNextOpen] = useState(false)
   const [page, setPage] = useState(0)
   const [lyrics, setLyrics] = useState<LyricsData | 'loading' | null>(null)
   const swipeStartX = useRef<number | null>(null)
 
-  const loadNode = (id: number) => {
-    fetch(`${API}/nodes/${id}`)
+  const load = () => {
+    if (nodeId == null) return
+    fetch(`${API}/nodes/${nodeId}`)
       .then((r) => r.json())
       .then(setNode)
       .catch(() => setNode(null))
@@ -87,13 +327,16 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
       setNode(null)
       return
     }
-    loadNode(nodeId)
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId])
 
   const pages: Array<'metadata' | 'lyrics' | 'article'> = node
-    ? node.article
-      ? ['metadata', 'lyrics', 'article']
-      : ['metadata', 'lyrics']
+    ? [
+        'metadata' as const,
+        ...(node.type === 'recording' ? (['lyrics'] as const) : []),
+        ...(node.article ? (['article'] as const) : []),
+      ]
     : ['metadata']
 
   useEffect(() => {
@@ -150,6 +393,17 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
   const file = node.files[0] as FileRow | undefined
   const artist = node.edges.find((e) => e.direction === 'out' && e.type === 'performed_by')
   const album = node.edges.find((e) => e.direction === 'out' && e.type === 'appears_on')
+  // Recordings connected to a non-recording node (e.g. every track by this
+  // artist) — the incoming-edge half of the graph, rendered as a link list
+  // since facts() only gives a count for these, not each individual node.
+  const incomingRecordings = node.edges.filter((e) => e.direction === 'in' && e.other_type === 'recording')
+  const manualEdges = node.edges.filter((e) => e.source === 'manual')
+  const factGroups = groupFacts(node.facts)
+
+  const deleteEdge = async (edgeId: number) => {
+    await fetch(`${API}/edges/${edgeId}`, { method: 'DELETE' })
+    load()
+  }
 
   const startEditing = () => {
     setDraft({
@@ -179,7 +433,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
     if (!pendingWrite) return
     await fetch(`${API}/tag-writes/${pendingWrite.id}/approve`, { method: 'POST' })
     setPendingWrite(null)
-    loadNode(node.id)
+    load()
   }
 
   const discardWrite = async () => {
@@ -202,74 +456,342 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
 
   return (
     <div className="flex flex-col">
-      <CoverArt
-        nodeId={node.id}
-        size="full"
-        alt={`Cover art for ${node.title}`}
-        className="aspect-square w-full"
-      />
-
-      <div className="mt-[12px] flex items-start justify-between gap-[8px]">
-        <div className="min-w-0">
-          <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
-            {node.title}
-          </p>
-          {(artist || album) && (
-            <p className="truncate text-[length:var(--text-base)] text-[var(--color-muted)]">
-              {artist?.other_title}
-              {artist && album ? ' — ' : ''}
-              {album?.other_title}
-            </p>
-          )}
-        </div>
-        {upNext.length > 0 && (
+      <div className="relative">
+        <CoverArt nodeId={node.id} size="full" alt={`Cover art for ${node.title}`} className="aspect-square w-full" />
+        {onClose && (
           <button
             type="button"
-            onClick={() => setUpNextOpen((v) => !v)}
-            aria-label={upNextOpen ? 'Hide up next' : 'Show up next'}
-            aria-expanded={upNextOpen}
-            className={`shrink-0 text-[var(--color-muted)] transition-transform duration-[var(--motion-base)] ease-[var(--ease-out)] hover:text-[var(--color-muted-hi)] ${
-              upNextOpen ? 'rotate-180' : ''
-            }`}
+            onClick={onClose}
+            aria-label="Close"
+            className="absolute top-[8px] right-[8px] text-[var(--color-ink)]/80 transition-colors duration-150 hover:text-[var(--color-ink)]"
           >
-            <Icon name="chevron-down" size={24} />
+            <Icon name="cancel" size={24} />
           </button>
         )}
       </div>
 
-      {/* Always mounted, animated to its natural height via the 0fr -> 1fr
-       * grid-template-rows technique (MO-4) rather than an instant swap —
-       * no JS measurement, no magic max-height. --ease-inout rather than
-       * --ease-out: this is a toggle someone will flip twice in a row, and
-       * it needs to reverse cleanly mid-flight. The chevron above shares
-       * this same duration so the glyph and the list move together. */}
+      {/* P-7: the mockup's title block is three centred lines — title,
+       * album, artist — not two left-aligned lines joined by an em dash.
+       * Non-recording nodes have no album/artist edges, so they fall back
+       * to a centred type label. */}
+      <div className="mt-[12px] flex flex-col items-center gap-[2px] text-center">
+        <p className="w-full truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+          {node.title}
+        </p>
+        {node.type === 'recording' ? (
+          <>
+            {album && (
+              <p className="w-full truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+                {album.other_title}
+              </p>
+            )}
+            {artist && (
+              <p className="w-full truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+                {artist.other_title}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{node.type}</p>
+        )}
+      </div>
+
+      {/* P-7: always present and expanded when non-empty, not hidden behind
+       * a chevron. */}
       {upNext.length > 0 && (
-        <div
-          className={`grid transition-all duration-[var(--motion-base)] ease-[var(--ease-inout)] motion-reduce:transition-none ${
-            upNextOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
-          }`}
-        >
-          <div className="min-h-0 overflow-hidden">
-            <SectionHeader title="up next" />
-            <ul className="mt-[8px] flex flex-col">
-              {upNext.map((entry) => (
-                <li key={entry.recordingNodeId}>
-                  <button
-                    type="button"
-                    onClick={() => onSelectNode(entry.recordingNodeId)}
-                    className="w-full truncate py-[4px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-                  >
-                    {entry.title}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
+        <div className="mt-[15px]">
+          <SectionHeader title="up next" />
+          <ul className="mt-[8px] flex flex-col">
+            {upNext.map((entry) => (
+              <li key={entry.recordingNodeId}>
+                <button
+                  type="button"
+                  onClick={() => onSelectNode(entry.recordingNodeId)}
+                  className="w-full truncate py-[4px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                >
+                  {entry.title}
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
+      {/* One horizontal track with every page mounted, translated by
+       * -page * 100% (MO-3) — arrow keys, the dots and a swipe all produce
+       * the same transition, and direction is what tells you which way you
+       * went. Pages differ wildly in height (lyrics can run long); letting
+       * the row stretch to the tallest mounted page is simpler than
+       * measuring the active one and costs nothing since the panel already
+       * owns the scroll. */}
+      <div className="mt-[15px] overflow-hidden" onPointerDown={handleSwipeStart} onPointerUp={handleSwipeEnd}>
+        <div
+          className="flex transition-transform duration-[var(--motion-base)] ease-[var(--ease-out)] motion-reduce:transition-none"
+          style={{ transform: `translateX(-${page * 100}%)` }}
+        >
+          {pages.includes('metadata') && (
+            <div className="w-full shrink-0" inert={pages[page] !== 'metadata'}>
+              <SectionHeader
+                title="metadata"
+                action={
+                  !editing &&
+                  !pendingWrite && (
+                    <div className="flex items-center gap-[16px]">
+                      {node.recording && !isPlaying && (
+                        <Tooltip label="Play">
+                          <button
+                            type="button"
+                            onClick={() => onPlay(node.id, node.title)}
+                            aria-label="Play"
+                            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                          >
+                            <Icon name="play" size={24} />
+                          </button>
+                        </Tooltip>
+                      )}
+                      {file && (
+                        <Tooltip label="Edit metadata">
+                          <button
+                            type="button"
+                            onClick={startEditing}
+                            aria-label="Edit metadata"
+                            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                          >
+                            <Icon name="pencil" size={24} />
+                          </button>
+                        </Tooltip>
+                      )}
+                    </div>
+                  )
+                }
+              />
+
+              {node.recording && (
+                <div className="mt-[8px]">
+                  <DataRow label="track no." value={file?.track_no ?? '—'} />
+                  <DataRow label="length" value={formatDuration(node.recording.canonical_duration_ms)} />
+                  {editing ? (
+                    <>
+                      <DataRow
+                        label="bpm"
+                        value={
+                          <input
+                            type="number"
+                            value={draft.bpm ?? ''}
+                            onChange={(e) => setDraft((d) => ({ ...d, bpm: e.target.value ? Number(e.target.value) : undefined }))}
+                            className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
+                          />
+                        }
+                      />
+                      <DataRow
+                        label="label"
+                        value={
+                          <input
+                            type="text"
+                            value={draft.label ?? ''}
+                            onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))}
+                            className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
+                          />
+                        }
+                      />
+                      <DataRow
+                        label="release type"
+                        value={
+                          <input
+                            type="text"
+                            value={draft.releaseType ?? ''}
+                            onChange={(e) => setDraft((d) => ({ ...d, releaseType: e.target.value }))}
+                            className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
+                          />
+                        }
+                      />
+                      <div className="flex gap-[16px] pt-[10px]">
+                        <Button onClick={submitDraft}>review changes</Button>
+                        <button
+                          type="button"
+                          onClick={() => setEditing(false)}
+                          className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]"
+                        >
+                          cancel
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {file?.bpm != null && <DataRow label="bpm" value={file.bpm} />}
+                      {file?.label && <DataRow label="label" value={file.label} />}
+                      {file?.release_date && <DataRow label="release date" value={file.release_date} />}
+                      {file?.release_type && <DataRow label="release type" value={file.release_type} />}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {pendingWrite && (
+                <>
+                  <SectionHeader title="review diff" />
+                  <ul className="mt-[8px] flex flex-col gap-[2px]">
+                    {pendingWrite.diff.map((d) => (
+                      <li
+                        key={d.field}
+                        className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]"
+                      >
+                        {d.field}: {String(d.oldValue)} → <span className="text-[var(--color-ink)]">{String(d.newValue)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="flex items-center gap-[16px] pt-[10px]">
+                    <Button variant="destructive" onClick={approveWrite}>
+                      approve — write to file
+                    </Button>
+                    <button
+                      type="button"
+                      onClick={discardWrite}
+                      className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]"
+                    >
+                      discard
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {factGroups.length > 0 && (
+                <ul className="mt-[8px] flex flex-col gap-[4px]">
+                  {factGroups.map(({ key, items }) => (
+                    <li key={key}>
+                      {items[0].groupType ? (
+                        <FactGroup groupType={items[0].groupType} items={items} onSelectNode={onSelectNode} />
+                      ) : (
+                        <FactLine fact={items[0]} onSelectNode={onSelectNode} />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {incomingRecordings.length > 0 && (
+                <>
+                  <SectionHeader title="recordings" />
+                  <ul className="mt-[8px] flex max-h-[240px] flex-col gap-[2px] overflow-y-auto">
+                    {incomingRecordings.map((e) => (
+                      <li key={e.id}>
+                        <button
+                          type="button"
+                          onClick={() => onSelectNode(e.other_id)}
+                          className={`block w-full truncate py-[2px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] ${linkClass}`}
+                        >
+                          {e.other_title}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+
+              {node.mbid && (
+                <div className="pt-[15px]">
+                  <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">mbid</p>
+                  <p className="mt-[4px] break-all font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+                    {node.mbid}
+                  </p>
+                </div>
+              )}
+
+              {node.files.length > 1 && (
+                <>
+                  <SectionHeader title={`instances (${node.files.length})`} />
+                  <ul className="mt-[8px] flex flex-col gap-[8px]">
+                    {node.files.map((f) => (
+                      <li key={f.file_path}>
+                        <p className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+                          {f.format ?? '—'} · {f.bitrate ? `${Math.round(f.bitrate / 1000)}kbps` : '—'}
+                        </p>
+                        <p className="mt-[2px] break-all font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+                          {f.file_path}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+
+              <SectionHeader title="personal edges" />
+              {manualEdges.length > 0 && (
+                <ul className="mt-[8px] flex flex-col gap-[6px]">
+                  {manualEdges.map((e) => (
+                    <li key={e.id} className="flex items-start justify-between gap-[8px]">
+                      <div className="min-w-0">
+                        <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+                          {e.direction === 'out' ? e.label : `${e.label} ←`}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => onSelectNode(e.other_id)}
+                          className={`truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] ${linkClass}`}
+                        >
+                          {e.other_title}
+                        </button>
+                        {e.note && <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{e.note}</p>}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void deleteEdge(e.id)}
+                        aria-label={`Remove edge to ${e.other_title}`}
+                        className="shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                      >
+                        <Icon name="cancel" size={18} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <AddEdgeForm nodeId={node.id} onAdded={load} />
+            </div>
+          )}
+
+          {pages.includes('lyrics') && (
+            <div className="w-full shrink-0" inert={pages[page] !== 'lyrics'}>
+              <SectionHeader title="lyrics" />
+              {lyrics === 'loading' ? (
+                lyricsWaitVisible && (
+                  <p
+                    className={`mt-[8px] text-[length:var(--text-base)] transition-colors duration-[var(--motion-fast)] ${
+                      lyricsWaitLong ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)]'
+                    }`}
+                  >
+                    loading lyrics…
+                  </p>
+                )
+              ) : lyrics === null ? null : !lyrics.found ? (
+                <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">no lyrics found</p>
+              ) : lyrics.instrumental ? (
+                <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">instrumental</p>
+              ) : (
+                <pre className="mt-[8px] whitespace-pre-wrap text-[length:var(--text-base)] leading-relaxed text-[var(--color-ink)]">
+                  {lyrics.plainLyrics}
+                </pre>
+              )}
+            </div>
+          )}
+
+          {pages.includes('article') && node.article && (
+            <div className="w-full shrink-0" inert={pages[page] !== 'article'}>
+              <SectionHeader title="article" />
+              <ArticleBody
+                bodyMd={node.article.body_md}
+                onSelectNode={onSelectNode}
+                className="mt-[8px] text-[length:var(--text-base)] leading-relaxed text-[var(--color-ink)]"
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* P-7: page dots sit at the panel's bottom edge in the mockup, not
+       * directly under the title block — sticky rather than a Panel.tsx API
+       * change, since the panel already owns the scrolling container. */}
       {pages.length > 1 && (
-        <div className="mt-[15px] flex justify-center gap-[6px]">
+        <div className="sticky bottom-0 mt-[15px] flex justify-center gap-[6px] border-t border-[var(--color-divider)] bg-[var(--color-surface-flat)]/80 py-[12px] backdrop-blur-[var(--blur-glass)]">
           {pages.map((p, i) => (
             <button
               key={p}
@@ -284,166 +806,6 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
           ))}
         </div>
       )}
-
-      {/* One horizontal track with every page mounted, translated by
-       * -page * 100% (MO-3) — arrow keys, the dots and a swipe all produce
-       * the same transition, and direction is what tells you which way you
-       * went. Pages differ wildly in height (lyrics can run long); letting
-       * the row stretch to the tallest mounted page is simpler than
-       * measuring the active one and costs nothing since the panel already
-       * owns the scroll. */}
-      <div className="overflow-hidden" onPointerDown={handleSwipeStart} onPointerUp={handleSwipeEnd}>
-        <div
-          className="flex transition-transform duration-[var(--motion-base)] ease-[var(--ease-out)] motion-reduce:transition-none"
-          style={{ transform: `translateX(-${page * 100}%)` }}
-        >
-        {pages.includes('metadata') && (
-          <div className="w-full shrink-0" inert={pages[page] !== 'metadata'}>
-            <SectionHeader
-              title="metadata"
-              action={
-                !editing &&
-                !pendingWrite && (
-                  <Tooltip label="Edit metadata">
-                    <button
-                      type="button"
-                      onClick={startEditing}
-                      aria-label="Edit metadata"
-                      className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-                    >
-                      <Icon name="pencil" size={24} />
-                    </button>
-                  </Tooltip>
-                )
-              }
-            />
-
-            <div className="mt-[8px]">
-              <DataRow label="length" value={formatDuration(node.recording?.canonical_duration_ms ?? null)} />
-              <DataRow label="elapsed" value={formatDuration(status.positionMs)} />
-              {editing ? (
-                <>
-                  <DataRow
-                    label="bpm"
-                    value={
-                      <input
-                        type="number"
-                        value={draft.bpm ?? ''}
-                        onChange={(e) => setDraft((d) => ({ ...d, bpm: e.target.value ? Number(e.target.value) : undefined }))}
-                        className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
-                      />
-                    }
-                  />
-                  <DataRow
-                    label="label"
-                    value={
-                      <input
-                        type="text"
-                        value={draft.label ?? ''}
-                        onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))}
-                        className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
-                      />
-                    }
-                  />
-                  <DataRow
-                    label="release type"
-                    value={
-                      <input
-                        type="text"
-                        value={draft.releaseType ?? ''}
-                        onChange={(e) => setDraft((d) => ({ ...d, releaseType: e.target.value }))}
-                        className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
-                      />
-                    }
-                  />
-                  <div className="flex gap-[16px] pt-[10px]">
-                    <Button onClick={submitDraft}>review changes</Button>
-                    <button
-                      type="button"
-                      onClick={() => setEditing(false)}
-                      className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]"
-                    >
-                      cancel
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  {file?.bpm != null && <DataRow label="bpm" value={file.bpm} />}
-                  {file?.label && <DataRow label="label" value={file.label} />}
-                  {file?.release_date && <DataRow label="release date" value={file.release_date} />}
-                  {file?.release_type && <DataRow label="release type" value={file.release_type} />}
-                </>
-              )}
-            </div>
-
-            {pendingWrite && (
-              <>
-                <SectionHeader title="review diff" />
-                <ul className="mt-[8px] flex flex-col gap-[2px]">
-                  {pendingWrite.diff.map((d) => (
-                    <li
-                      key={d.field}
-                      className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]"
-                    >
-                      {d.field}: {String(d.oldValue)} → <span className="text-[var(--color-ink)]">{String(d.newValue)}</span>
-                    </li>
-                  ))}
-                </ul>
-                <div className="flex items-center gap-[16px] pt-[10px]">
-                  <Button variant="destructive" onClick={approveWrite}>
-                    approve — write to file
-                  </Button>
-                  <button
-                    type="button"
-                    onClick={discardWrite}
-                    className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]"
-                  >
-                    discard
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {pages.includes('lyrics') && (
-          <div className="w-full shrink-0" inert={pages[page] !== 'lyrics'}>
-            <SectionHeader title="lyrics" />
-            {lyrics === 'loading' ? (
-              lyricsWaitVisible && (
-                <p
-                  className={`mt-[8px] text-[length:var(--text-base)] transition-colors duration-[var(--motion-fast)] ${
-                    lyricsWaitLong ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)]'
-                  }`}
-                >
-                  loading lyrics…
-                </p>
-              )
-            ) : lyrics === null ? null : !lyrics.found ? (
-              <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">no lyrics found</p>
-            ) : lyrics.instrumental ? (
-              <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">instrumental</p>
-            ) : (
-              <pre className="mt-[8px] whitespace-pre-wrap text-[length:var(--text-base)] leading-relaxed text-[var(--color-ink)]">
-                {lyrics.plainLyrics}
-              </pre>
-            )}
-          </div>
-        )}
-
-        {pages.includes('article') && node.article && (
-          <div className="w-full shrink-0" inert={pages[page] !== 'article'}>
-            <SectionHeader title="article" />
-            <ArticleBody
-              bodyMd={node.article.body_md}
-              onSelectNode={onSelectNode}
-              className="mt-[8px] text-[length:var(--text-base)] leading-relaxed text-[var(--color-ink)]"
-            />
-          </div>
-        )}
-        </div>
-      </div>
     </div>
   )
 }
