@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ArticleBody } from '../ui/ArticleBody'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -237,6 +238,17 @@ export default function ArticlePanel({
                 </li>
               ))}
             </ul>
+          )}
+
+          {node.article && (
+            <>
+              <div style={{ opacity: 0.6, marginTop: 8, marginBottom: 4 }}>article</div>
+              <ArticleBody
+                bodyMd={node.article.body_md}
+                onSelectNode={onSelectNode}
+                className="mb-[12px] text-[13px] leading-relaxed text-white/90"
+              />
+            </>
           )}
 
           {incomingRecordings.length > 0 && (

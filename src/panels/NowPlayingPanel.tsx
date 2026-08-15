@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../ui/Icon'
 import { CoverArt } from '../ui/CoverArt'
 import { DataRow, SectionHeader } from '../ui/DataRow'
+import { ArticleBody } from '../ui/ArticleBody'
 import type { PlaybackStatus, QueueEntry } from '../playback/usePlayback'
 
 const API = 'http://127.0.0.1:8899/api/v1'
@@ -17,7 +18,9 @@ const API = 'http://127.0.0.1:8899/api/v1'
  * those touches match/collapse identity, a different question from
  * fixing a wrong bpm.
  *
- * Pagination — lyrics and article pages, the three dots — is session 7. */
+ * Pagination — the three dots — currently covers metadata and article.
+ * Lyrics lands as its own page between the two once LRCLIB is wired up;
+ * `pages` below is ordered so that's a one-line insertion, not a reshuffle. */
 
 function formatDuration(ms: number | null): string {
   if (ms == null) return '—'
@@ -39,6 +42,7 @@ type NodeDetail = {
   recording: { canonical_duration_ms: number | null } | null
   files: FileRow[]
   edges: Edge[]
+  article: { body_md: string } | null
 }
 type FieldDiff = { field: string; oldValue: string | number; newValue: string | number }
 type TagWriteRow = { id: number; status: string; diff_json: string }
@@ -58,6 +62,8 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
   const [draft, setDraft] = useState<EditableFields>({})
   const [pendingWrite, setPendingWrite] = useState<{ id: number; diff: FieldDiff[] } | null>(null)
   const [upNextOpen, setUpNextOpen] = useState(false)
+  const [page, setPage] = useState(0)
+  const swipeStartX = useRef<number | null>(null)
 
   const loadNode = (id: number) => {
     fetch(`${API}/nodes/${id}`)
@@ -69,12 +75,27 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
   useEffect(() => {
     setEditing(false)
     setPendingWrite(null)
+    setPage(0)
     if (nodeId == null) {
       setNode(null)
       return
     }
     loadNode(nodeId)
   }, [nodeId])
+
+  const pageCount = node?.article ? 2 : 1
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (editing) return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (e.key === 'ArrowLeft') setPage((p) => Math.max(0, p - 1))
+      if (e.key === 'ArrowRight') setPage((p) => Math.min(pageCount - 1, p + 1))
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [editing, pageCount])
 
   if (nodeId == null || !node) {
     return (
@@ -117,6 +138,20 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
     await fetch(`${API}/tag-writes/${pendingWrite.id}/approve`, { method: 'POST' })
     setPendingWrite(null)
     loadNode(node.id)
+  }
+
+  const pages: Array<'metadata' | 'article'> = node.article ? ['metadata', 'article'] : ['metadata']
+
+  const handleSwipeStart = (e: React.PointerEvent) => {
+    swipeStartX.current = e.clientX
+  }
+  const handleSwipeEnd = (e: React.PointerEvent) => {
+    if (swipeStartX.current == null) return
+    const delta = e.clientX - swipeStartX.current
+    swipeStartX.current = null
+    if (Math.abs(delta) < 40) return
+    if (delta < 0) setPage((p) => Math.min(pages.length - 1, p + 1))
+    else setPage((p) => Math.max(0, p - 1))
   }
 
   return (
@@ -175,124 +210,158 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
         </>
       )}
 
-      <SectionHeader
-        title="metadata"
-        action={
-          !editing &&
-          !pendingWrite && (
+      {pages.length > 1 && (
+        <div className="mt-[15px] flex justify-center gap-[6px]">
+          {pages.map((p, i) => (
             <button
+              key={p}
               type="button"
-              onClick={startEditing}
-              aria-label="Edit metadata"
-              title="Edit metadata"
-              className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
-            >
-              <Icon name="pencil" size={24} />
-            </button>
-          )
-        }
-      />
+              aria-label={`Page ${i + 1} of ${pages.length}: ${p}`}
+              aria-current={i === page}
+              onClick={() => setPage(i)}
+              className={`h-[6px] w-[6px] rounded-full transition-colors duration-150 ${
+                i === page ? 'bg-[var(--color-signal)]' : 'bg-[var(--color-hairline)]'
+              }`}
+            />
+          ))}
+        </div>
+      )}
 
-      <div className="mt-[8px]">
-        <DataRow label="length" value={formatDuration(node.recording?.canonical_duration_ms ?? null)} />
-        <DataRow label="elapsed" value={formatDuration(status.positionMs)} />
-        {editing ? (
+      <div onPointerDown={handleSwipeStart} onPointerUp={handleSwipeEnd}>
+        {pages[page] === 'metadata' && (
           <>
-            <DataRow
-              label="bpm"
-              value={
-                <input
-                  type="number"
-                  value={draft.bpm ?? ''}
-                  onChange={(e) => setDraft((d) => ({ ...d, bpm: e.target.value ? Number(e.target.value) : undefined }))}
-                  className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
-                />
+            <SectionHeader
+              title="metadata"
+              action={
+                !editing &&
+                !pendingWrite && (
+                  <button
+                    type="button"
+                    onClick={startEditing}
+                    aria-label="Edit metadata"
+                    title="Edit metadata"
+                    className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+                  >
+                    <Icon name="pencil" size={24} />
+                  </button>
+                )
               }
             />
-            <DataRow
-              label="label"
-              value={
-                <input
-                  type="text"
-                  value={draft.label ?? ''}
-                  onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))}
-                  className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
-                />
-              }
-            />
-            <DataRow
-              label="release type"
-              value={
-                <input
-                  type="text"
-                  value={draft.releaseType ?? ''}
-                  onChange={(e) => setDraft((d) => ({ ...d, releaseType: e.target.value }))}
-                  className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
-                />
-              }
-            />
-            <div className="flex gap-[16px] pt-[10px]">
-              <button
-                type="button"
-                onClick={submitDraft}
-                className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
-              >
-                review changes
-              </button>
-              <button
-                type="button"
-                onClick={() => setEditing(false)}
-                className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-              >
-                cancel
-              </button>
+
+            <div className="mt-[8px]">
+              <DataRow label="length" value={formatDuration(node.recording?.canonical_duration_ms ?? null)} />
+              <DataRow label="elapsed" value={formatDuration(status.positionMs)} />
+              {editing ? (
+                <>
+                  <DataRow
+                    label="bpm"
+                    value={
+                      <input
+                        type="number"
+                        value={draft.bpm ?? ''}
+                        onChange={(e) => setDraft((d) => ({ ...d, bpm: e.target.value ? Number(e.target.value) : undefined }))}
+                        className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
+                      />
+                    }
+                  />
+                  <DataRow
+                    label="label"
+                    value={
+                      <input
+                        type="text"
+                        value={draft.label ?? ''}
+                        onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value }))}
+                        className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
+                      />
+                    }
+                  />
+                  <DataRow
+                    label="release type"
+                    value={
+                      <input
+                        type="text"
+                        value={draft.releaseType ?? ''}
+                        onChange={(e) => setDraft((d) => ({ ...d, releaseType: e.target.value }))}
+                        className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
+                      />
+                    }
+                  />
+                  <div className="flex gap-[16px] pt-[10px]">
+                    <button
+                      type="button"
+                      onClick={submitDraft}
+                      className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
+                    >
+                      review changes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditing(false)}
+                      className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                    >
+                      cancel
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {file?.bpm != null && <DataRow label="bpm" value={file.bpm} />}
+                  {file?.label && <DataRow label="label" value={file.label} />}
+                  {file?.release_date && <DataRow label="release date" value={file.release_date} />}
+                  {file?.release_type && <DataRow label="release type" value={file.release_type} />}
+                </>
+              )}
             </div>
+
+            {pendingWrite && (
+              <>
+                <SectionHeader title="review diff" />
+                <ul className="mt-[8px] flex flex-col gap-[2px]">
+                  {pendingWrite.diff.map((d) => (
+                    <li
+                      key={d.field}
+                      className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]"
+                    >
+                      {d.field}: {String(d.oldValue)} → <span className="text-[var(--color-ink)]">{String(d.newValue)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex gap-[16px] pt-[10px]">
+                  <button
+                    type="button"
+                    onClick={approveWrite}
+                    className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
+                  >
+                    approve — write to file
+                  </button>
+                  {/* Not a delete — no DELETE /tag-writes/:id exists. This just
+                   * closes the inline review; the pending_review row is still
+                   * real and still shows up in the maintenance view's tag-write
+                   * section if it's never approved. */}
+                  <button
+                    type="button"
+                    onClick={() => setPendingWrite(null)}
+                    className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                  >
+                    close
+                  </button>
+                </div>
+              </>
+            )}
           </>
-        ) : (
+        )}
+
+        {pages[page] === 'article' && node.article && (
           <>
-            {file?.bpm != null && <DataRow label="bpm" value={file.bpm} />}
-            {file?.label && <DataRow label="label" value={file.label} />}
-            {file?.release_date && <DataRow label="release date" value={file.release_date} />}
-            {file?.release_type && <DataRow label="release type" value={file.release_type} />}
+            <SectionHeader title="article" />
+            <ArticleBody
+              bodyMd={node.article.body_md}
+              onSelectNode={onSelectNode}
+              className="mt-[8px] text-[length:var(--text-base)] leading-relaxed text-[var(--color-ink)]"
+            />
           </>
         )}
       </div>
-
-      {pendingWrite && (
-        <>
-          <SectionHeader title="review diff" />
-          <ul className="mt-[8px] flex flex-col gap-[2px]">
-            {pendingWrite.diff.map((d) => (
-              <li
-                key={d.field}
-                className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]"
-              >
-                {d.field}: {String(d.oldValue)} → <span className="text-[var(--color-ink)]">{String(d.newValue)}</span>
-              </li>
-            ))}
-          </ul>
-          <div className="flex gap-[16px] pt-[10px]">
-            <button
-              type="button"
-              onClick={approveWrite}
-              className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
-            >
-              approve — write to file
-            </button>
-            {/* Not a delete — no DELETE /tag-writes/:id exists. This just
-             * closes the inline review; the pending_review row is still
-             * real and still shows up in the maintenance view's tag-write
-             * section if it's never approved. */}
-            <button
-              type="button"
-              onClick={() => setPendingWrite(null)}
-              className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-            >
-              close
-            </button>
-          </div>
-        </>
-      )}
     </div>
   )
 }
