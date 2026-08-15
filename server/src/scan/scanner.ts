@@ -4,6 +4,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import type Database from "better-sqlite3";
 import { recomputeAllSeeds } from "../layout/seed.js";
+import { recomputeEntities } from "../entities/aggregate.js";
 import { enqueueEnrichmentIfNeeded } from "../enrich/queue.js";
 import { attachCoverForFile } from "../cover/extract.js";
 import { collapseFile } from "../match/collapse.js";
@@ -250,6 +251,7 @@ export async function executeScan(
     // every recording node's current released_in edge, cheap at this scale
     // and idempotent (see seed.ts's seed_version guard) on a no-op re-scan.
     recomputeAllSeeds(db);
+    recomputeEntities(db);
 
     db.prepare(
       `UPDATE scan_jobs SET status = 'done', files_scanned = ?, files_added = ?,

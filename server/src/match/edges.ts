@@ -19,13 +19,17 @@ function parseTagsRaw(tagsRaw: string | null): LocalTags | null {
 // level rather than a DB constraint — a blanket UNIQUE(type, title) index
 // would be wrong for 'recording' nodes (two different songs can share a
 // title), so this helper is only used for artist/release/year nodes, where
-// same-title-means-same-node is the correct v1 collapse rule. Safe without
-// a transaction/lock: better-sqlite3 is fully synchronous, so there's no
-// interleaving between the SELECT and the INSERT within one process.
+// same-title-means-same-node is the correct v1 collapse rule. Matching is
+// case/whitespace-insensitive (lower+trim on both sides) so "The Beatles"
+// and "the beatles " — the same artist, tagged inconsistently across a
+// real library — collapse into one node instead of fragmenting the entity
+// aggregates in entities/aggregate.ts. Safe without a transaction/lock:
+// better-sqlite3 is fully synchronous, so there's no interleaving between
+// the SELECT and the INSERT within one process.
 function findOrCreateNode(db: Database.Database, type: string, title: string): number {
-  const existing = db.prepare("SELECT id FROM nodes WHERE type = ? AND title = ?").get(type, title) as
-    | { id: number }
-    | undefined;
+  const existing = db
+    .prepare("SELECT id FROM nodes WHERE type = ? AND lower(trim(title)) = lower(trim(?))")
+    .get(type, title) as { id: number } | undefined;
   if (existing) return existing.id;
   const row = db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as {
     id: number;
