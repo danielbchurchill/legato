@@ -48,11 +48,20 @@
   /* ---- Graph ---------------------------------------------------------- */
 
   /* Edge color encodes relationship type. One family: identical saturation and
-   * lightness, hue rotated ~80deg per step. New relationship types continue
-   * around the wheel at 76%/66% rather than inventing a fourth kind of color. */
-  --color-edge-performed-by: #bf68eb; /* 283deg 76% 66% */
-  --color-edge-appears-on: #68b6eb; /*   203deg 76% 66% */
-  --color-edge-released-in: #68eb79; /*  115deg 76% 66% */
+   * lightness (76%/66%) for every edge type, at any hue — never a darker tone
+   * for "weaker" or a grey for "structural". See DESIGN.md "Edge palette" for
+   * the full spacing rationale (session 4 widened this from 3 types to 10,
+   * grouped by which graph each type actually renders in). */
+  --color-edge-performed-by: #bf68eb; /*    283deg 76% 66% — tracks */
+  --color-edge-appears-on: #68b6eb; /*      203deg 76% 66% — tracks */
+  --color-edge-released-in: #68eb79; /*     115deg 76% 66% — tracks */
+  --color-edge-released-on: #ea66a6; /*     331deg 76% 66% — tracks */
+  --color-edge-produced-by: #ea9066; /*      19deg 76% 66% — tracks */
+  --color-edge-engineered-by: #dbea66; /*    67deg 76% 66% — tracks */
+  --color-edge-featured-artist: #66eabc; /* 159deg 76% 66% — tracks */
+  --color-edge-same-artist: #7166ea; /*     245deg 76% 66% — albums */
+  --color-edge-same-label: #ea667c; /*      350deg 76% 66% — albums */
+  --color-edge-collaborated-with: #ea8766; /* 15deg 76% 66% — artists */
 
   /* Selection ring drawn around a node, not a fill change on it. */
   --color-node-ring: #ffffff;

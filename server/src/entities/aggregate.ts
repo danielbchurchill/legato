@@ -73,7 +73,17 @@ export function computeAlbumAggregates(
   return result;
 }
 
-export function computeArtistAggregates(appearsOn: EdgeRef[], performedBy: EdgeRef[]): ArtistAggregate[] {
+// performerEdges is performed_by + featured_artist combined — an artist
+// credited only as a featured guest, never as the primary performer on any
+// track, is still a real artist entity. Missing this made such an artist
+// invisible everywhere downstream: no albums/artists table row, so no
+// layout/seed.ts position, so they silently vanished from the artists
+// graph despite having real entities/collaboration.ts collaborated_with
+// edges pointing at them — confirmed live: nodes 410/411/412 had
+// collaborated_with edges but never appeared in GET /nodes?granularity=
+// artists, because they'd never once been the primary performed_by
+// credit on a track, only a featured one.
+export function computeArtistAggregates(appearsOn: EdgeRef[], performerEdges: EdgeRef[]): ArtistAggregate[] {
   const releaseByRecording = new Map<number, number>();
   for (const e of appearsOn) {
     if (!releaseByRecording.has(e.fromNode)) releaseByRecording.set(e.fromNode, e.toNode);
@@ -81,7 +91,7 @@ export function computeArtistAggregates(appearsOn: EdgeRef[], performedBy: EdgeR
 
   const tracksByArtist = new Map<number, Set<number>>();
   const albumsByArtist = new Map<number, Set<number>>();
-  for (const e of performedBy) {
+  for (const e of performerEdges) {
     const artistId = e.toNode;
     const recordingId = e.fromNode;
 
@@ -123,6 +133,14 @@ export function recomputeEntities(db: Database.Database): void {
   const performedBy = db
     .prepare("SELECT from_node AS fromNode, to_node AS toNode FROM edges WHERE type = 'performed_by'")
     .all() as EdgeRef[];
+  // Album primary-artist selection (computeAlbumAggregates) deliberately
+  // stays performed_by-only — a featured guest on a couple of tracks
+  // shouldn't contend for "primary artist of this album" against the
+  // actual album artist. Artist *entity* membership (computeArtistAggregates)
+  // is the opposite case: a featured-only artist is still a real artist.
+  const performerEdges = db
+    .prepare("SELECT from_node AS fromNode, to_node AS toNode FROM edges WHERE type IN ('performed_by', 'featured_artist')")
+    .all() as EdgeRef[];
 
   const durationRows = db.prepare("SELECT node_id AS nodeId, canonical_duration_ms AS durationMs FROM recordings").all() as {
     nodeId: number;
@@ -140,7 +158,7 @@ export function recomputeEntities(db: Database.Database): void {
   const recordingYear = new Map(yearRows.map((r) => [r.nodeId, r.year]));
 
   const albums = computeAlbumAggregates(appearsOn, performedBy, recordingDurationMs, recordingYear);
-  const artists = computeArtistAggregates(appearsOn, performedBy);
+  const artists = computeArtistAggregates(appearsOn, performerEdges);
 
   const upsertAlbum = db.prepare(
     `INSERT INTO albums (node_id, primary_artist_node_id, track_count, total_duration_ms, year_min, year_max)

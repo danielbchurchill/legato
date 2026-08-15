@@ -87,6 +87,24 @@ describe("computeArtistAggregates", () => {
     const [artist] = computeArtistAggregates([], performedBy);
     expect(artist).toEqual({ nodeId: 200, trackCount: 1, albumCount: 0 });
   });
+
+  it("creates an entity for an artist credited only as a featured guest, never as the primary performer", () => {
+    // Regression: confirmed live on the real library — nodes with a
+    // collaborated_with edge (entities/collaboration.ts) but no
+    // performed_by credit of their own never got an artists row, so they
+    // silently never appeared in GET /nodes?granularity=artists at all.
+    // The caller is responsible for passing performed_by + featured_artist
+    // combined as performerEdges.
+    const appearsOn: EdgeRef[] = [{ fromNode: 1, toNode: 100 }];
+    const performerEdges: EdgeRef[] = [
+      { fromNode: 1, toNode: 200 }, // primary performer
+      { fromNode: 1, toNode: 300 }, // featured guest, never a primary performer anywhere
+    ];
+
+    const artists = computeArtistAggregates(appearsOn, performerEdges);
+    const featuredGuest = artists.find((a) => a.nodeId === 300);
+    expect(featuredGuest).toEqual({ nodeId: 300, trackCount: 1, albumCount: 1 });
+  });
 });
 
 describe("recomputeEntities", () => {
@@ -164,5 +182,34 @@ describe("recomputeEntities", () => {
 
     const count = db.prepare("SELECT COUNT(*) AS n FROM albums").get() as { n: number };
     expect(count.n).toBe(1);
+  });
+
+  it("gives a featured-only artist a real artists table row", () => {
+    db = openDb(":memory:");
+    const primary = makeNode("artist", "The Beatles");
+    const featured = makeNode("artist", "Billy Preston");
+    const release = makeNode("release", "Let It Be");
+    const recording = makeNode("recording", "Get Back");
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+      recording,
+      release,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+      recording,
+      primary,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'featured_artist', 'local')").run(
+      recording,
+      featured,
+    );
+
+    recomputeEntities(db);
+
+    const row = db.prepare("SELECT track_count FROM artists WHERE node_id = ?").get(featured) as
+      | { track_count: number }
+      | undefined;
+    expect(row).toBeDefined();
+    expect(row?.track_count).toBe(1);
   });
 });

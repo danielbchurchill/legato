@@ -178,19 +178,40 @@ A node with no cover art falls back to a filled circle in `--color-muted`. (Wort
 
 Edge color encodes **relationship type**.
 
+Session 4 split the graph into three granularities (artists/albums/tracks), each its own view with its own edge types — and none of those three views ever render together. That relaxes the constraint the original three-color palette had to satisfy: colors only need to be mutually distinguishable *within one graph*, not across all ten types at once. So the table below is grouped by which graph a type actually appears in, not listed as one flat wheel.
+
+**Tracks graph — 7 types, all mutually distinguishable:**
+
 | Token | Value | HSL | Relationship |
 |---|---|---|---|
 | `--color-edge-performed-by` | `#BF68EB` | 283° 76% 66% | Recording → artist |
 | `--color-edge-appears-on` | `#68B6EB` | 203° 76% 66% | Recording → release |
 | `--color-edge-released-in` | `#68EB79` | 115° 76% 66% | Recording → year |
+| `--color-edge-featured-artist` | `#66EABC` | 159° 76% 66% | Recording → artist (featured) |
+| `--color-edge-released-on` | `#EA66A6` | 331° 76% 66% | Recording → label |
+| `--color-edge-produced-by` | `#EA9066` | 19° 76% 66% | Recording → credit (producer) |
+| `--color-edge-engineered-by` | `#DBEA66` | 67° 76% 66% | Recording → credit (engineer) |
+
+**Albums graph — 2 types** (`entities/collaboration.ts`'s derived relations, never rendered alongside the tracks graph's palette above):
+
+| Token | Value | HSL | Relationship |
+|---|---|---|---|
+| `--color-edge-same-artist` | `#7166EA` | 245° 76% 66% | Release ↔ release, shared primary artist |
+| `--color-edge-same-label` | `#EA667C` | 350° 76% 66% | Release ↔ release, shared dominant label |
+
+**Artists graph — 1 type:**
+
+| Token | Value | HSL | Relationship |
+|---|---|---|---|
+| `--color-edge-collaborated-with` | `#EA8766` | 15° 76% 66% | Artist ↔ artist, shared a recording |
 
 Edges are 1px (Figma: 0.5px — same sub-pixel reasoning as hairlines).
 
-**One family, three hues.** Identical saturation and lightness, rotated roughly 80° per step. The mockup drew the green at 50%/33%, which read as much heavier and darker than its two siblings rather than as a peer; it was normalized to 76%/66% to complete the set (decided 2026-08-14).
+**One family, every hue.** Identical saturation and lightness (76%/66%) at every hue, no exceptions. The mockup drew its green at 50%/33%, which read as much heavier and darker than its two siblings rather than as a peer; it was normalized to 76%/66% to complete the original set (decided 2026-08-14). It does not get a fourth kind of color — no darker tone for "weaker", no grey for "structural". If edges ever need to express strength as well as type, that is opacity or width, not a second color dimension.
 
-This is the rule that makes the palette extensible: **a new relationship type continues around the wheel at 76% saturation and 66% lightness.** It does not get a fourth kind of color — no darker tone for "weaker", no grey for "structural". If edges ever need to express strength as well as type, that is opacity or width, not a second color dimension.
+The original three types' hues were spaced ~80° apart (283°/203°/115°) — that spacing doesn't scale to ten types without either colliding or leaving no headroom for an eleventh. Session 4's seven new hues are chosen with ≥44° clearance from every *co-rendering* neighbor (the tracks graph's 7 types, spaced ~44-80° apart around the full circle) — colors that never appear in the same view (a tracks-graph hue and an albums-graph hue, say) aren't spaced against each other at all, since there's nothing to confuse them with. The original three anchors' exact hex values are untouched — they were measured against the Figma render and are correct; only the *methodology* for adding more is revised here, exactly as invited by this section's own note that the assignment was "provisional... revisit when edge types widen."
 
-The type-to-color assignment is provisional — the mockup shows three colors but does not label them, so they are assigned here by visual frequency (purple densest in clusters, blue spanning long distances, green sparse). Revisit when edge types widen beyond the current three.
+The type-to-color assignment within the tracks graph is still provisional in the same sense the original three were — no meaningful-order convention (e.g., "hard metadata warmest, personal edges coolest") has been decided, just clearance-based spacing. Revisit if that becomes worth doing deliberately.
 
 ---
 

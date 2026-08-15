@@ -3,6 +3,7 @@ import Graph from 'graphology'
 import Sigma from 'sigma'
 import { NodeImageProgram } from '@sigma/node-image'
 import { patchNodePosition, useGraphData, type GraphEdge, type GraphNode } from './useGraphData'
+import type { Granularity } from '../shell/granularity'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -32,15 +33,38 @@ const NODE_SIZE: Record<string, number> = {
 }
 
 /* Edge color encodes relationship type — one family, identical saturation and
- * lightness, hue rotated per step. Mirrors --color-edge-* in tokens.css; sigma
- * needs concrete values because it renders to WebGL and never sees our CSS.
- * See DESIGN.md "Edge palette". */
+ * lightness at every hue. Mirrors --color-edge-* in tokens.css; sigma needs
+ * concrete values because it renders to WebGL and never sees our CSS. Grouped
+ * by which graph a type actually renders in (they never render together), not
+ * spaced as one flat 10-color wheel — see DESIGN.md "Edge palette". */
 const EDGE_COLOR: Record<string, string> = {
   performed_by: '#bf68eb',
   appears_on: '#68b6eb',
   released_in: '#68eb79',
+  featured_artist: '#66eabc',
+  released_on: '#ea66a6',
+  produced_by: '#ea9066',
+  engineered_by: '#dbea66',
+  same_artist: '#7166ea',
+  same_label: '#ea667c',
+  collaborated_with: '#ea8766',
 }
 const EDGE_COLOR_FALLBACK = 'rgba(255,255,255,0.12)'
+
+/* Hover/neighbor highlighting dims everything else instead of brightening the
+ * hovered set — matches the selection ring's own "addition, not substitution"
+ * rule (DESIGN.md "Nodes"): the graph's base palette never changes meaning,
+ * uninvolved elements just recede. */
+const DIMMED_NODE_COLOR = 'rgba(255,255,255,0.06)'
+const DIMMED_EDGE_COLOR = 'rgba(255,255,255,0.03)'
+
+/* LOD: only bind real cover textures once the camera is zoomed in enough that
+ * they'd actually be legible — at the whole-library view, thumbnails would be
+ * a few pixels across and every one is still a unique texture in sigma's
+ * atlas for effectively no visual benefit. Below the threshold, art-eligible
+ * nodes render as the same flat colored dot as everything else. Sigma's own
+ * camera ratio is inverse-zoom: smaller ratio = more zoomed in. */
+const ART_ZOOM_RATIO_THRESHOLD = 1.4
 
 function nodeKey(id: number): string {
   return String(id)
@@ -89,84 +113,141 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
   }
 }
 
-function buildGraph(nodes: GraphNode[], edges: GraphEdge[]): Graph {
-  const graph = new Graph()
+/* Art is only ever bound to release nodes — every recording resolves to its
+ * album's cover through the endpoint, but binding thousands of recordings
+ * would put thousands of unique textures in sigma's atlas for images that are
+ * mostly duplicates of each other. artEnabled is the LOD gate above. */
+function nodeAttributes(node: GraphNode, artEnabled: boolean): Record<string, unknown> {
+  const x = node.user_x ?? node.seed_x
+  const y = node.user_y ?? node.seed_y
+  const hasArt = artEnabled && node.type === 'release' && node.has_cover === 1
 
+  if (hasArt) {
+    return {
+      label: node.title,
+      x,
+      y,
+      size: ART_SIZE,
+      type: 'image',
+      image: `${API}/nodes/${node.id}/cover?size=thumb`,
+      color: '#ffffff',
+      origSize: ART_SIZE,
+    }
+  }
+
+  const size = NODE_SIZE[node.type] ?? 3
+  const color = NODE_COLOR[node.type] ?? '#999'
+  return { label: node.title, x, y, size, color, type: 'circle', origSize: size }
+}
+
+/* Updates the existing graphology instance in place to match the latest
+ * fetched data — add/update/remove, never drop-and-rebuild — so the Sigma
+ * renderer subscribed to this graph never needs to be torn down for a plain
+ * data refresh. This is the actual fix for the bug that used to reset the
+ * camera on every refetch: the renderer effect below now only depends on
+ * `granularity`, not on `nodes`/`edges`. */
+function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], artEnabled: boolean): void {
+  const wantedNodes = new Map<string, GraphNode>()
   for (const node of nodes) {
     const x = node.user_x ?? node.seed_x
     const y = node.user_y ?? node.seed_y
     if (x == null || y == null) continue // no position yet — nothing to plot
-
-    // Artwork is bound to release nodes only. Every recording resolves to its
-    // album's cover through the endpoint, but binding thousands of recordings
-    // would put thousands of unique textures in sigma's atlas for images that
-    // are mostly duplicates of each other. Session 4 revisits this when the
-    // graph splits by granularity.
-    const hasArt = node.type === 'release' && node.has_cover === 1
-
-    if (hasArt) {
-      graph.addNode(nodeKey(node.id), {
-        label: node.title,
-        x,
-        y,
-        size: ART_SIZE,
-        type: 'image',
-        image: `${API}/nodes/${node.id}/cover?size=thumb`,
-        color: '#ffffff',
-        origSize: ART_SIZE,
-      })
-      continue
-    }
-
-    const size = NODE_SIZE[node.type] ?? 3
-    const color = NODE_COLOR[node.type] ?? '#999'
-    graph.addNode(nodeKey(node.id), { label: node.title, x, y, size, color, origSize: size })
+    wantedNodes.set(nodeKey(node.id), node)
   }
 
+  graph.forEachNode((key) => {
+    if (!wantedNodes.has(key)) graph.dropNode(key)
+  })
+  for (const [key, node] of wantedNodes) {
+    const attrs = nodeAttributes(node, artEnabled)
+    if (graph.hasNode(key)) graph.mergeNodeAttributes(key, attrs)
+    else graph.addNode(key, attrs)
+  }
+
+  // Keyed by (from, to, type) rather than just (from, to) — two albums can
+  // share both a same_artist and a same_label relation at once (confirmed on
+  // the real library: 19 of 109 album pairs do), and a plain Graph only
+  // allows one edge between a given pair. graph is constructed as a
+  // multigraph below specifically so both survive as visually distinct
+  // edges instead of one silently overwriting the other.
+  const wantedEdgeKeys = new Set<string>()
   for (const edge of edges) {
     const from = nodeKey(edge.from_node)
     const to = nodeKey(edge.to_node)
     if (!graph.hasNode(from) || !graph.hasNode(to)) continue
-    if (graph.hasEdge(from, to)) continue
-    graph.addEdge(from, to, { size: 0.5, color: EDGE_COLOR[edge.type] ?? EDGE_COLOR_FALLBACK })
+    const edgeKey = `${from}->${to}::${edge.type}`
+    wantedEdgeKeys.add(edgeKey)
+    if (graph.hasEdge(edgeKey)) continue
+    graph.addEdgeWithKey(edgeKey, from, to, { size: 0.5, color: EDGE_COLOR[edge.type] ?? EDGE_COLOR_FALLBACK })
   }
 
-  return graph
+  graph.forEachEdge((edgeKey) => {
+    if (!wantedEdgeKeys.has(edgeKey)) graph.dropEdge(edgeKey)
+  })
+}
+
+// Re-attributes every art-eligible node when the LOD threshold is crossed —
+// an event-driven bulk update on camera 'updated', not a per-frame reducer:
+// NodeImageProgram needs a real 'image' attribute and a real 'image' node
+// type on the graph, which a render-time reducer can override for color/size
+// but not reliably swap the rendering program for.
+function applyArtLOD(graph: Graph, nodes: GraphNode[], artEnabled: boolean): void {
+  for (const node of nodes) {
+    const key = nodeKey(node.id)
+    if (!graph.hasNode(key)) continue
+    const shouldHaveArt = artEnabled && node.type === 'release' && node.has_cover === 1
+    const currentlyHasArt = graph.getNodeAttribute(key, 'type') === 'image'
+    if (shouldHaveArt === currentlyHasArt) continue
+    graph.mergeNodeAttributes(key, nodeAttributes(node, artEnabled))
+  }
 }
 
 type Props = {
+  granularity: Granularity
   selectedNodeId: number | null
   onSelectNode: (id: number | null) => void
   onStats?: (stats: { nodes: number; edges: number }) => void
 }
 
-export default function Canvas({ selectedNodeId, onSelectNode, onStats }: Props) {
+export default function Canvas({ granularity, selectedNodeId, onSelectNode, onStats }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const graphRef = useRef<Graph | null>(null)
-  const { nodes, edges, loading } = useGraphData()
+  const rendererRef = useRef<Sigma | null>(null)
+  const { nodes, edges, loading } = useGraphData(granularity)
 
-  // Held in refs so the sigma effect below does not list them as dependencies.
-  // It used to depend on onSelectNode, which meant every parent re-render tore
-  // down the whole renderer and reset the camera mid-interaction.
+  // Held in refs so effects below don't list them as dependencies — a parent
+  // re-render must never tear down the renderer or reset the camera.
   const onSelectNodeRef = useRef(onSelectNode)
   const onStatsRef = useRef(onStats)
+  const nodesRef = useRef(nodes)
+  const artEnabledRef = useRef(true)
+  const lastCameraRatioRef = useRef<number | null>(null)
   useEffect(() => {
     onSelectNodeRef.current = onSelectNode
     onStatsRef.current = onStats
+    nodesRef.current = nodes
   })
 
+  // Renderer lifecycle — created once per granularity (a genuinely different
+  // graph: different node set, different edges, different layout), NOT on
+  // every data refresh. The zoom ratio (not pan/x/y, which have no shared
+  // meaning across two different node sets) carries over from whichever
+  // graph was active before, so switching artists -> albums -> tracks doesn't
+  // suddenly zoom back out to fit-all every time.
   useEffect(() => {
-    if (!containerRef.current || loading) return
+    if (!containerRef.current) return
 
-    const graph = buildGraph(nodes, edges)
+    // multi: true — two nodes can hold more than one edge between them (a
+    // same_artist and a same_label relation between the same two albums,
+    // for real on the current library). See syncGraph's edge-keying comment.
+    const graph = new Graph({ multi: true })
     graphRef.current = graph
-    onStatsRef.current?.({ nodes: graph.order, edges: graph.size })
 
     const renderer = new Sigma(graph, containerRef.current, {
       // No labels on the canvas: the mockup identifies a node by its artwork
-      // and nothing else, and 398 overlapping titles bury the art they are
-      // supposed to describe. Hover and selection labelling is session 4's,
-      // alongside neighbour highlighting.
+      // and nothing else, and hundreds of overlapping titles bury the art
+      // they are supposed to describe. Hover labelling is handled by the
+      // reducers below instead of sigma's built-in label rendering.
       renderLabels: false,
       renderEdgeLabels: false,
       defaultEdgeType: 'line',
@@ -175,9 +256,51 @@ export default function Canvas({ selectedNodeId, onSelectNode, onStats }: Props)
       // artwork stays square inside a panel. DESIGN.md "Radius".
       defaultNodeType: 'circle',
     })
+    rendererRef.current = renderer
 
-    const bbox = robustBBox(graph)
-    if (bbox) renderer.setCustomBBox(bbox)
+    if (lastCameraRatioRef.current != null) {
+      renderer.getCamera().setState({ ratio: lastCameraRatioRef.current })
+    }
+    renderer.getCamera().on('updated', (state) => {
+      lastCameraRatioRef.current = state.ratio
+      const shouldHaveArt = state.ratio <= ART_ZOOM_RATIO_THRESHOLD
+      if (shouldHaveArt !== artEnabledRef.current) {
+        artEnabledRef.current = shouldHaveArt
+        applyArtLOD(graph, nodesRef.current, shouldHaveArt)
+      }
+    })
+
+    // Hover/neighbor highlighting — dims everything not connected to the
+    // hovered node, via sigma's render-time reducers rather than mutating
+    // graph attributes, so it costs nothing to undo on leaveNode.
+    let hoveredNode: string | null = null
+    let hoveredNeighbors: Set<string> | null = null
+
+    renderer.setSetting('nodeReducer', (node, data) => {
+      if (!hoveredNode || node === hoveredNode || hoveredNeighbors?.has(node)) return data
+      // Forced to 'circle' rather than left as 'image' with no image — an
+      // art-bound node dimmed mid-hover must reliably fall back to a plain
+      // dimmed dot, not depend on NodeImageProgram handling a missing image
+      // gracefully.
+      return { ...data, type: 'circle', color: DIMMED_NODE_COLOR, zIndex: 0 }
+    })
+    renderer.setSetting('edgeReducer', (edge, data) => {
+      if (!hoveredNode) return data
+      const [source, target] = graph.extremities(edge)
+      if (source === hoveredNode || target === hoveredNode) return data
+      return { ...data, color: DIMMED_EDGE_COLOR }
+    })
+
+    renderer.on('enterNode', ({ node }) => {
+      hoveredNode = node
+      hoveredNeighbors = new Set(graph.neighbors(node))
+      renderer.refresh()
+    })
+    renderer.on('leaveNode', () => {
+      hoveredNode = null
+      hoveredNeighbors = null
+      renderer.refresh()
+    })
 
     // Standard sigma.js drag-node recipe: track the dragged node across
     // downNode -> mousemovebody -> mouseup, reposition it live, and PATCH
@@ -211,15 +334,14 @@ export default function Canvas({ selectedNodeId, onSelectNode, onStats }: Props)
         const x = graph.getNodeAttribute(draggedNode, 'x') as number
         const y = graph.getNodeAttribute(draggedNode, 'y') as number
         graph.removeNodeAttribute(draggedNode, 'highlighted')
-        void patchNodePosition(id, x, y)
+        void patchNodePosition(id, x, y, granularity)
       }
       isDragging = false
       draggedNode = null
     }
 
     // Pins the projection while dragging so the graph does not reflow under
-    // the cursor. Already a no-op when robustBBox set one above, kept for the
-    // empty-graph case.
+    // the cursor.
     const handleMouseDown = () => {
       if (!renderer.getCustomBBox()) renderer.setCustomBBox(renderer.getBBox())
     }
@@ -229,7 +351,31 @@ export default function Canvas({ selectedNodeId, onSelectNode, onStats }: Props)
 
     return () => {
       renderer.kill()
+      rendererRef.current = null
       graphRef.current = null
+    }
+    // Deliberately [granularity] only, not [nodes, edges] — see the comment
+    // above the effect. onSelectNode/onStats/nodes are read through refs.
+  }, [granularity])
+
+  // Data sync — updates the existing graph in place whenever fetched data
+  // changes, without touching the renderer (which would reset the camera).
+  useEffect(() => {
+    const graph = graphRef.current
+    const renderer = rendererRef.current
+    if (!graph || !renderer || loading) return
+
+    const hadNoNodes = graph.order === 0
+    syncGraph(graph, nodes, edges, artEnabledRef.current)
+    onStatsRef.current?.({ nodes: graph.order, edges: graph.size })
+
+    // Only fit the camera to the data on the graph's first population for
+    // this renderer (a fresh mount or a granularity switch) — a background
+    // refresh of the same graph must never move the viewport out from under
+    // whatever the user is currently looking at.
+    if (hadNoNodes) {
+      const bbox = robustBBox(graph)
+      if (bbox) renderer.setCustomBBox(bbox)
     }
   }, [nodes, edges, loading])
 

@@ -205,6 +205,7 @@ function MainApp() {
   return (
     <AppShell>
       <Canvas
+        granularity={granularity}
         selectedNodeId={selectedNodeId}
         onSelectNode={setSelectedNodeId}
         onStats={setStats}
