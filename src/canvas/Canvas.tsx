@@ -56,9 +56,17 @@ const EDGE_COLOR_FALLBACK = 'rgba(255,255,255,0.12)'
 /* Hover/neighbor highlighting dims everything else instead of brightening the
  * hovered set — matches the selection ring's own "addition, not substitution"
  * rule (DESIGN.md "Nodes"): the graph's base palette never changes meaning,
- * uninvolved elements just recede. */
-const DIMMED_NODE_COLOR = 'rgba(255,255,255,0.06)'
-const DIMMED_EDGE_COLOR = 'rgba(255,255,255,0.03)'
+ * uninvolved elements just recede.
+ *
+ * Mirrors --color-node-dim / --color-edge-dim in tokens.css — sigma needs
+ * concrete values because it renders to WebGL and never sees our CSS (same
+ * reasoning as EDGE_COLOR above). These MUST be opaque: sigma's WebGL path
+ * does not composite a translucent rgba() the way CSS would, so the
+ * previous rgba(255,255,255,0.06) rendered as solid white — hovering blew
+ * the whole graph out to a bright flash instead of dimming it. Confirmed
+ * live: swapping to an opaque dark hex fixes it outright. */
+const DIMMED_NODE_COLOR = '#20262a'
+const DIMMED_EDGE_COLOR = '#1b2023'
 
 /* LOD: only bind real cover textures once the camera is zoomed in enough that
  * they'd actually be legible — at the whole-library view, thumbnails would be

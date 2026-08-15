@@ -66,6 +66,14 @@
   /* Selection ring drawn around a node, not a fill change on it. */
   --color-node-ring: #ffffff;
 
+  /* Hover dimming for uninvolved nodes/edges. Must be opaque — sigma's WebGL
+   * path renders a translucent rgba() as solid white rather than compositing
+   * it, so these can never be alpha values no matter how tempting that reads
+   * next to --color-canvas. Canvas.tsx duplicates these as concrete hex
+   * (sigma never sees CSS); keep the two in sync by hand. */
+  --color-node-dim: #20262a;
+  --color-edge-dim: #1b2023;
+
   /* ---- Controls ------------------------------------------------------- */
 
   /* Waveform bars and the now-playing page dots share one value. */
