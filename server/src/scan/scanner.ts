@@ -210,6 +210,7 @@ export function markMissing(db: Database.Database, filePath: string): void {
 
 export type ScanProgress = {
   jobId: number;
+  libraryRootId: number;
   filesScanned: number;
   filesAdded: number;
   filesUpdated: number;
@@ -247,7 +248,7 @@ export async function executeScan(
       filesScanned++;
       if (outcome === "added") filesAdded++;
       if (outcome === "updated") filesUpdated++;
-      onProgress?.({ jobId, filesScanned, filesAdded, filesUpdated });
+      onProgress?.({ jobId, libraryRootId, filesScanned, filesAdded, filesUpdated });
     }
 
     const existingPaths = db

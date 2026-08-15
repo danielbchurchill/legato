@@ -4,6 +4,7 @@ use std::io::BufReader;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -65,11 +66,19 @@ pub struct PlaybackState {
   // Sink, and a user's volume choice shouldn't reset every time the queue
   // empties and refills.
   volume: Arc<Mutex<f32>>,
+  // None means "system default" — the common case, and what every session
+  // used before device selection existed. Also lives outside Session so a
+  // chosen device survives stop/restart the same way volume does.
+  device_name: Arc<Mutex<Option<String>>>,
 }
 
 impl PlaybackState {
   pub fn new() -> Self {
-    PlaybackState { session: Arc::new(Mutex::new(None)), volume: Arc::new(Mutex::new(1.0)) }
+    PlaybackState {
+      session: Arc::new(Mutex::new(None)),
+      volume: Arc::new(Mutex::new(1.0)),
+      device_name: Arc::new(Mutex::new(None)),
+    }
   }
 }
 
@@ -114,19 +123,55 @@ fn spawn_monitor(app: AppHandle, state: Arc<Mutex<Option<Session>>>) {
   });
 }
 
+// Falls back to the system default if the configured device is gone
+// (unplugged, renamed) rather than erroring — a stale device preference
+// should degrade to "plays somewhere," not "doesn't play."
+fn open_stream(device_name: &Option<String>) -> Result<OutputStream, String> {
+  if let Some(name) = device_name {
+    let host = rodio::cpal::default_host();
+    if let Ok(mut devices) = host.output_devices() {
+      if let Some(device) = devices.find(|d| d.name().ok().as_deref() == Some(name.as_str())) {
+        return OutputStreamBuilder::from_device(device)
+          .and_then(|builder| builder.open_stream())
+          .map_err(|e| e.to_string());
+      }
+    }
+  }
+  OutputStreamBuilder::open_default_stream().map_err(|e| e.to_string())
+}
+
 fn ensure_session<'a>(
   app: &AppHandle,
   state: &'a PlaybackState,
 ) -> Result<std::sync::MutexGuard<'a, Option<Session>>, String> {
   let mut guard = state.session.lock().unwrap();
   if guard.is_none() {
-    let stream = OutputStreamBuilder::open_default_stream().map_err(|e| e.to_string())?;
+    let device_name = state.device_name.lock().unwrap().clone();
+    let stream = open_stream(&device_name)?;
     let sink = Sink::connect_new(stream.mixer());
     sink.set_volume(*state.volume.lock().unwrap());
     *guard = Some(Session { _stream: stream, sink, queue: VecDeque::new() });
     spawn_monitor(app.clone(), state.session.clone());
   }
   Ok(guard)
+}
+
+#[tauri::command]
+pub fn list_audio_devices() -> Result<Vec<String>, String> {
+  let host = rodio::cpal::default_host();
+  let devices = host.output_devices().map_err(|e| e.to_string())?;
+  Ok(devices.filter_map(|d| d.name().ok()).collect())
+}
+
+/// Selecting a device tears down any live session (same effect as
+/// queue_stop) so the next enqueue reopens on the new device — rodio has
+/// no way to swap a Sink's output stream mid-session, and this mirrors how
+/// an actual device unplug already behaves.
+#[tauri::command]
+pub fn queue_set_device(state: State<PlaybackState>, name: Option<String>) -> Result<(), String> {
+  *state.device_name.lock().unwrap() = name;
+  *state.session.lock().unwrap() = None;
+  Ok(())
 }
 
 #[tauri::command]
@@ -234,6 +279,16 @@ mod tests {
   fn gain_db_passes_through_the_tag_value() {
     let track = QueueTrack { file_path: String::new(), recording_node_id: 0, replaygain_track_gain: Some(-6.5) };
     assert_eq!(gain_db(&track), -6.5);
+  }
+
+  // Only enumeration — no stream is opened, so this is safe to run in a
+  // headless environment with no real output device (an empty Vec is a
+  // legitimate result there, not a failure); a real device list is what
+  // this was actually checked against in a normal desktop session.
+  #[test]
+  fn list_audio_devices_does_not_panic() {
+    let result = list_audio_devices();
+    assert!(result.is_ok());
   }
 
   // Exercises the real audio engine against real hardware and a real file

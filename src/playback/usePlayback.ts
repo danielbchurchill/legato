@@ -16,6 +16,21 @@ type ResolvedTrack = {
 }
 
 export type QueueEntry = { recordingNodeId: number; title: string; durationMs: number | null }
+export type ReplayGainMode = 'track' | 'album' | 'off'
+
+// 'album' falls back to track gain when a recording's release has none
+// (an untagged single, a compilation with mixed source masters) — "no
+// adjustment at all" is a worse default than "adjust some other way" for
+// what a ReplayGain mode is actually for: consistent loudness across a
+// mixed queue.
+function gainForMode(
+  track: { replaygainTrackGain: number | null; replaygainAlbumGain: number | null },
+  mode: ReplayGainMode,
+): number | null {
+  if (mode === 'off') return null
+  if (mode === 'album') return track.replaygainAlbumGain ?? track.replaygainTrackGain
+  return track.replaygainTrackGain
+}
 
 export type PlaybackStatus = {
   playing: boolean
@@ -95,7 +110,7 @@ function reportPlay(entry: PlayInProgress): void {
 // invoke()/listen() are no-ops outside an actual Tauri window (a plain
 // browser tab has no IPC bridge), so every call here is defensively
 // wrapped rather than assumed to succeed.
-export function usePlayback() {
+export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
   const [status, setStatus] = useState<PlaybackStatus>({
     playing: false,
     positionMs: 0,
@@ -194,7 +209,11 @@ export function usePlayback() {
           track: {
             file_path: t.filePath,
             recording_node_id: t.recordingNodeId,
-            replaygain_track_gain: t.replaygainTrackGain,
+            // Rust just applies whatever dB value arrives here — the mode
+            // selection (track/album/off) is entirely a frontend decision
+            // about *which* precomputed gain to send, not something the
+            // audio engine needs to know about.
+            replaygain_track_gain: gainForMode(t, replaygainMode),
           },
         })
       }
@@ -203,7 +222,7 @@ export function usePlayback() {
       setUpNext(queueContext.current.slice(1))
       setStatus((s) => ({ ...s, playing: true, currentRecordingNodeId: recordingNodeId }))
     },
-    [finalizeCurrentPlay],
+    [finalizeCurrentPlay, replaygainMode],
   )
 
   const pause = useCallback(async () => {
@@ -247,5 +266,12 @@ export function usePlayback() {
     setStatus((s) => ({ ...s, volume: clamped }))
   }, [])
 
-  return { status, currentTitle, upNext, playNode, pause, resume, stop, skip, seek, setVolume }
+  // null means "system default" — tearing the session down here (mirrored
+  // on the Rust side) is deliberate: rodio can't swap a Sink's output
+  // stream live, so the new device only takes effect on the next play.
+  const setAudioDevice = useCallback(async (name: string | null) => {
+    await invoke('queue_set_device', { name })
+  }, [])
+
+  return { status, currentTitle, upNext, playNode, pause, resume, stop, skip, seek, setVolume, setAudioDevice }
 }

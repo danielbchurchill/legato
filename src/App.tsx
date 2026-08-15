@@ -15,6 +15,9 @@ import type { Granularity } from './shell/granularity'
 import { TransportDock } from './shell/TransportDock'
 import { CollectionPanel } from './panels/CollectionPanel'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
+import { SettingsView } from './settings/SettingsView'
+import { useSettings } from './hooks/useSettings'
+import type { ReplayGainMode } from './playback/usePlayback'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -180,9 +183,21 @@ function MainApp() {
   const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
   const [hygieneOpen, setHygieneOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [granularity, setGranularity] = useState<Granularity>('albums')
-  const playback = usePlayback()
+  const { settings, updateSettings } = useSettings()
+  const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
+  const playback = usePlayback(replaygainMode)
   const canvasRef = useRef<CanvasHandle>(null)
+
+  // Applies a saved device preference on launch (Rust's own device_name
+  // starts at None every fresh process) and again on any change made from
+  // the settings screen — see playback.rs's open_stream for the "falls
+  // back to default if the device is gone" half of this contract.
+  useEffect(() => {
+    if (settings.audioDevice) void playback.setAudioDevice(settings.audioDevice)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.audioDevice])
 
   // Every "go to this node" action in the app — search, similarity
   // thumbnails, fact links, hygiene worklist items — resolves through here,
@@ -224,6 +239,7 @@ function MainApp() {
           anchorNodeId={anchorNodeId}
           onSelectNode={selectAndFly}
           onOpenMaintenance={() => setHygieneOpen(true)}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       </Panel>
 
@@ -264,6 +280,15 @@ function MainApp() {
             setHygieneOpen(false)
           }}
           onClose={() => setHygieneOpen(false)}
+        />
+      )}
+
+      {settingsOpen && (
+        <SettingsView
+          settings={settings}
+          updateSettings={updateSettings}
+          onSetAudioDevice={playback.setAudioDevice}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
     </AppShell>

@@ -272,12 +272,26 @@ type CollectionPanelProps = {
   anchorNodeId: number | null
   onSelectNode: (id: number) => void
   onOpenMaintenance: () => void
+  onOpenSettings: () => void
 }
 
-export function CollectionPanel({ anchorNodeId, onSelectNode, onOpenMaintenance }: CollectionPanelProps) {
+export function CollectionPanel({ anchorNodeId, onSelectNode, onOpenMaintenance, onOpenSettings }: CollectionPanelProps) {
   return (
     <div className="flex flex-col">
-      <SearchField onSelectNode={onSelectNode} />
+      <div className="flex items-center gap-[12px]">
+        <div className="min-w-0 flex-1">
+          <SearchField onSelectNode={onSelectNode} />
+        </div>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          aria-label="Open settings"
+          title="Open settings"
+          className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+        >
+          <Icon name="settings" size={24} />
+        </button>
+      </div>
       <OverviewBlock />
       <SimilaritySection anchorNodeId={anchorNodeId} onSelectNode={onSelectNode} />
       <MaintenancePreview onSelectNode={onSelectNode} onOpenMaintenance={onOpenMaintenance} />

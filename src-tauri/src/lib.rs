@@ -112,6 +112,8 @@ pub fn run() {
       playback::queue_skip,
       playback::queue_status,
       playback::queue_set_volume,
+      playback::list_audio_devices,
+      playback::queue_set_device,
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")

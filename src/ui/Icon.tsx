@@ -6,6 +6,7 @@ import pause from '../assets/icons/pause.svg?raw'
 import pencil from '../assets/icons/pencil.svg?raw'
 import play from '../assets/icons/play.svg?raw'
 import search from '../assets/icons/search.svg?raw'
+import settings from '../assets/icons/settings.svg?raw'
 import spacebar from '../assets/icons/spacebar.svg?raw'
 import volume from '../assets/icons/volume.svg?raw'
 
@@ -21,6 +22,7 @@ const GLYPHS = {
   pencil,
   play,
   search,
+  settings,
   spacebar,
   volume,
 } as const
