@@ -96,6 +96,28 @@ export function tagWritesRoutes(db: Database.Database) {
       }
     });
 
+    // Discards a review without writing anything to disk. Only pending or
+    // already-terminal rows are eligible — a 'written' row still has a live
+    // file-system effect and must go through /revert instead, which is the
+    // only path that also clears app_write_marker/last_written_mtime.
+    app.delete<{ Params: { id: string } }>("/tag-writes/:id", async (request, reply) => {
+      const tagWrite = db
+        .prepare("SELECT * FROM tag_writes WHERE id = ?")
+        .get(request.params.id) as TagWriteRow | undefined;
+      if (!tagWrite) {
+        reply.code(404);
+        return { error: "not found" };
+      }
+      if (tagWrite.status === "written") {
+        reply.code(409);
+        return { error: "cannot delete a written tag_write — revert it first" };
+      }
+
+      db.prepare("DELETE FROM tag_writes WHERE id = ?").run(tagWrite.id);
+      reply.code(204);
+      return null;
+    });
+
     // Re-applies the old values from the same diff — itself a write (goes
     // through the same atomic path and gets its own fresh write-marker),
     // not a magic "undo."

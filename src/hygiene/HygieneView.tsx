@@ -125,7 +125,17 @@ function formatEnrichmentNote(note: string | null): string {
 // tag_writes row yet — the metadata panel's pencil, which will, is session
 // 6's job — so this section is normally empty on a real library. Built now
 // so that wiring has somewhere real to land.
-function TagWriteRow({ tagWrite, onApprove, onRevert }: { tagWrite: TagWrite; onApprove: () => void; onRevert: () => void }) {
+function TagWriteRow({
+  tagWrite,
+  onApprove,
+  onRevert,
+  onDiscard,
+}: {
+  tagWrite: TagWrite
+  onApprove: () => void
+  onRevert: () => void
+  onDiscard: () => void
+}) {
   const diff = JSON.parse(tagWrite.diff_json) as FieldDiff[];
   return (
     <div className="flex flex-col gap-[6px] border-b border-[var(--color-divider)] py-[15px] last:border-b-0">
@@ -156,6 +166,7 @@ function TagWriteRow({ tagWrite, onApprove, onRevert }: { tagWrite: TagWrite; on
       <div className="flex gap-[16px]">
         {tagWrite.status === 'pending_review' && <LinkButton onClick={onApprove}>approve</LinkButton>}
         {tagWrite.status === 'written' && <LinkButton onClick={onRevert}>revert</LinkButton>}
+        {tagWrite.status !== 'written' && <LinkButton onClick={onDiscard}>discard</LinkButton>}
       </div>
     </div>
   )
@@ -211,6 +222,11 @@ export default function HygieneView({
 
   const revertTagWrite = async (id: number) => {
     await fetch(`${API}/tag-writes/${id}/revert`, { method: 'POST' })
+    loadTagWrites()
+  }
+
+  const discardTagWrite = async (id: number) => {
+    await fetch(`${API}/tag-writes/${id}`, { method: 'DELETE' })
     loadTagWrites()
   }
 
@@ -272,6 +288,7 @@ export default function HygieneView({
                     tagWrite={tw}
                     onApprove={() => approveTagWrite(tw.id)}
                     onRevert={() => revertTagWrite(tw.id)}
+                    onDiscard={() => discardTagWrite(tw.id)}
                   />
                 ))}
               </div>

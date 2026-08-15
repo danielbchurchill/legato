@@ -160,6 +160,12 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
     loadNode(node.id)
   }
 
+  const discardWrite = async () => {
+    if (!pendingWrite) return
+    await fetch(`${API}/tag-writes/${pendingWrite.id}`, { method: 'DELETE' })
+    setPendingWrite(null)
+  }
+
   const handleSwipeStart = (e: React.PointerEvent) => {
     swipeStartX.current = e.clientX
   }
@@ -352,16 +358,12 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
                   >
                     approve — write to file
                   </button>
-                  {/* Not a delete — no DELETE /tag-writes/:id exists. This just
-                   * closes the inline review; the pending_review row is still
-                   * real and still shows up in the maintenance view's tag-write
-                   * section if it's never approved. */}
                   <button
                     type="button"
-                    onClick={() => setPendingWrite(null)}
+                    onClick={discardWrite}
                     className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
                   >
-                    close
+                    discard
                   </button>
                 </div>
               </>
