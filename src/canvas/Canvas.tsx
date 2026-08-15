@@ -82,6 +82,13 @@ const ART_ZOOM_RATIO_THRESHOLD = 1.4
 const FLY_TO_RATIO = 0.3
 const FLY_TO_DURATION_MS = 500
 
+/* Selection ring — mirrors --color-node-ring in tokens.css (sigma's hover
+ * canvas is plain 2D context, same reasoning as EDGE_COLOR/DIMMED_*_COLOR
+ * above: it never sees our CSS). 15px of clearance around the node's own
+ * rendered radius, per DESIGN.md "Nodes". */
+const NODE_RING_COLOR = '#ffffff'
+const NODE_RING_CLEARANCE = 15
+
 /* Default NodeImageProgram sizes its atlas cell off the source image's own
  * resolution ('auto' mode) — a 128px cover thumb squeezed into a ~44px node
  * (ART_SIZE 22) then gets minified across the atlas's 1px inter-image
@@ -312,6 +319,22 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       // Covers are clipped to circles on the canvas, and only here — the same
       // artwork stays square inside a panel. DESIGN.md "Radius".
       defaultNodeType: 'circle',
+      // sigma routes both `highlighted:true` nodes AND the live mouse-hovered
+      // node through this same drawer — there is no way to tell them apart
+      // from inside it except by attribute. Only nodes we explicitly flag
+      // `ring: true` (the selection effect below) get the ring; a node the
+      // pointer merely happens to be over draws nothing, in favour of the
+      // dim/neighbor-highlight reducers and the panel already doing that
+      // job. Without this override sigma falls back to its stock
+      // black-on-white label-box hover renderer.
+      defaultDrawNodeHover: (context, data) => {
+        if (!data.ring) return
+        context.beginPath()
+        context.arc(data.x, data.y, data.size + NODE_RING_CLEARANCE, 0, Math.PI * 2)
+        context.lineWidth = 1
+        context.strokeStyle = NODE_RING_COLOR
+        context.stroke()
+      },
     })
     rendererRef.current = renderer
 
@@ -450,15 +473,19 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     const prev = previousSelectionRef.current
     if (prev && graph.hasNode(prev)) {
       graph.removeNodeAttribute(prev, 'highlighted')
-      graph.setNodeAttribute(prev, 'size', graph.getNodeAttribute(prev, 'origSize'))
+      graph.removeNodeAttribute(prev, 'ring')
     }
 
     if (selectedNodeId != null) {
       const key = nodeKey(selectedNodeId)
       if (graph.hasNode(key)) {
-        // sigma's `highlighted` draws a ring around the node without touching
-        // its fill or its image — exactly the ringed-cover treatment.
+        // `highlighted` lifts the node onto sigma's hover layer, drawn above
+        // edges; `ring` is our own flag telling defaultDrawNodeHover (set on
+        // the Sigma constructor above) to actually draw the ring rather than
+        // sigma's stock hover box — see the comment there for why both are
+        // needed. Neither touches the node's own fill, size or image.
         graph.setNodeAttribute(key, 'highlighted', true)
+        graph.setNodeAttribute(key, 'ring', true)
         previousSelectionRef.current = key
         return
       }
