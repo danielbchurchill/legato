@@ -67,6 +67,7 @@ type SettingsViewProps = {
 export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClose }: SettingsViewProps) {
   const { phase, requestClose } = useModalTransition(onClose)
   const [roots, setRoots] = useState<LibraryRoot[] | null>(null)
+  const [confirmingRemoveId, setConfirmingRemoveId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [scanning, setScanning] = useState<Record<number, ScanProgress>>({})
   const [devices, setDevices] = useState<string[] | null>(null)
@@ -116,6 +117,7 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
   }
 
   const removeRoot = async (id: number) => {
+    setConfirmingRemoveId(null)
     await fetch(`${API}/library-roots/${id}`, { method: 'DELETE' })
     loadRoots()
   }
@@ -176,29 +178,53 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
               <ul className="flex flex-col gap-[8px]">
                 {roots.map((r) => {
                   const progress = scanning[r.id]
+                  const confirming = confirmingRemoveId === r.id
                   return (
                     <li key={r.id} className="flex items-center justify-between gap-[12px]">
-                      <div className="min-w-0">
-                        <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
-                          {r.label ?? r.path}
-                        </p>
-                        {progress && (
-                          <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
-                            scanning… {progress.filesScanned} files
+                      {confirming ? (
+                        <>
+                          <p className="min-w-0 truncate text-[length:var(--text-base)] text-[var(--color-muted)]">
+                            Remove {r.label ?? r.path}? Legato stops watching it — already-scanned tracks stay in
+                            your library.
                           </p>
-                        )}
-                      </div>
-                      <div className="flex shrink-0 items-center gap-[12px]">
-                        <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
-                        <button
-                          type="button"
-                          onClick={() => void removeRoot(r.id)}
-                          aria-label={`Remove ${r.label ?? r.path}`}
-                          className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-                        >
-                          <Icon name="cancel" size={18} />
-                        </button>
-                      </div>
+                          <div className="flex shrink-0 items-center gap-[16px]">
+                            <Button variant="destructive" onClick={() => void removeRoot(r.id)}>
+                              remove
+                            </Button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingRemoveId(null)}
+                              className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]"
+                            >
+                              cancel
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="min-w-0">
+                            <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+                              {r.label ?? r.path}
+                            </p>
+                            {progress && (
+                              <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+                                scanning… {progress.filesScanned} files
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex shrink-0 items-center gap-[12px]">
+                            <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingRemoveId(r.id)}
+                              aria-label={`Remove ${r.label ?? r.path}`}
+                              className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                            >
+                              <Icon name="cancel" size={18} />
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </li>
                   )
                 })}
