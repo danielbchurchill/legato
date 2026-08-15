@@ -43,6 +43,7 @@ pub struct QueueStatus {
   pub position_ms: u64,
   pub current_recording_node_id: Option<i64>,
   pub queue_len: usize,
+  pub volume: f32,
 }
 
 struct Session {
@@ -56,11 +57,19 @@ struct Session {
   queue: VecDeque<QueueTrack>,
 }
 
-pub struct PlaybackState(Arc<Mutex<Option<Session>>>);
+pub struct PlaybackState {
+  session: Arc<Mutex<Option<Session>>>,
+  // Lives outside Session (and outside the Mutex<Option<_>> that gets
+  // wiped to None on every queue_stop) specifically so it survives across
+  // stop/restart — rodio's own Sink::volume resets to 1.0 on every new
+  // Sink, and a user's volume choice shouldn't reset every time the queue
+  // empties and refills.
+  volume: Arc<Mutex<f32>>,
+}
 
 impl PlaybackState {
   pub fn new() -> Self {
-    PlaybackState(Arc::new(Mutex::new(None)))
+    PlaybackState { session: Arc::new(Mutex::new(None)), volume: Arc::new(Mutex::new(1.0)) }
   }
 }
 
@@ -109,12 +118,13 @@ fn ensure_session<'a>(
   app: &AppHandle,
   state: &'a PlaybackState,
 ) -> Result<std::sync::MutexGuard<'a, Option<Session>>, String> {
-  let mut guard = state.0.lock().unwrap();
+  let mut guard = state.session.lock().unwrap();
   if guard.is_none() {
     let stream = OutputStreamBuilder::open_default_stream().map_err(|e| e.to_string())?;
     let sink = Sink::connect_new(stream.mixer());
+    sink.set_volume(*state.volume.lock().unwrap());
     *guard = Some(Session { _stream: stream, sink, queue: VecDeque::new() });
-    spawn_monitor(app.clone(), state.0.clone());
+    spawn_monitor(app.clone(), state.session.clone());
   }
   Ok(guard)
 }
@@ -135,7 +145,7 @@ pub fn queue_enqueue(app: AppHandle, state: State<PlaybackState>, track: QueueTr
 
 #[tauri::command]
 pub fn queue_play(state: State<PlaybackState>) -> Result<(), String> {
-  if let Some(session) = state.0.lock().unwrap().as_ref() {
+  if let Some(session) = state.session.lock().unwrap().as_ref() {
     session.sink.play();
   }
   Ok(())
@@ -143,23 +153,24 @@ pub fn queue_play(state: State<PlaybackState>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn queue_pause(state: State<PlaybackState>) -> Result<(), String> {
-  if let Some(session) = state.0.lock().unwrap().as_ref() {
+  if let Some(session) = state.session.lock().unwrap().as_ref() {
     session.sink.pause();
   }
   Ok(())
 }
 
 /// Drops the whole session — stops output, frees the audio device, and
-/// (via spawn_monitor's exit condition) ends the polling thread.
+/// (via spawn_monitor's exit condition) ends the polling thread. volume is
+/// untouched — it lives outside the session precisely so it survives this.
 #[tauri::command]
 pub fn queue_stop(state: State<PlaybackState>) -> Result<(), String> {
-  *state.0.lock().unwrap() = None;
+  *state.session.lock().unwrap() = None;
   Ok(())
 }
 
 #[tauri::command]
 pub fn queue_seek(state: State<PlaybackState>, position_ms: u64) -> Result<(), String> {
-  if let Some(session) = state.0.lock().unwrap().as_ref() {
+  if let Some(session) = state.session.lock().unwrap().as_ref() {
     session
       .sink
       .try_seek(Duration::from_millis(position_ms))
@@ -173,7 +184,7 @@ pub fn queue_seek(state: State<PlaybackState>, position_ms: u64) -> Result<(), S
 /// necessarily an audible cut, same as any player.
 #[tauri::command]
 pub fn queue_skip(state: State<PlaybackState>) -> Result<(), String> {
-  if let Some(session) = state.0.lock().unwrap().as_mut() {
+  if let Some(session) = state.session.lock().unwrap().as_mut() {
     session.sink.skip_one();
     session.queue.pop_front();
   }
@@ -182,15 +193,31 @@ pub fn queue_skip(state: State<PlaybackState>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn queue_status(state: State<PlaybackState>) -> QueueStatus {
-  match state.0.lock().unwrap().as_ref() {
+  let volume = *state.volume.lock().unwrap();
+  match state.session.lock().unwrap().as_ref() {
     Some(session) => QueueStatus {
       playing: !session.sink.is_paused() && !session.sink.empty(),
       position_ms: session.sink.get_pos().as_millis() as u64,
       current_recording_node_id: session.queue.front().map(|t| t.recording_node_id),
       queue_len: session.queue.len(),
+      volume,
     },
-    None => QueueStatus { playing: false, position_ms: 0, current_recording_node_id: None, queue_len: 0 },
+    None => QueueStatus { playing: false, position_ms: 0, current_recording_node_id: None, queue_len: 0, volume },
   }
+}
+
+/// value is a linear 0.0-1.0 multiplier (rodio's own Sink::set_volume
+/// scale, passed straight through) — clamped here rather than trusted from
+/// the frontend, since an out-of-range value would otherwise silently
+/// distort or invert the signal deep inside rodio rather than fail loudly.
+#[tauri::command]
+pub fn queue_set_volume(state: State<PlaybackState>, value: f32) -> Result<(), String> {
+  let clamped = value.clamp(0.0, 1.0);
+  *state.volume.lock().unwrap() = clamped;
+  if let Some(session) = state.session.lock().unwrap().as_ref() {
+    session.sink.set_volume(clamped);
+  }
+  Ok(())
 }
 
 #[cfg(test)]
