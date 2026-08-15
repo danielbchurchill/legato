@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { pickMode } from "./mode.js";
 
 export type EdgeRef = { fromNode: number; toNode: number };
 
@@ -58,20 +59,11 @@ export function computeAlbumAggregates(
       if (artistId == null) continue;
       artistCounts.set(artistId, (artistCounts.get(artistId) ?? 0) + 1);
     }
-    // Mode, ties broken by lowest node id — deterministic across recomputes
-    // when a compilation has no single dominant artist.
-    let primaryArtistNodeId: number | null = null;
-    let bestCount = 0;
-    for (const [artistId, count] of [...artistCounts].sort((a, b) => a[0] - b[0])) {
-      if (count > bestCount) {
-        bestCount = count;
-        primaryArtistNodeId = artistId;
-      }
-    }
-
     result.push({
       nodeId: releaseNodeId,
-      primaryArtistNodeId,
+      // Mode, ties broken by lowest node id — deterministic across
+      // recomputes when a compilation has no single dominant artist.
+      primaryArtistNodeId: pickMode(artistCounts),
       trackCount: recordingIds.length,
       totalDurationMs,
       yearMin: years.length > 0 ? Math.min(...years) : null,
