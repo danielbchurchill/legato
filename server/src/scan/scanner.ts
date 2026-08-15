@@ -3,11 +3,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import type Database from "better-sqlite3";
-import { recomputeAllLayouts } from "../layout/seed.js";
-import { recomputeEntities } from "../entities/aggregate.js";
-import { recomputeCollaborationEdges } from "../entities/collaboration.js";
-import { recomputeSimilarityFeatures } from "../similarity/similarity.js";
-import { recomputeArticles } from "../articles/recompute.js";
+import { recompute } from "../recompute.js";
 import { enqueueEnrichmentIfNeeded } from "../enrich/queue.js";
 import { attachCoverForFile } from "../cover/extract.js";
 import { ensurePeaksForFile } from "../waveform/peaks.js";
@@ -262,25 +258,11 @@ export async function executeScan(
       }
     }
 
-    // Recomputed once per scan (not per-file) — it's a global pass over
-    // every recording node's current released_in edge, cheap at this scale
-    // and idempotent (see seed.ts's seed_version guard) on a no-op re-scan.
-    recomputeEntities(db);
-    // Depends on albums.primary_artist_node_id, so must run after
-    // recomputeEntities — and before recomputeAllLayouts, whose layout
-    // (deterministic cell assignment) uses these derived edges for
-    // artist/label-affinity clustering.
-    recomputeCollaborationEdges(db);
-    recomputeAllLayouts(db);
-    // Depends on collaborated_with edges (artist-cluster feature group), so
-    // must run after recomputeCollaborationEdges — order relative to
-    // recomputeAllLayouts doesn't matter, the two are independent.
-    recomputeSimilarityFeatures(db);
-    // Reads the same performed_by/appears_on/collaborated_with/etc. edges
-    // recomputeEntities and recomputeCollaborationEdges just refreshed, so
-    // must run after both — order relative to recomputeAllLayouts and
-    // recomputeSimilarityFeatures doesn't matter, all three are independent.
-    recomputeArticles(db);
+    // B-1: everything derived from what scan found, recomputed
+    // unconditionally for every file currently in the library — not just
+    // the ones this run changed. Idempotent (see seed.ts's seed_version
+    // guard, deriveLocalEdges' delete-then-reinsert) on a no-op re-scan.
+    recompute(db);
 
     db.prepare(
       `UPDATE scan_jobs SET status = 'done', files_scanned = ?, files_added = ?,
