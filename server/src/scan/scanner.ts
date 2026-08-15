@@ -7,6 +7,7 @@ import { recomputeAllLayouts } from "../layout/seed.js";
 import { recomputeEntities } from "../entities/aggregate.js";
 import { recomputeCollaborationEdges } from "../entities/collaboration.js";
 import { recomputeSimilarityFeatures } from "../similarity/similarity.js";
+import { recomputeArticles } from "../articles/recompute.js";
 import { enqueueEnrichmentIfNeeded } from "../enrich/queue.js";
 import { attachCoverForFile } from "../cover/extract.js";
 import { ensurePeaksForFile } from "../waveform/peaks.js";
@@ -274,6 +275,11 @@ export async function executeScan(
     // must run after recomputeCollaborationEdges — order relative to
     // recomputeAllLayouts doesn't matter, the two are independent.
     recomputeSimilarityFeatures(db);
+    // Reads the same performed_by/appears_on/collaborated_with/etc. edges
+    // recomputeEntities and recomputeCollaborationEdges just refreshed, so
+    // must run after both — order relative to recomputeAllLayouts and
+    // recomputeSimilarityFeatures doesn't matter, all three are independent.
+    recomputeArticles(db);
 
     db.prepare(
       `UPDATE scan_jobs SET status = 'done', files_scanned = ?, files_added = ?,
