@@ -6,6 +6,7 @@ import type Database from "better-sqlite3";
 import { recomputeAllLayouts } from "../layout/seed.js";
 import { recomputeEntities } from "../entities/aggregate.js";
 import { recomputeCollaborationEdges } from "../entities/collaboration.js";
+import { recomputeSimilarityFeatures } from "../similarity/similarity.js";
 import { enqueueEnrichmentIfNeeded } from "../enrich/queue.js";
 import { attachCoverForFile } from "../cover/extract.js";
 import { collapseFile } from "../match/collapse.js";
@@ -258,6 +259,10 @@ export async function executeScan(
     // artist/label-affinity clustering.
     recomputeCollaborationEdges(db);
     recomputeAllLayouts(db);
+    // Depends on collaborated_with edges (artist-cluster feature group), so
+    // must run after recomputeCollaborationEdges — order relative to
+    // recomputeAllLayouts doesn't matter, the two are independent.
+    recomputeSimilarityFeatures(db);
 
     db.prepare(
       `UPDATE scan_jobs SET status = 'done', files_scanned = ?, files_added = ?,
