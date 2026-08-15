@@ -6,6 +6,7 @@ import { Surface } from '../shell/Surface'
 import { SectionHeader } from '../ui/DataRow'
 import { Button } from '../ui/Button'
 import { useWsEvent } from '../hooks/useWs'
+import { useModalTransition } from '../hooks/useModalTransition'
 import type { Settings } from '../hooks/useSettings'
 import type { ReplayGainMode } from '../playback/usePlayback'
 
@@ -64,6 +65,7 @@ type SettingsViewProps = {
 }
 
 export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClose }: SettingsViewProps) {
+  const { phase, requestClose } = useModalTransition(onClose)
   const [roots, setRoots] = useState<LibraryRoot[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [scanning, setScanning] = useState<Record<number, ScanProgress>>({})
@@ -133,14 +135,24 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
   const replaygainMode: ReplayGainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
   const audioDevice = settings.audioDevice || ''
 
+  // Arriving is slower than leaving (MO-8: --motion-base in, --motion-exit
+  // out) — the scrim and panel share one duration class so both layers
+  // move together.
+  const duration = phase === 'exiting' ? 'duration-[var(--motion-exit)]' : 'duration-[var(--motion-base)]'
+  const entered = phase === 'entered'
+
   return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-[var(--color-canvas)]/90 p-[60px]">
-      <Surface className="flex max-h-full w-full max-w-[640px] flex-col overflow-hidden">
+    <div
+      className={`fixed inset-0 z-30 flex items-center justify-center bg-[var(--color-canvas)]/40 p-[60px] backdrop-blur-[var(--blur-glass)] transition-opacity ${duration} ease-[var(--ease-out)] ${entered ? 'opacity-100' : 'opacity-0'}`}
+    >
+      <Surface
+        className={`flex max-h-full w-full max-w-[640px] flex-col overflow-hidden transition-all ${duration} ease-[var(--ease-out)] motion-reduce:scale-100 ${entered ? 'scale-100 opacity-100' : 'scale-[0.985] opacity-0'}`}
+      >
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-divider)] px-[var(--spacing-panel)] py-[21px]">
           <h2 className="text-[length:var(--text-base)] font-normal text-[var(--color-muted)]">settings</h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="Close settings"
             className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
           >

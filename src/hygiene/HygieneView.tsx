@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
+import { useModalTransition } from '../hooks/useModalTransition'
 import { Icon } from '../ui/Icon'
 import { Surface } from '../shell/Surface'
 import { SectionHeader } from '../ui/DataRow'
@@ -172,6 +173,7 @@ export default function HygieneView({
   onSelectNode: (id: number) => void
   onClose: () => void
 }) {
+  const { phase, requestClose } = useModalTransition(onClose)
   const [items, setItems] = useState<WorklistItem[] | null>(null)
   const [filter, setFilter] = useState<'all' | WorklistItem['type']>('all')
   const [tagWrites, setTagWrites] = useState<TagWrite[] | null>(null)
@@ -226,14 +228,24 @@ export default function HygieneView({
   const visible = (items ?? []).filter((i) => filter === 'all' || i.type === filter)
   const pendingTagWrites = (tagWrites ?? []).filter((t) => t.status !== 'reverted')
 
+  // Arriving is slower than leaving (MO-8: --motion-base in, --motion-exit
+  // out) — the scrim and panel share one duration class so both layers
+  // move together.
+  const duration = phase === 'exiting' ? 'duration-[var(--motion-exit)]' : 'duration-[var(--motion-base)]'
+  const entered = phase === 'entered'
+
   return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-[var(--color-canvas)]/90 p-[60px]">
-      <Surface className="flex max-h-full w-full max-w-[900px] flex-col overflow-hidden">
+    <div
+      className={`fixed inset-0 z-30 flex items-center justify-center bg-[var(--color-canvas)]/40 p-[60px] backdrop-blur-[var(--blur-glass)] transition-opacity ${duration} ease-[var(--ease-out)] ${entered ? 'opacity-100' : 'opacity-0'}`}
+    >
+      <Surface
+        className={`flex max-h-full w-full max-w-[900px] flex-col overflow-hidden transition-all ${duration} ease-[var(--ease-out)] motion-reduce:scale-100 ${entered ? 'scale-100 opacity-100' : 'scale-[0.985] opacity-0'}`}
+      >
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-divider)] px-[var(--spacing-panel)] py-[21px]">
           <h2 className="text-[length:var(--text-base)] font-normal text-[var(--color-muted)]">maintenance</h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="Close maintenance"
             className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
           >
