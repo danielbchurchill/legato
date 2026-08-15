@@ -81,3 +81,34 @@
     animation-iteration-count: 1;
   }
 }
+
+/* MO-2: zero :active and zero :focus-visible styles existed anywhere in the
+ * app — clicking a control produced no acknowledgment until whatever it
+ * triggered finished, and the app was unusable by keyboard with no visible
+ * focus ring. One rule covers every real <button>, ARIA button/slider role,
+ * and the waveform scrubber's own tabIndex, rather than touching each
+ * component individually.
+ *
+ * Asymmetric timing, matching MO-1's first principle: press-in is instant
+ * (0ms) — the receipt has to be immediate — release recovers over
+ * --motion-fast. `transition-property: all` rather than an explicit list so
+ * this composes with whatever a specific control already transitions (a
+ * hover color, the up-next chevron's transform) instead of needing to
+ * enumerate every property here.
+ *
+ * Unlayered for the same reason as the reduced-motion block above: needs to
+ * win regardless of whatever transition-* utility a control already
+ * carries, and @layer utilities always outranks @layer base. */
+:is(button, [role='button'], [role='slider'], [tabindex]:not([tabindex='-1'])) {
+  transition-property: all;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--ease-out);
+}
+:is(button, [role='button'], [role='slider'], [tabindex]:not([tabindex='-1'])):active {
+  transition-duration: 0ms;
+  opacity: 0.7;
+}
+:is(button, [role='button'], [role='slider'], [tabindex]:not([tabindex='-1'])):focus-visible {
+  outline: 1px solid var(--color-hairline);
+  outline-offset: 3px;
+}
