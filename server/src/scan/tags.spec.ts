@@ -61,6 +61,7 @@ describe("normalizeTags", () => {
       sampleRate: 44100,
       channels: 2,
       releaseDate: "1969-09-26",
+      pressingDate: null,
       bpm: 82,
       label: "Apple Records",
       releaseType: "album",
@@ -80,6 +81,7 @@ describe("normalizeTags", () => {
     expect(result.replaygainTrackGain).toBeNull();
     expect(result.durationMs).toBeNull();
     expect(result.releaseDate).toBeNull();
+    expect(result.pressingDate).toBeNull();
     expect(result.bpm).toBeNull();
     expect(result.label).toBeNull();
     expect(result.releaseType).toBeNull();
@@ -103,13 +105,25 @@ describe("normalizeTags", () => {
     expect(noArtistsField.featuredArtists).toBeNull();
   });
 
-  it("falls back through releasedate -> originaldate -> date", () => {
-    expect(normalizeTags(common({ originaldate: "1969-09" }), format()).releaseDate).toBe("1969-09");
+  it("falls back through originaldate -> releasedate -> date -> year (M-7: original release wins)", () => {
+    expect(normalizeTags(common({ releasedate: "1969-09-26" }), format()).releaseDate).toBe("1969-09-26");
     expect(normalizeTags(common({ date: "1969" }), format()).releaseDate).toBe("1969");
+    expect(normalizeTags(common({ year: 1969 }), format()).releaseDate).toBe("1969");
+    // The case M-7 exists for: a reissue's `date` disagreeing with the
+    // original pressing. originaldate wins regardless of what else is set.
     expect(
-      normalizeTags(common({ releasedate: "1969-09-26", originaldate: "1969-09", date: "1969" }), format())
+      normalizeTags(common({ releasedate: "1983-01-01", originaldate: "1969-09-26", date: "1983" }), format())
         .releaseDate,
     ).toBe("1969-09-26");
+  });
+
+  it("keeps the pressing date as its own fact rather than collapsing it into releaseDate", () => {
+    const result = normalizeTags(
+      common({ originaldate: "1969-09-26", date: "1983", releasedate: "1983-01-01" }),
+      format(),
+    );
+    expect(result.releaseDate).toBe("1969-09-26");
+    expect(result.pressingDate).toBe("1983");
   });
 
   it("rounds duration to milliseconds and bitrate to whole numbers", () => {

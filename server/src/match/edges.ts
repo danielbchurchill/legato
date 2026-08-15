@@ -2,13 +2,21 @@ import type Database from "better-sqlite3";
 
 type LocalTags = {
   artist?: string | null;
-  year?: number | null;
+  releaseDate?: string | null;
   album?: string | null;
   label?: string | null;
   producer?: string[] | null;
   engineer?: string[] | null;
   featuredArtists?: string[] | null;
 };
+
+// releaseDate is a date string ("1969-09-26", "1969-09", or just "1969") —
+// only the leading year matters for the released_in edge.
+function extractYear(dateStr: string | null | undefined): number | null {
+  if (!dateStr) return null;
+  const match = /^(\d{4})/.exec(dateStr);
+  return match ? Number(match[1]) : null;
+}
 
 function parseTagsRaw(tagsRaw: string | null): LocalTags | null {
   if (!tagsRaw) return null;
@@ -76,8 +84,15 @@ export function deriveLocalEdges(db: Database.Database, fileId: number): void {
   if (tags.artist) {
     insertEdge(db, recordingNodeId, findOrCreateNode(db, "artist", tags.artist), "performed_by");
   }
-  if (tags.year) {
-    insertEdge(db, recordingNodeId, findOrCreateNode(db, "year", String(tags.year)), "released_in");
+  // M-7: derived from the same originaldate-first precedence releaseDate
+  // itself uses (scan/tags.ts) — previously this read music-metadata's own
+  // `common.year`, which tracks the *pressing's* date tag, not the
+  // originaldate the release_date column already preferred. A Mobile
+  // Fidelity reissue's DATE tag disagreeing with the original recording
+  // year is exactly the real case that produced wrong year nodes.
+  const year = extractYear(tags.releaseDate);
+  if (year != null) {
+    insertEdge(db, recordingNodeId, findOrCreateNode(db, "year", String(year)), "released_in");
   }
   if (tags.album) {
     insertEdge(db, recordingNodeId, findOrCreateNode(db, "release", tags.album), "appears_on");

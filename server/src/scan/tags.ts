@@ -22,6 +22,12 @@ export type NormalizedTags = {
   sampleRate: number | null;
   channels: number | null;
   releaseDate: string | null;
+  // "date" specifically — a reissue/remaster pressing's own date, kept
+  // distinct from releaseDate rather than collapsed into it (M-7). Picard
+  // keeps these as two separate facts for the same reason: "when was this
+  // pressed" and "when was this music made" routinely disagree, and
+  // whichever one wins a merged field is lost for good.
+  pressingDate: string | null;
   bpm: number | null;
   label: string | null;
   releaseType: string | null;
@@ -56,10 +62,15 @@ export function normalizeTags(common: ICommonTagsResult, format: IFormat): Norma
     bitrate: format.bitrate != null ? Math.round(format.bitrate) : null,
     sampleRate: format.sampleRate ?? null,
     channels: format.numberOfChannels ?? null,
-    // releasedate/originaldate/date are three tiers of the same fact, most
-    // specific first — a reissue usually only carries `date`, while a
-    // MusicBrainz-tagged rip carries all three in agreement.
-    releaseDate: common.releasedate ?? common.originaldate ?? common.date ?? null,
+    // originaldate first, not releasedate: "when was this music made" is
+    // the fact the canvas layout and the metadata panel both actually want
+    // (M-7) — a Mobile Fidelity reissue's `date` disagreeing with the
+    // original 1969 pressing is exactly the case that matters, and the
+    // original should win. Falls through to the bare `year` field for
+    // files with no date-string tag at all (still bucket-only, e.g. a
+    // TDRC/YEAR-only ID3 tag).
+    releaseDate: common.originaldate ?? common.releasedate ?? common.date ?? (common.year != null ? String(common.year) : null),
+    pressingDate: common.date ?? null,
     bpm: common.bpm ?? null,
     label: common.label?.[0] ?? null,
     releaseType: common.releasetype?.[0] ?? null,

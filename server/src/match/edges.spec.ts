@@ -97,6 +97,41 @@ describe("deriveLocalEdges — widened credit/label edges", () => {
     expect(creditNodes.n).toBe(1);
   });
 
+  it("derives a released_in edge from releaseDate's leading year (M-7)", () => {
+    const fileId = insertFile({ artist: "The Beatles", releaseDate: "1969-09-26" });
+    const { recording_node_id: nodeId } = db
+      .prepare("SELECT recording_node_id FROM files WHERE id = ?")
+      .get(fileId) as { recording_node_id: number };
+
+    deriveLocalEdges(db, fileId);
+
+    const yearEdge = edgesFrom(nodeId).find((e) => e.type === "released_in");
+    expect(yearEdge?.other_type).toBe("year");
+    expect(yearEdge?.other_title).toBe("1969");
+  });
+
+  it("a bare 4-digit releaseDate still derives a year edge", () => {
+    const fileId = insertFile({ artist: "The Beatles", releaseDate: "1969" });
+    const { recording_node_id: nodeId } = db
+      .prepare("SELECT recording_node_id FROM files WHERE id = ?")
+      .get(fileId) as { recording_node_id: number };
+
+    deriveLocalEdges(db, fileId);
+
+    expect(edgesFrom(nodeId).find((e) => e.type === "released_in")?.other_title).toBe("1969");
+  });
+
+  it("no released_in edge when releaseDate is absent", () => {
+    const fileId = insertFile({ artist: "The Beatles" });
+    const { recording_node_id: nodeId } = db
+      .prepare("SELECT recording_node_id FROM files WHERE id = ?")
+      .get(fileId) as { recording_node_id: number };
+
+    deriveLocalEdges(db, fileId);
+
+    expect(edgesFrom(nodeId).find((e) => e.type === "released_in")).toBeUndefined();
+  });
+
   it("re-derives cleanly on a second call — no duplicate edges", () => {
     const fileId = insertFile({ artist: "The Beatles", label: "Apple Records", producer: ["George Martin"] });
     const { recording_node_id: nodeId } = db
