@@ -55,14 +55,19 @@ export function getWorklist(db: Database.Database, typeFilter?: string): Worklis
   if (!typeFilter || typeFilter === "enrichment_flag") {
     // Only the latest mbid provenance row per node — enrichment can retry,
     // and an old flag shouldn't linger after a newer attempt superseded
-    // it (a successful later match has confidence=1, correctly excluded
-    // below).
+    // it. Filtered on value IS NULL, not a confidence threshold: M-3's
+    // weighted scorer means a genuinely successful match's own confidence
+    // is now anywhere from ~0.35 (textSearch.ts's MIN_CONFIDENCE floor) to
+    // 1.0, not a clean always-exactly-1 — a `confidence < 1` filter here
+    // would flag most real matches as needing attention. applyMatch always
+    // writes a real mbid as `value`; every "needs a human" outcome
+    // (ambiguous/no_match/malformed tag/no artist tag) always writes null.
     const rows = db
       .prepare(
         `SELECT fp.node_id, n.title AS node_title, fp.note, fp.updated_at
          FROM field_provenance fp
          JOIN nodes n ON n.id = fp.node_id
-         WHERE fp.field = 'mbid' AND fp.confidence < 1
+         WHERE fp.field = 'mbid' AND fp.value IS NULL
            AND fp.id = (
              SELECT MAX(fp2.id) FROM field_provenance fp2
              WHERE fp2.node_id = fp.node_id AND fp2.field = 'mbid'
