@@ -4,7 +4,7 @@ import Sigma from 'sigma'
 import PlaybackSpike from './PlaybackSpike'
 import LibrarySetup, { Centered } from './LibrarySetup'
 import { useServerReady } from './hooks/useServerReady'
-import Canvas from './canvas/Canvas'
+import Canvas, { type CanvasHandle } from './canvas/Canvas'
 import ArticlePanel from './canvas/ArticlePanel'
 import { usePlayback } from './playback/usePlayback'
 import HygieneView from './hygiene/HygieneView'
@@ -181,8 +181,18 @@ function MainApp() {
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
   const [hygieneOpen, setHygieneOpen] = useState(false)
   const [granularity, setGranularity] = useState<Granularity>('albums')
-  const [stats, setStats] = useState({ nodes: 0, edges: 0 })
   const playback = usePlayback()
+  const canvasRef = useRef<CanvasHandle>(null)
+
+  // Every "go to this node" action in the app — search, similarity
+  // thumbnails, fact links, hygiene worklist items — resolves through here,
+  // so selecting is always also navigating. Canvas-first spatial navigation
+  // is the actual point (Legato.md), not a side effect of clicking a node
+  // directly on the graph.
+  const selectAndFly = (id: number) => {
+    setSelectedNodeId(id)
+    canvasRef.current?.flyToNode(id)
+  }
 
   useEffect(() => {
     fetch('http://127.0.0.1:8899/api/v1/library-roots')
@@ -202,22 +212,27 @@ function MainApp() {
         }
       : null
 
+  // The similarity strips' and maintenance preview's anchor: whatever is
+  // selected takes precedence (the more recent intent), falling back to
+  // whatever is playing when nothing is selected.
+  const anchorNodeId = selectedNodeId ?? nowPlaying?.nodeId ?? null
+
   return (
     <AppShell>
       <Canvas
+        ref={canvasRef}
         granularity={granularity}
         selectedNodeId={selectedNodeId}
         onSelectNode={setSelectedNodeId}
-        onStats={setStats}
       />
 
       <GraphToggle value={granularity} onChange={setGranularity} />
 
       <Panel side="left" title="collection">
         <CollectionPanel
-          nodeCount={stats.nodes}
-          edgeCount={stats.edges}
-          onSelectNode={setSelectedNodeId}
+          anchorNodeId={anchorNodeId}
+          onSelectNode={selectAndFly}
+          onOpenMaintenance={() => setHygieneOpen(true)}
         />
       </Panel>
 
@@ -228,7 +243,7 @@ function MainApp() {
         {selectedNodeId != null ? (
           <ArticlePanel
             nodeId={selectedNodeId}
-            onSelectNode={setSelectedNodeId}
+            onSelectNode={selectAndFly}
             onClose={() => setSelectedNodeId(null)}
             onPlay={playback.playNode}
           />
@@ -244,18 +259,10 @@ function MainApp() {
         onResume={playback.resume}
       />
 
-      {/* Still the old unstyled overlay — the maintenance surface is a later
-       * pass, and the mockup reaches it from the collection panel's pencil. */}
-      <button
-        onClick={() => setHygieneOpen(true)}
-        className="absolute bottom-[14px] left-[14px] z-20 text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-      >
-        maintenance
-      </button>
       {hygieneOpen && (
         <HygieneView
           onSelectNode={(id) => {
-            setSelectedNodeId(id)
+            selectAndFly(id)
             setHygieneOpen(false)
           }}
           onClose={() => setHygieneOpen(false)}

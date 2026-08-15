@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import Graph from 'graphology'
 import Sigma from 'sigma'
+import { createNormalizationFunction } from 'sigma/utils'
 import { NodeImageProgram } from '@sigma/node-image'
 import { patchNodePosition, useGraphData, type GraphEdge, type GraphNode } from './useGraphData'
 import type { Granularity } from '../shell/granularity'
@@ -65,6 +66,12 @@ const DIMMED_EDGE_COLOR = 'rgba(255,255,255,0.03)'
  * nodes render as the same flat colored dot as everything else. Sigma's own
  * camera ratio is inverse-zoom: smaller ratio = more zoomed in. */
 const ART_ZOOM_RATIO_THRESHOLD = 1.4
+
+/* Camera ratio flyToNode animates to — comfortably past
+ * ART_ZOOM_RATIO_THRESHOLD so the destination node's art is already bound
+ * and visible by the time the animation lands, not one more zoom step away. */
+const FLY_TO_RATIO = 0.3
+const FLY_TO_DURATION_MS = 500
 
 function nodeKey(id: number): string {
   return String(id)
@@ -209,11 +216,42 @@ type Props = {
   onStats?: (stats: { nodes: number; edges: number }) => void
 }
 
-export default function Canvas({ granularity, selectedNodeId, onSelectNode, onStats }: Props) {
+export type CanvasHandle = {
+  /** Animates the camera to center on and zoom into a node — search results,
+   * fact links, and hygiene worklist items all resolve to this so "select a
+   * node" always means "go look at it," matching the canvas-first navigation
+   * Legato.md calls out as the actual point of a spatial layout. No-op for a
+   * node not in the currently active granularity's graph. */
+  flyToNode: (nodeId: number) => void
+}
+
+export default forwardRef<CanvasHandle, Props>(function Canvas(
+  { granularity, selectedNodeId, onSelectNode, onStats },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement>(null)
   const graphRef = useRef<Graph | null>(null)
   const rendererRef = useRef<Sigma | null>(null)
   const { nodes, edges, loading } = useGraphData(granularity)
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      flyToNode(nodeId: number) {
+        const graph = graphRef.current
+        const renderer = rendererRef.current
+        const key = nodeKey(nodeId)
+        if (!graph || !renderer || !graph.hasNode(key)) return
+
+        const attrs = graph.getNodeAttributes(key)
+        const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
+        const normalize = createNormalizationFunction(bbox)
+        const { x, y } = normalize({ x: attrs.x as number, y: attrs.y as number })
+        void renderer.getCamera().animate({ x, y, ratio: FLY_TO_RATIO }, { duration: FLY_TO_DURATION_MS })
+      },
+    }),
+    [],
+  )
 
   // Held in refs so effects below don't list them as dependencies — a parent
   // re-render must never tear down the renderer or reset the camera.
@@ -410,4 +448,4 @@ export default function Canvas({ granularity, selectedNodeId, onSelectNode, onSt
   }, [selectedNodeId, nodes, edges, loading])
 
   return <div ref={containerRef} className="absolute inset-0" />
-}
+})

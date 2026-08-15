@@ -1,23 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../ui/Icon'
+import { CoverArt } from '../ui/CoverArt'
 import { DataRow, SectionHeader } from '../ui/DataRow'
+import { useWsEvent } from '../hooks/useWs'
+import { formatBytes, formatDurationHours } from './format'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
-/* The left-hand panel.
- *
- * Search is real: it hits the FTS5 index that has existed since M5 and was
- * previously reachable only from inside the add-edge form. Selecting a result
- * selects the node, which the canvas already follows. Filtering the graph and
- * flying the camera to a match is session 5.
- *
- * The similarity strips ("more like this" / "completely different") are absent
- * rather than stubbed — nothing computes similarity yet, and a strip of grey
- * squares would read as broken art rather than as an unbuilt feature.
- *
- * Overview shows the graph counts the canvas HUD used to carry. The real
- * collection stats — artists, albums, tracks, size, duration, top artist —
- * need an endpoint and a plays table that do not exist yet (session 3). */
+/* The left-hand panel: search, the real collection overview, similarity
+ * strips anchored on whatever is selected (or playing), and a condensed
+ * maintenance worklist. */
 
 type SearchResult = { id: number; type: string; title: string }
 
@@ -84,22 +76,211 @@ function SearchField({ onSelectNode }: { onSelectNode: (id: number) => void }) {
   )
 }
 
-type CollectionPanelProps = {
-  nodeCount: number
-  edgeCount: number
-  onSelectNode: (id: number) => void
+type Stats = {
+  artists: number
+  albums: number
+  tracks: number
+  totalBytes: number
+  totalDurationMs: number
+  topArtist: { id: number; title: string } | null
+  topAlbum: { id: number; title: string } | null
+  topTrack: { id: number; title: string } | null
 }
 
-export function CollectionPanel({ nodeCount, edgeCount, onSelectNode }: CollectionPanelProps) {
+function OverviewBlock() {
+  const [stats, setStats] = useState<Stats | null>(null)
+
+  useEffect(() => {
+    fetch(`${API}/stats`)
+      .then((r) => r.json())
+      .then(setStats)
+      .catch(() => setStats(null))
+  }, [])
+
+  // Absent rather than stubbed while loading or on failure — a row of
+  // dashes reads as broken, not as "still loading."
+  if (!stats) return null
+
+  return (
+    <>
+      <SectionHeader
+        title="overview"
+        action={
+          <button
+            type="button"
+            aria-label="About these stats"
+            title="Top artist/album/track are based on real play history — 50% of a track's duration or 4 minutes listened, whichever comes first."
+            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+          >
+            <Icon name="info" size={24} />
+          </button>
+        }
+      />
+      <div className="mt-[8px]">
+        <DataRow label="artists" value={stats.artists.toLocaleString()} />
+        <DataRow label="albums" value={stats.albums.toLocaleString()} />
+        <DataRow label="tracks" value={stats.tracks.toLocaleString()} />
+        <DataRow label="size" value={formatBytes(stats.totalBytes)} />
+        <DataRow label="duration" value={formatDurationHours(stats.totalDurationMs)} />
+        {stats.topArtist && <DataRow label="top artist" value={stats.topArtist.title} />}
+        {stats.topAlbum && <DataRow label="top album" value={stats.topAlbum.title} />}
+        {stats.topTrack && <DataRow label="top track" value={stats.topTrack.title} />}
+      </div>
+    </>
+  )
+}
+
+type SimilarityItem = { id: number; title: string; has_cover: number }
+
+function SimilarityStrip({
+  title,
+  items,
+  onSelectNode,
+}: {
+  title: string
+  items: SimilarityItem[]
+  onSelectNode: (id: number) => void
+}) {
+  // Absent rather than a strip of grey squares — nothing to show is a
+  // normal state (the anchor isn't a recording, or the library is too
+  // small/uniform to have a real contrast), not a broken feature.
+  if (items.length === 0) return null
+
+  return (
+    <>
+      <SectionHeader title={title} />
+      <div className="mt-[8px] grid grid-cols-3 gap-[15px]">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onSelectNode(item.id)}
+            className="h-[75px] w-[75px]"
+          >
+            <CoverArt nodeId={item.id} size="thumb" alt={item.title} className="h-full w-full" />
+          </button>
+        ))}
+      </div>
+    </>
+  )
+}
+
+function SimilaritySection({ anchorNodeId, onSelectNode }: { anchorNodeId: number | null; onSelectNode: (id: number) => void }) {
+  const [similar, setSimilar] = useState<SimilarityItem[]>([])
+  const [dissimilar, setDissimilar] = useState<SimilarityItem[]>([])
+
+  useEffect(() => {
+    if (anchorNodeId == null) {
+      setSimilar([])
+      setDissimilar([])
+      return
+    }
+    fetch(`${API}/nodes/${anchorNodeId}/similar`)
+      .then((r) => r.json())
+      .then(setSimilar)
+      .catch(() => setSimilar([]))
+    fetch(`${API}/nodes/${anchorNodeId}/dissimilar`)
+      .then((r) => r.json())
+      .then(setDissimilar)
+      .catch(() => setDissimilar([]))
+  }, [anchorNodeId])
+
+  return (
+    <>
+      <SimilarityStrip title="more like this" items={similar} onSelectNode={onSelectNode} />
+      <SimilarityStrip title="completely different" items={dissimilar} onSelectNode={onSelectNode} />
+    </>
+  )
+}
+
+type WorklistItem =
+  | { type: 'fuzzy_pending'; fileId: number; filePath: string; nodeId: number; nodeTitle: string; candidateNodeId: number; candidateTitle: string }
+  | { type: 'enrichment_flag'; nodeId: number; nodeTitle: string; note: string | null; updatedAt: string }
+  | { type: 'missing_file'; fileId: number; filePath: string; nodeId: number; nodeTitle: string; missingSince: string }
+
+const TYPE_LABEL: Record<WorklistItem['type'], string> = {
+  fuzzy_pending: 'possible duplicate',
+  enrichment_flag: 'enrichment issue',
+  missing_file: 'missing file',
+}
+
+function MaintenancePreview({
+  onSelectNode,
+  onOpenMaintenance,
+}: {
+  onSelectNode: (id: number) => void
+  onOpenMaintenance: () => void
+}) {
+  const [items, setItems] = useState<WorklistItem[] | null>(null)
+
+  const load = () => {
+    fetch(`${API}/hygiene/worklist`)
+      .then((r) => r.json())
+      .then(setItems)
+      .catch(() => setItems([]))
+  }
+
+  useEffect(load, [])
+  // Resolving a fuzzy-pending match, an enrichment job finishing, or a
+  // re-scan finding/losing a file all broadcast events that can change this
+  // worklist — see hygiene/HygieneView.tsx for the same wiring.
+  useWsEvent(['hygiene:changed', 'scan:done', 'scan:file'], load)
+
+  if (items === null) return null
+
+  return (
+    <>
+      <SectionHeader
+        title="maintenance"
+        action={
+          <button
+            type="button"
+            aria-label="Open maintenance"
+            title="Open maintenance"
+            onClick={onOpenMaintenance}
+            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+          >
+            <Icon name="pencil" size={24} />
+          </button>
+        }
+      />
+      {items.length === 0 ? (
+        // A success state, not an empty one — DESIGN.md "No maintenance
+        // items ... should read as calm, not empty."
+        <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">nothing needs attention</p>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onSelectNode(items[0].nodeId)}
+          className="mt-[8px] block w-full text-left"
+        >
+          <span className="block truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+            {TYPE_LABEL[items[0].type]} — {items[0].nodeTitle}
+          </span>
+          {items.length > 1 && (
+            <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+              +{items.length - 1} other{items.length - 1 === 1 ? '' : 's'}
+            </span>
+          )}
+        </button>
+      )}
+    </>
+  )
+}
+
+type CollectionPanelProps = {
+  anchorNodeId: number | null
+  onSelectNode: (id: number) => void
+  onOpenMaintenance: () => void
+}
+
+export function CollectionPanel({ anchorNodeId, onSelectNode, onOpenMaintenance }: CollectionPanelProps) {
   return (
     <div className="flex flex-col">
       <SearchField onSelectNode={onSelectNode} />
-
-      <SectionHeader title="overview" />
-      <div className="mt-[8px]">
-        <DataRow label="nodes" value={nodeCount.toLocaleString()} />
-        <DataRow label="edges" value={edgeCount.toLocaleString()} />
-      </div>
+      <OverviewBlock />
+      <SimilaritySection anchorNodeId={anchorNodeId} onSelectNode={onSelectNode} />
+      <MaintenancePreview onSelectNode={onSelectNode} onOpenMaintenance={onOpenMaintenance} />
     </div>
   )
 }

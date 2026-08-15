@@ -41,6 +41,40 @@ describe("generateFacts", () => {
     expect(facts).toContainEqual({ text: "Appears on Abbey Road", targetNodeId: release });
   });
 
+  it("phrases session 4's widened edge types (label/credit/collaboration), not their raw type strings", () => {
+    const recording = makeNode("recording", "Come Together");
+    const label = makeNode("label", "Apple Records");
+    const producer = makeNode("credit", "George Martin");
+    const engineer = makeNode("credit", "Geoff Emerick");
+    const featured = makeNode("artist", "Billy Preston");
+    addEdge(recording, label, "released_on");
+    addEdge(recording, producer, "produced_by");
+    addEdge(recording, engineer, "engineered_by");
+    addEdge(recording, featured, "featured_artist");
+
+    const artistA = makeNode("artist", "The Beatles");
+    const artistB = makeNode("artist", "Billy Preston");
+    addEdge(artistA, artistB, "collaborated_with");
+
+    const albumA = makeNode("release", "Abbey Road");
+    const albumB = makeNode("release", "Let It Be");
+    addEdge(albumA, albumB, "same_artist");
+    addEdge(albumA, albumB, "same_label");
+
+    const recordingFacts = generateFacts(db, recording);
+    expect(recordingFacts).toContainEqual({ text: "Released on Apple Records", targetNodeId: label });
+    expect(recordingFacts).toContainEqual({ text: "Produced by George Martin", targetNodeId: producer });
+    expect(recordingFacts).toContainEqual({ text: "Engineered by Geoff Emerick", targetNodeId: engineer });
+    expect(recordingFacts).toContainEqual({ text: "Featuring Billy Preston", targetNodeId: featured });
+
+    const artistFacts = generateFacts(db, artistA);
+    expect(artistFacts).toContainEqual({ text: "Collaborated with Billy Preston", targetNodeId: artistB });
+
+    const albumFacts = generateFacts(db, albumA);
+    expect(albumFacts).toContainEqual({ text: "Same artist as Let It Be", targetNodeId: albumB });
+    expect(albumFacts).toContainEqual({ text: "Same label as Let It Be", targetNodeId: albumB });
+  });
+
   it("ignores manual edges when generating facts (local edges only)", () => {
     const recording = makeNode("recording", "Yesterday");
     const noteNode = makeNode("recording", "Blackbird");

@@ -9,6 +9,11 @@ const EDGE_VERB: Record<string, string> = {
   released_on: "Released on",
   remix_of: "Remix of",
   featured_artist: "Featuring",
+  produced_by: "Produced by",
+  engineered_by: "Engineered by",
+  collaborated_with: "Collaborated with",
+  same_artist: "Same artist as",
+  same_label: "Same label as",
 };
 
 // Template-based, not an LLM call — see Legato.md's article-view spec.
