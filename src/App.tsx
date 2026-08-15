@@ -296,11 +296,11 @@ function MainApp() {
 }
 
 export default function App() {
-  const serverReady = useServerReady()
+  const { ready, everConnected } = useServerReady()
   const debug = new URLSearchParams(window.location.search).has('debug')
 
-  if (!serverReady) {
-    return <Centered>starting legato-server…</Centered>
+  if (!ready) {
+    return <Centered>{everConnected ? 'lost connection to legato-server…' : 'starting legato-server…'}</Centered>
   }
 
   return debug ? <DebugSpikes /> : <MainApp />

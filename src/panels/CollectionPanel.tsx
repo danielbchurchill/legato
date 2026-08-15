@@ -16,11 +16,16 @@ type SearchResult = { id: number; type: string; title: string }
 function SearchField({ onSelectNode }: { onSelectNode: (id: number) => void }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
+  // Distinct from "results is empty because nothing was typed yet" —
+  // DESIGN.md's "search matched nothing" state only applies once a real
+  // query actually came back with zero rows.
+  const [searched, setSearched] = useState(false)
 
   useEffect(() => {
     const trimmed = query.trim()
     if (trimmed.length < 2) {
       setResults([])
+      setSearched(false)
       return
     }
 
@@ -28,8 +33,14 @@ function SearchField({ onSelectNode }: { onSelectNode: (id: number) => void }) {
     const timer = setTimeout(() => {
       fetch(`${API}/search?q=${encodeURIComponent(trimmed)}&limit=8`)
         .then((r) => r.json())
-        .then(setResults)
-        .catch(() => setResults([]))
+        .then((data: SearchResult[]) => {
+          setResults(data)
+          setSearched(true)
+        })
+        .catch(() => {
+          setResults([])
+          setSearched(true)
+        })
     }, 200)
 
     return () => clearTimeout(timer)
@@ -48,6 +59,12 @@ function SearchField({ onSelectNode }: { onSelectNode: (id: number) => void }) {
           className="min-w-0 flex-1 bg-transparent text-[length:var(--text-base)] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]"
         />
       </div>
+
+      {searched && results.length === 0 && (
+        <p className="mt-[12px] text-[length:var(--text-base)] text-[var(--color-muted)]">
+          no matches for "{query.trim()}"
+        </p>
+      )}
 
       {results.length > 0 && (
         <ul className="mt-[12px] flex flex-col">

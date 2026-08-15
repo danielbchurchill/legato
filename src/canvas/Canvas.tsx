@@ -5,6 +5,7 @@ import { createNormalizationFunction } from 'sigma/utils'
 import { NodeImageProgram } from '@sigma/node-image'
 import { patchNodePosition, useGraphData, type GraphEdge, type GraphNode } from './useGraphData'
 import type { Granularity } from '../shell/granularity'
+import { useScanStatus } from '../hooks/useScanStatus'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -233,6 +234,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const graphRef = useRef<Graph | null>(null)
   const rendererRef = useRef<Sigma | null>(null)
   const { nodes, edges, loading } = useGraphData(granularity)
+  const scanStatus = useScanStatus()
 
   useImperativeHandle(
     ref,
@@ -447,5 +449,38 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     previousSelectionRef.current = null
   }, [selectedNodeId, nodes, edges, loading])
 
-  return <div ref={containerRef} className="absolute inset-0" />
+  // One sentence, muted, centered, no illustration — DESIGN.md's empty-state
+  // rule. Ordered error > scanning > plain-empty: a failed scan is the most
+  // specific and actionable thing to tell someone, an in-progress one at
+  // least explains why the graph is still blank, and a real empty result
+  // (a library that scanned clean with nothing in it) is the fallback.
+  const showEmptyState = !loading && nodes.length === 0
+
+  return (
+    <div className="absolute inset-0">
+      <div ref={containerRef} className="absolute inset-0" />
+      {showEmptyState && (
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-[12px] text-center">
+          {scanStatus.error ? (
+            <>
+              <p className="max-w-[420px] text-[length:var(--text-base)] text-[var(--color-muted)]">
+                scan failed: {scanStatus.error}
+              </p>
+              <button
+                type="button"
+                onClick={scanStatus.retry}
+                className="pointer-events-auto text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
+              >
+                retry
+              </button>
+            </>
+          ) : scanStatus.scanning ? (
+            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">scanning your library…</p>
+          ) : (
+            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">nothing to show yet</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
 })
