@@ -248,6 +248,31 @@ The mockup is static, so this is a stated position rather than a measurement, an
 - The graph's own motion (pan, zoom, drag) is direct manipulation and must never be animated or eased. It tracks the input exactly.
 - Nothing animates on a loop. No pulsing, no shimmer, no breathing.
 
+### Tokens
+
+Four durations and two curves; every transition in the app draws from this table, in `src/styles/tokens.css`'s `@theme` block.
+
+| Token | Value | Use |
+|---|---|---|
+| `--motion-instant` | 90ms | Press receipt. Below this, a response reads as instantaneous — reserved for acknowledging a click before the real work (often a Rust IPC round trip) has finished. |
+| `--motion-fast` | 140ms | Hover, colour, small state change. |
+| `--motion-base` | 180ms | Pagination, disclosure, modal entry. |
+| `--motion-exit` | 120ms | Leaving. Faster than arriving — on the way out the user has already decided; a slow exit is just waiting. |
+| `--ease-out` | `cubic-bezier(0.2, 0, 0, 1)` | The default. Starts at full speed and decelerates into place — a response to input, not an approach to it. Tailwind's built-in `ease-out` is close but not this; this token is the one to reach for. |
+| `--ease-inout` | `cubic-bezier(0.4, 0, 0.2, 1)` | Reserved for things genuinely reversible mid-flight, like a disclosure toggled twice quickly. |
+
+**Acknowledge under 100ms, finish under 400ms.** Below roughly 100ms a response reads as instantaneous; past about 400ms attention starts to leave the task. Every control acknowledges the press immediately, even when the real work behind it hasn't returned yet.
+
+**Animate to preserve identity, never to decorate.** Motion earns its place where something moves or changes identity and the user would otherwise have to re-find it — paging the inspector, a ring attaching to a node, a modal arriving over the canvas. It does not earn its place because content simply appeared.
+
+**Never animate live data.** Playback position, elapsed time, waveform progress, volume. A transition here makes the display lag the truth, and a readout that disagrees with the audio is worse than one that steps. Step, do not ease.
+
+**Motion is pre-attentive, so spend it once per interaction.** Movement is the strongest attention-grabbing channel available; two moving things compete and neither is read. One element moves per interaction — the one carrying the meaning.
+
+### Reduced motion means less movement, not less feedback
+
+A blanket `*{transition:none}` reset is the wrong reflex — it strips the feedback that tells someone their click registered. Under `prefers-reduced-motion: reduce`, transforms, translations and scale — the things that move through space and carry vestibular risk — drop to zero duration. Opacity and colour crossfades keep theirs: they carry the same state information without the risk. The base layer implementing this lives in `src/index.css`, deliberately outside any `@layer` block so it outranks Tailwind's utility layer without reaching for `!important`.
+
 ---
 
 ## Empty and error states

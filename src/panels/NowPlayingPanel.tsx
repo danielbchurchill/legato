@@ -206,7 +206,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
             onClick={() => setUpNextOpen((v) => !v)}
             aria-label={upNextOpen ? 'Hide up next' : 'Show up next'}
             aria-expanded={upNextOpen}
-            className={`shrink-0 text-[var(--color-muted)] transition-transform duration-150 hover:text-[var(--color-ink)] ${
+            className={`shrink-0 text-[var(--color-muted)] transition-transform duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:text-[var(--color-ink)] ${
               upNextOpen ? 'rotate-180' : ''
             }`}
           >

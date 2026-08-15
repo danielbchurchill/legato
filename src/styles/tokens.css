@@ -102,4 +102,19 @@
 
   --blur-glass: 6.5px;
   --shadow-surface: 0 4px 4px rgb(0 0 0 / 0.25);
+
+  /* ---- Motion ----------------------------------------------------------
+   * DESIGN.md's Motion section states the four principles these serve;
+   * this is every duration and curve in the app, so nothing gets a literal.
+   */
+
+  --motion-instant: 90ms; /* press receipt; must read as immediate  */
+  --motion-fast: 140ms; /* hover, colour, small state change      */
+  --motion-base: 180ms; /* pagination, disclosure, modal entry    */
+  --motion-exit: 120ms; /* leaving is faster than arriving        */
+
+  /* Response to input: starts at full speed, decelerates into place. */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  /* Reserved for things reversible mid-flight, like a disclosure toggled twice. */
+  --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
 }
