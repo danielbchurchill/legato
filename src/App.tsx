@@ -216,7 +216,7 @@ function MainApp() {
   }, [])
 
   if (hasLibrary === null) return <Centered>loading library…</Centered>
-  if (!hasLibrary) return <LibrarySetup />
+  if (!hasLibrary) return <LibrarySetup onLibraryReady={() => setHasLibrary(true)} />
 
   // The similarity strips' and maintenance preview's anchor: whatever is
   // selected takes precedence (the more recent intent), falling back to

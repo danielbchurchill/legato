@@ -1,31 +1,33 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
+import { useWsEvent } from './hooks/useWs'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
-type LibraryRoot = {
-  id: number
-  path: string
-  label: string | null
-  enabled: number
-  added_at: string
-}
+type LibraryRoot = { id: number; path: string; label: string | null }
+type ScanProgress = { libraryRootId: number; filesScanned: number }
 
-// Real (non-debug) app entry point for M0: prove the folder-picker -> DB
-// round trip works end to end. Canvas/article/playback views land in
-// M3-M6 — this is intentionally just enough UI to configure a library.
-export default function LibrarySetup() {
-  const [roots, setRoots] = useState<LibraryRoot[] | null>(null)
+/* First-run — takes over the whole window per DESIGN.md's empty-state
+ * catalogue. Once a root is added, the initial scan already starts itself
+ * server-side (library-roots.ts's POST handler) — this just watches it
+ * happen over the same scan:progress/scan:done events the settings screen
+ * uses, then hands off to the canvas once real data exists to show. */
+export default function LibrarySetup({ onLibraryReady }: { onLibraryReady: () => void }) {
   const [error, setError] = useState<string | null>(null)
+  const [scanningRoot, setScanningRoot] = useState<LibraryRoot | null>(null)
+  const [filesScanned, setFilesScanned] = useState(0)
 
-  const refresh = async () => {
-    const res = await fetch(`${API}/library-roots`)
-    setRoots(await res.json())
-  }
-
-  useEffect(() => {
-    refresh()
-  }, [])
+  useWsEvent(['scan:progress'], (payload) => {
+    const p = payload as ScanProgress
+    if (scanningRoot && p.libraryRootId === scanningRoot.id) setFilesScanned(p.filesScanned)
+  })
+  // A failed initial scan still leaves a real (if empty or partial) library
+  // — DESIGN.md puts scan-failure handling on the canvas, not here, so this
+  // hands off either way rather than stranding the user on this screen.
+  useWsEvent(['scan:done', 'scan:error'], (payload) => {
+    const p = payload as { libraryRootId: number }
+    if (scanningRoot && p.libraryRootId === scanningRoot.id) onLibraryReady()
+  })
 
   const chooseFolder = async () => {
     setError(null)
@@ -42,60 +44,43 @@ export default function LibrarySetup() {
       setError(body.error ?? `server returned ${res.status}`)
       return
     }
-    await refresh()
-  }
-
-  if (roots === null) {
-    return <Centered>loading library configuration…</Centered>
+    const root = (await res.json()) as LibraryRoot
+    setFilesScanned(0)
+    setScanningRoot(root)
   }
 
   return (
     <Centered>
-      <h2 style={{ marginTop: 0 }}>Legato</h2>
-      {roots.length === 0 ? (
-        <p style={{ opacity: 0.7, maxWidth: 420 }}>
-          No music library configured yet. Choose a folder to scan.
+      <span className="font-[family-name:var(--font-display)] text-[length:var(--text-wordmark)] leading-none text-[var(--color-ink)]">
+        legato
+      </span>
+
+      {scanningRoot ? (
+        <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+          scanning {scanningRoot.label ?? scanningRoot.path}… {filesScanned} files
         </p>
       ) : (
-        <ul style={{ textAlign: 'left', listStyle: 'none', padding: 0 }}>
-          {roots.map((r) => (
-            <li key={r.id}>{r.label ?? r.path}</li>
-          ))}
-        </ul>
+        <>
+          <p className="max-w-[420px] text-[length:var(--text-base)] text-[var(--color-muted)]">
+            No music library configured yet. Choose a folder to scan.
+          </p>
+          <button
+            type="button"
+            onClick={() => void chooseFolder()}
+            className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
+          >
+            choose music folder
+          </button>
+          {error && <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{error}</p>}
+        </>
       )}
-      <button onClick={chooseFolder} style={buttonStyle}>
-        {roots.length === 0 ? 'Choose music folder' : 'Add another folder'}
-      </button>
-      {error && <p style={{ color: '#f66' }}>{error}</p>}
     </Centered>
   )
 }
 
-const buttonStyle: CSSProperties = {
-  padding: '8px 16px',
-  fontFamily: 'monospace',
-  fontSize: 14,
-  cursor: 'pointer',
-}
-
 export function Centered({ children }: { children: ReactNode }) {
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 12,
-        background: '#111',
-        color: '#fff',
-        fontFamily: 'monospace',
-        textAlign: 'center',
-        padding: 24,
-      }}
-    >
+    <div className="fixed inset-0 flex flex-col items-center justify-center gap-[12px] bg-[var(--color-canvas)] p-[24px] text-center text-[length:var(--text-base)] text-[var(--color-ink)]">
       {children}
     </div>
   )
