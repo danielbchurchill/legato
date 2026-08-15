@@ -208,6 +208,7 @@ export type ScanProgress = {
   jobId: number;
   libraryRootId: number;
   filesScanned: number;
+  filesTotal: number;
   filesAdded: number;
   filesUpdated: number;
 };
@@ -238,13 +239,14 @@ export async function executeScan(
   try {
     const paths = await walkLibraryRoot(rootPath);
     const seen = new Set(paths);
+    const filesTotal = paths.length;
 
     for (const filePath of paths) {
       const outcome = await scanFile(db, libraryRootId, filePath);
       filesScanned++;
       if (outcome === "added") filesAdded++;
       if (outcome === "updated") filesUpdated++;
-      onProgress?.({ jobId, libraryRootId, filesScanned, filesAdded, filesUpdated });
+      onProgress?.({ jobId, libraryRootId, filesScanned, filesTotal, filesAdded, filesUpdated });
     }
 
     const existingPaths = db

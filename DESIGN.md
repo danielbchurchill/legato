@@ -290,6 +290,16 @@ Four durations and two curves; every transition in the app draws from this table
 
 A blanket `*{transition:none}` reset is the wrong reflex — it strips the feedback that tells someone their click registered. Under `prefers-reduced-motion: reduce`, transforms, translations and scale — the things that move through space and carry vestibular risk — drop to zero duration. Opacity and colour crossfades keep theirs: they carry the same state information without the risk. The base layer implementing this lives in `src/index.css`, deliberately outside any `@layer` block so it outranks Tailwind's utility layer without reaching for `!important`.
 
+### A bounded exception: progress
+
+"Nothing animates on a loop" holds for decoration. It does not hold for progress, which is data about work actually happening, not a mood. Three cases:
+
+- **Determinate progress is data, not decoration.** A scan knows its file count; the enrichment queue knows its remaining jobs. Render the real value — a count, a bar that fills to a number — never a loop standing in for one.
+- **Indeterminate and short shows nothing.** Under roughly 400ms, a spinner shown just to prove the wait happened costs more attention than the wait itself. Say nothing and let the result land.
+- **Indeterminate and long gets one state change, not a loop.** Past roughly 800ms, silence starts to read as broken. Change something once — a label from muted to ink, a single sweep that completes and stops — and hold it there. The change earns its place by telling the user work is happening; it does not need to keep telling them.
+
+This is the same attention curve as "Acknowledge under 100ms, finish under 400ms" above, applied to work whose true length isn't known in advance.
+
 ---
 
 ## Empty and error states

@@ -119,6 +119,26 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node?.id, page, lyrics])
 
+  // MO-11: a single LRCLIB round trip has no measurable length — genuinely
+  // indeterminate. Under ~400ms show nothing (most lookups land there);
+  // past ~800ms shift the label once, non-looping, rather than pretend to
+  // track progress that doesn't exist.
+  const [lyricsWaitVisible, setLyricsWaitVisible] = useState(false)
+  const [lyricsWaitLong, setLyricsWaitLong] = useState(false)
+  useEffect(() => {
+    if (lyrics !== 'loading') {
+      setLyricsWaitVisible(false)
+      setLyricsWaitLong(false)
+      return
+    }
+    const shortTimer = setTimeout(() => setLyricsWaitVisible(true), 400)
+    const longTimer = setTimeout(() => setLyricsWaitLong(true), 800)
+    return () => {
+      clearTimeout(shortTimer)
+      clearTimeout(longTimer)
+    }
+  }, [lyrics])
+
   if (nodeId == null || !node) {
     return (
       <p className="pt-[40px] text-center text-[length:var(--text-base)] text-[var(--color-muted)]">
@@ -390,9 +410,17 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
         {pages.includes('lyrics') && (
           <div className="w-full shrink-0" inert={pages[page] !== 'lyrics'}>
             <SectionHeader title="lyrics" />
-            {lyrics === null || lyrics === 'loading' ? (
-              <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">loading lyrics…</p>
-            ) : !lyrics.found ? (
+            {lyrics === 'loading' ? (
+              lyricsWaitVisible && (
+                <p
+                  className={`mt-[8px] text-[length:var(--text-base)] transition-colors duration-[var(--motion-fast)] ${
+                    lyricsWaitLong ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)]'
+                  }`}
+                >
+                  loading lyrics…
+                </p>
+              )
+            ) : lyrics === null ? null : !lyrics.found ? (
               <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">no lyrics found</p>
             ) : lyrics.instrumental ? (
               <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">instrumental</p>

@@ -13,7 +13,14 @@ import type { ReplayGainMode } from '../playback/usePlayback'
 const API = 'http://127.0.0.1:8899/api/v1'
 
 type LibraryRoot = { id: number; path: string; label: string | null; enabled: number }
-type ScanProgress = { jobId: number; libraryRootId: number; filesScanned: number; filesAdded: number; filesUpdated: number }
+type ScanProgress = {
+  jobId: number
+  libraryRootId: number
+  filesScanned: number
+  filesTotal: number
+  filesAdded: number
+  filesUpdated: number
+}
 
 /* The maintenance-view overlay's twin — same fixed-inset Surface modal, same
  * header bar. See DESIGN.md; this is the first surface built directly
@@ -207,9 +214,25 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
                               {r.label ?? r.path}
                             </p>
                             {progress && (
-                              <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
-                                scanning… {progress.filesScanned} files
-                              </p>
+                              <div className="flex items-center gap-[8px] py-[2px]">
+                                <p className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">
+                                  scanning{' '}
+                                  <span className="font-[family-name:var(--font-mono)] text-[var(--color-muted-hi)]">
+                                    {progress.filesScanned}/{progress.filesTotal}
+                                  </span>
+                                </p>
+                                {/* MO-11: determinate progress is data, not decoration — a
+                                 * real fraction of a known total, stepped not eased (DESIGN.md
+                                 * Motion's "never animate live data" applies here same as playback position). */}
+                                <div className="h-[3px] flex-1 overflow-hidden rounded-full bg-[var(--color-divider)]">
+                                  <div
+                                    className="h-full rounded-full bg-[var(--color-signal)]"
+                                    style={{
+                                      width: `${progress.filesTotal > 0 ? Math.min(100, (progress.filesScanned / progress.filesTotal) * 100) : 0}%`,
+                                    }}
+                                  />
+                                </div>
+                              </div>
                             )}
                           </div>
                           <div className="flex shrink-0 items-center gap-[12px]">
