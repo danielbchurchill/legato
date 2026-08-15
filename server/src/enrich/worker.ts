@@ -13,7 +13,7 @@ import {
 import { enqueueCoverArtLookupIfNeeded } from "./queue.js";
 import { assignTracks, pickBestRelease, scoreReleaseCandidate, type LocalAlbumInput, type LocalTrack } from "./releaseMatch.js";
 import { looksSuspicious } from "./sanityCheck.js";
-import { pickBestMatch, type LocalMatchInput } from "./textSearch.js";
+import { pickBestMatch, scoreCandidate, type LocalMatchInput } from "./textSearch.js";
 
 const MAX_BACKOFF_SECONDS = 5 * 60;
 
@@ -89,7 +89,11 @@ function recordProvenance(
 // enrichment-discovered mbid instead of one already embedded in tags: if a
 // node already canonical for this mbid exists, repoint every file
 // currently on this node to it; otherwise this node becomes canonical.
-function applyMatch(db: Database.Database, nodeId: number, mbid: string, confidence: number): void {
+// Exported for routes/hygiene.ts (M-5): resolving an ambiguous match from
+// the maintenance view writes the chosen mbid through this exact path,
+// not a separate one — a manually-resolved match should behave
+// identically to a confident automatic one everywhere downstream.
+export function applyMatch(db: Database.Database, nodeId: number, mbid: string, confidence: number): void {
   const canonical = db
     .prepare("SELECT id FROM nodes WHERE type = 'recording' AND mbid = ? AND id != ?")
     .get(mbid, nodeId) as { id: number } | undefined;
@@ -107,6 +111,9 @@ function applyMatch(db: Database.Database, nodeId: number, mbid: string, confide
   }
 
   recordProvenance(db, nodeId, mbid, confidence, null);
+  // Any candidates left over from a previous ambiguous attempt no longer
+  // apply — this node has a real match now.
+  db.prepare("DELETE FROM match_candidates WHERE node_id = ?").run(nodeId);
 
   // A confident mbid on the recording is the only thing that makes a
   // Cover Art Archive lookup possible at all (it resolves through the
@@ -239,18 +246,41 @@ async function processRecordingLookup(db: Database.Database, job: EnrichJob): Pr
   const candidates = await searchRecording(input);
   const result = pickBestMatch(candidates, input);
 
+  // Any new attempt supersedes whatever a previous one left behind — a
+  // stale candidate list from an earlier, worse-scoring attempt has no
+  // business surviving next to this one.
+  db.prepare("DELETE FROM match_candidates WHERE node_id = ?").run(job.node_id);
+
   if (result.outcome === "matched") {
     applyMatch(db, job.node_id, result.mbid, result.confidence);
   } else if (result.outcome === "ambiguous") {
-    recordProvenance(
-      db,
-      job.node_id,
-      null,
-      0,
-      `ambiguous — ${result.candidates.length} tied candidates, needs manual confirmation: ${result.candidates
-        .map((c) => c.mbid)
-        .join(", ")}`,
+    // M-5: candidates go in a real table the maintenance view can act on,
+    // not just named in the note — the note keeps the count for the log
+    // line, since the UUIDs themselves used to be dumped there too, and
+    // the frontend was already trimming them back out client-side.
+    recordProvenance(db, job.node_id, null, 0, `ambiguous — ${result.candidates.length} tied candidates, needs manual confirmation`);
+    const insertCandidate = db.prepare(
+      `INSERT INTO match_candidates (node_id, mbid, release_title, release_date, duration_ms, score)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     );
+    for (const c of result.candidates) {
+      const release = c.releases[0];
+      // The weighted 0-1 confidence (textSearch.ts's own scoreCandidate),
+      // not MusicBrainz's raw 0-100 relevance score — storing the raw
+      // score here would both order the picker by exactly the flawed
+      // signal M-3 exists to fix (every tied candidate scores 100) and
+      // write a nonsense match_confidence if this candidate is later
+      // resolved, since applyMatch's confidence parameter is a fraction
+      // everywhere else in the app.
+      insertCandidate.run(
+        job.node_id,
+        c.mbid,
+        release?.title ?? null,
+        release?.date ?? null,
+        c.durationMs,
+        scoreCandidate(input, c),
+      );
+    }
   } else {
     recordProvenance(db, job.node_id, null, 0, "no MusicBrainz match found");
   }

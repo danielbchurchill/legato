@@ -14,7 +14,7 @@ vi.mock("./coverArchive.js", () => ({ fetchCaaFrontImage: vi.fn() }));
 // recorded as a cover_art row at all.
 vi.mock("../cover/store.js", () => ({ storeCover: vi.fn().mockResolvedValue("fake-hash") }));
 
-const { runDueJobs } = await import("./worker.js");
+const { runDueJobs, applyMatch } = await import("./worker.js");
 
 let db: Database.Database;
 
@@ -95,12 +95,26 @@ describe("runDueJobs", () => {
     expect(file.every((f) => f.recording_node_id === canonicalId)).toBe(true);
   });
 
-  it("does not apply an ambiguous result, but records it for a future hygiene view", async () => {
+  it("does not apply an ambiguous result, but records it in match_candidates for the maintenance view (M-5)", async () => {
     const nodeId = insertNode("Come Together", "The Beatles", null);
     enqueue(nodeId);
     vi.mocked(mbClient.searchRecording).mockResolvedValue([
-      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: null, releases: [] },
-      { mbid: "mb-2", score: 100, title: "Come Together", artist: "The Beatles", durationMs: null, releases: [] },
+      {
+        mbid: "mb-1",
+        score: 100,
+        title: "Come Together",
+        artist: "The Beatles",
+        durationMs: 258506,
+        releases: [{ title: "Abbey Road", releaseType: "Album", date: "1969-09-26", trackCount: 17, trackNo: 1 }],
+      },
+      {
+        mbid: "mb-2",
+        score: 100,
+        title: "Come Together",
+        artist: "The Beatles",
+        durationMs: 258506,
+        releases: [{ title: "Abbey Road (2019 Mix)", releaseType: "Album", date: "2019", trackCount: 17, trackNo: 1 }],
+      },
     ]);
 
     await runDueJobs(db);
@@ -111,8 +125,42 @@ describe("runDueJobs", () => {
       note: string;
     };
     expect(provenance.note).toContain("ambiguous");
+    // No more UUIDs dumped in the note — that's what match_candidates is for.
+    expect(provenance.note).not.toContain("mb-1");
+
+    const candidates = db
+      .prepare("SELECT mbid, release_title, release_date, score FROM match_candidates WHERE node_id = ? ORDER BY mbid")
+      .all(nodeId) as { mbid: string; release_title: string; release_date: string; score: number }[];
+    expect(candidates.map((c) => ({ mbid: c.mbid, release_title: c.release_title, release_date: c.release_date }))).toEqual([
+      { mbid: "mb-1", release_title: "Abbey Road", release_date: "1969-09-26" },
+      { mbid: "mb-2", release_title: "Abbey Road (2019 Mix)", release_date: "2019" },
+    ]);
+    // The weighted 0-1 confidence (textSearch.ts's scoreCandidate), not
+    // MusicBrainz's raw 0-100 score both candidates share here — storing
+    // the raw value would write a nonsense match_confidence if this
+    // candidate is later resolved through the picker, and would order the
+    // picker by exactly the flawed signal M-3 exists to fix.
+    for (const c of candidates) {
+      expect(c.score).toBeGreaterThan(0);
+      expect(c.score).toBeLessThanOrEqual(1);
+    }
+
     const job = db.prepare("SELECT status FROM enrich_jobs WHERE node_id = ?").get(nodeId) as { status: string };
     expect(job.status).toBe("done"); // terminal, not a retryable error
+  });
+
+  it("resolving via applyMatch (the M-5 picker's own write path) clears any leftover candidates", () => {
+    const nodeId = insertNode("Come Together", "The Beatles", 258506);
+    db.prepare(
+      "INSERT INTO match_candidates (node_id, mbid, release_title, release_date, duration_ms, score) VALUES (?, 'mb-1', 'Abbey Road', '1969', 258506, 100)",
+    ).run(nodeId);
+
+    applyMatch(db, nodeId, "mb-1", 0.95);
+
+    const remaining = db.prepare("SELECT COUNT(*) AS n FROM match_candidates WHERE node_id = ?").get(nodeId) as {
+      n: number;
+    };
+    expect(remaining.n).toBe(0);
   });
 
   it("skips the search entirely for a malformed tag and never calls MusicBrainz", async () => {

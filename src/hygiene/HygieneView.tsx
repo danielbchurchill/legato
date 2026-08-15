@@ -48,6 +48,92 @@ const TAG_WRITE_STATUS_LABEL: Record<TagWriteStatus, string> = {
   reverted: 'reverted',
 }
 
+type MatchCandidate = {
+  id: number
+  mbid: string
+  release_title: string | null
+  release_date: string | null
+  duration_ms: number | null
+  score: number
+  duration_delta_ms: number | null
+}
+
+function yearOf(dateStr: string | null): string | null {
+  return dateStr ? (/^\d{4}/.exec(dateStr)?.[0] ?? null) : null
+}
+
+function formatDelta(ms: number | null): string {
+  if (ms == null) return 'no local duration to compare'
+  return `Δ ${Math.round(ms / 1000)}s`
+}
+
+// M-5: candidates used to be a wall of UUIDs in the note text with no way
+// to act on any of them. Real rows now (server/src/migrations/0018), shown
+// in the same 0fr -> 1fr disclosure MO-4 built for up-next — fetched only
+// once actually opened, since most ambiguous items are never expanded.
+// Resolving broadcasts hygiene:changed the same way every other write in
+// this view does, so the parent's existing WS listener reloads the
+// worklist — no separate refresh callback needed here.
+function AmbiguousMatchDisclosure({ nodeId }: { nodeId: number }) {
+  const [open, setOpen] = useState(false)
+  const [candidates, setCandidates] = useState<MatchCandidate[] | null>(null)
+
+  const toggle = () => {
+    if (!open && candidates === null) {
+      fetch(`${API}/hygiene/match-candidates/${nodeId}`)
+        .then((r) => r.json())
+        .then(setCandidates)
+        .catch(() => setCandidates([]))
+    }
+    setOpen((v) => !v)
+  }
+
+  const resolve = async (mbid: string) => {
+    await fetch(`${API}/hygiene/match-candidates/${nodeId}/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mbid }),
+    })
+  }
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+      >
+        {open ? 'hide candidates' : 'show candidates'}
+      </button>
+      <div
+        className={`grid transition-all duration-[var(--motion-base)] ease-[var(--ease-inout)] motion-reduce:transition-none ${
+          open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+        }`}
+      >
+        <div className="min-h-0 overflow-hidden">
+          {candidates === null ? (
+            <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">loading…</p>
+          ) : (
+            <ul className="mt-[8px] flex flex-col gap-[8px]">
+              {candidates.map((c) => (
+                <li key={c.mbid} className="flex items-center justify-between gap-[12px]">
+                  <span className="min-w-0 truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+                    {c.release_title ?? 'unknown release'}
+                    {yearOf(c.release_date) && <span className="text-[var(--color-muted)]"> · {yearOf(c.release_date)}</span>}
+                    <span className="text-[var(--color-muted)]"> · {formatDelta(c.duration_delta_ms)}</span>
+                  </span>
+                  <Button onClick={() => resolve(c.mbid)}>use this</Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function WorklistRow({
   item,
   onSelectNode,
@@ -78,9 +164,12 @@ function WorklistRow({
         </div>
       )}
       {item.type === 'enrichment_flag' && (
-        <p className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
-          {formatEnrichmentNote(item.note)}
-        </p>
+        <>
+          <p className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
+            {item.note}
+          </p>
+          {item.note?.startsWith('ambiguous') && <AmbiguousMatchDisclosure nodeId={item.nodeId} />}
+        </>
       )}
       {item.type === 'missing_file' && (
         <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
@@ -93,21 +182,6 @@ function WorklistRow({
 
 function formatDiffValue(value: FieldDiff['newValue']): string {
   return Array.isArray(value) ? value.join(', ') : String(value)
-}
-
-// enrich/worker.ts's ambiguous-match note already states the tied-candidate
-// count in plain words ("ambiguous — 6 tied candidates, needs manual
-// confirmation: <uuid>, <uuid>, ...") before dumping every tied MBID
-// verbatim — real, useful detail for a log line, but a wall of UUIDs in a
-// worklist row reads as broken, not restyled. No UI exists to act on an
-// individual MBID from here (there never was, even before the restyle), so
-// the count already in the message is all that's actionable to read.
-function formatEnrichmentNote(note: string | null): string {
-  if (!note) return ''
-  const marker = 'needs manual confirmation:'
-  const index = note.indexOf(marker)
-  if (index === -1) return note
-  return note.slice(0, index).replace(/,\s*$/, '').trim()
 }
 
 // The tag-write diff/approve/revert flow the server has had since M9 and
