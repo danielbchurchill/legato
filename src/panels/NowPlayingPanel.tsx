@@ -18,9 +18,11 @@ const API = 'http://127.0.0.1:8899/api/v1'
  * those touches match/collapse identity, a different question from
  * fixing a wrong bpm.
  *
- * Pagination — the three dots — currently covers metadata and article.
- * Lyrics lands as its own page between the two once LRCLIB is wired up;
- * `pages` below is ordered so that's a one-line insertion, not a reshuffle. */
+ * Pagination — the three dots — covers metadata, lyrics, and article.
+ * Lyrics is fetched lazily (only once the lyrics page is actually opened,
+ * not eagerly when a track starts) since GET /nodes/:id/lyrics is a real
+ * network round trip to LRCLIB on a cache miss — see migration 0017's
+ * comment on why that can't happen during a scan. */
 
 function formatDuration(ms: number | null): string {
   if (ms == null) return '—'
@@ -46,6 +48,7 @@ type NodeDetail = {
 }
 type FieldDiff = { field: string; oldValue: string | number; newValue: string | number }
 type TagWriteRow = { id: number; status: string; diff_json: string }
+type LyricsData = { plainLyrics: string | null; syncedLyrics: string | null; instrumental: boolean; found: boolean }
 
 type EditableFields = { bpm?: number; label?: string; releaseType?: string }
 
@@ -63,6 +66,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
   const [pendingWrite, setPendingWrite] = useState<{ id: number; diff: FieldDiff[] } | null>(null)
   const [upNextOpen, setUpNextOpen] = useState(false)
   const [page, setPage] = useState(0)
+  const [lyrics, setLyrics] = useState<LyricsData | 'loading' | null>(null)
   const swipeStartX = useRef<number | null>(null)
 
   const loadNode = (id: number) => {
@@ -76,6 +80,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
     setEditing(false)
     setPendingWrite(null)
     setPage(0)
+    setLyrics(null)
     if (nodeId == null) {
       setNode(null)
       return
@@ -83,7 +88,11 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
     loadNode(nodeId)
   }, [nodeId])
 
-  const pageCount = node?.article ? 2 : 1
+  const pages: Array<'metadata' | 'lyrics' | 'article'> = node
+    ? node.article
+      ? ['metadata', 'lyrics', 'article']
+      : ['metadata', 'lyrics']
+    : ['metadata']
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -91,11 +100,22 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       if (e.key === 'ArrowLeft') setPage((p) => Math.max(0, p - 1))
-      if (e.key === 'ArrowRight') setPage((p) => Math.min(pageCount - 1, p + 1))
+      if (e.key === 'ArrowRight') setPage((p) => Math.min(pages.length - 1, p + 1))
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [editing, pageCount])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, pages.length])
+
+  useEffect(() => {
+    if (!node || pages[page] !== 'lyrics' || lyrics !== null) return
+    setLyrics('loading')
+    fetch(`${API}/nodes/${node.id}/lyrics`)
+      .then((r) => (r.ok ? (r.json() as Promise<LyricsData>) : null))
+      .then(setLyrics)
+      .catch(() => setLyrics(null))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node?.id, page, lyrics])
 
   if (nodeId == null || !node) {
     return (
@@ -139,8 +159,6 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
     setPendingWrite(null)
     loadNode(node.id)
   }
-
-  const pages: Array<'metadata' | 'article'> = node.article ? ['metadata', 'article'] : ['metadata']
 
   const handleSwipeStart = (e: React.PointerEvent) => {
     swipeStartX.current = e.clientX
@@ -347,6 +365,23 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
                   </button>
                 </div>
               </>
+            )}
+          </>
+        )}
+
+        {pages[page] === 'lyrics' && (
+          <>
+            <SectionHeader title="lyrics" />
+            {lyrics === null || lyrics === 'loading' ? (
+              <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">loading lyrics…</p>
+            ) : !lyrics.found ? (
+              <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">no lyrics found</p>
+            ) : lyrics.instrumental ? (
+              <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">instrumental</p>
+            ) : (
+              <pre className="mt-[8px] whitespace-pre-wrap text-[length:var(--text-base)] leading-relaxed text-[var(--color-ink)]">
+                {lyrics.plainLyrics}
+              </pre>
             )}
           </>
         )}
