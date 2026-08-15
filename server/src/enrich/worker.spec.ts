@@ -49,7 +49,7 @@ describe("runDueJobs", () => {
     const nodeId = insertNode("Come Together", "The Beatles", 262000);
     enqueue(nodeId);
     vi.mocked(mbClient.searchRecording).mockResolvedValue([
-      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000 },
+      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000, releases: [] },
     ]);
 
     await runDueJobs(db);
@@ -61,13 +61,18 @@ describe("runDueJobs", () => {
       match_confidence: number;
     };
     expect(file.match_source).toBe("mbid");
-    expect(file.match_confidence).toBe(1);
+    // No longer a bare 1 (M-3): confidence is textSearch.ts's weighted
+    // score, not MB's own relevance score — title/artist/length all match
+    // exactly, but there's no release data to score against, so
+    // releasetype/album/totaltracks/date land at their neutral/no-data
+    // defaults rather than a perfect 1.
+    expect(file.match_confidence).toBeCloseTo(0.6981, 4);
     const provenance = db.prepare("SELECT * FROM field_provenance WHERE node_id = ?").get(nodeId) as {
       value: string;
       confidence: number;
     };
     expect(provenance.value).toBe("mb-1");
-    expect(provenance.confidence).toBe(1);
+    expect(provenance.confidence).toBeCloseTo(0.6981, 4);
     const job = db.prepare("SELECT status FROM enrich_jobs WHERE node_id = ?").get(nodeId) as { status: string };
     expect(job.status).toBe("done");
   });
@@ -79,7 +84,7 @@ describe("runDueJobs", () => {
     const duplicateId = insertNode("Yellow Submarine", "The Beatles", 160100);
     enqueue(duplicateId);
     vi.mocked(mbClient.searchRecording).mockResolvedValue([
-      { mbid: "mb-existing", score: 100, title: "Yellow Submarine", artist: "The Beatles", durationMs: 160000 },
+      { mbid: "mb-existing", score: 100, title: "Yellow Submarine", artist: "The Beatles", durationMs: 160000, releases: [] },
     ]);
 
     await runDueJobs(db);
@@ -94,8 +99,8 @@ describe("runDueJobs", () => {
     const nodeId = insertNode("Come Together", "The Beatles", null);
     enqueue(nodeId);
     vi.mocked(mbClient.searchRecording).mockResolvedValue([
-      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: null },
-      { mbid: "mb-2", score: 100, title: "Come Together", artist: "The Beatles", durationMs: null },
+      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: null, releases: [] },
+      { mbid: "mb-2", score: 100, title: "Come Together", artist: "The Beatles", durationMs: null, releases: [] },
     ]);
 
     await runDueJobs(db);
@@ -176,7 +181,7 @@ describe("runDueJobs", () => {
     );
     enqueue(nodeId);
     vi.mocked(mbClient.searchRecording).mockResolvedValue([
-      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000 },
+      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000, releases: [] },
     ]);
     vi.mocked(mbClient.lookupReleaseGroupForRecording).mockResolvedValue("rg-1");
     vi.mocked(coverArchive.fetchCaaFrontImage).mockResolvedValue({
@@ -215,7 +220,7 @@ describe("runDueJobs", () => {
     ).run(release.id);
     enqueue(nodeId);
     vi.mocked(mbClient.searchRecording).mockResolvedValue([
-      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000 },
+      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000, releases: [] },
     ]);
 
     await runDueJobs(db);

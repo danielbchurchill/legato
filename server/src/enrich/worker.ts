@@ -3,10 +3,10 @@ import { coverTargetNode, recordCover, resolveCover } from "../cover/extract.js"
 import { storeCover } from "../cover/store.js";
 import { broadcast } from "../ws.js";
 import { fetchCaaFrontImage } from "./coverArchive.js";
-import { lookupReleaseGroupForRecording, searchRecording } from "./mbClient.js";
+import { lookupReleaseGroupForRecording, searchRecording, type RecordingSearchInput } from "./mbClient.js";
 import { enqueueCoverArtLookupIfNeeded } from "./queue.js";
 import { looksSuspicious } from "./sanityCheck.js";
-import { pickBestMatch } from "./textSearch.js";
+import { pickBestMatch, type LocalMatchInput } from "./textSearch.js";
 
 const MAX_BACKOFF_SECONDS = 5 * 60;
 
@@ -23,24 +23,42 @@ function getNextDueJob(db: Database.Database): EnrichJob | undefined {
     .get() as EnrichJob | undefined;
 }
 
-function getSearchInput(
-  db: Database.Database,
-  nodeId: number,
-): { title: string; artist: string; durationMs: number | null } | null {
+type SearchInput = LocalMatchInput & RecordingSearchInput;
+
+// M-2: everything the local tags already hold, not just title/artist —
+// album, track number, total tracks and date all feed the widened
+// MusicBrainz query and, for whatever comes back, M-3's weighted scorer.
+function getSearchInput(db: Database.Database, nodeId: number): SearchInput | null {
   const node = db.prepare("SELECT title FROM nodes WHERE id = ?").get(nodeId) as { title: string } | undefined;
   if (!node) return null;
 
   const file = db
     .prepare("SELECT tags_raw FROM files WHERE recording_node_id = ? ORDER BY id LIMIT 1")
     .get(nodeId) as { tags_raw: string | null } | undefined;
-  const tags = file?.tags_raw ? (JSON.parse(file.tags_raw) as { artist?: string | null }) : null;
+  const tags = file?.tags_raw
+    ? (JSON.parse(file.tags_raw) as {
+        artist?: string | null;
+        album?: string | null;
+        trackNo?: number | null;
+        totalTracks?: number | null;
+        releaseDate?: string | null;
+      })
+    : null;
   if (!tags?.artist) return null;
 
   const recording = db.prepare("SELECT canonical_duration_ms FROM recordings WHERE node_id = ?").get(nodeId) as
     | { canonical_duration_ms: number | null }
     | undefined;
 
-  return { title: node.title, artist: tags.artist, durationMs: recording?.canonical_duration_ms ?? null };
+  return {
+    title: node.title,
+    artist: tags.artist,
+    album: tags.album ?? null,
+    trackNo: tags.trackNo ?? null,
+    totalTracks: tags.totalTracks ?? null,
+    date: tags.releaseDate ?? null,
+    durationMs: recording?.canonical_duration_ms ?? null,
+  };
 }
 
 function recordProvenance(
@@ -107,8 +125,8 @@ async function processRecordingLookup(db: Database.Database, job: EnrichJob): Pr
     return;
   }
 
-  const candidates = await searchRecording(input.artist, input.title);
-  const result = pickBestMatch(candidates, input.durationMs);
+  const candidates = await searchRecording(input);
+  const result = pickBestMatch(candidates, input);
 
   if (result.outcome === "matched") {
     applyMatch(db, job.node_id, result.mbid, result.confidence);

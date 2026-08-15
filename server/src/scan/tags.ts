@@ -9,6 +9,9 @@ export type NormalizedTags = {
   album: string | null;
   albumartist: string | null;
   trackNo: number | null;
+  // "N of M" — M-2's release-scoped MusicBrainz query boost needs the
+  // total, not just this track's own position.
+  totalTracks: number | null;
   discNo: number | null;
   year: number | null;
   mbRecordingId: string | null;
@@ -50,6 +53,7 @@ export function normalizeTags(common: ICommonTagsResult, format: IFormat): Norma
     album: common.album ?? null,
     albumartist: common.albumartist ?? null,
     trackNo: common.track?.no ?? null,
+    totalTracks: common.track?.of ?? null,
     discNo: common.disk?.no ?? null,
     year: common.year ?? null,
     mbRecordingId: common.musicbrainz_recordingid ?? null,

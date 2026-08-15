@@ -48,6 +48,7 @@ describe("normalizeTags", () => {
       album: "Abbey Road",
       albumartist: "The Beatles",
       trackNo: 1,
+      totalTracks: 17,
       discNo: 1,
       year: 1969,
       mbRecordingId: "rec-123",
@@ -82,6 +83,7 @@ describe("normalizeTags", () => {
     expect(result.durationMs).toBeNull();
     expect(result.releaseDate).toBeNull();
     expect(result.pressingDate).toBeNull();
+    expect(result.totalTracks).toBeNull();
     expect(result.bpm).toBeNull();
     expect(result.label).toBeNull();
     expect(result.releaseType).toBeNull();
