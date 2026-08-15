@@ -22,6 +22,8 @@ import { queueRoutes } from "./routes/queue.js";
 import { hygieneRoutes } from "./routes/hygiene.js";
 import { tagWritesRoutes } from "./routes/tag-writes.js";
 import { coverRoutes } from "./routes/cover.js";
+import { playsRoutes } from "./routes/plays.js";
+import { statsRoutes } from "./routes/stats.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { runDueJobs } from "./enrich/worker.js";
 
@@ -63,6 +65,8 @@ await app.register(queueRoutes(db), { prefix: "/api/v1" });
 await app.register(hygieneRoutes(db), { prefix: "/api/v1" });
 await app.register(tagWritesRoutes(db), { prefix: "/api/v1" });
 await app.register(coverRoutes(db), { prefix: "/api/v1" });
+await app.register(playsRoutes(db), { prefix: "/api/v1" });
+await app.register(statsRoutes(db), { prefix: "/api/v1" });
 
 // Resume watching every already-configured root across restarts — a root
 // added in a previous session shouldn't need a manual re-scan to notice
