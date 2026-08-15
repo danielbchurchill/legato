@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useWsEvent } from './hooks/useWs'
+import { Button } from './ui/Button'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -64,13 +65,7 @@ export default function LibrarySetup({ onLibraryReady }: { onLibraryReady: () =>
           <p className="max-w-[420px] text-[length:var(--text-base)] text-[var(--color-muted)]">
             No music library configured yet. Choose a folder to scan.
           </p>
-          <button
-            type="button"
-            onClick={() => void chooseFolder()}
-            className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
-          >
-            choose music folder
-          </button>
+          <Button onClick={() => void chooseFolder()}>choose music folder</Button>
           {error && <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{error}</p>}
         </>
       )}

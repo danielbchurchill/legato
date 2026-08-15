@@ -241,6 +241,21 @@ The wordmark is centered in the titlebar and the whole bar outside the controls 
 
 ---
 
+## Controls
+
+Underline was the only button affordance in the app (C-3) — "retry", "rescan", "approve — write to file" and "cancel" all read as the same plain underlined text, so the one irreversible action in the product looked exactly like the one that isn't. Two shapes, `src/ui/Button.tsx`, split by consequence rather than prominence:
+
+| Variant | Looks like | Use |
+|---|---|---|
+| `link` | Ink text, underlined, hairline decoration | Anything reversible — navigation, retry, resubmit, undo itself. Most actions in the app genuinely are this, and it's the shape the app already had. |
+| `destructive` | A bordered pill: hairline border, rounded-full, padded | The rare action with no undo — currently only "approve — write to file" and its twin in the maintenance view. |
+
+`destructive` is distinguished by shape, not color. The palette has no danger token, deliberately (`--color-*` in tokens.css is glass/ink/muted/edge-hue, full stop — inventing a red for one rare state would be the first exception), so weight carries what color can't: a bordered pill reads as a control to commit to, a plain underline reads as a link to follow.
+
+Both variants share the toggle pill's rounding language (`rounded-full`, no new radius token) and MO-1's motion tokens (`--motion-fast`, `--ease-out`) rather than a literal duration.
+
+---
+
 ## Motion
 
 The mockup is static, so this is a stated position rather than a measurement, and it follows Daniel's documented rule for his own work: *the UI is the straightest, cleanest thing on the screen — the content is what is flashy.*

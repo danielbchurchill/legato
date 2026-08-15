@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '../ui/Icon'
 import { Surface } from '../shell/Surface'
 import { SectionHeader } from '../ui/DataRow'
+import { Button } from '../ui/Button'
 import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
 import type { ReplayGainMode } from '../playback/usePlayback'
@@ -150,15 +151,7 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
         <div className="min-h-0 flex-1 overflow-y-auto px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
           <SectionHeader
             title="library"
-            action={
-              <button
-                type="button"
-                onClick={() => void addFolder()}
-                className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
-              >
-                + add folder
-              </button>
-            }
+            action={<Button onClick={() => void addFolder()}>+ add folder</Button>}
           />
           <div className="mt-[8px]">
             {roots === null ? (
@@ -184,13 +177,7 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-[12px]">
-                        <button
-                          type="button"
-                          onClick={() => void rescanRoot(r.id)}
-                          className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
-                        >
-                          rescan
-                        </button>
+                        <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
                         <button
                           type="button"
                           onClick={() => void removeRoot(r.id)}

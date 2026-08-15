@@ -6,6 +6,7 @@ import { createNodeImageProgram } from '@sigma/node-image'
 import { patchNodePosition, useGraphData, type GraphEdge, type GraphNode } from './useGraphData'
 import type { Granularity } from '../shell/granularity'
 import { useScanStatus } from '../hooks/useScanStatus'
+import { Button } from '../ui/Button'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -756,13 +757,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
               <p className="max-w-[420px] text-[length:var(--text-base)] text-[var(--color-muted)]">
                 scan failed: {scanStatus.error}
               </p>
-              <button
-                type="button"
-                onClick={scanStatus.retry}
-                className="pointer-events-auto text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
-              >
+              <Button onClick={scanStatus.retry} className="pointer-events-auto">
                 retry
-              </button>
+              </Button>
             </>
           ) : scanStatus.scanning ? (
             <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">scanning your library…</p>

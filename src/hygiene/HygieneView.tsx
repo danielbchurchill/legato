@@ -3,6 +3,7 @@ import { useWsEvent } from '../hooks/useWs'
 import { Icon } from '../ui/Icon'
 import { Surface } from '../shell/Surface'
 import { SectionHeader } from '../ui/DataRow'
+import { Button } from '../ui/Button'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -46,18 +47,6 @@ const TAG_WRITE_STATUS_LABEL: Record<TagWriteStatus, string> = {
   reverted: 'reverted',
 }
 
-function LinkButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 transition-colors duration-150 hover:text-[var(--color-muted)]"
-    >
-      {children}
-    </button>
-  )
-}
-
 function WorklistRow({
   item,
   onSelectNode,
@@ -70,7 +59,7 @@ function WorklistRow({
   return (
     <div className="flex flex-col gap-[6px] border-b border-[var(--color-divider)] py-[15px] last:border-b-0">
       <div className="flex items-baseline justify-between gap-[12px]">
-        <LinkButton onClick={() => onSelectNode(item.nodeId)}>{item.nodeTitle}</LinkButton>
+        <Button onClick={() => onSelectNode(item.nodeId)}>{item.nodeTitle}</Button>
         <span className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">
           {TYPE_LABEL[item.type]}
         </span>
@@ -79,11 +68,11 @@ function WorklistRow({
       {item.type === 'fuzzy_pending' && (
         <div className="flex flex-wrap items-baseline justify-between gap-[12px]">
           <span className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
-            looks like <LinkButton onClick={() => onSelectNode(item.candidateNodeId)}>{item.candidateTitle}</LinkButton>
+            looks like <Button onClick={() => onSelectNode(item.candidateNodeId)}>{item.candidateTitle}</Button>
           </span>
           <div className="flex gap-[16px]">
-            <LinkButton onClick={() => onResolveFuzzy(item.fileId, item.candidateNodeId)}>merge</LinkButton>
-            <LinkButton onClick={() => onResolveFuzzy(item.fileId, null)}>keep separate</LinkButton>
+            <Button onClick={() => onResolveFuzzy(item.fileId, item.candidateNodeId)}>merge</Button>
+            <Button onClick={() => onResolveFuzzy(item.fileId, null)}>keep separate</Button>
           </div>
         </div>
       )}
@@ -163,10 +152,14 @@ function TagWriteRow({
           {tagWrite.error_message}
         </p>
       )}
-      <div className="flex gap-[16px]">
-        {tagWrite.status === 'pending_review' && <LinkButton onClick={onApprove}>approve</LinkButton>}
-        {tagWrite.status === 'written' && <LinkButton onClick={onRevert}>revert</LinkButton>}
-        {tagWrite.status !== 'written' && <LinkButton onClick={onDiscard}>discard</LinkButton>}
+      <div className="flex items-center gap-[16px]">
+        {tagWrite.status === 'pending_review' && (
+          <Button variant="destructive" onClick={onApprove}>
+            approve
+          </Button>
+        )}
+        {tagWrite.status === 'written' && <Button onClick={onRevert}>revert</Button>}
+        {tagWrite.status !== 'written' && <Button onClick={onDiscard}>discard</Button>}
       </div>
     </div>
   )

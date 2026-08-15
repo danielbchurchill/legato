@@ -3,6 +3,7 @@ import { Icon } from '../ui/Icon'
 import { CoverArt } from '../ui/CoverArt'
 import { DataRow, SectionHeader } from '../ui/DataRow'
 import { ArticleBody } from '../ui/ArticleBody'
+import { Button } from '../ui/Button'
 import type { PlaybackStatus, QueueEntry } from '../playback/usePlayback'
 
 const API = 'http://127.0.0.1:8899/api/v1'
@@ -311,13 +312,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
                     }
                   />
                   <div className="flex gap-[16px] pt-[10px]">
-                    <button
-                      type="button"
-                      onClick={submitDraft}
-                      className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
-                    >
-                      review changes
-                    </button>
+                    <Button onClick={submitDraft}>review changes</Button>
                     <button
                       type="button"
                       onClick={() => setEditing(false)}
@@ -350,14 +345,10 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
                     </li>
                   ))}
                 </ul>
-                <div className="flex gap-[16px] pt-[10px]">
-                  <button
-                    type="button"
-                    onClick={approveWrite}
-                    className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
-                  >
+                <div className="flex items-center gap-[16px] pt-[10px]">
+                  <Button variant="destructive" onClick={approveWrite}>
                     approve — write to file
-                  </button>
+                  </Button>
                   <button
                     type="button"
                     onClick={discardWrite}
