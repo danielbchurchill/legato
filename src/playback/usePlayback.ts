@@ -15,10 +15,17 @@ type ResolvedTrack = {
   replaygainAlbumGain: number | null
 }
 
+export type QueueEntry = { recordingNodeId: number; title: string; durationMs: number | null }
+
 export type PlaybackStatus = {
   playing: boolean
   positionMs: number
   currentRecordingNodeId: number | null
+  /** The file backing the current recording — TransportDock's waveform
+   * scrubber fetches peaks by file id, not recording id. */
+  currentFileId: number | null
+  currentDurationMs: number | null
+  volume: number
 }
 
 // What a play-in-progress needs to report itself to POST /api/v1/plays once
@@ -40,6 +47,34 @@ async function resolveTracks(recordingNodeIds: number[]): Promise<ResolvedTrack[
   })
   const data = await res.json()
   return (data.tracks as (ResolvedTrack | null)[]).filter((t): t is ResolvedTrack => t != null)
+}
+
+type NodeDetail = { title: string; edges: { direction: 'in' | 'out'; type: string; other_id: number }[] }
+type TracklistEntry = { id: number; title: string; track_no: number | null; canonical_duration_ms: number | null }
+
+// A single click on a track queues the rest of its album, in album order —
+// not just that one track. Loose files with no release (or a release with
+// no other tracks after this one) queue alone, same as before.
+async function resolveQueueContext(recordingNodeId: number, fallbackTitle: string): Promise<QueueEntry[]> {
+  try {
+    const node = (await fetch(`${API}/nodes/${recordingNodeId}`).then((r) => r.json())) as NodeDetail
+    const releaseEdge = node.edges.find((e) => e.direction === 'out' && e.type === 'appears_on')
+    if (!releaseEdge) return [{ recordingNodeId, title: node.title, durationMs: null }]
+
+    const tracklist = (await fetch(`${API}/nodes/${releaseEdge.other_id}/tracklist`).then((r) =>
+      r.json(),
+    )) as TracklistEntry[]
+    const startIndex = tracklist.findIndex((t) => t.id === recordingNodeId)
+    if (startIndex === -1) return [{ recordingNodeId, title: node.title, durationMs: null }]
+
+    return tracklist
+      .slice(startIndex)
+      .map((t) => ({ recordingNodeId: t.id, title: t.title, durationMs: t.canonical_duration_ms }))
+  } catch {
+    // Context resolution is an enhancement, not a requirement — a network
+    // hiccup here shouldn't block playing the one track the user clicked.
+    return [{ recordingNodeId, title: fallbackTitle, durationMs: null }]
+  }
 }
 
 // Server applies the scrobble threshold (server/src/plays/scrobble.ts) and
@@ -65,15 +100,23 @@ export function usePlayback() {
     playing: false,
     positionMs: 0,
     currentRecordingNodeId: null,
+    currentFileId: null,
+    currentDurationMs: null,
+    volume: 1,
   })
   const [currentTitle, setCurrentTitle] = useState<string | null>(null)
+  const [upNext, setUpNext] = useState<QueueEntry[]>([])
 
   // fileId/durationMs per recording node, populated by playNode's own
   // resolveTracks() call — the only place a recordingNodeId maps to the
-  // fileId a play report needs. currentPlay tracks the listening span in
-  // progress; both are refs, not state, since neither should trigger a
-  // re-render on every 250ms position tick.
+  // fileId a play report needs. queueContext is the full ordered context
+  // (the whole album, from the clicked track on) resolved at play time;
+  // track-changed slices it to derive up-next as the queue advances,
+  // rather than re-resolving context on every boundary. Both are refs, not
+  // state, since neither should trigger a re-render on every 250ms
+  // position tick.
   const trackInfo = useRef(new Map<number, { fileId: number; durationMs: number | null }>())
+  const queueContext = useRef<QueueEntry[]>([])
   const currentPlay = useRef<PlayInProgress | null>(null)
 
   const finalizeCurrentPlay = useCallback(() => {
@@ -82,6 +125,10 @@ export function usePlayback() {
   }, [])
 
   useEffect(() => {
+    invoke<{ volume: number }>('queue_status')
+      .then((s) => setStatus((prev) => ({ ...prev, volume: s.volume })))
+      .catch(() => undefined)
+
     const unlistenPosition = listen<{ position_ms: number; recording_node_id: number | null }>(
       'playback://position',
       (e) => {
@@ -96,18 +143,28 @@ export function usePlayback() {
       finalizeCurrentPlay()
 
       const nodeId = e.payload.recording_node_id
-      setStatus((s) => ({ ...s, currentRecordingNodeId: nodeId }))
       if (nodeId != null) {
         const info = trackInfo.current.get(nodeId)
         currentPlay.current = info
           ? { recordingNodeId: nodeId, fileId: info.fileId, startedAt: new Date().toISOString(), lastPositionMs: 0 }
           : null
+        setStatus((s) => ({
+          ...s,
+          currentRecordingNodeId: nodeId,
+          currentFileId: info?.fileId ?? null,
+          currentDurationMs: info?.durationMs ?? null,
+        }))
+
+        const index = queueContext.current.findIndex((t) => t.recordingNodeId === nodeId)
+        setUpNext(index === -1 ? [] : queueContext.current.slice(index + 1))
+
         fetch(`${API}/nodes/${nodeId}`)
           .then((r) => r.json())
           .then((n) => setCurrentTitle(n.title))
       } else {
         setCurrentTitle(null)
-        setStatus((s) => ({ ...s, playing: false }))
+        setUpNext([])
+        setStatus((s) => ({ ...s, playing: false, currentRecordingNodeId: null, currentFileId: null, currentDurationMs: null }))
       }
     }).catch(() => undefined)
 
@@ -117,25 +174,37 @@ export function usePlayback() {
     }
   }, [finalizeCurrentPlay])
 
-  const playNode = useCallback(async (recordingNodeId: number, title: string) => {
-    const tracks = await resolveTracks([recordingNodeId])
-    if (tracks.length === 0) return
-    for (const t of tracks) trackInfo.current.set(t.recordingNodeId, { fileId: t.fileId, durationMs: t.durationMs })
-    finalizeCurrentPlay()
-    await invoke('queue_stop')
-    for (const t of tracks) {
-      await invoke('queue_enqueue', {
-        track: {
-          file_path: t.filePath,
-          recording_node_id: t.recordingNodeId,
-          replaygain_track_gain: t.replaygainTrackGain,
-        },
-      })
-    }
-    await invoke('queue_play')
-    setCurrentTitle(title)
-    setStatus((s) => ({ ...s, playing: true, currentRecordingNodeId: recordingNodeId }))
-  }, [finalizeCurrentPlay])
+  const playNode = useCallback(
+    async (recordingNodeId: number, title: string) => {
+      const context = await resolveQueueContext(recordingNodeId, title)
+      const tracks = await resolveTracks(context.map((c) => c.recordingNodeId))
+      if (tracks.length === 0) return
+
+      for (const t of tracks) trackInfo.current.set(t.recordingNodeId, { fileId: t.fileId, durationMs: t.durationMs })
+      // Context can outrun what actually resolved to a real file (a queued
+      // track whose file went missing since the album was last scanned) —
+      // up-next should only ever show what will really play.
+      const resolvedIds = new Set(tracks.map((t) => t.recordingNodeId))
+      queueContext.current = context.filter((c) => resolvedIds.has(c.recordingNodeId))
+
+      finalizeCurrentPlay()
+      await invoke('queue_stop')
+      for (const t of tracks) {
+        await invoke('queue_enqueue', {
+          track: {
+            file_path: t.filePath,
+            recording_node_id: t.recordingNodeId,
+            replaygain_track_gain: t.replaygainTrackGain,
+          },
+        })
+      }
+      await invoke('queue_play')
+      setCurrentTitle(title)
+      setUpNext(queueContext.current.slice(1))
+      setStatus((s) => ({ ...s, playing: true, currentRecordingNodeId: recordingNodeId }))
+    },
+    [finalizeCurrentPlay],
+  )
 
   const pause = useCallback(async () => {
     await invoke('queue_pause')
@@ -150,13 +219,33 @@ export function usePlayback() {
   const stop = useCallback(async () => {
     finalizeCurrentPlay()
     await invoke('queue_stop')
-    setStatus({ playing: false, positionMs: 0, currentRecordingNodeId: null })
+    queueContext.current = []
+    setUpNext([])
+    setStatus({
+      playing: false,
+      positionMs: 0,
+      currentRecordingNodeId: null,
+      currentFileId: null,
+      currentDurationMs: null,
+      volume: status.volume,
+    })
     setCurrentTitle(null)
-  }, [finalizeCurrentPlay])
+  }, [finalizeCurrentPlay, status.volume])
 
   const skip = useCallback(async () => {
     await invoke('queue_skip')
   }, [])
 
-  return { status, currentTitle, playNode, pause, resume, stop, skip }
+  const seek = useCallback(async (positionMs: number) => {
+    await invoke('queue_seek', { positionMs })
+    setStatus((s) => ({ ...s, positionMs }))
+  }, [])
+
+  const setVolume = useCallback(async (value: number) => {
+    const clamped = Math.min(1, Math.max(0, value))
+    await invoke('queue_set_volume', { value: clamped })
+    setStatus((s) => ({ ...s, volume: clamped }))
+  }, [])
+
+  return { status, currentTitle, upNext, playNode, pause, resume, stop, skip, seek, setVolume }
 }

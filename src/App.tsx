@@ -203,19 +203,10 @@ function MainApp() {
   if (hasLibrary === null) return <Centered>loading library…</Centered>
   if (!hasLibrary) return <LibrarySetup />
 
-  const nowPlaying =
-    playback.status.currentRecordingNodeId != null
-      ? {
-          nodeId: playback.status.currentRecordingNodeId,
-          title: playback.currentTitle ?? '—',
-          durationMs: null,
-        }
-      : null
-
   // The similarity strips' and maintenance preview's anchor: whatever is
   // selected takes precedence (the more recent intent), falling back to
   // whatever is playing when nothing is selected.
-  const anchorNodeId = selectedNodeId ?? nowPlaying?.nodeId ?? null
+  const anchorNodeId = selectedNodeId ?? playback.status.currentRecordingNodeId ?? null
 
   return (
     <AppShell>
@@ -248,7 +239,12 @@ function MainApp() {
             onPlay={playback.playNode}
           />
         ) : (
-          <NowPlayingPanel track={nowPlaying} status={playback.status} />
+          <NowPlayingPanel
+            nodeId={playback.status.currentRecordingNodeId}
+            status={playback.status}
+            upNext={playback.upNext}
+            onSelectNode={selectAndFly}
+          />
         )}
       </Panel>
 
@@ -257,6 +253,8 @@ function MainApp() {
         hasTrack={playback.currentTitle != null}
         onPause={playback.pause}
         onResume={playback.resume}
+        onSeek={playback.seek}
+        onSetVolume={playback.setVolume}
       />
 
       {hygieneOpen && (

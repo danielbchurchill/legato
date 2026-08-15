@@ -120,6 +120,27 @@ export function nodesRoutes(db: Database.Database) {
       },
     );
 
+    // A release's own track order — what usePlayback.ts needs to build a
+    // real queue from "play this track" (the rest of its album, in album
+    // order) rather than a single-track stop. MIN(f.id) is the only
+    // aggregate, which is what makes SQLite's bare-column rule pick
+    // track_no/disc_no from a deterministic row when a recording has more
+    // than one file (a merge case, not the common one).
+    app.get<{ Params: { id: string } }>("/nodes/:id/tracklist", async (request) => {
+      return db
+        .prepare(
+          `SELECT n.id, n.title, f.track_no, f.disc_no, r.canonical_duration_ms, MIN(f.id)
+           FROM edges e
+           JOIN nodes n ON n.id = e.from_node
+           LEFT JOIN recordings r ON r.node_id = n.id
+           LEFT JOIN files f ON f.recording_node_id = n.id
+           WHERE e.to_node = ? AND e.type = 'appears_on'
+           GROUP BY n.id
+           ORDER BY f.disc_no, f.track_no, n.id`,
+        )
+        .all(request.params.id);
+    });
+
     app.get<{ Querystring: { granularity?: string } }>("/edges", async (request) => {
       const granularity = parseGranularity(request.query.granularity);
       const types = EDGE_TYPES_BY_GRANULARITY[granularity];
