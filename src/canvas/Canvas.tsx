@@ -88,6 +88,77 @@ const FLY_TO_DURATION_MS = 500
  * rendered radius, per DESIGN.md "Nodes". */
 const NODE_RING_COLOR = '#ffffff'
 const NODE_RING_CLEARANCE = 15
+const RING_IN_MS = 140 // --motion-fast — the ring arriving
+const RING_OUT_MS = 120 // --motion-exit — leaving is faster than arriving
+
+/* Hover dwell + dim crossfade (MO-6). Engaging the dim only after a short
+ * dwell keeps a cursor merely passing over a dense cluster from strobing
+ * enterNode/leaveNode dozens of times; crossfading it in and out keeps
+ * leaving a node from snapping the whole canvas back at once. */
+const HOVER_DWELL_MS = 90 // --motion-instant — used here as a debounce threshold, not a transition
+const DIM_CROSSFADE_MS = 120 // --motion-exit
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+/* The only two things in this file that can't be CSS — WebGL has no
+ * transitions of its own. One scalar, one rAF loop, terminates on reaching
+ * its target: not an ongoing animation, so it doesn't fall foul of "nothing
+ * animates on a loop". Snaps straight to the target under reduced motion.
+ * Returns a cancel function so a new animation can interrupt one in flight
+ * without it fighting over the same value. */
+function animateScalar(
+  from: number,
+  to: number,
+  durationMs: number,
+  onFrame: (value: number) => void,
+  onDone?: () => void,
+): () => void {
+  if (prefersReducedMotion()) {
+    onFrame(to)
+    onDone?.()
+    return () => {}
+  }
+  const start = performance.now()
+  let raf = requestAnimationFrame(function step(now) {
+    const t = Math.min(1, (now - start) / durationMs)
+    // Approximates --ease-out (cubic-bezier(0.2, 0, 0, 1)) closely enough for
+    // a canvas scalar: starts fast, decelerates into place.
+    const eased = 1 - (1 - t) ** 3
+    onFrame(from + (to - from) * eased)
+    if (t < 1) {
+      raf = requestAnimationFrame(step)
+    } else {
+      onDone?.()
+    }
+  })
+  return () => cancelAnimationFrame(raf)
+}
+
+function parseColorChannels(color: string): [number, number, number] {
+  if (color.startsWith('#')) {
+    const n = Number.parseInt(color.slice(1), 16)
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+  }
+  const m = color.match(/\d+/g)
+  return m ? [Number(m[0]), Number(m[1]), Number(m[2])] : [255, 255, 255]
+}
+
+/* Mixes toward the dim color as `t` goes 0 -> 1. Always resolves to an
+ * opaque rgb() — G-2's fix depends on these values staying opaque, since
+ * sigma's WebGL path renders a translucent color as solid white rather than
+ * compositing it. */
+function mixTowardDim(color: string, dim: string, t: number): string {
+  if (t <= 0) return color
+  if (t >= 1) return dim
+  const [ar, ag, ab] = parseColorChannels(color)
+  const [br, bg, bb] = parseColorChannels(dim)
+  const r = Math.round(ar + (br - ar) * t)
+  const g = Math.round(ag + (bg - ag) * t)
+  const b = Math.round(ab + (bb - ab) * t)
+  return `rgb(${r},${g},${b})`
+}
 
 /* Default NodeImageProgram sizes its atlas cell off the source image's own
  * resolution ('auto' mode) — a 128px cover thumb squeezed into a ~44px node
@@ -286,6 +357,13 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const nodesRef = useRef(nodes)
   const artEnabledRef = useRef(true)
   const lastCameraRatioRef = useRef<number | null>(null)
+
+  // Selection-ring animation state (MO-5), read by defaultDrawNodeHover on
+  // the renderer-lifecycle effect below and written by the selection effect
+  // further down — both need the same instance across renders, hence a
+  // component-level ref rather than a local inside either effect.
+  const ringProgressRef = useRef<Map<string, number>>(new Map())
+  const ringCancelRef = useRef<Map<string, () => void>>(new Map())
   useEffect(() => {
     onSelectNodeRef.current = onSelectNode
     onStatsRef.current = onStats
@@ -327,13 +405,22 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       // dim/neighbor-highlight reducers and the panel already doing that
       // job. Without this override sigma falls back to its stock
       // black-on-white label-box hover renderer.
+      //
+      // Progress (0-1) comes from ringProgressRef, driven by animateScalar
+      // in the selection effect below — the ring scales out from the node's
+      // own radius and fades in alongside, rather than snapping into place
+      // (MO-5). A node with `ring: true` but no in-flight animation (the
+      // steady-state selected node, most of the time) draws at progress 1.
       defaultDrawNodeHover: (context, data) => {
-        if (!data.ring) return
+        const progress = ringProgressRef.current.get(data.key) ?? (data.ring ? 1 : 0)
+        if (progress <= 0) return
         context.beginPath()
-        context.arc(data.x, data.y, data.size + NODE_RING_CLEARANCE, 0, Math.PI * 2)
+        context.arc(data.x, data.y, data.size + NODE_RING_CLEARANCE * progress, 0, Math.PI * 2)
         context.lineWidth = 1
+        context.globalAlpha = progress
         context.strokeStyle = NODE_RING_COLOR
         context.stroke()
+        context.globalAlpha = 1
       },
     })
     rendererRef.current = renderer
@@ -353,33 +440,67 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // Hover/neighbor highlighting — dims everything not connected to the
     // hovered node, via sigma's render-time reducers rather than mutating
     // graph attributes, so it costs nothing to undo on leaveNode.
+    //
+    // dimProgress (0-1, MO-6) gates and crossfades the effect: it only
+    // starts rising after HOVER_DWELL_MS of continuous hover, so dragging
+    // the cursor across a dense cluster doesn't strobe the whole graph on
+    // every enterNode/leaveNode, and it's mixed into the reducers' colors
+    // frame by frame rather than cut, so leaving a node doesn't snap
+    // everything back at once. hoveredNode/hoveredNeighbors are read by the
+    // reducers below but only matter while dimProgress > 0 — safe to leave
+    // pointing at a stale node between hovers, since a zero progress makes
+    // every reducer below a no-op regardless of what they reference.
     let hoveredNode: string | null = null
     let hoveredNeighbors: Set<string> | null = null
+    let dimProgress = 0
+    let dwellTimeout: ReturnType<typeof setTimeout> | null = null
+    let cancelDimAnim: (() => void) | null = null
+
+    const setDimTarget = (target: number) => {
+      cancelDimAnim?.()
+      cancelDimAnim = animateScalar(dimProgress, target, DIM_CROSSFADE_MS, (v) => {
+        dimProgress = v
+        rendererRef.current?.refresh()
+      })
+    }
 
     renderer.setSetting('nodeReducer', (node, data) => {
-      if (!hoveredNode || node === hoveredNode || hoveredNeighbors?.has(node)) return data
+      if (dimProgress <= 0 || node === hoveredNode || hoveredNeighbors?.has(node)) return data
       // Forced to 'circle' rather than left as 'image' with no image — an
       // art-bound node dimmed mid-hover must reliably fall back to a plain
       // dimmed dot, not depend on NodeImageProgram handling a missing image
-      // gracefully.
-      return { ...data, type: 'circle', color: DIMMED_NODE_COLOR, zIndex: 0 }
+      // gracefully. The crossfade itself mixes from the node's own color
+      // (white, for art still loading/dimmed) toward the dim tone — sigma
+      // has no notion of fading an image out, so the art->circle swap
+      // stays a hard cut; only the circle's own color crossfades.
+      return { ...data, type: 'circle', color: mixTowardDim(data.color, DIMMED_NODE_COLOR, dimProgress), zIndex: 0 }
     })
     renderer.setSetting('edgeReducer', (edge, data) => {
-      if (!hoveredNode) return data
+      if (dimProgress <= 0) return data
       const [source, target] = graph.extremities(edge)
       if (source === hoveredNode || target === hoveredNode) return data
-      return { ...data, color: DIMMED_EDGE_COLOR }
+      return { ...data, color: mixTowardDim(data.color, DIMMED_EDGE_COLOR, dimProgress) }
     })
 
     renderer.on('enterNode', ({ node }) => {
+      if (dwellTimeout != null) clearTimeout(dwellTimeout)
       hoveredNode = node
       hoveredNeighbors = new Set(graph.neighbors(node))
-      renderer.refresh()
+      dwellTimeout = setTimeout(() => {
+        dwellTimeout = null
+        setDimTarget(1)
+      }, HOVER_DWELL_MS)
     })
     renderer.on('leaveNode', () => {
-      hoveredNode = null
-      hoveredNeighbors = null
-      renderer.refresh()
+      if (dwellTimeout != null) {
+        // Dwell never engaged — nothing was ever dimmed, so there is
+        // nothing to reverse. This is what stops a cursor sweeping across
+        // a cluster from strobing it.
+        clearTimeout(dwellTimeout)
+        dwellTimeout = null
+        return
+      }
+      setDimTarget(0)
     })
 
     // Standard sigma.js drag-node recipe: track the dragged node across
@@ -430,6 +551,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     mouseCaptor.on('mousedown', handleMouseDown)
 
     return () => {
+      if (dwellTimeout != null) clearTimeout(dwellTimeout)
+      cancelDimAnim?.()
       renderer.kill()
       rendererRef.current = null
       graphRef.current = null
@@ -470,27 +593,57 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     const graph = graphRef.current
     if (!graph) return
 
-    const prev = previousSelectionRef.current
-    if (prev && graph.hasNode(prev)) {
-      graph.removeNodeAttribute(prev, 'highlighted')
-      graph.removeNodeAttribute(prev, 'ring')
+    // Scales from the node's own radius out to full clearance and fades in
+    // alongside, rather than snapping into place; reverses over RING_OUT_MS
+    // on the way out, since leaving is faster than arriving (MO-5). Once an
+    // animation settles, the progress entry is dropped — a steady selected
+    // node falls back to defaultDrawNodeHover's `data.ring ? 1 : 0`, so the
+    // map only ever holds nodes actually mid-transition.
+    const animateRing = (key: string, target: 0 | 1) => {
+      ringCancelRef.current.get(key)?.()
+      const from = ringProgressRef.current.get(key) ?? (target === 1 ? 0 : 1)
+      const cancel = animateScalar(
+        from,
+        target,
+        target === 1 ? RING_IN_MS : RING_OUT_MS,
+        (v) => {
+          ringProgressRef.current.set(key, v)
+          rendererRef.current?.refresh()
+        },
+        () => {
+          ringCancelRef.current.delete(key)
+          ringProgressRef.current.delete(key)
+          if (target === 0 && graph.hasNode(key)) {
+            graph.removeNodeAttribute(key, 'highlighted')
+            graph.removeNodeAttribute(key, 'ring')
+          }
+        },
+      )
+      ringCancelRef.current.set(key, cancel)
     }
 
-    if (selectedNodeId != null) {
-      const key = nodeKey(selectedNodeId)
-      if (graph.hasNode(key)) {
-        // `highlighted` lifts the node onto sigma's hover layer, drawn above
-        // edges; `ring` is our own flag telling defaultDrawNodeHover (set on
-        // the Sigma constructor above) to actually draw the ring rather than
-        // sigma's stock hover box — see the comment there for why both are
-        // needed. Neither touches the node's own fill, size or image.
-        graph.setNodeAttribute(key, 'highlighted', true)
-        graph.setNodeAttribute(key, 'ring', true)
-        previousSelectionRef.current = key
-        return
+    const prev = previousSelectionRef.current
+    const nextKey = selectedNodeId != null ? nodeKey(selectedNodeId) : null
+
+    if (prev !== nextKey) {
+      // A genuine selection change — animate the old node out and the new
+      // one in. `highlighted`/`ring` go on immediately so the new node is
+      // eligible for hover-layer rendering from the first frame; the ramp
+      // itself is what animateRing drives.
+      if (prev && graph.hasNode(prev)) animateRing(prev, 0)
+      if (nextKey != null && graph.hasNode(nextKey)) {
+        graph.setNodeAttribute(nextKey, 'highlighted', true)
+        graph.setNodeAttribute(nextKey, 'ring', true)
+        animateRing(nextKey, 1)
       }
+      previousSelectionRef.current = nextKey != null && graph.hasNode(nextKey) ? nextKey : null
+    } else if (nextKey != null && graph.hasNode(nextKey) && !graph.getNodeAttribute(nextKey, 'ring')) {
+      // Selection didn't change — just a background data refresh. syncGraph
+      // may have dropped and re-added this node with fresh attributes, so
+      // make sure it's still flagged, but don't replay the arrival animation.
+      graph.setNodeAttribute(nextKey, 'highlighted', true)
+      graph.setNodeAttribute(nextKey, 'ring', true)
     }
-    previousSelectionRef.current = null
   }, [selectedNodeId, nodes, edges, loading])
 
   // One sentence, muted, centered, no illustration — DESIGN.md's empty-state
