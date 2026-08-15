@@ -20,7 +20,7 @@ function WindowButton({ control }: { control: Control }) {
       title={control.label}
       // Muted at rest so the chrome stays quiet, full white on hover — the
       // only hover affordance in the titlebar.
-      className="grid h-[32px] w-[32px] place-items-center rounded-[6px] text-[var(--color-muted)] transition-colors duration-150 hover:bg-white/8 hover:text-[var(--color-ink)]"
+      className="grid h-[32px] w-[32px] place-items-center rounded-[6px] text-[var(--color-muted)] transition-colors duration-150 hover:bg-white/8 hover:text-[var(--color-muted-hi)]"
     >
       <Icon name={control.name} size={24} />
     </button>

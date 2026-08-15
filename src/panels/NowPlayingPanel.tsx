@@ -206,7 +206,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
             onClick={() => setUpNextOpen((v) => !v)}
             aria-label={upNextOpen ? 'Hide up next' : 'Show up next'}
             aria-expanded={upNextOpen}
-            className={`shrink-0 text-[var(--color-muted)] transition-transform duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:text-[var(--color-ink)] ${
+            className={`shrink-0 text-[var(--color-muted)] transition-transform duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:text-[var(--color-muted-hi)] ${
               upNextOpen ? 'rotate-180' : ''
             }`}
           >
@@ -224,7 +224,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
                 <button
                   type="button"
                   onClick={() => onSelectNode(entry.recordingNodeId)}
-                  className="w-full truncate py-[4px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+                  className="w-full truncate py-[4px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
                 >
                   {entry.title}
                 </button>
@@ -264,7 +264,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
                     onClick={startEditing}
                     aria-label="Edit metadata"
                     title="Edit metadata"
-                    className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+                    className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
                   >
                     <Icon name="pencil" size={24} />
                   </button>
@@ -321,7 +321,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
                     <button
                       type="button"
                       onClick={() => setEditing(false)}
-                      className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                      className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]"
                     >
                       cancel
                     </button>
@@ -361,7 +361,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
                   <button
                     type="button"
                     onClick={discardWrite}
-                    className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                    className="text-[length:var(--text-base)] text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]"
                   >
                     discard
                   </button>

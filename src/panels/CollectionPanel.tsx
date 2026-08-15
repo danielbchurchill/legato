@@ -127,7 +127,7 @@ function OverviewBlock() {
             type="button"
             aria-label="About these stats"
             title="Top artist/album/track are based on real play history — 50% of a track's duration or 4 minutes listened, whichever comes first."
-            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
           >
             <Icon name="info" size={24} />
           </button>
@@ -255,7 +255,7 @@ function MaintenancePreview({
             aria-label="Open maintenance"
             title="Open maintenance"
             onClick={onOpenMaintenance}
-            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
           >
             <Icon name="pencil" size={24} />
           </button>
@@ -304,7 +304,7 @@ export function CollectionPanel({ anchorNodeId, onSelectNode, onOpenMaintenance,
           onClick={onOpenSettings}
           aria-label="Open settings"
           title="Open settings"
-          className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+          className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
         >
           <Icon name="settings" size={24} />
         </button>

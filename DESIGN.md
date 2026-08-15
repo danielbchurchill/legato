@@ -112,6 +112,8 @@ release date     2022-08-05
 
 This is what makes the panels legible at a glance without any boxes, alignment aids, or weight changes. A grey value or a mono label breaks the pattern and should be treated as a defect. Track titles, artist names, durations, file paths, IDs — all data, all mono, all white. Section headers (`collection`, `now playing`, `overview`, `metadata`, `maintenance`, `up next`) are Rubik muted.
 
+`--color-ink` is reserved for values and for genuinely active state (the current tab, the current filter) — never for hover. A hovered label steps to `--color-muted-hi` instead: distinct enough from `--color-muted` to read as a response, but not the color of a value, so hovering a label never makes it look like data.
+
 ### Size
 
 The mockup is single-size: **every label and every value is 16px.** The only other size in the file is the 40px wordmark.

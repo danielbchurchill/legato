@@ -45,6 +45,14 @@
   --color-ink: #ffffff;
   --color-muted: #717171;
 
+  /* Hover's own step (C-2) — of 23 hover rules in the app, 20 jumped straight
+   * to --color-ink, which is also the color of every value in the panels, so
+   * hovering a label briefly made it look like data. A lifted grey reads
+   * clearly against --color-muted without colliding with a value; full white
+   * stays reserved for genuinely active state (the current tab, the current
+   * filter). See DESIGN.md's type rule. */
+  --color-muted-hi: #a0a0a0;
+
   /* ---- Graph ---------------------------------------------------------- */
 
   /* Edge color encodes relationship type. One family: identical saturation and

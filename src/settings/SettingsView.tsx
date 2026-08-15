@@ -38,7 +38,7 @@ function Toggle<T extends string>({
             aria-selected={active}
             onClick={() => onChange(opt.value)}
             className={`text-[length:var(--text-base)] transition-colors duration-150 ${
-              active ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]'
+              active ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'
             }`}
           >
             {opt.label}
@@ -141,7 +141,7 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
             type="button"
             onClick={onClose}
             aria-label="Close settings"
-            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
           >
             <Icon name="cancel" size={24} />
           </button>
@@ -195,7 +195,7 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
                           type="button"
                           onClick={() => void removeRoot(r.id)}
                           aria-label={`Remove ${r.label ?? r.path}`}
-                          className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+                          className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
                         >
                           <Icon name="cancel" size={18} />
                         </button>

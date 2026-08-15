@@ -242,7 +242,7 @@ export default function HygieneView({
             type="button"
             onClick={onClose}
             aria-label="Close maintenance"
-            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
+            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
           >
             <Icon name="cancel" size={24} />
           </button>
@@ -256,7 +256,7 @@ export default function HygieneView({
                 type="button"
                 onClick={() => setFilter(f)}
                 className={`text-[length:var(--text-base)] transition-colors duration-150 ${
-                  filter === f ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]'
+                  filter === f ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'
                 }`}
               >
                 {f === 'all' ? 'all' : TYPE_LABEL[f]}

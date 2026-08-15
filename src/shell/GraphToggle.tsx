@@ -32,7 +32,7 @@ export function GraphToggle({ value, onChange }: GraphToggleProps) {
               className={`text-[length:var(--text-base)] leading-none transition-colors duration-150 ${
                 active
                   ? 'text-[var(--color-ink)]'
-                  : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]'
+                  : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'
               }`}
             >
               {granularity}
