@@ -53,6 +53,17 @@ const EDGE_COLOR: Record<string, string> = {
 }
 const EDGE_COLOR_FALLBACK = 'rgba(255,255,255,0.12)'
 
+/* Edges carry graph-space size 0.5 (syncGraph), but sigma scales rendered
+ * edge thickness by its default zoomToSizeRatioFunction (Math.sqrt of the
+ * camera ratio) — so as the camera ratio shrinks while zooming in, edges
+ * render visibly thicker, becoming wide saturated ribbons well before
+ * FLY_TO_RATIO. DESIGN.md says edges are 1px, full stop, with no exception
+ * for zoom level. Recomputed live in the edgeReducer below (reading the
+ * camera's current ratio, not cached) so the on-screen width stays
+ * constant at every zoom, calibrated to match the original literal at
+ * camera ratio 1. */
+const EDGE_WIDTH_AT_RATIO_1 = 0.5
+
 /* Hover/neighbor highlighting dims everything else instead of brightening the
  * hovered set — matches the selection ring's own "addition, not substitution"
  * rule (DESIGN.md "Nodes"): the graph's base palette never changes meaning,
@@ -78,9 +89,26 @@ const ART_ZOOM_RATIO_THRESHOLD = 1.4
 
 /* Camera ratio flyToNode animates to — comfortably past
  * ART_ZOOM_RATIO_THRESHOLD so the destination node's art is already bound
- * and visible by the time the animation lands, not one more zoom step away. */
-const FLY_TO_RATIO = 0.3
-const FLY_TO_DURATION_MS = 500
+ * and visible by the time the animation lands, not one more zoom step away.
+ * 0.3 dropped the destination into a wall of thick edges with almost no
+ * context; 0.7 lands with its neighborhood still visible. */
+const FLY_TO_RATIO = 0.7
+
+/* MO-7: a flat fly duration makes a forty-pixel hop crawl and a jump across
+ * the whole library feel abrupt. Sub-linear (sqrt) so a merely-far target
+ * doesn't take proportionally forever, clamped to the range the punch list
+ * measured against the live app — DESIGN.md's original 120-200ms estimate
+ * for this behavior only really covers the short end. Distance is measured
+ * in on-screen pixels at the moment the fly starts (see flyToNode), not
+ * graph units, so it means the same thing at every zoom level. */
+const FLY_TO_DURATION_MIN_MS = 180
+const FLY_TO_DURATION_MAX_MS = 420
+const FLY_TO_DISTANCE_REFERENCE_PX = 2000 // distance at which duration reaches the max
+
+function flyToDurationForDistance(distancePx: number): number {
+  const t = Math.min(1, distancePx / FLY_TO_DISTANCE_REFERENCE_PX)
+  return FLY_TO_DURATION_MIN_MS + (FLY_TO_DURATION_MAX_MS - FLY_TO_DURATION_MIN_MS) * Math.sqrt(t)
+}
 
 /* Selection ring — mirrors --color-node-ring in tokens.css (sigma's hover
  * canvas is plain 2D context, same reasoning as EDGE_COLOR/DIMMED_*_COLOR
@@ -216,14 +244,67 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
   }
 }
 
-/* Art is only ever bound to release nodes — every recording resolves to its
- * album's cover through the endpoint, but binding thousands of recordings
- * would put thousands of unique textures in sigma's atlas for images that are
- * mostly duplicates of each other. artEnabled is the LOD gate above. */
+/* G-8: the camera fits the given bbox to the FULL viewport, edge to edge —
+ * sigma has no notion of the ~820px of that viewport the two panels and the
+ * transport dock actually cover. At every granularity, several nodes ended
+ * up placed permanently underneath them: visible through the blur,
+ * unreachable by a click.
+ *
+ * Geometry mirrors Panel.tsx (51px inset + 360px width per side, 59px below
+ * the titlebar) and TransportDock.tsx (121px tall, docked to the bottom).
+ * A conservative rectangular inset rather than the true L-shaped reserved
+ * area — the panels don't span the full height and the dock doesn't span
+ * the full width — since sigma's bbox fit only understands a rectangle
+ * anyway; erring toward extra clearance is the safe direction, a node
+ * still ending up hidden is not. */
+const PANEL_INSET_PX = 51 + 360
+const PANEL_TOP_INSET_PX = 59
+const DOCK_HEIGHT_PX = 121
+
+function insetForShell(
+  renderer: Sigma,
+  bbox: { x: [number, number]; y: [number, number] },
+): { x: [number, number]; y: [number, number] } {
+  const dims = renderer.getDimensions()
+  const innerW = dims.width - PANEL_INSET_PX * 2
+  const innerH = dims.height - PANEL_TOP_INSET_PX - DOCK_HEIGHT_PX
+  if (innerW <= 0 || innerH <= 0) return bbox // window too small to inset meaningfully
+
+  const bw = bbox.x[1] - bbox.x[0]
+  const bh = bbox.y[1] - bbox.y[0]
+  const padX = (PANEL_INSET_PX / innerW) * bw
+  const padForScreenTop = (PANEL_TOP_INSET_PX / innerH) * bh
+  const padForScreenBottom = (DOCK_HEIGHT_PX / innerH) * bh
+
+  // Whether increasing graph-space y maps to the top or bottom of the
+  // screen is an orientation baked into sigma's rendering matrix, not
+  // something to assume — asked directly rather than guessed, using
+  // whatever camera state already happens to be active.
+  const yAtScreenTop = renderer.viewportToGraph({ x: dims.width / 2, y: 0 }).y
+  const yAtScreenBottom = renderer.viewportToGraph({ x: dims.width / 2, y: dims.height }).y
+  const [padAtYMin, padAtYMax] =
+    yAtScreenTop > yAtScreenBottom ? [padForScreenBottom, padForScreenTop] : [padForScreenTop, padForScreenBottom]
+
+  return {
+    x: [bbox.x[0] - padX, bbox.x[1] + padX],
+    y: [bbox.y[0] - padAtYMin, bbox.y[1] + padAtYMax],
+  }
+}
+
+/* Art is only ever bound to release nodes today — every recording resolves
+ * to its album's cover through the endpoint, but binding thousands of
+ * recordings would put thousands of unique textures in sigma's atlas for
+ * images that are mostly duplicates of each other, which is what
+ * artEnabled (the LOD gate above) exists to protect against. Release art
+ * stays bound at every zoom regardless — 26 textures on this library, not
+ * thousands — so the whole-library view still reads as a field of album
+ * art rather than stripping it exactly where the mockup shows the most of
+ * it. The gate is left wired for any future, much larger art-eligible node
+ * type instead of deleted, since release nodes never actually reach it. */
 function nodeAttributes(node: GraphNode, artEnabled: boolean): Record<string, unknown> {
   const x = node.user_x ?? node.seed_x
   const y = node.user_y ?? node.seed_y
-  const hasArt = artEnabled && node.type === 'release' && node.has_cover === 1
+  const hasArt = node.type === 'release' ? node.has_cover === 1 : artEnabled && node.has_cover === 1
 
   if (hasArt) {
     return {
@@ -298,7 +379,7 @@ function applyArtLOD(graph: Graph, nodes: GraphNode[], artEnabled: boolean): voi
   for (const node of nodes) {
     const key = nodeKey(node.id)
     if (!graph.hasNode(key)) continue
-    const shouldHaveArt = artEnabled && node.type === 'release' && node.has_cover === 1
+    const shouldHaveArt = node.type === 'release' ? node.has_cover === 1 : artEnabled && node.has_cover === 1
     const currentlyHasArt = graph.getNodeAttribute(key, 'type') === 'image'
     if (shouldHaveArt === currentlyHasArt) continue
     graph.mergeNodeAttributes(key, nodeAttributes(node, artEnabled))
@@ -344,7 +425,18 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
         const normalize = createNormalizationFunction(bbox)
         const { x, y } = normalize({ x: attrs.x as number, y: attrs.y as number })
-        void renderer.getCamera().animate({ x, y, ratio: FLY_TO_RATIO }, { duration: FLY_TO_DURATION_MS })
+
+        // Distance the camera is actually about to travel, in the same
+        // on-screen pixels the user perceives — where the target already
+        // sits on screen right now, relative to the viewport center it's
+        // about to be centered on. Graph-unit distance wouldn't mean the
+        // same thing at every zoom level; this does.
+        const dims = renderer.getDimensions()
+        const targetViewport = renderer.graphToViewport({ x: attrs.x as number, y: attrs.y as number })
+        const distancePx = Math.hypot(targetViewport.x - dims.width / 2, targetViewport.y - dims.height / 2)
+        const duration = prefersReducedMotion() ? 0 : flyToDurationForDistance(distancePx)
+
+        void renderer.getCamera().animate({ x, y, ratio: FLY_TO_RATIO }, { duration })
       },
     }),
     [],
@@ -476,10 +568,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       return { ...data, type: 'circle', color: mixTowardDim(data.color, DIMMED_NODE_COLOR, dimProgress), zIndex: 0 }
     })
     renderer.setSetting('edgeReducer', (edge, data) => {
-      if (dimProgress <= 0) return data
+      const size = EDGE_WIDTH_AT_RATIO_1 * Math.sqrt(renderer.getCamera().ratio)
+      if (dimProgress <= 0) return { ...data, size }
       const [source, target] = graph.extremities(edge)
-      if (source === hoveredNode || target === hoveredNode) return data
-      return { ...data, color: mixTowardDim(data.color, DIMMED_EDGE_COLOR, dimProgress) }
+      if (source === hoveredNode || target === hoveredNode) return { ...data, size }
+      return { ...data, size, color: mixTowardDim(data.color, DIMMED_EDGE_COLOR, dimProgress) }
     })
 
     renderer.on('enterNode', ({ node }) => {
@@ -578,7 +671,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // whatever the user is currently looking at.
     if (hadNoNodes) {
       const bbox = robustBBox(graph)
-      if (bbox) renderer.setCustomBBox(bbox)
+      if (bbox) renderer.setCustomBBox(insetForShell(renderer, bbox))
     }
   }, [nodes, edges, loading])
 
