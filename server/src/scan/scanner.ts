@@ -9,6 +9,7 @@ import { recomputeCollaborationEdges } from "../entities/collaboration.js";
 import { recomputeSimilarityFeatures } from "../similarity/similarity.js";
 import { enqueueEnrichmentIfNeeded } from "../enrich/queue.js";
 import { attachCoverForFile } from "../cover/extract.js";
+import { ensurePeaksForFile } from "../waveform/peaks.js";
 import { collapseFile } from "../match/collapse.js";
 import { deriveLocalEdges } from "../match/edges.js";
 import { parseTags } from "./tags.js";
@@ -181,6 +182,16 @@ export async function scanFile(
     );
   } catch (err) {
     onWarn(`cover art failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Same inline, non-fatal shape as cover art immediately above — a
+  // failed decode costs the track its waveform, not its place in the
+  // library. isCached() inside ensurePeaksForFile keeps a no-op re-scan
+  // cheap (no ffmpeg spawn for a file already covered).
+  try {
+    await ensurePeaksForFile(db, fileId);
+  } catch (err) {
+    onWarn(`waveform peaks failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   return outcome;

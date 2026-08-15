@@ -25,6 +25,7 @@ import { coverRoutes } from "./routes/cover.js";
 import { playsRoutes } from "./routes/plays.js";
 import { statsRoutes } from "./routes/stats.js";
 import { similarityRoutes } from "./routes/similarity.js";
+import { waveformRoutes } from "./routes/waveform.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { runDueJobs } from "./enrich/worker.js";
 
@@ -69,6 +70,7 @@ await app.register(coverRoutes(db), { prefix: "/api/v1" });
 await app.register(playsRoutes(db), { prefix: "/api/v1" });
 await app.register(statsRoutes(db), { prefix: "/api/v1" });
 await app.register(similarityRoutes(db), { prefix: "/api/v1" });
+await app.register(waveformRoutes(db), { prefix: "/api/v1" });
 
 // Resume watching every already-configured root across restarts — a root
 // added in a previous session shouldn't need a manual re-scan to notice
