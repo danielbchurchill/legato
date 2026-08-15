@@ -95,6 +95,45 @@ describe("applyTagWrite", () => {
   });
 });
 
+describe("widened field vocabulary", () => {
+  it("round-trips discNo/genre/bpm/label/releaseType — each field readable back by name", async () => {
+    await applyTagWrite(filePath, {
+      discNo: 2,
+      genre: ["Rock", "Psychedelic Rock"],
+      bpm: 82,
+      label: "Apple Records",
+      releaseType: "album",
+    });
+
+    expect(
+      computeDiff(filePath, {
+        discNo: 2,
+        genre: ["Rock", "Psychedelic Rock"],
+        bpm: 82,
+        label: "Apple Records",
+        releaseType: "album",
+      }),
+    ).toEqual([]);
+  });
+
+  it("writes bpm/label/releaseType to the exact Vorbis fields music-metadata reads back, not TagLib#'s defaults", async () => {
+    await applyTagWrite(filePath, { bpm: 120, label: "Apple Records", releaseType: "album" });
+
+    const raw = execFileSync("ffprobe", ["-v", "quiet", "-show_entries", "format_tags", "-of", "json", filePath], {
+      encoding: "utf8",
+    });
+    const tags = (JSON.parse(raw).format.tags ?? {}) as Record<string, string>;
+    const lower = Object.fromEntries(Object.entries(tags).map(([k, v]) => [k.toLowerCase(), v]));
+
+    expect(lower.bpm).toBe("120");
+    expect(lower.tempo).toBeUndefined();
+    expect(lower.label).toBe("Apple Records");
+    expect(lower.organization).toBeUndefined();
+    expect(lower.releasetype).toBe("album");
+    expect(lower.musicbrainz_albumtype).toBeUndefined();
+  });
+});
+
 describe("revertTagWrite", () => {
   it("restores the original value, via the same atomic path (a fresh write, not magic undo)", async () => {
     const firstWrite = await applyTagWrite(filePath, { title: "Fixed Title" });

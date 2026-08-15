@@ -1,7 +1,11 @@
 import { File as TagLibFile } from "node-taglib-sharp";
 import { assertFlac, readFields, type TagFields } from "./fields.js";
 
-export type FieldDiff = { field: keyof TagFields; oldValue: string | number; newValue: string | number };
+export type FieldDiff = {
+  field: keyof TagFields;
+  oldValue: string | number | string[];
+  newValue: string | number | string[];
+};
 
 // Dry-run only — opens the file read-only (node-taglib-sharp still needs
 // to parse it to know current values, but nothing is written here) and
