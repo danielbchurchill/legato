@@ -30,6 +30,11 @@ describe("normalizeTags", () => {
         musicbrainz_artistid: ["artist-789"],
         replaygain_track_gain: { dB: -6.5, ratio: 0.5 },
         replaygain_album_gain: { dB: -5.2, ratio: 0.6 },
+        releasedate: "1969-09-26",
+        bpm: 82,
+        label: ["Apple Records"],
+        releasetype: ["album"],
+        genre: ["Rock", "Psychedelic Rock"],
       }),
       format({ duration: 259.5, container: "FLAC", bitrate: 1000000, sampleRate: 44100, numberOfChannels: 2 }),
     );
@@ -52,6 +57,11 @@ describe("normalizeTags", () => {
       bitrate: 1000000,
       sampleRate: 44100,
       channels: 2,
+      releaseDate: "1969-09-26",
+      bpm: 82,
+      label: "Apple Records",
+      releaseType: "album",
+      genre: ["Rock", "Psychedelic Rock"],
     });
   });
 
@@ -63,6 +73,20 @@ describe("normalizeTags", () => {
     expect(result.mbRecordingId).toBeNull();
     expect(result.replaygainTrackGain).toBeNull();
     expect(result.durationMs).toBeNull();
+    expect(result.releaseDate).toBeNull();
+    expect(result.bpm).toBeNull();
+    expect(result.label).toBeNull();
+    expect(result.releaseType).toBeNull();
+    expect(result.genre).toBeNull();
+  });
+
+  it("falls back through releasedate -> originaldate -> date", () => {
+    expect(normalizeTags(common({ originaldate: "1969-09" }), format()).releaseDate).toBe("1969-09");
+    expect(normalizeTags(common({ date: "1969" }), format()).releaseDate).toBe("1969");
+    expect(
+      normalizeTags(common({ releasedate: "1969-09-26", originaldate: "1969-09", date: "1969" }), format())
+        .releaseDate,
+    ).toBe("1969-09-26");
   });
 
   it("rounds duration to milliseconds and bitrate to whole numbers", () => {

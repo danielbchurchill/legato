@@ -82,6 +82,7 @@ export async function scanFile(
         `UPDATE files SET
            format = ?, duration_ms = ?, bitrate = ?, sample_rate = ?, channels = ?,
            replaygain_track_gain = ?, replaygain_album_gain = ?,
+           track_no = ?, disc_no = ?, release_date = ?, bpm = ?, label = ?, release_type = ?, genre = ?,
            file_mtime = ?, file_size = ?, file_hash = ?,
            last_seen_at = datetime('now'), missing_since = NULL, tags_raw = ?
          WHERE id = ?`,
@@ -93,6 +94,13 @@ export async function scanFile(
         tags.channels,
         tags.replaygainTrackGain,
         tags.replaygainAlbumGain,
+        tags.trackNo,
+        tags.discNo,
+        tags.releaseDate,
+        tags.bpm,
+        tags.label,
+        tags.releaseType,
+        tags.genre ? JSON.stringify(tags.genre) : null,
         mtime,
         st.size,
         fileHash,
@@ -115,8 +123,9 @@ export async function scanFile(
            recording_node_id, library_root_id, file_path,
            format, duration_ms, bitrate, sample_rate, channels,
            replaygain_track_gain, replaygain_album_gain,
+           track_no, disc_no, release_date, bpm, label, release_type, genre,
            file_mtime, file_size, file_hash, tags_raw
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       )
       .get(
         node.id,
@@ -129,6 +138,13 @@ export async function scanFile(
         tags.channels,
         tags.replaygainTrackGain,
         tags.replaygainAlbumGain,
+        tags.trackNo,
+        tags.discNo,
+        tags.releaseDate,
+        tags.bpm,
+        tags.label,
+        tags.releaseType,
+        tags.genre ? JSON.stringify(tags.genre) : null,
         mtime,
         st.size,
         fileHash,

@@ -21,6 +21,11 @@ export type NormalizedTags = {
   bitrate: number | null;
   sampleRate: number | null;
   channels: number | null;
+  releaseDate: string | null;
+  bpm: number | null;
+  label: string | null;
+  releaseType: string | null;
+  genre: string[] | null;
 };
 
 // Split out from parseTags() so the mapping logic is unit-testable without
@@ -44,6 +49,14 @@ export function normalizeTags(common: ICommonTagsResult, format: IFormat): Norma
     bitrate: format.bitrate != null ? Math.round(format.bitrate) : null,
     sampleRate: format.sampleRate ?? null,
     channels: format.numberOfChannels ?? null,
+    // releasedate/originaldate/date are three tiers of the same fact, most
+    // specific first — a reissue usually only carries `date`, while a
+    // MusicBrainz-tagged rip carries all three in agreement.
+    releaseDate: common.releasedate ?? common.originaldate ?? common.date ?? null,
+    bpm: common.bpm ?? null,
+    label: common.label?.[0] ?? null,
+    releaseType: common.releasetype?.[0] ?? null,
+    genre: common.genre && common.genre.length > 0 ? common.genre : null,
   };
 }
 
