@@ -26,6 +26,13 @@ export type NormalizedTags = {
   label: string | null;
   releaseType: string | null;
   genre: string[] | null;
+  producer: string[] | null;
+  engineer: string[] | null;
+  // Every credited artist (music-metadata's `artists`, not the primary
+  // `artist`), minus the primary — the "featured artist" credits. No
+  // dedicated tag exists for "featured" specifically; this is the standard
+  // proxy every tagger (including MusicBrainz Picard) uses for it.
+  featuredArtists: string[] | null;
 };
 
 // Split out from parseTags() so the mapping logic is unit-testable without
@@ -57,7 +64,17 @@ export function normalizeTags(common: ICommonTagsResult, format: IFormat): Norma
     label: common.label?.[0] ?? null,
     releaseType: common.releasetype?.[0] ?? null,
     genre: common.genre && common.genre.length > 0 ? common.genre : null,
+    producer: common.producer && common.producer.length > 0 ? common.producer : null,
+    engineer: common.engineer && common.engineer.length > 0 ? common.engineer : null,
+    featuredArtists: featuredArtists(common.artist, common.artists),
   };
+}
+
+function featuredArtists(primary: string | undefined, all: string[] | undefined): string[] | null {
+  if (!all || all.length === 0) return null;
+  const normalizedPrimary = primary?.trim().toLowerCase();
+  const rest = all.filter((name) => name.trim().toLowerCase() !== normalizedPrimary);
+  return rest.length > 0 ? rest : null;
 }
 
 export type ParsedFile = {

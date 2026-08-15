@@ -35,6 +35,9 @@ describe("normalizeTags", () => {
         label: ["Apple Records"],
         releasetype: ["album"],
         genre: ["Rock", "Psychedelic Rock"],
+        producer: ["George Martin"],
+        engineer: ["Geoff Emerick"],
+        artists: ["The Beatles", "Billy Preston"],
       }),
       format({ duration: 259.5, container: "FLAC", bitrate: 1000000, sampleRate: 44100, numberOfChannels: 2 }),
     );
@@ -62,6 +65,9 @@ describe("normalizeTags", () => {
       label: "Apple Records",
       releaseType: "album",
       genre: ["Rock", "Psychedelic Rock"],
+      producer: ["George Martin"],
+      engineer: ["Geoff Emerick"],
+      featuredArtists: ["Billy Preston"],
     });
   });
 
@@ -78,6 +84,23 @@ describe("normalizeTags", () => {
     expect(result.label).toBeNull();
     expect(result.releaseType).toBeNull();
     expect(result.genre).toBeNull();
+    expect(result.producer).toBeNull();
+    expect(result.engineer).toBeNull();
+    expect(result.featuredArtists).toBeNull();
+  });
+
+  it("derives featuredArtists as every credited artist except the primary", () => {
+    const withFeature = normalizeTags(
+      common({ artist: "The Beatles", artists: ["The Beatles", "Billy Preston"] }),
+      format(),
+    );
+    expect(withFeature.featuredArtists).toEqual(["Billy Preston"]);
+
+    const soloOnly = normalizeTags(common({ artist: "The Beatles", artists: ["The Beatles"] }), format());
+    expect(soloOnly.featuredArtists).toBeNull();
+
+    const noArtistsField = normalizeTags(common({ artist: "The Beatles" }), format());
+    expect(noArtistsField.featuredArtists).toBeNull();
   });
 
   it("falls back through releasedate -> originaldate -> date", () => {

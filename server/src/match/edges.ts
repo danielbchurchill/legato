@@ -4,6 +4,10 @@ type LocalTags = {
   artist?: string | null;
   year?: number | null;
   album?: string | null;
+  label?: string | null;
+  producer?: string[] | null;
+  engineer?: string[] | null;
+  featuredArtists?: string[] | null;
 };
 
 function parseTagsRaw(tagsRaw: string | null): LocalTags | null {
@@ -45,10 +49,12 @@ function insertEdge(db: Database.Database, fromNode: number, toNode: number, typ
   );
 }
 
-// Hard edges derivable from locally embedded tags alone — performer, year,
-// and the release a track appears on. MusicBrainz-relationship edges
-// (producer/engineer/label/remix-of) need live enrichment data and are
-// M7's job, not this.
+// Hard edges derivable from locally embedded tags alone. Session 2 (M2)
+// only used performer/year/release — producer/engineer/label/featured-
+// artist were assumed to need live MusicBrainz relationship data, but
+// music-metadata already exposes all four from local tags alone
+// (scan/tags.ts), same as the original three; there was never an M7
+// dependency here, just an unexamined assumption.
 //
 // Re-derives from scratch on every call: deletes this recording's own
 // source='local' edges first, then reinserts. The WHERE clause is scoped to
@@ -75,5 +81,25 @@ export function deriveLocalEdges(db: Database.Database, fileId: number): void {
   }
   if (tags.album) {
     insertEdge(db, recordingNodeId, findOrCreateNode(db, "release", tags.album), "appears_on");
+  }
+  if (tags.label) {
+    insertEdge(db, recordingNodeId, findOrCreateNode(db, "label", tags.label), "released_on");
+  }
+  // Producer/engineer are credit-role people, kept as 'credit' nodes rather
+  // than 'artist' nodes — a studio engineer isn't a collection entity the
+  // artists graph (session 4) should treat the same as a performer, even
+  // though the same real person could in principle be both.
+  for (const name of tags.producer ?? []) {
+    insertEdge(db, recordingNodeId, findOrCreateNode(db, "credit", name), "produced_by");
+  }
+  for (const name of tags.engineer ?? []) {
+    insertEdge(db, recordingNodeId, findOrCreateNode(db, "credit", name), "engineered_by");
+  }
+  // Featured artists, unlike producers/engineers, are performers — they get
+  // 'artist' nodes so they're the same kind of entity performed_by already
+  // creates, which is what lets the collaboration graph (session 4) treat
+  // "performed on" and "featured on" as the same kind of tie.
+  for (const name of tags.featuredArtists ?? []) {
+    insertEdge(db, recordingNodeId, findOrCreateNode(db, "artist", name), "featured_artist");
   }
 }
