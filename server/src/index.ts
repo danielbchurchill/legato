@@ -5,7 +5,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 import { openDb } from "./db.js";
-import { PORT } from "./config.js";
+import { PORT, DATA_DIR } from "./config.js";
 import { healthRoutes } from "./routes/health.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { libraryRootsRoutes } from "./routes/library-roots.js";
@@ -33,6 +33,19 @@ import { runDueJobs } from "./enrich/worker.js";
 const db = openDb();
 
 const app = Fastify({ logger: true });
+
+// The #1 support question this app generates on itself: standalone runs
+// (`npm --prefix server run dev` without LEGATO_DATA_DIR) silently open a
+// second, empty database next to the real one Tauri points at — a "healthy"
+// server reporting zero of everything. Logging the resolved path and count
+// up front turns that into a one-line diagnosis instead of a debugging session.
+{
+  const dbPath = path.join(DATA_DIR, "legato.db");
+  const { count: fileCount } = db.prepare("SELECT COUNT(*) AS count FROM files").get() as {
+    count: number;
+  };
+  app.log.info(`database: ${dbPath} (${fileCount} files)`);
+}
 
 // @fastify/cors's actual default methods list is just GET,HEAD,POST — PUT/
 // PATCH/DELETE are silently preflight-rejected by the browser otherwise.
