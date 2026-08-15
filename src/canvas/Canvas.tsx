@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import { createNormalizationFunction } from 'sigma/utils'
-import { NodeImageProgram } from '@sigma/node-image'
+import { createNodeImageProgram } from '@sigma/node-image'
 import { patchNodePosition, useGraphData, type GraphEdge, type GraphNode } from './useGraphData'
 import type { Granularity } from '../shell/granularity'
 import { useScanStatus } from '../hooks/useScanStatus'
@@ -81,6 +81,15 @@ const ART_ZOOM_RATIO_THRESHOLD = 1.4
  * and visible by the time the animation lands, not one more zoom step away. */
 const FLY_TO_RATIO = 0.3
 const FLY_TO_DURATION_MS = 500
+
+/* Default NodeImageProgram sizes its atlas cell off the source image's own
+ * resolution ('auto' mode) — a 128px cover thumb squeezed into a ~44px node
+ * (ART_SIZE 22) then gets minified across the atlas's 1px inter-image
+ * margin, which bleeds in as a white fringe around every cover. Forcing a
+ * cell size close to the actual render size removes the mismatch outright
+ * (confirmed live: raising node size to 80, which sidesteps the same
+ * minification, also removed the fringe). */
+const NodeImageProgram = createNodeImageProgram({ size: { mode: 'force', value: 64 } })
 
 function nodeKey(id: number): string {
   return String(id)
