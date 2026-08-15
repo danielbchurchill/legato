@@ -208,7 +208,7 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
             onClick={() => setUpNextOpen((v) => !v)}
             aria-label={upNextOpen ? 'Hide up next' : 'Show up next'}
             aria-expanded={upNextOpen}
-            className={`shrink-0 text-[var(--color-muted)] transition-transform duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:text-[var(--color-muted-hi)] ${
+            className={`shrink-0 text-[var(--color-muted)] transition-transform duration-[var(--motion-base)] ease-[var(--ease-out)] hover:text-[var(--color-muted-hi)] ${
               upNextOpen ? 'rotate-180' : ''
             }`}
           >
@@ -217,23 +217,35 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
         )}
       </div>
 
-      {upNextOpen && upNext.length > 0 && (
-        <>
-          <SectionHeader title="up next" />
-          <ul className="mt-[8px] flex flex-col">
-            {upNext.map((entry) => (
-              <li key={entry.recordingNodeId}>
-                <button
-                  type="button"
-                  onClick={() => onSelectNode(entry.recordingNodeId)}
-                  className="w-full truncate py-[4px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-                >
-                  {entry.title}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
+      {/* Always mounted, animated to its natural height via the 0fr -> 1fr
+       * grid-template-rows technique (MO-4) rather than an instant swap —
+       * no JS measurement, no magic max-height. --ease-inout rather than
+       * --ease-out: this is a toggle someone will flip twice in a row, and
+       * it needs to reverse cleanly mid-flight. The chevron above shares
+       * this same duration so the glyph and the list move together. */}
+      {upNext.length > 0 && (
+        <div
+          className={`grid transition-all duration-[var(--motion-base)] ease-[var(--ease-inout)] motion-reduce:transition-none ${
+            upNextOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+          }`}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <SectionHeader title="up next" />
+            <ul className="mt-[8px] flex flex-col">
+              {upNext.map((entry) => (
+                <li key={entry.recordingNodeId}>
+                  <button
+                    type="button"
+                    onClick={() => onSelectNode(entry.recordingNodeId)}
+                    className="w-full truncate py-[4px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                  >
+                    {entry.title}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
       )}
 
       {pages.length > 1 && (
@@ -253,9 +265,20 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
         </div>
       )}
 
-      <div onPointerDown={handleSwipeStart} onPointerUp={handleSwipeEnd}>
-        {pages[page] === 'metadata' && (
-          <>
+      {/* One horizontal track with every page mounted, translated by
+       * -page * 100% (MO-3) — arrow keys, the dots and a swipe all produce
+       * the same transition, and direction is what tells you which way you
+       * went. Pages differ wildly in height (lyrics can run long); letting
+       * the row stretch to the tallest mounted page is simpler than
+       * measuring the active one and costs nothing since the panel already
+       * owns the scroll. */}
+      <div className="overflow-hidden" onPointerDown={handleSwipeStart} onPointerUp={handleSwipeEnd}>
+        <div
+          className="flex transition-transform duration-[var(--motion-base)] ease-[var(--ease-out)] motion-reduce:transition-none"
+          style={{ transform: `translateX(-${page * 100}%)` }}
+        >
+        {pages.includes('metadata') && (
+          <div className="w-full shrink-0" inert={pages[page] !== 'metadata'}>
             <SectionHeader
               title="metadata"
               action={
@@ -361,11 +384,11 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
                 </div>
               </>
             )}
-          </>
+          </div>
         )}
 
-        {pages[page] === 'lyrics' && (
-          <>
+        {pages.includes('lyrics') && (
+          <div className="w-full shrink-0" inert={pages[page] !== 'lyrics'}>
             <SectionHeader title="lyrics" />
             {lyrics === null || lyrics === 'loading' ? (
               <p className="mt-[8px] text-[length:var(--text-base)] text-[var(--color-muted)]">loading lyrics…</p>
@@ -378,19 +401,20 @@ export function NowPlayingPanel({ nodeId, status, upNext, onSelectNode }: NowPla
                 {lyrics.plainLyrics}
               </pre>
             )}
-          </>
+          </div>
         )}
 
-        {pages[page] === 'article' && node.article && (
-          <>
+        {pages.includes('article') && node.article && (
+          <div className="w-full shrink-0" inert={pages[page] !== 'article'}>
             <SectionHeader title="article" />
             <ArticleBody
               bodyMd={node.article.body_md}
               onSelectNode={onSelectNode}
               className="mt-[8px] text-[length:var(--text-base)] leading-relaxed text-[var(--color-ink)]"
             />
-          </>
+          </div>
         )}
+        </div>
       </div>
     </div>
   )
