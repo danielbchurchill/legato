@@ -2,8 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type Database from "better-sqlite3";
 import { openDb } from "../db.js";
 import * as mbClient from "./mbClient.js";
+import * as coverArchive from "./coverArchive.js";
 
-vi.mock("./mbClient.js", () => ({ searchRecording: vi.fn() }));
+vi.mock("./mbClient.js", () => ({
+  searchRecording: vi.fn(),
+  lookupReleaseGroupForRecording: vi.fn(),
+}));
+vi.mock("./coverArchive.js", () => ({ fetchCaaFrontImage: vi.fn() }));
+// Real storeCover shells out to ffmpeg to produce resized JPEGs — not
+// interesting to this suite, which only cares whether a CAA hit gets
+// recorded as a cover_art row at all.
+vi.mock("../cover/store.js", () => ({ storeCover: vi.fn().mockResolvedValue("fake-hash") }));
 
 const { runDueJobs } = await import("./worker.js");
 
@@ -154,5 +163,67 @@ describe("runDueJobs", () => {
       .prepare("SELECT next_attempt_at <= datetime('now', '+1 hour') AS due FROM enrich_jobs WHERE node_id = ?")
       .get(nodeId) as { due: number };
     expect(willBecomeDue.due).toBe(1);
+  });
+
+  it("queues and resolves a Cover Art Archive lookup for a matched recording's art-less release", async () => {
+    const nodeId = insertNode("Come Together", "The Beatles", 262000);
+    const release = db.prepare("INSERT INTO nodes (type, title) VALUES ('release', 'Abbey Road') RETURNING id").get() as {
+      id: number;
+    };
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+      nodeId,
+      release.id,
+    );
+    enqueue(nodeId);
+    vi.mocked(mbClient.searchRecording).mockResolvedValue([
+      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000 },
+    ]);
+    vi.mocked(mbClient.lookupReleaseGroupForRecording).mockResolvedValue("rg-1");
+    vi.mocked(coverArchive.fetchCaaFrontImage).mockResolvedValue({
+      bytes: Buffer.from("fake-jpeg"),
+      mime: "image/jpeg",
+    });
+
+    await runDueJobs(db);
+
+    const caaJob = db
+      .prepare("SELECT status FROM enrich_jobs WHERE node_id = ? AND job_type = 'cover_art_lookup'")
+      .get(release.id) as { status: string } | undefined;
+    expect(caaJob?.status).toBe("done");
+    expect(mbClient.lookupReleaseGroupForRecording).toHaveBeenCalledWith("mb-1");
+    expect(coverArchive.fetchCaaFrontImage).toHaveBeenCalledWith("rg-1");
+
+    const cover = db.prepare("SELECT source, hash FROM cover_art WHERE node_id = ?").get(release.id) as {
+      source: string;
+      hash: string;
+    };
+    expect(cover.source).toBe("caa");
+    expect(cover.hash).toBe("fake-hash");
+  });
+
+  it("does not queue a Cover Art Archive lookup when the release already has art", async () => {
+    const nodeId = insertNode("Come Together", "The Beatles", 262000);
+    const release = db.prepare("INSERT INTO nodes (type, title) VALUES ('release', 'Abbey Road') RETURNING id").get() as {
+      id: number;
+    };
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+      nodeId,
+      release.id,
+    );
+    db.prepare(
+      "INSERT INTO cover_art (node_id, source, hash, mime) VALUES (?, 'folder', 'existing-hash', 'image/jpeg')",
+    ).run(release.id);
+    enqueue(nodeId);
+    vi.mocked(mbClient.searchRecording).mockResolvedValue([
+      { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000 },
+    ]);
+
+    await runDueJobs(db);
+
+    const caaJob = db
+      .prepare("SELECT id FROM enrich_jobs WHERE node_id = ? AND job_type = 'cover_art_lookup'")
+      .get(release.id);
+    expect(caaJob).toBeUndefined();
+    expect(mbClient.lookupReleaseGroupForRecording).not.toHaveBeenCalled();
   });
 });

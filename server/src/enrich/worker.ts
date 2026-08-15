@@ -1,17 +1,21 @@
 import type Database from "better-sqlite3";
+import { coverTargetNode, recordCover, resolveCover } from "../cover/extract.js";
+import { storeCover } from "../cover/store.js";
 import { broadcast } from "../ws.js";
-import { searchRecording } from "./mbClient.js";
+import { fetchCaaFrontImage } from "./coverArchive.js";
+import { lookupReleaseGroupForRecording, searchRecording } from "./mbClient.js";
+import { enqueueCoverArtLookupIfNeeded } from "./queue.js";
 import { looksSuspicious } from "./sanityCheck.js";
 import { pickBestMatch } from "./textSearch.js";
 
 const MAX_BACKOFF_SECONDS = 5 * 60;
 
-type EnrichJob = { id: number; node_id: number; attempts: number };
+type EnrichJob = { id: number; node_id: number; job_type: "recording_lookup" | "cover_art_lookup"; attempts: number };
 
 function getNextDueJob(db: Database.Database): EnrichJob | undefined {
   return db
     .prepare(
-      `SELECT id, node_id, attempts FROM enrich_jobs
+      `SELECT id, node_id, job_type, attempts FROM enrich_jobs
        WHERE status IN ('queued','error') AND next_attempt_at <= datetime('now')
        ORDER BY priority DESC, id ASC
        LIMIT 1`,
@@ -73,50 +77,103 @@ function applyMatch(db: Database.Database, nodeId: number, mbid: string, confide
   }
 
   recordProvenance(db, nodeId, mbid, confidence, null);
+
+  // A confident mbid on the recording is the only thing that makes a
+  // Cover Art Archive lookup possible at all (it resolves through the
+  // release the recording belongs to) — only worth queuing when that
+  // release doesn't already have art from a faster source (embedded,
+  // folder, or a manual override).
+  const releaseNodeId = coverTargetNode(db, nodeId);
+  if (releaseNodeId !== nodeId && !resolveCover(db, releaseNodeId)) {
+    enqueueCoverArtLookupIfNeeded(db, releaseNodeId);
+  }
+}
+
+async function processRecordingLookup(db: Database.Database, job: EnrichJob): Promise<void> {
+  const input = getSearchInput(db, job.node_id);
+  if (!input) {
+    // No artist tag to search with at all — not a transient failure,
+    // nothing will change on retry.
+    recordProvenance(db, job.node_id, null, 0, "no local artist tag to search with");
+    db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
+    broadcast("hygiene:changed", { nodeId: job.node_id });
+    return;
+  }
+
+  if (looksSuspicious(input.title) || looksSuspicious(input.artist)) {
+    recordProvenance(db, job.node_id, null, 0, "tag looks malformed — skipped search, needs a hygiene fix first");
+    db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
+    broadcast("hygiene:changed", { nodeId: job.node_id });
+    return;
+  }
+
+  const candidates = await searchRecording(input.artist, input.title);
+  const result = pickBestMatch(candidates, input.durationMs);
+
+  if (result.outcome === "matched") {
+    applyMatch(db, job.node_id, result.mbid, result.confidence);
+  } else if (result.outcome === "ambiguous") {
+    recordProvenance(
+      db,
+      job.node_id,
+      null,
+      0,
+      `ambiguous — ${result.candidates.length} tied candidates, needs manual confirmation: ${result.candidates
+        .map((c) => c.mbid)
+        .join(", ")}`,
+    );
+  } else {
+    recordProvenance(db, job.node_id, null, 0, "no MusicBrainz match found");
+  }
+
+  db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
+  broadcast("hygiene:changed", { nodeId: job.node_id });
+}
+
+// job.node_id is a *release* node here, not a recording — see 0014's
+// migration note on enrich_jobs.node_id's job_type-dependent meaning.
+// Every outcome (already has art, no matched recording to hang a lookup
+// off of, no release-group found, CAA has nothing for it) marks the job
+// done rather than an error: none of them are transient, so nothing would
+// change on a retry.
+async function processCoverArtLookup(db: Database.Database, job: EnrichJob): Promise<void> {
+  const releaseNodeId = job.node_id;
+
+  if (resolveCover(db, releaseNodeId)) {
+    db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
+    return;
+  }
+
+  const recording = db
+    .prepare(
+      `SELECT n.mbid AS mbid
+       FROM edges e JOIN nodes n ON n.id = e.from_node
+       WHERE e.to_node = ? AND e.type = 'appears_on' AND n.mbid IS NOT NULL
+       LIMIT 1`,
+    )
+    .get(releaseNodeId) as { mbid: string } | undefined;
+
+  const releaseGroupMbid = recording ? await lookupReleaseGroupForRecording(recording.mbid) : null;
+  const image = releaseGroupMbid ? await fetchCaaFrontImage(releaseGroupMbid) : null;
+
+  if (image) {
+    const hash = await storeCover(image.bytes);
+    recordCover(db, { nodeId: releaseNodeId, source: "caa", hash, mime: image.mime });
+    broadcast("hygiene:changed", { nodeId: releaseNodeId });
+  }
+
+  db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
 }
 
 async function processJob(db: Database.Database, job: EnrichJob): Promise<void> {
   db.prepare("UPDATE enrich_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?").run(job.id);
 
   try {
-    const input = getSearchInput(db, job.node_id);
-    if (!input) {
-      // No artist tag to search with at all — not a transient failure,
-      // nothing will change on retry.
-      recordProvenance(db, job.node_id, null, 0, "no local artist tag to search with");
-      db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
-      broadcast("hygiene:changed", { nodeId: job.node_id });
-      return;
-    }
-
-    if (looksSuspicious(input.title) || looksSuspicious(input.artist)) {
-      recordProvenance(db, job.node_id, null, 0, "tag looks malformed — skipped search, needs a hygiene fix first");
-      db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
-      broadcast("hygiene:changed", { nodeId: job.node_id });
-      return;
-    }
-
-    const candidates = await searchRecording(input.artist, input.title);
-    const result = pickBestMatch(candidates, input.durationMs);
-
-    if (result.outcome === "matched") {
-      applyMatch(db, job.node_id, result.mbid, result.confidence);
-    } else if (result.outcome === "ambiguous") {
-      recordProvenance(
-        db,
-        job.node_id,
-        null,
-        0,
-        `ambiguous — ${result.candidates.length} tied candidates, needs manual confirmation: ${result.candidates
-          .map((c) => c.mbid)
-          .join(", ")}`,
-      );
+    if (job.job_type === "cover_art_lookup") {
+      await processCoverArtLookup(db, job);
     } else {
-      recordProvenance(db, job.node_id, null, 0, "no MusicBrainz match found");
+      await processRecordingLookup(db, job);
     }
-
-    db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
-    broadcast("hygiene:changed", { nodeId: job.node_id });
   } catch (err) {
     // Network/API failures are transient — back off and retry, unlike the
     // terminal outcomes above (suspicious/ambiguous/no_match are real

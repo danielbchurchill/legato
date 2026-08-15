@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { openDb } from "../db.js";
-import { enqueueEnrichmentIfNeeded, isEnrichmentEnabled } from "./queue.js";
+import { enqueueCoverArtLookupIfNeeded, enqueueEnrichmentIfNeeded, isEnrichmentEnabled } from "./queue.js";
 
 let db: Database.Database;
 
@@ -64,5 +64,34 @@ describe("enqueueEnrichmentIfNeeded", () => {
     const nodeId = insertNode("unmatched");
     enqueueEnrichmentIfNeeded(db, nodeId);
     expect(db.prepare("SELECT COUNT(*) AS n FROM enrich_jobs WHERE node_id = ?").get(nodeId)).toEqual({ n: 0 });
+  });
+});
+
+describe("enqueueCoverArtLookupIfNeeded", () => {
+  function insertReleaseNode(): number {
+    const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('release', 'Abbey Road') RETURNING id").get() as {
+      id: number;
+    };
+    return node.id;
+  }
+
+  it("queues a cover_art_lookup job for a release node", () => {
+    const releaseNodeId = insertReleaseNode();
+    enqueueCoverArtLookupIfNeeded(db, releaseNodeId);
+    const job = db.prepare("SELECT job_type, status FROM enrich_jobs WHERE node_id = ?").get(releaseNodeId) as {
+      job_type: string;
+      status: string;
+    };
+    expect(job.job_type).toBe("cover_art_lookup");
+    expect(job.status).toBe("queued");
+  });
+
+  it("does not double-queue a release that already has a pending job", () => {
+    const releaseNodeId = insertReleaseNode();
+    enqueueCoverArtLookupIfNeeded(db, releaseNodeId);
+    enqueueCoverArtLookupIfNeeded(db, releaseNodeId);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM enrich_jobs WHERE node_id = ?").get(releaseNodeId)).toEqual({
+      n: 1,
+    });
   });
 });

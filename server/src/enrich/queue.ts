@@ -32,3 +32,21 @@ export function enqueueEnrichmentIfNeeded(db: Database.Database, nodeId: number)
     nodeId,
   );
 }
+
+// Queued once a 'recording_lookup' job resolves a real MusicBrainz mbid —
+// only then does the release its recording belongs to have any MBID this
+// server can hand to Cover Art Archive (enrich/coverArchive.ts). node_id
+// here is the *release* node, not a recording — see 0014's migration note
+// on enrich_jobs.node_id's job_type-dependent meaning.
+export function enqueueCoverArtLookupIfNeeded(db: Database.Database, releaseNodeId: number): void {
+  const existing = db
+    .prepare(
+      "SELECT id FROM enrich_jobs WHERE node_id = ? AND job_type = 'cover_art_lookup' AND status IN ('queued','running')",
+    )
+    .get(releaseNodeId);
+  if (existing) return;
+
+  db.prepare("INSERT INTO enrich_jobs (node_id, job_type, status) VALUES (?, 'cover_art_lookup', 'queued')").run(
+    releaseNodeId,
+  );
+}
