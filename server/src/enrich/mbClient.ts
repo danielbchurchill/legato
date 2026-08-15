@@ -147,6 +147,129 @@ export async function searchRecording(input: RecordingSearchInput): Promise<MbRe
   }));
 }
 
+// M-6: release ("album-first") search input and results — a completely
+// separate query shape from RecordingSearchInput above, searching MB's
+// /release endpoint instead of /recording.
+export type ReleaseSearchInput = {
+  album: string;
+  albumartist?: string | null;
+  totalTracks?: number | null;
+  date?: string | null;
+};
+
+export type MbReleaseCandidateSearch = {
+  mbid: string;
+  score: number;
+  title: string;
+  artist: string | null;
+  releaseType: string | null;
+  date: string | null;
+  totalTracks: number | null;
+};
+
+// release+artist required; tracks/date left as bare boost terms for the
+// same reason as buildRecordingQuery above — a required date can exclude
+// the very edition that's otherwise the best match.
+export function buildReleaseQuery(input: ReleaseSearchInput): string {
+  const required = [`release:"${escapeLucene(input.album)}"`];
+  if (input.albumartist) required.push(`artist:"${escapeLucene(input.albumartist)}"`);
+
+  const boosts: string[] = [];
+  if (input.totalTracks != null) boosts.push(`tracks:${input.totalTracks}`);
+  const year = extractYear(input.date);
+  if (year != null) boosts.push(`date:${year}`);
+
+  return [required.join(" AND "), ...boosts].join(" ").trim();
+}
+
+type RawReleaseSearchResult = {
+  id: string;
+  score: number;
+  title: string;
+  date?: string;
+  "track-count"?: number;
+  "artist-credit"?: { name: string }[];
+  "release-group"?: { "primary-type"?: string };
+};
+
+export async function searchRelease(input: ReleaseSearchInput): Promise<MbReleaseCandidateSearch[]> {
+  await throttle();
+
+  const query = buildReleaseQuery(input);
+  const url = `${API_ROOT}/release?query=${encodeURIComponent(query)}&fmt=json&limit=15`;
+
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+  if (!res.ok) {
+    throw new Error(`MusicBrainz release search failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = (await res.json()) as { releases?: RawReleaseSearchResult[] };
+
+  return (data.releases ?? []).map((r) => ({
+    mbid: r.id,
+    score: r.score,
+    title: r.title,
+    artist: r["artist-credit"]?.[0]?.name ?? null,
+    releaseType: r["release-group"]?.["primary-type"] ?? null,
+    date: r.date ?? null,
+    totalTracks: r["track-count"] ?? null,
+  }));
+}
+
+export type MbReleaseTrack = {
+  position: number;
+  recordingMbid: string;
+  durationMs: number | null;
+};
+
+export type MbReleaseDetail = {
+  mbid: string;
+  tracks: MbReleaseTrack[];
+};
+
+type RawDetailTrack = {
+  position: number;
+  length?: number | null;
+  recording?: { id: string; length?: number | null };
+};
+type RawDetailMedium = { tracks?: RawDetailTrack[] };
+type RawReleaseDetail = { id: string; media?: RawDetailMedium[] };
+
+// inc=recordings+artist-credits+labels+release-groups is the one request
+// that replaces N per-recording lookups — every track's real recording
+// MBID comes back in a single call. artist-credits/labels/release-groups
+// beyond what's used here are exactly the wider field harvest M-8 needs;
+// fetched now so that work doesn't cost a second request per album later.
+export async function fetchReleaseDetail(mbid: string): Promise<MbReleaseDetail | null> {
+  await throttle();
+
+  const url = `${API_ROOT}/release/${mbid}?inc=recordings+artist-credits+labels+release-groups&fmt=json`;
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`MusicBrainz release lookup failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = (await res.json()) as RawReleaseDetail;
+  const tracks: MbReleaseTrack[] = [];
+  for (const medium of data.media ?? []) {
+    for (const t of medium.tracks ?? []) {
+      const recordingMbid = t.recording?.id;
+      if (recordingMbid == null) continue;
+      tracks.push({
+        position: t.position,
+        // The track's own length can differ slightly from the recording's
+        // canonical length (a different edit/fade) — the track length is
+        // what actually played on *this* release, so it wins when both exist.
+        durationMs: t.length ?? t.recording?.length ?? null,
+        recordingMbid,
+      });
+    }
+  }
+
+  return { mbid: data.id, tracks };
+}
+
 // Cover Art Archive keys images by release (or release-group), never by
 // recording — a matched recording (from searchRecording, above) only gives
 // this server the one MBID that's actually of any use to CAA: this second

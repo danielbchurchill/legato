@@ -1,0 +1,137 @@
+import { describe, expect, it } from "vitest";
+import type { MbReleaseCandidateSearch, MbReleaseDetail } from "./mbClient.js";
+import { assignTracks, pickBestRelease, scoreReleaseCandidate, type LocalAlbumInput, type LocalTrack } from "./releaseMatch.js";
+
+function releaseCandidate(overrides: Partial<MbReleaseCandidateSearch> = {}): MbReleaseCandidateSearch {
+  return {
+    mbid: "release-1",
+    score: 100,
+    title: "Blonde on Blonde",
+    artist: "Bob Dylan",
+    releaseType: "Album",
+    date: "1966",
+    totalTracks: 14,
+    ...overrides,
+  };
+}
+
+function local(overrides: Partial<LocalAlbumInput> = {}): LocalAlbumInput {
+  return {
+    album: "Blonde On Blonde",
+    albumartist: "Bob Dylan",
+    totalTracks: 14,
+    releaseType: null,
+    date: null,
+    ...overrides,
+  };
+}
+
+// The real Blonde on Blonde tracklist — fetched live against MusicBrainz
+// while building this (GET /release/{mbid}?inc=recordings+...) to confirm
+// the actual response shape rather than guessing at it.
+const REAL_TRACKLIST: MbReleaseDetail = {
+  mbid: "acc2a08d-5c3d-3f16-a5aa-20824c957f09",
+  tracks: [
+    { position: 1, recordingMbid: "469c2986-08a7-4085-ad19-39491bbfb457", durationMs: 277893 },
+    { position: 2, recordingMbid: "5a27b48c-c688-42fd-b68c-73f4cdb102b9", durationMs: 229506 },
+    { position: 3, recordingMbid: "a9a1c164-f261-4072-96b4-ef4e4f1f4608", durationMs: 454066 },
+    { position: 4, recordingMbid: "40bd0f3a-180d-43a2-b912-25b0ec55ac78", durationMs: 296493 },
+    { position: 5, recordingMbid: "123e4be7-73a3-4f0e-87da-5be68c5abbf6", durationMs: 188440 },
+    { position: 6, recordingMbid: "589ec3c9-1345-40ce-b379-53288bbd1982", durationMs: 425893 },
+    { position: 7, recordingMbid: "bafb0720-3c1a-4f67-863d-9c37f03f15da", durationMs: 240240 },
+    { position: 8, recordingMbid: "80b48ecb-559a-4046-9704-ff030b979120", durationMs: 294160 },
+    { position: 9, recordingMbid: "606fb070-829c-455b-84bb-e2c445dd2e29", durationMs: 209533 },
+    { position: 10, recordingMbid: "b15b6425-519a-4ed1-be5b-9b21be35715b", durationMs: 306506 },
+    { position: 11, recordingMbid: "243e222a-d7d6-49ed-934f-b5717c4a73fa", durationMs: 297360 },
+    { position: 12, recordingMbid: "2d0038f2-59ff-4f35-9e83-0e0bf351be27", durationMs: 276800 },
+    { position: 13, recordingMbid: "798d1127-6e7c-4cca-8f59-e320c3f9c39d", durationMs: 216933 },
+    { position: 14, recordingMbid: "d2f46fbf-64b1-4b66-acb5-62eee4b10c15", durationMs: 680173 },
+  ],
+};
+
+describe("scoreReleaseCandidate / pickBestRelease — M-6 cluster weights", () => {
+  it("scores an exact match near 1 (scaled only by MB's own score)", () => {
+    // Every field agrees, including date — local() alone leaves date null,
+    // which is a neutral (not perfect) score by design (dateScore has no
+    // opinion when either side is missing a year), so this test sets it
+    // explicitly to isolate "everything really does match" from "nothing
+    // to compare."
+    const score = scoreReleaseCandidate(local({ date: "1966" }), releaseCandidate({ score: 100, date: "1966" }));
+    expect(score).toBeCloseTo(1, 6);
+  });
+
+  it("prefers the studio album over a live/bootleg release of the same title", () => {
+    const album = releaseCandidate({ mbid: "album", releaseType: "Album" });
+    const live = releaseCandidate({ mbid: "live", releaseType: "Live", title: "Blonde on Blonde", totalTracks: 20 });
+    const best = pickBestRelease(local(), [live, album]);
+    expect(best?.mbid).toBe("album");
+  });
+
+  it("prefers the edition whose total track count matches the local album", () => {
+    const fourteen = releaseCandidate({ mbid: "fourteen", totalTracks: 14 });
+    const deluxe = releaseCandidate({ mbid: "deluxe", totalTracks: 28 }); // a 2-disc deluxe reissue
+    const best = pickBestRelease(local({ totalTracks: 14 }), [deluxe, fourteen]);
+    expect(best?.mbid).toBe("fourteen");
+  });
+
+  it("returns null when nothing clears the confidence floor", () => {
+    const wrongAlbum = releaseCandidate({
+      title: "Highway 61 Revisited",
+      artist: "Bob Dylan",
+      totalTracks: 9,
+      score: 60,
+    });
+    const best = pickBestRelease(local({ album: "Blonde On Blonde", totalTracks: 14 }), [wrongAlbum]);
+    expect(best).toBeNull();
+  });
+
+  it("returns null on an empty candidate list", () => {
+    expect(pickBestRelease(local(), [])).toBeNull();
+  });
+});
+
+describe("assignTracks — M-6 track assignment", () => {
+  it("assigns every local file to its recording by track position, the real 14-track case", () => {
+    const localFiles: LocalTrack[] = REAL_TRACKLIST.tracks.map((t, i) => ({
+      fileId: i + 1,
+      trackNo: t.position,
+      durationMs: null,
+    }));
+
+    const assignments = assignTracks(localFiles, REAL_TRACKLIST);
+
+    expect(assignments).toHaveLength(14);
+    // Visions of Johanna is file 3 (position 3) — same recording MBID
+    // confirmed live against the real MusicBrainz release.
+    expect(assignments.find((a) => a.fileId === 3)?.recordingMbid).toBe(
+      "a9a1c164-f261-4072-96b4-ef4e4f1f4608",
+    );
+  });
+
+  it("falls back to closest duration when a file has no track number", () => {
+    const localFiles: LocalTrack[] = [{ fileId: 1, trackNo: null, durationMs: 454000 }]; // ~Visions of Johanna
+    const assignments = assignTracks(localFiles, REAL_TRACKLIST);
+    expect(assignments).toEqual([{ fileId: 1, recordingMbid: "a9a1c164-f261-4072-96b4-ef4e4f1f4608" }]);
+  });
+
+  it("falls back to duration when the track number doesn't exist on this release (a bonus-track edition)", () => {
+    const localFiles: LocalTrack[] = [{ fileId: 1, trackNo: 99, durationMs: 229500 }]; // ~Pledging My Time
+    const assignments = assignTracks(localFiles, REAL_TRACKLIST);
+    expect(assignments).toEqual([{ fileId: 1, recordingMbid: "5a27b48c-c688-42fd-b68c-73f4cdb102b9" }]);
+  });
+
+  it("never assigns the same release track to two different local files", () => {
+    const localFiles: LocalTrack[] = [
+      { fileId: 1, trackNo: null, durationMs: 454000 }, // both want "Visions of Johanna" by duration
+      { fileId: 2, trackNo: null, durationMs: 454100 },
+    ];
+    const assignments = assignTracks(localFiles, REAL_TRACKLIST);
+    const mbids = assignments.map((a) => a.recordingMbid);
+    expect(new Set(mbids).size).toBe(mbids.length); // no duplicates
+  });
+
+  it("leaves a file unassigned when nothing on the release plausibly matches", () => {
+    const localFiles: LocalTrack[] = [{ fileId: 1, trackNo: null, durationMs: null }];
+    expect(assignTracks(localFiles, REAL_TRACKLIST)).toEqual([]);
+  });
+});

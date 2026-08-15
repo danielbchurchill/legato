@@ -3,8 +3,15 @@ import { coverTargetNode, recordCover, resolveCover } from "../cover/extract.js"
 import { storeCover } from "../cover/store.js";
 import { broadcast } from "../ws.js";
 import { fetchCaaFrontImage } from "./coverArchive.js";
-import { lookupReleaseGroupForRecording, searchRecording, type RecordingSearchInput } from "./mbClient.js";
+import {
+  fetchReleaseDetail,
+  lookupReleaseGroupForRecording,
+  searchRecording,
+  searchRelease,
+  type RecordingSearchInput,
+} from "./mbClient.js";
 import { enqueueCoverArtLookupIfNeeded } from "./queue.js";
+import { assignTracks, pickBestRelease, scoreReleaseCandidate, type LocalAlbumInput, type LocalTrack } from "./releaseMatch.js";
 import { looksSuspicious } from "./sanityCheck.js";
 import { pickBestMatch, type LocalMatchInput } from "./textSearch.js";
 
@@ -23,11 +30,14 @@ function getNextDueJob(db: Database.Database): EnrichJob | undefined {
     .get() as EnrichJob | undefined;
 }
 
-type SearchInput = LocalMatchInput & RecordingSearchInput;
+type SearchInput = LocalMatchInput & RecordingSearchInput & { albumartist: string | null };
 
 // M-2: everything the local tags already hold, not just title/artist —
 // album, track number, total tracks and date all feed the widened
 // MusicBrainz query and, for whatever comes back, M-3's weighted scorer.
+// albumartist feeds M-6's release search specifically — the *track*
+// artist (a featured guest, say) isn't necessarily who the album search
+// should be scoped to.
 function getSearchInput(db: Database.Database, nodeId: number): SearchInput | null {
   const node = db.prepare("SELECT title FROM nodes WHERE id = ?").get(nodeId) as { title: string } | undefined;
   if (!node) return null;
@@ -39,6 +49,7 @@ function getSearchInput(db: Database.Database, nodeId: number): SearchInput | nu
     ? (JSON.parse(file.tags_raw) as {
         artist?: string | null;
         album?: string | null;
+        albumartist?: string | null;
         trackNo?: number | null;
         totalTracks?: number | null;
         releaseDate?: string | null;
@@ -53,6 +64,7 @@ function getSearchInput(db: Database.Database, nodeId: number): SearchInput | nu
   return {
     title: node.title,
     artist: tags.artist,
+    albumartist: tags.albumartist ?? null,
     album: tags.album ?? null,
     trackNo: tags.trackNo ?? null,
     totalTracks: tags.totalTracks ?? null,
@@ -107,6 +119,100 @@ function applyMatch(db: Database.Database, nodeId: number, mbid: string, confide
   }
 }
 
+type SiblingFile = { fileId: number; nodeId: number; trackNo: number | null; durationMs: number | null };
+
+// Every currently-unmatched file sharing this album (and, when both sides
+// have one, this album artist) — the group M-6's single release lookup
+// resolves at once instead of issuing one independent search per file.
+// Filtered in JS rather than a json_extract() WHERE clause: this library
+// runs to hundreds of files, not enough for the difference to matter, and
+// it keeps this working the same way regardless of whether the SQLite
+// build has JSON1 compiled in.
+function findUnmatchedAlbumSiblings(db: Database.Database, album: string, albumartist: string | null): SiblingFile[] {
+  const rows = db
+    .prepare(
+      `SELECT f.id AS fileId, f.recording_node_id AS nodeId, f.tags_raw AS tagsRaw,
+              r.canonical_duration_ms AS durationMs
+       FROM files f JOIN recordings r ON r.node_id = f.recording_node_id
+       WHERE f.match_source != 'mbid' AND f.missing_since IS NULL`,
+    )
+    .all() as { fileId: number; nodeId: number; tagsRaw: string | null; durationMs: number | null }[];
+
+  const siblings: SiblingFile[] = [];
+  for (const row of rows) {
+    if (!row.tagsRaw) continue;
+    const tags = JSON.parse(row.tagsRaw) as {
+      album?: string | null;
+      albumartist?: string | null;
+      trackNo?: number | null;
+    };
+    if (tags.album !== album) continue;
+    if (albumartist && tags.albumartist && tags.albumartist !== albumartist) continue;
+    siblings.push({ fileId: row.fileId, nodeId: row.nodeId, trackNo: tags.trackNo ?? null, durationMs: row.durationMs });
+  }
+  return siblings;
+}
+
+// M-6: one release lookup instead of N per-recording ones. Only attempted
+// when there's an album tag to group on; returns whether the *triggering*
+// job's own node got matched this way, so the caller knows whether to
+// fall through to the per-recording search still below it. Every sibling
+// this resolves along the way (not just the one job that happened to run
+// first) gets applied and its own pending job marked done — the actual
+// point of grouping by album at all.
+async function tryAlbumMatch(db: Database.Database, targetNodeId: number, input: SearchInput): Promise<boolean> {
+  if (!input.album) return false;
+
+  const siblings = findUnmatchedAlbumSiblings(db, input.album, input.albumartist);
+  if (siblings.length === 0) return false;
+
+  const releaseCandidates = await searchRelease({
+    album: input.album,
+    albumartist: input.albumartist ?? input.artist,
+    totalTracks: input.totalTracks,
+    date: input.date,
+  });
+  const localAlbum: LocalAlbumInput = {
+    album: input.album,
+    albumartist: input.albumartist ?? input.artist,
+    totalTracks: input.totalTracks,
+    releaseType: null,
+    date: input.date,
+  };
+  const best = pickBestRelease(localAlbum, releaseCandidates);
+  if (!best) return false;
+
+  const detail = await fetchReleaseDetail(best.mbid);
+  if (!detail || detail.tracks.length === 0) return false;
+
+  const localTracks: LocalTrack[] = siblings.map((s) => ({
+    fileId: s.fileId,
+    trackNo: s.trackNo,
+    durationMs: s.durationMs,
+  }));
+  const assignments = assignTracks(localTracks, detail);
+  if (assignments.length === 0) return false;
+
+  const confidence = scoreReleaseCandidate(localAlbum, best);
+  const fileToNode = new Map(siblings.map((s) => [s.fileId, s.nodeId]));
+  let matchedTarget = false;
+  for (const { fileId, recordingMbid } of assignments) {
+    const nodeId = fileToNode.get(fileId);
+    if (nodeId == null) continue;
+    applyMatch(db, nodeId, recordingMbid, confidence);
+    // Resolved via this album lookup, not its own per-recording search —
+    // don't let its own queued job redo the work.
+    db.prepare(
+      `UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now')
+       WHERE node_id = ? AND job_type = 'recording_lookup' AND status IN ('queued','running')`,
+    ).run(nodeId);
+    broadcast("hygiene:changed", { nodeId });
+    if (nodeId === targetNodeId) matchedTarget = true;
+  }
+
+  return matchedTarget;
+}
+
 async function processRecordingLookup(db: Database.Database, job: EnrichJob): Promise<void> {
   const input = getSearchInput(db, job.node_id);
   if (!input) {
@@ -122,6 +228,11 @@ async function processRecordingLookup(db: Database.Database, job: EnrichJob): Pr
     recordProvenance(db, job.node_id, null, 0, "tag looks malformed — skipped search, needs a hygiene fix first");
     db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
     broadcast("hygiene:changed", { nodeId: job.node_id });
+    return;
+  }
+
+  if (await tryAlbumMatch(db, job.node_id, input)) {
+    db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
     return;
   }
 
