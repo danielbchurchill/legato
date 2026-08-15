@@ -8,7 +8,8 @@
     "start": "tsx src/index.ts",
     "test": "vitest run",
     "backfill:covers": "tsx src/cover/backfill-cli.ts",
-    "backfill:tags": "tsx src/scan/backfill-tags-cli.ts"
+    "backfill:tags": "tsx src/scan/backfill-tags-cli.ts",
+    "backfill:edges": "tsx src/match/backfill-edges-cli.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.3.0",

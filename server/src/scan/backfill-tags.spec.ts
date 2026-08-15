@@ -80,16 +80,26 @@ describe("backfillTagColumns", () => {
     expect(JSON.parse(row.genre)).toEqual(["Rock"]);
   });
 
-  it("skips a file that already has these columns populated, without opening it", async () => {
-    // A nonexistent path would make parseTags() throw if this file were
-    // ever opened — proof the skip check works, not just that the count matches.
-    const fileId = insertFile(path.join(dir, "does-not-exist.flac"), { release_date: "2000" });
+  it("re-parses even a file whose columns are already populated — no skip check", async () => {
+    // Regression: an earlier version of this tool skipped any file whose
+    // four session-3 columns were already non-NULL, which meant a second
+    // run after session 4 added producer/engineer/featuredArtists to
+    // normalizeTags silently did nothing — confirmed live on the real
+    // /mnt/music library, where real producer tags sat unread because
+    // tags_raw was never refreshed a second time.
+    const filePath = path.join(dir, "track.flac");
+    execFileSync(
+      "ffmpeg",
+      ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-metadata", "bpm=99", filePath],
+      { stdio: "ignore" },
+    );
+    const fileId = insertFile(filePath, { bpm: 40 }); // stale value from a prior parse
 
     const progress = await backfillTagColumns(db);
-    expect(progress).toEqual({ filesConsidered: 0, filesUpdated: 0, failures: 0 });
+    expect(progress).toEqual({ filesConsidered: 1, filesUpdated: 1, failures: 0 });
 
-    const row = db.prepare("SELECT release_date FROM files WHERE id = ?").get(fileId) as { release_date: string };
-    expect(row.release_date).toBe("2000");
+    const row = db.prepare("SELECT bpm FROM files WHERE id = ?").get(fileId) as { bpm: number };
+    expect(row.bpm).toBe(99); // overwritten with the current on-disk value
   });
 
   it("records a failure without throwing when a file can't be parsed", async () => {

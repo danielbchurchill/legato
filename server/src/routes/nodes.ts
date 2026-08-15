@@ -2,15 +2,38 @@ import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import { generateFacts } from "../facts.js";
 
+const GRANULARITIES = ["artists", "albums", "tracks"] as const;
+type Granularity = (typeof GRANULARITIES)[number];
+
+function parseGranularity(value: string | undefined): Granularity {
+  return (GRANULARITIES as readonly string[]).includes(value ?? "") ? (value as Granularity) : "tracks";
+}
+
+// Which edge types belong to each granularity's graph. 'tracks' is every
+// edge — the full mixed graph, unchanged from before granularities
+// existed. 'albums'/'artists' are the collaboration-graph edges
+// entities/collaboration.ts derives; returning every edge for those would
+// mostly return edges between nodes that aren't even in that granularity's
+// node set (a recording -> artist edge has no home in the albums graph).
+const EDGE_TYPES_BY_GRANULARITY: Record<Granularity, string[] | null> = {
+  tracks: null,
+  albums: ["same_artist", "same_label"],
+  artists: ["collaborated_with"],
+};
+
 export function nodesRoutes(db: Database.Database) {
   return async function routes(app: FastifyInstance) {
-    app.get<{ Querystring: { limit?: string } }>("/nodes", async (request) => {
+    app.get<{ Querystring: { limit?: string; granularity?: string } }>("/nodes", async (request) => {
       const limit = Math.min(Number(request.query.limit ?? 5000), 20000);
+      const granularity = parseGranularity(request.query.granularity);
       // A position row is the actual "has something to display" signal —
       // orphaned provisional nodes (collapsed away, no file references
       // them — see match/collapse.ts) never get one, so they never show up
-      // here. Covers both recording nodes (year-based) and artist/release
-      // nodes (centroid-based) — see layout/seed.ts.
+      // here. Joining on a specific granularity is also what scopes the
+      // node *set* itself: 'albums'/'artists' positions (layout/seed.ts)
+      // are only ever written for release/artist entities, so this one
+      // join does double duty as both "has a position" and "belongs to
+      // this graph" without a separate node-type filter.
       // has_cover lets the canvas decide which nodes to render as artwork
       // without probing the cover endpoint once per node and eating a 404 for
       // every node that never had art.
@@ -20,16 +43,17 @@ export function nodesRoutes(db: Database.Database) {
                   p.seed_x, p.seed_y, p.user_x, p.user_y,
                   EXISTS (SELECT 1 FROM cover_art ca WHERE ca.node_id = n.id) AS has_cover
            FROM nodes n
-           JOIN positions p ON p.node_id = n.id
+           JOIN positions p ON p.node_id = n.id AND p.granularity = ?
            LEFT JOIN recordings r ON r.node_id = n.id
            ORDER BY n.id
            LIMIT ?`,
         )
-        .all(limit);
+        .all(granularity, limit);
     });
 
-    app.get<{ Params: { id: string } }>("/nodes/:id", async (request, reply) => {
+    app.get<{ Params: { id: string }; Querystring: { granularity?: string } }>("/nodes/:id", async (request, reply) => {
       const id = request.params.id;
+      const granularity = parseGranularity(request.query.granularity);
       const node = db.prepare("SELECT * FROM nodes WHERE id = ?").get(id);
       if (!node) {
         reply.code(404);
@@ -38,8 +62,8 @@ export function nodesRoutes(db: Database.Database) {
       const recording = db.prepare("SELECT * FROM recordings WHERE node_id = ?").get(id);
       const files = db.prepare("SELECT * FROM files WHERE recording_node_id = ? ORDER BY id").all(id);
       const position = db
-        .prepare("SELECT seed_x, seed_y, user_x, user_y FROM positions WHERE node_id = ?")
-        .get(id);
+        .prepare("SELECT seed_x, seed_y, user_x, user_y FROM positions WHERE node_id = ? AND granularity = ?")
+        .get(id, granularity);
 
       // Both directions resolved with the *other* node's title/type inlined
       // — the client renders "Performed by The Beatles" (outgoing, from a
@@ -77,13 +101,17 @@ export function nodesRoutes(db: Database.Database) {
 
     // Writes user_x/user_y only — seed_x/seed_y are derived and only ever
     // touched by layout/seed.ts's recompute. A user's drag never gets
-    // auto-moved back, per Legato's canvas design.
-    app.patch<{ Params: { id: string }; Body: { x: number; y: number } }>(
+    // auto-moved back, per Legato's canvas design. granularity is required
+    // in the body (not inferred): the same node can hold an independent
+    // drag position in up to three graphs (migration 0015), and only the
+    // caller — mid-drag, in one specific graph — knows which one changed.
+    app.patch<{ Params: { id: string }; Body: { x: number; y: number; granularity?: string } }>(
       "/nodes/:id/position",
       async (request, reply) => {
+        const granularity = parseGranularity(request.body.granularity);
         const result = db
-          .prepare("UPDATE positions SET user_x = ?, user_y = ? WHERE node_id = ?")
-          .run(request.body.x, request.body.y, request.params.id);
+          .prepare("UPDATE positions SET user_x = ?, user_y = ? WHERE node_id = ? AND granularity = ?")
+          .run(request.body.x, request.body.y, request.params.id, granularity);
         if (result.changes === 0) {
           reply.code(404);
           return { error: "not found" };
@@ -92,8 +120,20 @@ export function nodesRoutes(db: Database.Database) {
       },
     );
 
-    app.get("/edges", async () =>
-      db.prepare("SELECT id, from_node, to_node, type, source, label, note FROM edges").all(),
-    );
+    app.get<{ Querystring: { granularity?: string } }>("/edges", async (request) => {
+      const granularity = parseGranularity(request.query.granularity);
+      const types = EDGE_TYPES_BY_GRANULARITY[granularity];
+
+      if (!types) {
+        return db.prepare("SELECT id, from_node, to_node, type, source, label, note FROM edges").all();
+      }
+      return db
+        .prepare(
+          `SELECT id, from_node, to_node, type, source, label, note FROM edges WHERE type IN (${types
+            .map(() => "?")
+            .join(",")})`,
+        )
+        .all(...types);
+    });
   };
 }

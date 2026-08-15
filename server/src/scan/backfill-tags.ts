@@ -7,33 +7,36 @@ export type TagBackfillProgress = {
   failures: number;
 };
 
-// Migration 0011 added release_date/bpm/label/release_type/genre as real
-// columns, but a normal re-scan can't populate them for a library that was
-// scanned before those columns existed: scanFile() short-circuits on any
-// file whose mtime/size are unchanged, which is every file in an
-// already-scanned library — confirmed by running a real re-scan against
-// the actual /mnt/music library and finding these four columns still NULL
-// on all 338 files afterward, track_no/disc_no aside (those came from
-// 0011's own SQL backfill of the existing tags_raw blob, not a re-scan).
-// Same shape as cover/backfill.ts for exactly the same reason.
+// Re-parses every file and refreshes both its tag columns and tags_raw
+// from what's actually on disk — the general fix for a structural gap:
+// scanFile() short-circuits on any file whose mtime/size are unchanged,
+// which is every file in an already-scanned library, so normalizeTags
+// (scan/tags.ts) growing a new field is otherwise invisible to a library
+// that was scanned before that field existed. Confirmed twice on the real
+// /mnt/music library — once when migration 0011 added release_date/bpm/
+// label/release_type/genre, again in session 4 when producer/engineer/
+// featuredArtists were added and this tool's own earlier skip-if-populated
+// check (based only on the four session-3 columns) meant a second run
+// silently did nothing, even though real files had producer tags waiting
+// to be picked up. No skip check now, for exactly that reason: this is a
+// manual maintenance tool run occasionally, not a hot path, and correctness
+// under a growing tag vocabulary matters more than avoiding a few seconds
+// of re-parsing an already-current library.
 export async function backfillTagColumns(
   db: Database.Database,
   onProgress?: (progress: TagBackfillProgress) => void,
 ): Promise<TagBackfillProgress> {
-  const files = db
-    .prepare(
-      `SELECT id, file_path
-         FROM files
-        WHERE missing_since IS NULL AND release_date IS NULL AND bpm IS NULL AND label IS NULL
-              AND release_type IS NULL AND genre IS NULL
-        ORDER BY id`,
-    )
-    .all() as { id: number; file_path: string }[];
+  const files = db.prepare("SELECT id, file_path FROM files WHERE missing_since IS NULL ORDER BY id").all() as {
+    id: number;
+    file_path: string;
+  }[];
 
   const progress: TagBackfillProgress = { filesConsidered: 0, filesUpdated: 0, failures: 0 };
 
   const update = db.prepare(
-    `UPDATE files SET release_date = ?, bpm = ?, label = ?, release_type = ?, genre = ?, tags_raw = ? WHERE id = ?`,
+    `UPDATE files SET
+       track_no = ?, disc_no = ?, release_date = ?, bpm = ?, label = ?, release_type = ?, genre = ?, tags_raw = ?
+     WHERE id = ?`,
   );
 
   for (const file of files) {
@@ -42,6 +45,8 @@ export async function backfillTagColumns(
     try {
       const { tags } = await parseTags(file.file_path);
       update.run(
+        tags.trackNo,
+        tags.discNo,
         tags.releaseDate,
         tags.bpm,
         tags.label,
