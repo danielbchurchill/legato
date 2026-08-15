@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import type Database from "better-sqlite3";
-import { recomputeAllSeeds } from "../layout/seed.js";
+import { recomputeAllLayouts } from "../layout/seed.js";
 import { recomputeEntities } from "../entities/aggregate.js";
 import { recomputeCollaborationEdges } from "../entities/collaboration.js";
 import { enqueueEnrichmentIfNeeded } from "../enrich/queue.js";
@@ -253,11 +253,11 @@ export async function executeScan(
     // and idempotent (see seed.ts's seed_version guard) on a no-op re-scan.
     recomputeEntities(db);
     // Depends on albums.primary_artist_node_id, so must run after
-    // recomputeEntities — and before recomputeAllSeeds, whose layout
+    // recomputeEntities — and before recomputeAllLayouts, whose layout
     // (deterministic cell assignment) uses these derived edges for
     // artist/label-affinity clustering.
     recomputeCollaborationEdges(db);
-    recomputeAllSeeds(db);
+    recomputeAllLayouts(db);
 
     db.prepare(
       `UPDATE scan_jobs SET status = 'done', files_scanned = ?, files_added = ?,

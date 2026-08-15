@@ -21,8 +21,8 @@ export type ArtistAggregate = {
 // Pure aggregation over the same 'appears_on'/'performed_by' hard edges
 // match/edges.ts derives per file — split out from the DB-reading orchestrator
 // below so the aggregation logic (mode, sums, min/max) is unit-testable
-// without a real database, matching layout/seed.ts's computeSeeds/
-// recomputeAllSeeds split.
+// without a real database, matching layout/cluster.ts's computeClusteredSeeds/
+// layout/seed.ts orchestrator split.
 export function computeAlbumAggregates(
   appearsOn: EdgeRef[],
   performedBy: EdgeRef[],
@@ -111,7 +111,7 @@ export function computeArtistAggregates(appearsOn: EdgeRef[], performedBy: EdgeR
 }
 
 // Recomputed wholesale after every scan (called from scan/scanner.ts
-// alongside recomputeAllSeeds) rather than maintained incrementally —
+// alongside recomputeAllLayouts) rather than maintained incrementally —
 // cheap at real-library scale and avoids keeping running aggregates in
 // sync across collapse, re-scan, and manual-edge flows. Rows for entities
 // that no longer have any tracks are left stale rather than deleted, the

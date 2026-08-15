@@ -1,92 +1,22 @@
 import type Database from "better-sqlite3";
+import { getAlbumLabelMap } from "../entities/collaboration.js";
+import { pickMode } from "../entities/mode.js";
+import { computeClusteredSeeds, type ClusterInput, type Seed } from "./cluster.js";
 
-// v1 layout is year-only: X = decade, Y = position within the decade (see
-// Legato.md's Open Questions — artist-cluster/label axes are a later
-// upgrade once enrichment data exists). Deterministic placement alone
-// overplots at scale (a whole decade's worth of nodes can share one year),
-// so nodes sharing a (decade, year) cell are packed into a deterministic
-// grid ordered by node id — reproducible on every recompute, and simpler
-// than a physics-based local force relaxation while solving the same
-// "don't stack exactly on top of each other" problem. A relaxation pass
-// can replace this later without touching the schema.
-const DECADE_SPACING = 400;
-const YEAR_SPACING = 40;
-const CELL_GRID_SPACING = 8;
-const CELL_GRID_COLS = 5;
-const UNKNOWN_YEAR_MARGIN = DECADE_SPACING * 3;
+export type { Seed };
 
-export type SeedInput = { nodeId: number; year: number | null };
-export type Seed = { x: number; y: number };
-
-function baseXForYear(year: number): number {
-  return Math.floor(year / 10) * 10 * (DECADE_SPACING / 10);
-}
-
-// Where year-less nodes park: three decades to the left of the earliest real
-// data, rather than at a fixed coordinate.
-//
-// This used to be an absolute -1200, which looks reasonable until you notice
-// baseX is derived from the calendar year itself — the 1960s land at 78,400,
-// not at 0. A single untagged file therefore sat ~79,600 units from everything
-// else and stretched the graph's bounding box by 16x, so sigma normalised the
-// entire real library into roughly 6% of the viewport. Found on the real
-// /mnt/music library: 396 of 398 nodes spanned 5,000 units, one node sat at
-// -1200, and the canvas rendered as a tiny unreadable clump.
-export function unknownRegionX(inputs: SeedInput[]): number {
-  const knownBaseXs = inputs
-    .filter((input) => input.year != null && !Number.isNaN(input.year))
-    .map((input) => baseXForYear(input.year as number));
-
-  if (knownBaseXs.length === 0) return -UNKNOWN_YEAR_MARGIN;
-  return Math.min(...knownBaseXs) - UNKNOWN_YEAR_MARGIN;
-}
-
-function packCell(inputs: SeedInput[], baseX: number, baseY: number, result: Map<number, Seed>) {
-  const sorted = [...inputs].sort((a, b) => a.nodeId - b.nodeId);
-  sorted.forEach((input, index) => {
-    const row = Math.floor(index / CELL_GRID_COLS);
-    const col = index % CELL_GRID_COLS;
-    result.set(input.nodeId, { x: baseX + col * CELL_GRID_SPACING, y: baseY + row * CELL_GRID_SPACING });
-  });
-}
-
-export function computeSeeds(inputs: SeedInput[]): Map<number, Seed> {
-  const cells = new Map<string, SeedInput[]>();
-  const unknown: SeedInput[] = [];
-
-  for (const input of inputs) {
-    if (input.year == null || Number.isNaN(input.year)) {
-      unknown.push(input);
-      continue;
-    }
-    const key = String(input.year);
-    const list = cells.get(key);
-    if (list) list.push(input);
-    else cells.set(key, [input]);
-  }
-
-  const result = new Map<number, Seed>();
-
-  for (const [yearKey, list] of cells) {
-    const year = Number(yearKey);
-    const decade = Math.floor(year / 10) * 10;
-    const baseY = (year - decade) * YEAR_SPACING;
-    packCell(list, baseXForYear(year), baseY, result);
-  }
-
-  packCell(unknown, unknownRegionX(inputs), 0, result);
-
-  return result;
+function decadeOf(year: number | null): number | null {
+  return year == null || Number.isNaN(year) ? null : Math.floor(year / 10) * 10;
 }
 
 // Centroid of every recording a non-recording node (artist/release/label)
 // connects to via an edge. Without this, only recording nodes would ever
-// have a position — but every hard edge M2 derives is recording -> other,
-// so a recording-only canvas would render zero visible connections, which
-// defeats the actual point ("the library is a graph"). Placing artist/
-// release nodes near their own recordings is a simple, deterministic stand-
-// in for a real layout axis for those types (still an open question for
-// v2 — see Legato.md's genre-axis note).
+// have a position — but every hard edge derives recording -> other, so a
+// recording-only canvas would render zero visible connections, which
+// defeats the actual point ("the library is a graph"). Only used for the
+// 'tracks' granularity's satellite node types (artist/release/label/credit/
+// year) — the albums/artists granularities have their own dedicated
+// cluster layout below, since their primary nodes ARE artists/releases.
 function computeCentroidSeeds(
   nodeIds: number[],
   connectedRecordingIds: Map<number, number[]>,
@@ -110,26 +40,59 @@ function computeCentroidSeeds(
   return result;
 }
 
-// Recomputes every node's seed position and persists it. Two passes:
-// recording nodes from their current released_in edge (see match/edges.ts),
-// then every other node type at the centroid of the recordings it connects
-// to. Orphaned nodes (nothing references them — see match/collapse.ts) are
-// skipped, they have nothing to display. user_x/user_y are never touched
-// here — only a PATCH /nodes/:id/position request writes them.
-export function recomputeAllSeeds(db: Database.Database): void {
+// seed_version only bumps when the computed position actually differs — a
+// no-op recompute (nothing about the underlying data changed) must leave
+// the row byte-identical, not just numerically equal. granularity is part
+// of the conflict key (migration 0015): the same node can hold up to three
+// independent seed positions, one per graph it appears in.
+function upsertSeeds(db: Database.Database, granularity: "tracks" | "albums" | "artists", seeds: Map<number, Seed>): void {
+  const upsert = db.prepare(
+    `INSERT INTO positions (node_id, granularity, seed_x, seed_y, seed_version) VALUES (?, ?, ?, ?, 1)
+     ON CONFLICT(node_id, granularity) DO UPDATE SET
+       seed_version = CASE
+         WHEN positions.seed_x = excluded.seed_x AND positions.seed_y = excluded.seed_y
+         THEN positions.seed_version ELSE positions.seed_version + 1
+       END,
+       seed_x = excluded.seed_x, seed_y = excluded.seed_y`,
+  );
+  const applyAll = db.transaction(() => {
+    for (const [nodeId, seed] of seeds) upsert.run(nodeId, granularity, seed.x, seed.y);
+  });
+  applyAll();
+}
+
+// The full mixed graph — every recording plus every artist/release/label/
+// credit/year node connected to one, unchanged in node-set terms from
+// before granularities existed. What changed is how recordings are placed:
+// deterministic cell assignment (primary artist, falling back to label,
+// falling back to unclustered) crossed with decade, then local force
+// relaxation within each cell — replacing the old plain (decade, year)
+// grid pack, which is what actually overplotted on the real library (see
+// Legato.md: same-artist albums landing at near-identical centroids with
+// overlapping covers).
+export function recomputeTracksLayout(db: Database.Database): void {
   const recordingRows = db
     .prepare(
       `SELECT n.id AS node_id,
               (SELECT CAST(y.title AS INTEGER) FROM edges e
                  JOIN nodes y ON y.id = e.to_node
-                WHERE e.from_node = n.id AND e.type = 'released_in' LIMIT 1) AS year
+                WHERE e.from_node = n.id AND e.type = 'released_in' LIMIT 1) AS year,
+              (SELECT e.to_node FROM edges e
+                WHERE e.from_node = n.id AND e.type = 'performed_by' LIMIT 1) AS artist_id,
+              (SELECT e.to_node FROM edges e
+                WHERE e.from_node = n.id AND e.type = 'released_on' LIMIT 1) AS label_id
        FROM nodes n
        WHERE n.type = 'recording'
          AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = n.id)`,
     )
-    .all() as { node_id: number; year: number | null }[];
+    .all() as { node_id: number; year: number | null; artist_id: number | null; label_id: number | null }[];
 
-  const seeds = computeSeeds(recordingRows.map((r) => ({ nodeId: r.node_id, year: r.year })));
+  const clusterInputs: ClusterInput[] = recordingRows.map((r) => ({
+    nodeId: r.node_id,
+    groupKey: r.artist_id ?? r.label_id,
+    decade: decadeOf(r.year),
+  }));
+  const seeds = computeClusteredSeeds(clusterInputs);
 
   const otherRows = db
     .prepare(
@@ -154,31 +117,81 @@ export function recomputeAllSeeds(db: Database.Database): void {
     );
   }
 
+  const fallbackX = Math.min(0, ...[...seeds.values()].map((s) => s.x)) - 1200;
   const centroidSeeds = computeCentroidSeeds(
     otherRows.map((r) => r.node_id),
     connections,
     seeds,
-    // Same region as year-less recordings, derived from the same data, so a
-    // disconnected artist node cannot drag the bounding box either.
-    { x: unknownRegionX(recordingRows.map((r) => ({ nodeId: r.node_id, year: r.year }))), y: 0 },
+    { x: fallbackX, y: 0 },
   );
   for (const [nodeId, seed] of centroidSeeds) seeds.set(nodeId, seed);
 
-  // seed_version only bumps when the computed position actually differs —
-  // a no-op recompute (nothing about the underlying data changed) must
-  // leave the row byte-identical, not just numerically equal.
-  const upsert = db.prepare(
-    `INSERT INTO positions (node_id, seed_x, seed_y, seed_version) VALUES (?, ?, ?, 1)
-     ON CONFLICT(node_id) DO UPDATE SET
-       seed_version = CASE
-         WHEN positions.seed_x = excluded.seed_x AND positions.seed_y = excluded.seed_y
-         THEN positions.seed_version ELSE positions.seed_version + 1
-       END,
-       seed_x = excluded.seed_x, seed_y = excluded.seed_y`,
-  );
+  upsertSeeds(db, "tracks", seeds);
+}
 
-  const applyAll = db.transaction(() => {
-    for (const [nodeId, seed] of seeds) upsert.run(nodeId, seed.x, seed.y);
+// Album entities only, connected to each other via same_artist/same_label
+// edges (entities/collaboration.ts) — a distinct graph, not the tracks
+// graph filtered down. Clustered by the same artist/label affinity as the
+// tracks graph, one level up: primary artist if known, else the release's
+// own dominant label; positioned chronologically by year_min.
+export function recomputeAlbumsLayout(db: Database.Database): void {
+  const albums = db
+    .prepare("SELECT node_id, primary_artist_node_id, year_min FROM albums")
+    .all() as { node_id: number; primary_artist_node_id: number | null; year_min: number | null }[];
+
+  const albumLabel = getAlbumLabelMap(db);
+
+  const clusterInputs: ClusterInput[] = albums.map((a) => ({
+    nodeId: a.node_id,
+    groupKey: a.primary_artist_node_id ?? albumLabel.get(a.node_id) ?? null,
+    decade: decadeOf(a.year_min),
+  }));
+
+  upsertSeeds(db, "albums", computeClusteredSeeds(clusterInputs));
+}
+
+// Artist entities only, connected to each other via collaborated_with
+// edges. Neither "primary artist" nor "decade" apply to an artist itself,
+// so both axes are derived one level up from their own albums: clustered
+// by their most common label across every release they're the primary
+// artist on, positioned at the decade of their earliest release.
+export function recomputeArtistsLayout(db: Database.Database): void {
+  const artists = db.prepare("SELECT node_id FROM artists").all() as { node_id: number }[];
+  const albums = db
+    .prepare("SELECT node_id, primary_artist_node_id, year_min FROM albums WHERE primary_artist_node_id IS NOT NULL")
+    .all() as { node_id: number; primary_artist_node_id: number; year_min: number | null }[];
+
+  const albumLabel = getAlbumLabelMap(db);
+
+  const albumsByArtist = new Map<number, typeof albums>();
+  for (const album of albums) {
+    const list = albumsByArtist.get(album.primary_artist_node_id);
+    if (list) list.push(album);
+    else albumsByArtist.set(album.primary_artist_node_id, [album]);
+  }
+
+  const clusterInputs: ClusterInput[] = artists.map((artist) => {
+    const own = albumsByArtist.get(artist.node_id) ?? [];
+
+    const labelCounts = new Map<number, number>();
+    for (const album of own) {
+      const labelId = albumLabel.get(album.node_id);
+      if (labelId != null) labelCounts.set(labelId, (labelCounts.get(labelId) ?? 0) + 1);
+    }
+
+    const years = own.map((a) => a.year_min).filter((y): y is number => y != null);
+    const earliestYear = years.length > 0 ? Math.min(...years) : null;
+
+    return { nodeId: artist.node_id, groupKey: pickMode(labelCounts), decade: decadeOf(earliestYear) };
   });
-  applyAll();
+
+  upsertSeeds(db, "artists", computeClusteredSeeds(clusterInputs));
+}
+
+// user_x/user_y are never touched by any of these — only a PATCH
+// /nodes/:id/position request (scoped to one granularity) writes them.
+export function recomputeAllLayouts(db: Database.Database): void {
+  recomputeTracksLayout(db);
+  recomputeAlbumsLayout(db);
+  recomputeArtistsLayout(db);
 }

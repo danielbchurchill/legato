@@ -83,18 +83,12 @@ export function computeAlbumRelations(
 // only ever deletes edges scoped to one specific recording's from_node,
 // and these edges' from_node values are always artist/release ids, never
 // recording ids.
-export function recomputeCollaborationEdges(db: Database.Database): void {
-  const performerEdges = db
-    .prepare(
-      "SELECT from_node AS fromNode, to_node AS toNode FROM edges WHERE type IN ('performed_by', 'featured_artist')",
-    )
-    .all() as { fromNode: number; toNode: number }[];
-
-  const albums = db.prepare("SELECT node_id AS nodeId, primary_artist_node_id AS primaryArtistNodeId FROM albums").all() as {
-    nodeId: number;
-    primaryArtistNodeId: number | null;
-  }[];
-
+// A release's dominant label — the mode label node among its own tracks'
+// released_on edges. Exported for layout/seed.ts too: the albums/artists
+// graph layouts (session 4) cluster by the same label affinity this module
+// already needs for same_label edges, so it's one query with two readers
+// rather than two copies of the same join.
+export function getAlbumLabelMap(db: Database.Database): Map<number, number | null> {
   const labelRows = db
     .prepare(
       `SELECT release.to_node AS releaseNodeId, label.to_node AS labelNodeId
@@ -117,6 +111,22 @@ export function recomputeCollaborationEdges(db: Database.Database): void {
   for (const [releaseNodeId, counts] of labelCountsByAlbum) {
     albumLabel.set(releaseNodeId, pickMode(counts));
   }
+  return albumLabel;
+}
+
+export function recomputeCollaborationEdges(db: Database.Database): void {
+  const performerEdges = db
+    .prepare(
+      "SELECT from_node AS fromNode, to_node AS toNode FROM edges WHERE type IN ('performed_by', 'featured_artist')",
+    )
+    .all() as { fromNode: number; toNode: number }[];
+
+  const albums = db.prepare("SELECT node_id AS nodeId, primary_artist_node_id AS primaryArtistNodeId FROM albums").all() as {
+    nodeId: number;
+    primaryArtistNodeId: number | null;
+  }[];
+
+  const albumLabel = getAlbumLabelMap(db);
 
   const edges = [...computeArtistCollaborations(performerEdges), ...computeAlbumRelations(albums, albumLabel)];
 
