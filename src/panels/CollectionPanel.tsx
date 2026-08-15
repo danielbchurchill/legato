@@ -309,8 +309,8 @@ export function CollectionPanel({ anchorNodeId, onSelectNode, onOpenMaintenance,
           <Icon name="settings" size={24} />
         </button>
       </div>
-      <OverviewBlock />
       <SimilaritySection anchorNodeId={anchorNodeId} onSelectNode={onSelectNode} />
+      <OverviewBlock />
       <MaintenancePreview onSelectNode={onSelectNode} onOpenMaintenance={onOpenMaintenance} />
     </div>
   )
