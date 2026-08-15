@@ -44,6 +44,15 @@
   [data-selectable] {
     user-select: text;
   }
+
+  /* The platform scrollbar is a pale grey track and thumb sitting on top of
+   * the frosted glass — the one place native chrome shows through the
+   * design. --color-hairline is already the panel border's translucent
+   * white, so a scrolling thumb reads as part of the same surface. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-hairline) transparent;
+  }
 }
 
 /* Reduced motion means less movement, not less feedback (DESIGN.md, Motion).
