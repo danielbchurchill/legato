@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
+import { Icon } from '../ui/Icon'
+import { Surface } from '../shell/Surface'
+import { SectionHeader } from '../ui/DataRow'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -22,14 +25,140 @@ const TYPE_LABEL: Record<WorklistItem['type'], string> = {
   missing_file: 'missing file',
 }
 
-const linkStyle: React.CSSProperties = {
-  color: '#7fb8ff',
-  cursor: 'pointer',
-  textDecoration: 'underline',
-  background: 'none',
-  border: 'none',
-  padding: 0,
-  font: 'inherit',
+type FieldDiff = { field: string; oldValue: string | number | string[]; newValue: string | number | string[] }
+type TagWriteStatus = 'pending_review' | 'approved' | 'written' | 'failed' | 'reverted'
+type TagWrite = {
+  id: number
+  file_id: number
+  status: TagWriteStatus
+  diff_json: string
+  requested_at: string
+  written_at: string | null
+  reverted_at: string | null
+  error_message: string | null
+}
+
+const TAG_WRITE_STATUS_LABEL: Record<TagWriteStatus, string> = {
+  pending_review: 'pending review',
+  approved: 'approved',
+  written: 'written',
+  failed: 'failed',
+  reverted: 'reverted',
+}
+
+function LinkButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-[length:var(--text-base)] text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 transition-colors duration-150 hover:text-[var(--color-muted)]"
+    >
+      {children}
+    </button>
+  )
+}
+
+function WorklistRow({
+  item,
+  onSelectNode,
+  onResolveFuzzy,
+}: {
+  item: WorklistItem
+  onSelectNode: (id: number) => void
+  onResolveFuzzy: (fileId: number, forcedRecordingNodeId: number | null) => void
+}) {
+  return (
+    <div className="flex flex-col gap-[6px] border-b border-[var(--color-divider)] py-[15px] last:border-b-0">
+      <div className="flex items-baseline justify-between gap-[12px]">
+        <LinkButton onClick={() => onSelectNode(item.nodeId)}>{item.nodeTitle}</LinkButton>
+        <span className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">
+          {TYPE_LABEL[item.type]}
+        </span>
+      </div>
+
+      {item.type === 'fuzzy_pending' && (
+        <div className="flex flex-wrap items-baseline justify-between gap-[12px]">
+          <span className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
+            looks like <LinkButton onClick={() => onSelectNode(item.candidateNodeId)}>{item.candidateTitle}</LinkButton>
+          </span>
+          <div className="flex gap-[16px]">
+            <LinkButton onClick={() => onResolveFuzzy(item.fileId, item.candidateNodeId)}>merge</LinkButton>
+            <LinkButton onClick={() => onResolveFuzzy(item.fileId, null)}>keep separate</LinkButton>
+          </div>
+        </div>
+      )}
+      {item.type === 'enrichment_flag' && (
+        <p className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
+          {formatEnrichmentNote(item.note)}
+        </p>
+      )}
+      {item.type === 'missing_file' && (
+        <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
+          {item.filePath} — missing since {item.missingSince}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function formatDiffValue(value: FieldDiff['newValue']): string {
+  return Array.isArray(value) ? value.join(', ') : String(value)
+}
+
+// enrich/worker.ts's ambiguous-match note already states the tied-candidate
+// count in plain words ("ambiguous — 6 tied candidates, needs manual
+// confirmation: <uuid>, <uuid>, ...") before dumping every tied MBID
+// verbatim — real, useful detail for a log line, but a wall of UUIDs in a
+// worklist row reads as broken, not restyled. No UI exists to act on an
+// individual MBID from here (there never was, even before the restyle), so
+// the count already in the message is all that's actionable to read.
+function formatEnrichmentNote(note: string | null): string {
+  if (!note) return ''
+  const marker = 'needs manual confirmation:'
+  const index = note.indexOf(marker)
+  if (index === -1) return note
+  return note.slice(0, index).replace(/,\s*$/, '').trim()
+}
+
+// The tag-write diff/approve/revert flow the server has had since M9 and
+// the frontend has never touched (session 5). Nothing in the UI creates a
+// tag_writes row yet — the metadata panel's pencil, which will, is session
+// 6's job — so this section is normally empty on a real library. Built now
+// so that wiring has somewhere real to land.
+function TagWriteRow({ tagWrite, onApprove, onRevert }: { tagWrite: TagWrite; onApprove: () => void; onRevert: () => void }) {
+  const diff = JSON.parse(tagWrite.diff_json) as FieldDiff[];
+  return (
+    <div className="flex flex-col gap-[6px] border-b border-[var(--color-divider)] py-[15px] last:border-b-0">
+      <div className="flex items-baseline justify-between gap-[12px]">
+        <span className="text-[length:var(--text-base)] text-[var(--color-ink)]">tag write #{tagWrite.id}</span>
+        <span className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">
+          {TAG_WRITE_STATUS_LABEL[tagWrite.status]}
+        </span>
+      </div>
+      <ul className="flex flex-col gap-[2px]">
+        {diff.map((d) => (
+          <li
+            key={d.field}
+            className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]"
+          >
+            {d.field}: {formatDiffValue(d.oldValue)} → <span className="text-[var(--color-ink)]">{formatDiffValue(d.newValue)}</span>
+          </li>
+        ))}
+      </ul>
+      {tagWrite.error_message && (
+        // No dedicated error/danger token exists in the design system yet
+        // (DESIGN.md's palette is all glass/ink/muted/edge-hue) — plain ink
+        // rather than inventing an unauthorized color for one rare state.
+        <p className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+          {tagWrite.error_message}
+        </p>
+      )}
+      <div className="flex gap-[16px]">
+        {tagWrite.status === 'pending_review' && <LinkButton onClick={onApprove}>approve</LinkButton>}
+        {tagWrite.status === 'written' && <LinkButton onClick={onRevert}>revert</LinkButton>}
+      </div>
+    </div>
+  )
 }
 
 export default function HygieneView({
@@ -41,22 +170,30 @@ export default function HygieneView({
 }) {
   const [items, setItems] = useState<WorklistItem[] | null>(null)
   const [filter, setFilter] = useState<'all' | WorklistItem['type']>('all')
+  const [tagWrites, setTagWrites] = useState<TagWrite[] | null>(null)
 
-  const load = useCallback(() => {
+  const loadWorklist = useCallback(() => {
     fetch(`${API}/hygiene/worklist`)
       .then((r) => r.json())
       .then(setItems)
   }, [])
 
+  const loadTagWrites = useCallback(() => {
+    fetch(`${API}/tag-writes`)
+      .then((r) => r.json())
+      .then(setTagWrites)
+  }, [])
+
   useEffect(() => {
-    load()
-  }, [load])
+    loadWorklist()
+    loadTagWrites()
+  }, [loadWorklist, loadTagWrites])
 
   // Resolving a fuzzy-pending match (merge-overrides.ts) or an enrichment
   // job finishing (worker.ts) both broadcast hygiene:changed — plus scan
-  // events, since a re-scan can add/clear missing_file rows. No manual
-  // refresh needed for any of the three worklist categories.
-  useWsEvent(['hygiene:changed', 'scan:done', 'scan:file'], load)
+  // events, since a re-scan can add/clear missing_file rows.
+  useWsEvent(['hygiene:changed', 'scan:done', 'scan:file'], loadWorklist)
+  useWsEvent(['tag-write:written', 'tag-write:reverted'], loadTagWrites)
 
   const resolveFuzzy = async (fileId: number, forcedRecordingNodeId: number | null) => {
     await fetch(`${API}/merge-overrides`, {
@@ -64,115 +201,84 @@ export default function HygieneView({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fileId, forcedRecordingNodeId }),
     })
-    load()
+    loadWorklist()
+  }
+
+  const approveTagWrite = async (id: number) => {
+    await fetch(`${API}/tag-writes/${id}/approve`, { method: 'POST' })
+    loadTagWrites()
+  }
+
+  const revertTagWrite = async (id: number) => {
+    await fetch(`${API}/tag-writes/${id}/revert`, { method: 'POST' })
+    loadTagWrites()
   }
 
   const visible = (items ?? []).filter((i) => filter === 'all' || i.type === filter)
+  const pendingTagWrites = (tagWrites ?? []).filter((t) => t.status !== 'reverted')
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(10,10,10,0.97)',
-        color: '#fff',
-        fontFamily: 'monospace',
-        fontSize: 13,
-        padding: 24,
-        overflowY: 'auto',
-        zIndex: 30,
-      }}
-    >
-      <button
-        onClick={onClose}
-        style={{ float: 'right', background: 'none', border: 'none', color: '#fff', cursor: 'pointer', fontSize: 16 }}
-      >
-        ✕
-      </button>
-      <h2 style={{ marginTop: 0 }}>Library hygiene</h2>
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {(['all', 'fuzzy_pending', 'enrichment_flag', 'missing_file'] as const).map((f) => (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-[var(--color-canvas)]/90 p-[60px]">
+      <Surface className="flex max-h-full w-full max-w-[900px] flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-divider)] px-[var(--spacing-panel)] py-[21px]">
+          <h2 className="text-[length:var(--text-base)] font-normal text-[var(--color-muted)]">maintenance</h2>
           <button
-            key={f}
-            onClick={() => setFilter(f)}
-            style={{
-              padding: '4px 10px',
-              fontFamily: 'monospace',
-              fontSize: 12,
-              background: filter === f ? '#fff' : 'rgba(255,255,255,0.1)',
-              color: filter === f ? '#111' : '#fff',
-              border: 'none',
-              cursor: 'pointer',
-            }}
+            type="button"
+            onClick={onClose}
+            aria-label="Close maintenance"
+            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-ink)]"
           >
-            {f === 'all' ? 'all' : TYPE_LABEL[f]}
+            <Icon name="cancel" size={24} />
           </button>
-        ))}
-      </div>
+        </div>
 
-      {items === null ? (
-        <div>loading…</div>
-      ) : visible.length === 0 ? (
-        <div style={{ opacity: 0.6 }}>Nothing needs attention.</div>
-      ) : (
-        <table style={{ borderCollapse: 'collapse', width: '100%', maxWidth: 900 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', opacity: 0.6 }}>
-              <th style={{ padding: 4 }}>type</th>
-              <th style={{ padding: 4 }}>node</th>
-              <th style={{ padding: 4 }}>detail</th>
-              <th style={{ padding: 4 }}>action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((item, i) => (
-              <tr key={i} style={{ borderTop: '1px solid #333' }}>
-                <td style={{ padding: 4, opacity: 0.6 }}>{TYPE_LABEL[item.type]}</td>
-                <td style={{ padding: 4 }}>
-                  <button style={linkStyle} onClick={() => onSelectNode(item.nodeId)}>
-                    {item.nodeTitle}
-                  </button>
-                </td>
-                <td style={{ padding: 4, maxWidth: 400 }}>
-                  {item.type === 'fuzzy_pending' && (
-                    <>
-                      looks like{' '}
-                      <button style={linkStyle} onClick={() => onSelectNode(item.candidateNodeId)}>
-                        {item.candidateTitle}
-                      </button>
-                    </>
-                  )}
-                  {item.type === 'enrichment_flag' && <span style={{ wordBreak: 'break-word' }}>{item.note}</span>}
-                  {item.type === 'missing_file' && (
-                    <span style={{ wordBreak: 'break-all', opacity: 0.7 }}>
-                      {item.filePath} (since {item.missingSince})
-                    </span>
-                  )}
-                </td>
-                <td style={{ padding: 4 }}>
-                  {item.type === 'fuzzy_pending' && (
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <button
-                        onClick={() => void resolveFuzzy(item.fileId, item.candidateNodeId)}
-                        style={{ fontFamily: 'monospace', fontSize: 11 }}
-                      >
-                        merge
-                      </button>
-                      <button
-                        onClick={() => void resolveFuzzy(item.fileId, null)}
-                        style={{ fontFamily: 'monospace', fontSize: 11 }}
-                      >
-                        keep separate
-                      </button>
-                    </div>
-                  )}
-                </td>
-              </tr>
+        <div className="min-h-0 flex-1 overflow-y-auto px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
+          <div className="flex gap-[20px] pt-[15px]">
+            {(['all', 'fuzzy_pending', 'enrichment_flag', 'missing_file'] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFilter(f)}
+                className={`text-[length:var(--text-base)] transition-colors duration-150 ${
+                  filter === f ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-ink)]'
+                }`}
+              >
+                {f === 'all' ? 'all' : TYPE_LABEL[f]}
+              </button>
             ))}
-          </tbody>
-        </table>
-      )}
+          </div>
+
+          {items === null ? (
+            <p className="pt-[24px] text-[length:var(--text-base)] text-[var(--color-muted)]">loading…</p>
+          ) : visible.length === 0 ? (
+            // A success state, not an empty one — DESIGN.md "No maintenance
+            // items ... should read as calm, not empty."
+            <p className="pt-[24px] text-[length:var(--text-base)] text-[var(--color-muted)]">nothing needs attention</p>
+          ) : (
+            <div className="mt-[8px]">
+              {visible.map((item, i) => (
+                <WorklistRow key={i} item={item} onSelectNode={onSelectNode} onResolveFuzzy={resolveFuzzy} />
+              ))}
+            </div>
+          )}
+
+          {pendingTagWrites.length > 0 && (
+            <>
+              <SectionHeader title="tag writes" />
+              <div className="mt-[8px]">
+                {pendingTagWrites.map((tw) => (
+                  <TagWriteRow
+                    key={tw.id}
+                    tagWrite={tw}
+                    onApprove={() => approveTagWrite(tw.id)}
+                    onRevert={() => revertTagWrite(tw.id)}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </Surface>
     </div>
   )
 }
