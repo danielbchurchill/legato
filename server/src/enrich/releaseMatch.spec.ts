@@ -29,23 +29,44 @@ function local(overrides: Partial<LocalAlbumInput> = {}): LocalAlbumInput {
 // The real Blonde on Blonde tracklist — fetched live against MusicBrainz
 // while building this (GET /release/{mbid}?inc=recordings+...) to confirm
 // the actual response shape rather than guessing at it.
+function track(
+  position: number,
+  recordingMbid: string,
+  durationMs: number,
+  overrides: Partial<Pick<MbReleaseDetail["tracks"][number], "isrc" | "credits">> = {},
+): MbReleaseDetail["tracks"][number] {
+  return { position, recordingMbid, durationMs, isrc: null, credits: [], ...overrides };
+}
+
 const REAL_TRACKLIST: MbReleaseDetail = {
   mbid: "acc2a08d-5c3d-3f16-a5aa-20824c957f09",
+  status: null,
+  country: null,
+  barcode: null,
+  asin: null,
+  disambiguation: null,
+  language: null,
+  script: null,
+  format: null,
+  releaseGroupMbid: null,
+  firstReleaseDate: null,
+  labelName: null,
+  catalogNumber: null,
   tracks: [
-    { position: 1, recordingMbid: "469c2986-08a7-4085-ad19-39491bbfb457", durationMs: 277893 },
-    { position: 2, recordingMbid: "5a27b48c-c688-42fd-b68c-73f4cdb102b9", durationMs: 229506 },
-    { position: 3, recordingMbid: "a9a1c164-f261-4072-96b4-ef4e4f1f4608", durationMs: 454066 },
-    { position: 4, recordingMbid: "40bd0f3a-180d-43a2-b912-25b0ec55ac78", durationMs: 296493 },
-    { position: 5, recordingMbid: "123e4be7-73a3-4f0e-87da-5be68c5abbf6", durationMs: 188440 },
-    { position: 6, recordingMbid: "589ec3c9-1345-40ce-b379-53288bbd1982", durationMs: 425893 },
-    { position: 7, recordingMbid: "bafb0720-3c1a-4f67-863d-9c37f03f15da", durationMs: 240240 },
-    { position: 8, recordingMbid: "80b48ecb-559a-4046-9704-ff030b979120", durationMs: 294160 },
-    { position: 9, recordingMbid: "606fb070-829c-455b-84bb-e2c445dd2e29", durationMs: 209533 },
-    { position: 10, recordingMbid: "b15b6425-519a-4ed1-be5b-9b21be35715b", durationMs: 306506 },
-    { position: 11, recordingMbid: "243e222a-d7d6-49ed-934f-b5717c4a73fa", durationMs: 297360 },
-    { position: 12, recordingMbid: "2d0038f2-59ff-4f35-9e83-0e0bf351be27", durationMs: 276800 },
-    { position: 13, recordingMbid: "798d1127-6e7c-4cca-8f59-e320c3f9c39d", durationMs: 216933 },
-    { position: 14, recordingMbid: "d2f46fbf-64b1-4b66-acb5-62eee4b10c15", durationMs: 680173 },
+    track(1, "469c2986-08a7-4085-ad19-39491bbfb457", 277893),
+    track(2, "5a27b48c-c688-42fd-b68c-73f4cdb102b9", 229506),
+    track(3, "a9a1c164-f261-4072-96b4-ef4e4f1f4608", 454066),
+    track(4, "40bd0f3a-180d-43a2-b912-25b0ec55ac78", 296493),
+    track(5, "123e4be7-73a3-4f0e-87da-5be68c5abbf6", 188440),
+    track(6, "589ec3c9-1345-40ce-b379-53288bbd1982", 425893),
+    track(7, "bafb0720-3c1a-4f67-863d-9c37f03f15da", 240240),
+    track(8, "80b48ecb-559a-4046-9704-ff030b979120", 294160),
+    track(9, "606fb070-829c-455b-84bb-e2c445dd2e29", 209533),
+    track(10, "b15b6425-519a-4ed1-be5b-9b21be35715b", 306506),
+    track(11, "243e222a-d7d6-49ed-934f-b5717c4a73fa", 297360),
+    track(12, "2d0038f2-59ff-4f35-9e83-0e0bf351be27", 276800),
+    track(13, "798d1127-6e7c-4cca-8f59-e320c3f9c39d", 216933),
+    track(14, "d2f46fbf-64b1-4b66-acb5-62eee4b10c15", 680173),
   ],
 };
 

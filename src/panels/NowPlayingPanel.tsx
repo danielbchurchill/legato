@@ -94,6 +94,13 @@ const EDGE_VERB: Record<string, string> = {
   collaborated_with: 'Collaborated with',
   same_artist: 'Same artist as',
   same_label: 'Same label as',
+  mixed_by: 'Mixed by',
+  mastered_by: 'Mastered by',
+  arranged_by: 'Arranged by',
+  conducted_by: 'Conducted by',
+  remixed_by: 'Remixed by',
+  dj_mixed_by: 'DJ-mixed by',
+  performed_credit: 'Performed by',
 }
 
 const linkClass =

@@ -216,46 +216,82 @@ export async function searchRelease(input: ReleaseSearchInput): Promise<MbReleas
   }));
 }
 
+// M-8: an artist relation attached to a recording — producer, engineer,
+// mix, mastering, conductor, arranger, remixer, DJ-mixer are typically bare
+// (attributes: []); vocal/instrument/performer relations carry the actual
+// instrument or vocal part in attributes (["electric guitar"]), which is
+// what a bare "performer" credit can't express on its own.
+export type MbCredit = { type: string; artistName: string; attributes: string[] };
+
 export type MbReleaseTrack = {
   position: number;
   recordingMbid: string;
   durationMs: number | null;
+  isrc: string | null;
+  credits: MbCredit[];
 };
 
 export type MbReleaseDetail = {
   mbid: string;
+  status: string | null;
+  country: string | null;
+  barcode: string | null;
+  asin: string | null;
+  disambiguation: string | null;
+  language: string | null;
+  script: string | null;
+  format: string | null;
+  releaseGroupMbid: string | null;
+  firstReleaseDate: string | null;
+  labelName: string | null;
+  catalogNumber: string | null;
   tracks: MbReleaseTrack[];
 };
 
+type RawArtistRel = {
+  type: string;
+  "target-type": string;
+  artist?: { name: string };
+  attributes?: string[];
+};
 type RawDetailTrack = {
   position: number;
   length?: number | null;
-  recording?: { id: string; length?: number | null };
+  recording?: { id: string; length?: number | null; isrcs?: string[]; relations?: RawArtistRel[] };
 };
-type RawDetailMedium = { tracks?: RawDetailTrack[] };
-type RawReleaseDetail = { id: string; media?: RawDetailMedium[] };
+type RawDetailMedium = { format?: string | null; tracks?: RawDetailTrack[] };
+type RawLabelInfo = { "catalog-number"?: string | null; label?: { name?: string | null } };
+type RawReleaseGroup = { id?: string; "first-release-date"?: string | null };
+export type RawReleaseDetail = {
+  id: string;
+  status?: string | null;
+  country?: string | null;
+  barcode?: string | null;
+  asin?: string | null;
+  disambiguation?: string | null;
+  "text-representation"?: { language?: string | null; script?: string | null };
+  "release-group"?: RawReleaseGroup;
+  "label-info"?: RawLabelInfo[];
+  media?: RawDetailMedium[];
+};
 
-// inc=recordings+artist-credits+labels+release-groups is the one request
-// that replaces N per-recording lookups — every track's real recording
-// MBID comes back in a single call. artist-credits/labels/release-groups
-// beyond what's used here are exactly the wider field harvest M-8 needs;
-// fetched now so that work doesn't cost a second request per album later.
-export async function fetchReleaseDetail(mbid: string): Promise<MbReleaseDetail | null> {
-  await throttle();
-
-  const url = `${API_ROOT}/release/${mbid}?inc=recordings+artist-credits+labels+release-groups&fmt=json`;
-  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
-  if (res.status === 404) return null;
-  if (!res.ok) {
-    throw new Error(`MusicBrainz release lookup failed: ${res.status} ${res.statusText}`);
-  }
-
-  const data = (await res.json()) as RawReleaseDetail;
+// Pure parsing, split out from the fetch so M-8's field mapping is
+// unit-testable against a captured real response (no network, no
+// database) rather than only exercised live. Real shape confirmed against
+// a live GET /release/{mbid}?inc=...recording-level-rels+artist-rels+isrcs
+// while building this (a Beatles "Abbey Road" release): recording.relations[]
+// carries type/artist/attributes, recording.isrcs[] sits alongside it, and
+// label-info[]/release-group/text-representation are exactly the shape
+// used below.
+export function parseReleaseDetail(data: RawReleaseDetail): MbReleaseDetail {
   const tracks: MbReleaseTrack[] = [];
   for (const medium of data.media ?? []) {
     for (const t of medium.tracks ?? []) {
       const recordingMbid = t.recording?.id;
       if (recordingMbid == null) continue;
+      const credits: MbCredit[] = (t.recording?.relations ?? [])
+        .filter((r) => r["target-type"] === "artist" && r.artist?.name)
+        .map((r) => ({ type: r.type, artistName: r.artist!.name, attributes: r.attributes ?? [] }));
       tracks.push({
         position: t.position,
         // The track's own length can differ slightly from the recording's
@@ -263,11 +299,49 @@ export async function fetchReleaseDetail(mbid: string): Promise<MbReleaseDetail 
         // what actually played on *this* release, so it wins when both exist.
         durationMs: t.length ?? t.recording?.length ?? null,
         recordingMbid,
+        isrc: t.recording?.isrcs?.[0] ?? null,
+        credits,
       });
     }
   }
 
-  return { mbid: data.id, tracks };
+  const labelInfo = data["label-info"]?.[0];
+
+  return {
+    mbid: data.id,
+    status: data.status ?? null,
+    country: data.country ?? null,
+    barcode: data.barcode ?? null,
+    asin: data.asin ?? null,
+    disambiguation: data.disambiguation || null,
+    language: data["text-representation"]?.language ?? null,
+    script: data["text-representation"]?.script ?? null,
+    format: data.media?.[0]?.format ?? null,
+    releaseGroupMbid: data["release-group"]?.id ?? null,
+    firstReleaseDate: data["release-group"]?.["first-release-date"] ?? null,
+    labelName: labelInfo?.label?.name ?? null,
+    catalogNumber: labelInfo?.["catalog-number"] ?? null,
+    tracks,
+  };
+}
+
+// inc=recordings+artist-credits+labels+release-groups is the one request
+// that replaces N per-recording lookups — every track's real recording
+// MBID comes back in a single call. recording-level-rels+artist-rels+isrcs
+// are M-8's wider field harvest, fetched in this same request rather than
+// a second one per album.
+export async function fetchReleaseDetail(mbid: string): Promise<MbReleaseDetail | null> {
+  await throttle();
+
+  const url = `${API_ROOT}/release/${mbid}?inc=recordings+artist-credits+labels+release-groups+recording-level-rels+artist-rels+isrcs&fmt=json`;
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`MusicBrainz release lookup failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = (await res.json()) as RawReleaseDetail;
+  return parseReleaseDetail(data);
 }
 
 // Cover Art Archive keys images by release (or release-group), never by

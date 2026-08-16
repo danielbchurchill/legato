@@ -19,6 +19,14 @@ const EDGE_VERB: Record<string, string> = {
   collaborated_with: "Collaborated with",
   same_artist: "Same artist as",
   same_label: "Same label as",
+  // M-8: MusicBrainz relation types match/edges.ts's local-tag-only pass
+  // never had a use for.
+  mixed_by: "Mixed by",
+  mastered_by: "Mastered by",
+  arranged_by: "Arranged by",
+  conducted_by: "Conducted by",
+  remixed_by: "Remixed by",
+  dj_mixed_by: "DJ-mixed by",
 };
 
 // Template-based, not an LLM call — see Legato.md's article-view spec.
@@ -35,17 +43,27 @@ export function generateFacts(db: Database.Database, nodeId: number): Fact[] {
 
   const facts: Fact[] = [];
 
+  // M-8: source widened from 'local' alone to include 'musicbrainz' — the
+  // wider field harvest's credit edges (produced_by/engineered_by/etc. from
+  // real MusicBrainz relations, not just local tags) were otherwise
+  // written to the graph and never surfaced anywhere.
   const outgoing = db
     .prepare(
-      `SELECT e.type, e.to_node AS target_id, n.title, n.type AS target_type
+      `SELECT e.type, e.label, e.to_node AS target_id, n.title, n.type AS target_type
        FROM edges e JOIN nodes n ON n.id = e.to_node
-       WHERE e.from_node = ? AND e.source = 'local'
+       WHERE e.from_node = ? AND e.source IN ('local', 'musicbrainz')
        ORDER BY e.type`,
     )
-    .all(nodeId) as { type: string; target_id: number; title: string; target_type: string }[];
+    .all(nodeId) as { type: string; label: string | null; target_id: number; title: string; target_type: string }[];
 
   for (const edge of outgoing) {
-    const verb = EDGE_VERB[edge.type] ?? edge.type;
+    // performed_credit carries the actual instrument/vocal part in its own
+    // label (e.g. "electric guitar") rather than a fixed verb — no single
+    // EDGE_VERB entry could say "Guitar by" and "Vocals by" both.
+    const verb =
+      edge.type === "performed_credit" && edge.label
+        ? `${edge.label[0].toUpperCase()}${edge.label.slice(1)} by`
+        : (EDGE_VERB[edge.type] ?? edge.type);
     facts.push({ text: `${verb} ${edge.title}`, targetNodeId: edge.target_id, groupType: edge.type });
   }
 

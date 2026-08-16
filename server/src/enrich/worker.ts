@@ -10,6 +10,7 @@ import {
   searchRelease,
   type RecordingSearchInput,
 } from "./mbClient.js";
+import { applyCredits, recordIsrc, recordReleaseFields } from "./credits.js";
 import { enqueueCoverArtLookupIfNeeded } from "./queue.js";
 import { assignTracks, pickBestRelease, scoreReleaseCandidate, type LocalAlbumInput, type LocalTrack } from "./releaseMatch.js";
 import { looksSuspicious } from "./sanityCheck.js";
@@ -202,7 +203,13 @@ async function tryAlbumMatch(db: Database.Database, targetNodeId: number, input:
 
   const confidence = scoreReleaseCandidate(localAlbum, best);
   const fileToNode = new Map(siblings.map((s) => [s.fileId, s.nodeId]));
+  // M-8: the same fetchReleaseDetail call that resolves each track's
+  // recording MBID already carries its credits/ISRC and the release's own
+  // identifiers — join back to it by recording MBID rather than a second
+  // request.
+  const trackByMbid = new Map(detail.tracks.map((t) => [t.recordingMbid, t]));
   let matchedTarget = false;
+  let releaseNodeId: number | null = null;
   for (const { fileId, recordingMbid } of assignments) {
     const nodeId = fileToNode.get(fileId);
     if (nodeId == null) continue;
@@ -213,9 +220,22 @@ async function tryAlbumMatch(db: Database.Database, targetNodeId: number, input:
       `UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now')
        WHERE node_id = ? AND job_type = 'recording_lookup' AND status IN ('queued','running')`,
     ).run(nodeId);
+
+    const track = trackByMbid.get(recordingMbid);
+    if (track) {
+      applyCredits(db, nodeId, track.credits);
+      recordIsrc(db, nodeId, track.isrc);
+    }
+    if (releaseNodeId == null) {
+      const resolved = coverTargetNode(db, nodeId);
+      if (resolved !== nodeId) releaseNodeId = resolved;
+    }
+
     broadcast("hygiene:changed", { nodeId });
     if (nodeId === targetNodeId) matchedTarget = true;
   }
+
+  if (releaseNodeId != null) recordReleaseFields(db, releaseNodeId, detail);
 
   return matchedTarget;
 }

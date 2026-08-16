@@ -75,6 +75,32 @@ describe("generateFacts", () => {
     expect(albumFacts).toContainEqual({ text: "Same label as Let It Be", targetNodeId: albumB, groupType: "same_label" });
   });
 
+  it("includes musicbrainz-sourced edges too — M-8's credit relations, not just local tags", () => {
+    const recording = makeNode("recording", "Come Together");
+    const producer = makeNode("credit", "George Martin");
+    addEdge(recording, producer, "produced_by", "musicbrainz");
+
+    expect(generateFacts(db, recording)).toContainEqual({
+      text: "Produced by George Martin",
+      targetNodeId: producer,
+      groupType: "produced_by",
+    });
+  });
+
+  it("phrases a performed_credit edge using its own label, since one verb can't cover every instrument", () => {
+    const recording = makeNode("recording", "Come Together");
+    const guitarist = makeNode("credit", "George Harrison");
+    db.prepare(
+      "INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, 'performed_credit', 'musicbrainz', ?)",
+    ).run(recording, guitarist, "electric guitar");
+
+    expect(generateFacts(db, recording)).toContainEqual({
+      text: "Electric guitar by George Harrison",
+      targetNodeId: guitarist,
+      groupType: "performed_credit",
+    });
+  });
+
   it("ignores manual edges when generating facts (local edges only)", () => {
     const recording = makeNode("recording", "Yesterday");
     const noteNode = makeNode("recording", "Blackbird");
