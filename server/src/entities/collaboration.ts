@@ -42,6 +42,63 @@ export function computeArtistCollaborations(performerEdges: { fromNode: number; 
   return pairEdges(artistsByRecording.values(), "collaborated_with");
 }
 
+// G-7: 20 artists, 6 collaborated_with edges in the real library — "shared
+// a recording" is too narrow a bar to make the artists graph worth
+// switching to. Three more signals, each folded into the same
+// collaborated_with type rather than a distinct one: the artists graph is
+// answering "is there a real tie here", not which kind. recomputeCollaborationEdges
+// dedupes the combined result, so a pair connected by more than one signal
+// still produces exactly one edge, the same "one edge no matter how many
+// groups" rule pairEdges already applies within a single call.
+export type CreditedRecording = { recordingNodeId: number; creditNodeId: number };
+
+export function computeArtistAffinities(
+  albums: AlbumForRelations[],
+  albumLabel: Map<number, number | null>,
+  albumEraDecade: Map<number, number | null>,
+  performerEdges: { fromNode: number; toNode: number }[],
+  creditEdges: CreditedRecording[],
+): CollaborationEdge[] {
+  const byLabel = new Map<number, number[]>();
+  const byEra = new Map<number, number[]>();
+  for (const album of albums) {
+    if (album.primaryArtistNodeId == null) continue;
+    const labelId = albumLabel.get(album.nodeId);
+    if (labelId != null) {
+      const list = byLabel.get(labelId);
+      if (list) list.push(album.primaryArtistNodeId);
+      else byLabel.set(labelId, [album.primaryArtistNodeId]);
+    }
+    const era = albumEraDecade.get(album.nodeId);
+    if (era != null) {
+      const list = byEra.get(era);
+      if (list) list.push(album.primaryArtistNodeId);
+      else byEra.set(era, [album.primaryArtistNodeId]);
+    }
+  }
+
+  // Same producer/engineer credit on two artists' recordings — built from
+  // the same performer edges computeArtistCollaborations reads, joined
+  // against whichever recordings a credit (M-8's produced_by/engineered_by,
+  // or a local one) touches.
+  const artistsByRecording = new Map<number, number[]>();
+  for (const e of performerEdges) {
+    const list = artistsByRecording.get(e.fromNode);
+    if (list) list.push(e.toNode);
+    else artistsByRecording.set(e.fromNode, [e.toNode]);
+  }
+  const byCredit = new Map<number, number[]>();
+  for (const credit of creditEdges) {
+    const artists = artistsByRecording.get(credit.recordingNodeId);
+    if (!artists) continue;
+    const list = byCredit.get(credit.creditNodeId);
+    if (list) list.push(...artists);
+    else byCredit.set(credit.creditNodeId, [...artists]);
+  }
+
+  return pairEdges([...byLabel.values(), ...byEra.values(), ...byCredit.values()], "collaborated_with");
+}
+
 export type AlbumForRelations = { nodeId: number; primaryArtistNodeId: number | null };
 
 // Two albums are tied by same_artist when they share a primary artist
@@ -114,6 +171,22 @@ export function getAlbumLabelMap(db: Database.Database): Map<number, number | nu
   return albumLabel;
 }
 
+// Global dedup across every source that can produce a collaborated_with
+// edge (direct performer co-occurrence, shared label, shared era, shared
+// credit) — pairEdges only dedupes within its own call, and these come
+// from three separate calls now.
+function dedupeEdges(edges: CollaborationEdge[]): CollaborationEdge[] {
+  const seen = new Set<string>();
+  const result: CollaborationEdge[] = [];
+  for (const e of edges) {
+    const key = `${e.fromNode}:${e.toNode}:${e.type}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(e);
+  }
+  return result;
+}
+
 export function recomputeCollaborationEdges(db: Database.Database): void {
   const performerEdges = db
     .prepare(
@@ -121,14 +194,26 @@ export function recomputeCollaborationEdges(db: Database.Database): void {
     )
     .all() as { fromNode: number; toNode: number }[];
 
-  const albums = db.prepare("SELECT node_id AS nodeId, primary_artist_node_id AS primaryArtistNodeId FROM albums").all() as {
-    nodeId: number;
-    primaryArtistNodeId: number | null;
-  }[];
+  const albums = db
+    .prepare("SELECT node_id AS nodeId, primary_artist_node_id AS primaryArtistNodeId, year_min AS yearMin FROM albums")
+    .all() as { nodeId: number; primaryArtistNodeId: number | null; yearMin: number | null }[];
 
   const albumLabel = getAlbumLabelMap(db);
+  const albumEraDecade = new Map<number, number | null>(
+    albums.map((a) => [a.nodeId, a.yearMin != null ? Math.floor(a.yearMin / 10) * 10 : null]),
+  );
 
-  const edges = [...computeArtistCollaborations(performerEdges), ...computeAlbumRelations(albums, albumLabel)];
+  const creditEdges = db
+    .prepare(
+      "SELECT from_node AS recordingNodeId, to_node AS creditNodeId FROM edges WHERE type IN ('produced_by', 'engineered_by')",
+    )
+    .all() as CreditedRecording[];
+
+  const edges = dedupeEdges([
+    ...computeArtistCollaborations(performerEdges),
+    ...computeArtistAffinities(albums, albumLabel, albumEraDecade, performerEdges, creditEdges),
+    ...computeAlbumRelations(albums, albumLabel),
+  ]);
 
   const applyAll = db.transaction(() => {
     db.prepare("DELETE FROM edges WHERE type IN ('collaborated_with', 'same_artist', 'same_label')").run();

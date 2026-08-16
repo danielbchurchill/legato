@@ -37,11 +37,31 @@ export function nodesRoutes(db: Database.Database) {
       // has_cover lets the canvas decide which nodes to render as artwork
       // without probing the cover endpoint once per node and eating a 404 for
       // every node that never had art.
+      //
+      // G-7: a straight EXISTS against this node's own id was always false
+      // for a recording (art attaches to its release) or an artist (no
+      // cover_art row of its own, ever) — the same class of bug P-4 fixed
+      // for similarity results. Mirrors cover/extract.ts's coverTargetNode
+      // resolution chain in SQL rather than one round trip per node: direct
+      // art, then a recording's release, then (new) an artist's most-
+      // represented album. "Any album by this artist has art" rather than
+      // specifically the highest-track_count one — a looser but cheap
+      // proxy; the actual image request (coverTargetNode) picks the exact
+      // one, and CoverArt.tsx already 404s to a blank block gracefully on
+      // any mismatch.
       return db
         .prepare(
           `SELECT n.id, n.type, n.title, n.mbid, r.canonical_duration_ms,
                   p.seed_x, p.seed_y, p.user_x, p.user_y,
-                  EXISTS (SELECT 1 FROM cover_art ca WHERE ca.node_id = n.id) AS has_cover
+                  EXISTS (
+                    SELECT 1 FROM cover_art ca WHERE ca.node_id = n.id
+                    UNION
+                    SELECT 1 FROM cover_art ca
+                      JOIN edges e ON e.from_node = n.id AND e.type = 'appears_on' AND e.to_node = ca.node_id
+                    UNION
+                    SELECT 1 FROM cover_art ca
+                      JOIN albums alb ON alb.primary_artist_node_id = n.id AND alb.node_id = ca.node_id
+                  ) AS has_cover
            FROM nodes n
            JOIN positions p ON p.node_id = n.id AND p.granularity = ?
            LEFT JOIN recordings r ON r.node_id = n.id

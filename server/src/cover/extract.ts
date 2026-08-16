@@ -70,11 +70,26 @@ export async function findFolderArt(audioFilePath: string): Promise<{ path: stri
 // should produce one cover, attached to the release they all point at. Loose
 // files with no album tag have no release node, so their art attaches to the
 // recording itself and still renders.
-export function coverTargetNode(db: Database.Database, recordingNodeId: number): number {
+//
+// G-7: an artist node has no release of its own to inherit art from via
+// appears_on (only recordings carry that edge) — widened to fall through to
+// their most-represented album (highest track_count, ties broken by lowest
+// node id, matching albums' own primary_artist_node_id doc comment) when
+// the recording path finds nothing. Safe for every other node type too:
+// node ids are unique across types, so a release or label id never
+// coincidentally matches an appears_on source or an albums.
+// primary_artist_node_id, and both queries simply return nothing for one —
+// falling through to the unchanged `?? nodeId` identity case.
+export function coverTargetNode(db: Database.Database, nodeId: number): number {
   const release = db
     .prepare("SELECT to_node FROM edges WHERE from_node = ? AND type = 'appears_on' LIMIT 1")
-    .get(recordingNodeId) as { to_node: number } | undefined;
-  return release?.to_node ?? recordingNodeId;
+    .get(nodeId) as { to_node: number } | undefined;
+  if (release) return release.to_node;
+
+  const album = db
+    .prepare("SELECT node_id FROM albums WHERE primary_artist_node_id = ? ORDER BY track_count DESC, node_id ASC LIMIT 1")
+    .get(nodeId) as { node_id: number } | undefined;
+  return album?.node_id ?? nodeId;
 }
 
 export function recordCover(

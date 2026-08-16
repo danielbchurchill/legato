@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { openDb } from "../db.js";
-import { computeAlbumRelations, computeArtistCollaborations, recomputeCollaborationEdges } from "./collaboration.js";
+import {
+  computeAlbumRelations,
+  computeArtistAffinities,
+  computeArtistCollaborations,
+  recomputeCollaborationEdges,
+} from "./collaboration.js";
 
 describe("computeArtistCollaborations", () => {
   it("pairs every artist sharing a recording exactly once", () => {
@@ -60,6 +65,70 @@ describe("computeAlbumRelations", () => {
     const edges = computeAlbumRelations(albums, albumLabel);
     expect(edges).toHaveLength(2);
     expect(edges.map((e) => e.type).sort()).toEqual(["same_artist", "same_label"]);
+  });
+});
+
+describe("computeArtistAffinities — G-7's wider artist-graph signals", () => {
+  it("connects two artists whose albums share a dominant label, even with no shared recording", () => {
+    const albums = [
+      { nodeId: 10, primaryArtistNodeId: 500 },
+      { nodeId: 11, primaryArtistNodeId: 600 },
+    ];
+    const albumLabel = new Map([
+      [10, 900],
+      [11, 900],
+    ]);
+    const edges = computeArtistAffinities(albums, albumLabel, new Map(), [], []);
+    expect(edges).toEqual([{ fromNode: 500, toNode: 600, type: "collaborated_with" }]);
+  });
+
+  it("connects two artists whose albums land in the same era (decade), even on different labels", () => {
+    const albums = [
+      { nodeId: 10, primaryArtistNodeId: 500 },
+      { nodeId: 11, primaryArtistNodeId: 600 },
+    ];
+    const albumEraDecade = new Map([
+      [10, 1960],
+      [11, 1960],
+    ]);
+    const edges = computeArtistAffinities(albums, new Map(), albumEraDecade, [], []);
+    expect(edges).toEqual([{ fromNode: 500, toNode: 600, type: "collaborated_with" }]);
+  });
+
+  it("does not connect artists whose albums land in different decades", () => {
+    const albums = [
+      { nodeId: 10, primaryArtistNodeId: 500 },
+      { nodeId: 11, primaryArtistNodeId: 600 },
+    ];
+    const albumEraDecade = new Map([
+      [10, 1960],
+      [11, 1990],
+    ]);
+    expect(computeArtistAffinities(albums, new Map(), albumEraDecade, [], [])).toEqual([]);
+  });
+
+  it("connects two artists whose recordings share a producer, even on different albums/labels/eras", () => {
+    const performerEdges = [
+      { fromNode: 1, toNode: 500 }, // recording 1 (artist 500)
+      { fromNode: 2, toNode: 600 }, // recording 2 (artist 600)
+    ];
+    const creditEdges = [
+      { recordingNodeId: 1, creditNodeId: 999 },
+      { recordingNodeId: 2, creditNodeId: 999 },
+    ];
+    const edges = computeArtistAffinities([], new Map(), new Map(), performerEdges, creditEdges);
+    expect(edges).toEqual([{ fromNode: 500, toNode: 600, type: "collaborated_with" }]);
+  });
+
+  it("ignores a credit on a recording with no performer edge to join against", () => {
+    const creditEdges = [{ recordingNodeId: 1, creditNodeId: 999 }];
+    expect(computeArtistAffinities([], new Map(), new Map(), [], creditEdges)).toEqual([]);
+  });
+
+  it("skips albums with no primary artist", () => {
+    const albums = [{ nodeId: 10, primaryArtistNodeId: null }];
+    const albumLabel = new Map([[10, 900]]);
+    expect(computeArtistAffinities(albums, albumLabel, new Map(), [], [])).toEqual([]);
   });
 });
 
@@ -131,6 +200,89 @@ describe("recomputeCollaborationEdges", () => {
     const count = db.prepare("SELECT COUNT(*) AS n FROM edges WHERE type = 'collaborated_with'").get() as {
       n: number;
     };
+    expect(count.n).toBe(1);
+  });
+
+  it("connects two artists via a shared producer credit end to end, with no shared recording", () => {
+    const db = openDb(":memory:");
+    const artistA = makeNode(db, "artist", "Artist A");
+    const artistB = makeNode(db, "artist", "Artist B");
+    const producer = makeNode(db, "credit", "Some Producer");
+    const trackA = makeNode(db, "recording", "Track A");
+    const trackB = makeNode(db, "recording", "Track B");
+
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+      trackA,
+      artistA,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+      trackB,
+      artistB,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'produced_by', 'musicbrainz')").run(
+      trackA,
+      producer,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'produced_by', 'musicbrainz')").run(
+      trackB,
+      producer,
+    );
+
+    recomputeCollaborationEdges(db);
+
+    const edge = db
+      .prepare("SELECT 1 FROM edges WHERE type = 'collaborated_with' AND from_node = ? AND to_node = ?")
+      .get(artistA, artistB);
+    expect(edge).toBeDefined();
+  });
+
+  it("produces exactly one edge for a pair connected by both direct collaboration and a shared label", () => {
+    const db = openDb(":memory:");
+    const artistA = makeNode(db, "artist", "Artist A");
+    const artistB = makeNode(db, "artist", "Artist B");
+    const recording = makeNode(db, "recording", "Duet");
+    const releaseA = makeNode(db, "release", "Solo Album A");
+    const releaseB = makeNode(db, "release", "Solo Album B");
+    const label = makeNode(db, "label", "Shared Label");
+
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+      recording,
+      artistA,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'featured_artist', 'local')").run(
+      recording,
+      artistB,
+    );
+    db.prepare(
+      "INSERT INTO albums (node_id, primary_artist_node_id, track_count) VALUES (?, ?, 1)",
+    ).run(releaseA, artistA);
+    db.prepare(
+      "INSERT INTO albums (node_id, primary_artist_node_id, track_count) VALUES (?, ?, 1)",
+    ).run(releaseB, artistB);
+    const soloA = makeNode(db, "recording", "Solo A Track");
+    const soloB = makeNode(db, "recording", "Solo B Track");
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+      soloA,
+      releaseA,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+      soloB,
+      releaseB,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'released_on', 'local')").run(
+      soloA,
+      label,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'released_on', 'local')").run(
+      soloB,
+      label,
+    );
+
+    recomputeCollaborationEdges(db);
+
+    const count = db
+      .prepare("SELECT COUNT(*) AS n FROM edges WHERE type = 'collaborated_with' AND from_node = ? AND to_node = ?")
+      .get(artistA, artistB) as { n: number };
     expect(count.n).toBe(1);
   });
 

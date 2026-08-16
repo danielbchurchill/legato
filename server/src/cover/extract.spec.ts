@@ -129,6 +129,35 @@ describe("cover attachment", () => {
     expect(coverTargetNode(db, rec)).toBe(rec);
   });
 
+  function artist(title: string): number {
+    return (
+      db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get(title) as { id: number }
+    ).id;
+  }
+
+  function album(title: string, primaryArtistNodeId: number, trackCount: number): number {
+    const node = release(title);
+    db.prepare(
+      "INSERT INTO albums (node_id, primary_artist_node_id, track_count) VALUES (?, ?, ?)",
+    ).run(node, primaryArtistNodeId, trackCount);
+    return node;
+  }
+
+  // G-7: an artist node has no appears_on edge of its own — falls through
+  // to their most-represented album (by track_count) instead.
+  it("resolves an artist to their most-represented album", () => {
+    const theBeatles = artist("The Beatles");
+    album("Please Please Me", theBeatles, 14);
+    const abbeyRoad = album("Abbey Road", theBeatles, 17);
+
+    expect(coverTargetNode(db, theBeatles)).toBe(abbeyRoad);
+  });
+
+  it("falls back to the artist's own id when they have no albums at all", () => {
+    const unknownArtist = artist("Nobody");
+    expect(coverTargetNode(db, unknownArtist)).toBe(unknownArtist);
+  });
+
   it("returns null when a node has no art at all", () => {
     expect(resolveCover(db, release("Nothing"))).toBeNull();
   });

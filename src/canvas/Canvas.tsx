@@ -54,6 +54,20 @@ const EDGE_COLOR: Record<string, string> = {
 }
 const EDGE_COLOR_FALLBACK = 'rgba(255,255,255,0.12)'
 
+/* G-6: 26 albums carry 103 same_artist edges (21 of those albums are one
+ * of two artists), so each artist's catalogue forms a near-complete
+ * subgraph — every album wired to every sibling, rendering as a solid mesh
+ * rather than the sparse, legible strands the mockup shows. Daniel's call:
+ * keep the edges (same_artist stays a real, followable relationship,
+ * unlike collapsing it to spatial-grouping-only) but mute them so density
+ * reads as proximity — a soft purple region where an artist's albums
+ * cluster — rather than noise. same_label is left at full strength: far
+ * sparser (not quadratic in the same way), so it stays legible on its own
+ * and doesn't need the same treatment. Mixed toward the dim tone once, at
+ * rest, via the same opaque-mixing helper G-2's hover-dim already uses —
+ * not a hover state, just a permanently quieter resting color. */
+const SAME_ARTIST_QUIET_MIX = 0.55
+
 /* Edges carry graph-space size 0.5 (syncGraph), but sigma scales rendered
  * edge thickness by its default zoomToSizeRatioFunction (Math.sqrt of the
  * camera ratio) — so as the camera ratio shrinks while zooming in, edges
@@ -363,7 +377,10 @@ function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], artEnab
     const edgeKey = `${from}->${to}::${edge.type}`
     wantedEdgeKeys.add(edgeKey)
     if (graph.hasEdge(edgeKey)) continue
-    graph.addEdgeWithKey(edgeKey, from, to, { size: 0.5, color: EDGE_COLOR[edge.type] ?? EDGE_COLOR_FALLBACK })
+    const baseColor = EDGE_COLOR[edge.type] ?? EDGE_COLOR_FALLBACK
+    const color =
+      edge.type === 'same_artist' ? mixTowardDim(baseColor, DIMMED_EDGE_COLOR, SAME_ARTIST_QUIET_MIX) : baseColor
+    graph.addEdgeWithKey(edgeKey, from, to, { size: 0.5, color })
   }
 
   graph.forEachEdge((edgeKey) => {
