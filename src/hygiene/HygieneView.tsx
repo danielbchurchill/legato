@@ -20,11 +20,13 @@ type WorklistItem =
     }
   | { type: 'enrichment_flag'; nodeId: number; nodeTitle: string; note: string | null; updatedAt: string }
   | { type: 'missing_file'; fileId: number; filePath: string; nodeId: number; nodeTitle: string; missingSince: string }
+  | { type: 'wont_decode'; fileId: number; filePath: string; nodeId: number; nodeTitle: string; error: string; updatedAt: string }
 
 const TYPE_LABEL: Record<WorklistItem['type'], string> = {
   fuzzy_pending: 'possible duplicate',
   enrichment_flag: 'enrichment issue',
   missing_file: 'missing file',
+  wont_decode: "won't decode",
 }
 
 type FieldDiff = { field: string; oldValue: string | number | string[]; newValue: string | number | string[] }
@@ -174,6 +176,11 @@ function WorklistRow({
       {item.type === 'missing_file' && (
         <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
           {item.filePath} — missing since {item.missingSince}
+        </p>
+      )}
+      {item.type === 'wont_decode' && (
+        <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
+          {item.filePath} — {item.error}
         </p>
       )}
     </div>
@@ -329,7 +336,7 @@ export default function HygieneView({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
           <div className="flex gap-[20px] pt-[15px]">
-            {(['all', 'fuzzy_pending', 'enrichment_flag', 'missing_file'] as const).map((f) => (
+            {(['all', 'fuzzy_pending', 'enrichment_flag', 'missing_file', 'wont_decode'] as const).map((f) => (
               <button
                 key={f}
                 type="button"

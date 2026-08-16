@@ -96,7 +96,41 @@ describe("getWorklist", () => {
     expect(getWorklist(db, "enrichment_flag")).toEqual([]);
   });
 
-  it("aggregates all three categories when no type filter is given", () => {
+  it("surfaces a won't-decode file, and only the latest outcome per node (B-4)", () => {
+    const nodeId = makeNode("Leopard-Skin Pill-Box Hat");
+    const fileId = makeFile(nodeId, "/fake/leopard-skin.flac");
+    db.prepare(
+      "INSERT INTO field_provenance (node_id, field, value, source, note) VALUES (?, 'decode_error', 'Invalid data found when processing input', 'local', 'Invalid data found when processing input')",
+    ).run(nodeId);
+
+    const items = getWorklist(db, "wont_decode");
+    expect(items).toEqual([
+      {
+        type: "wont_decode",
+        fileId,
+        filePath: "/fake/leopard-skin.flac",
+        nodeId,
+        nodeTitle: "Leopard-Skin Pill-Box Hat",
+        error: "Invalid data found when processing input",
+        updatedAt: expect.any(String),
+      },
+    ]);
+  });
+
+  it("excludes a node whose latest backfill attempt actually decoded fine", () => {
+    const nodeId = makeNode("Fixed Later");
+    makeFile(nodeId, "/fake/fixed.flac");
+    db.prepare(
+      "INSERT INTO field_provenance (node_id, field, value, source, note) VALUES (?, 'decode_error', 'corrupt', 'local', 'corrupt')",
+    ).run(nodeId);
+    db.prepare("INSERT INTO field_provenance (node_id, field, value, source) VALUES (?, 'decode_error', NULL, 'local')").run(
+      nodeId,
+    );
+
+    expect(getWorklist(db, "wont_decode")).toEqual([]);
+  });
+
+  it("aggregates all four categories when no type filter is given", () => {
     const a = makeNode("A");
     const b = makeNode("a");
     makeFile(a, "/fake/a.flac", { match_source: "mbid" });
@@ -111,7 +145,13 @@ describe("getWorklist", () => {
       "INSERT INTO field_provenance (node_id, field, value, source, confidence, note) VALUES (?, 'mbid', NULL, 'musicbrainz', 0, 'no match')",
     ).run(flaggedNode);
 
+    const wontDecodeNode = makeNode("Won't Decode");
+    makeFile(wontDecodeNode, "/fake/wont-decode.flac");
+    db.prepare(
+      "INSERT INTO field_provenance (node_id, field, value, source, note) VALUES (?, 'decode_error', 'corrupt', 'local', 'corrupt')",
+    ).run(wontDecodeNode);
+
     const items = getWorklist(db);
-    expect(items.map((i) => i.type).sort()).toEqual(["enrichment_flag", "fuzzy_pending", "missing_file"]);
+    expect(items.map((i) => i.type).sort()).toEqual(["enrichment_flag", "fuzzy_pending", "missing_file", "wont_decode"]);
   });
 });

@@ -293,10 +293,12 @@ type WorklistItem =
   | { type: 'fuzzy_pending'; fileId: number; filePath: string; nodeId: number; nodeTitle: string; candidateNodeId: number; candidateTitle: string }
   | { type: 'enrichment_flag'; nodeId: number; nodeTitle: string; note: string | null; updatedAt: string }
   | { type: 'missing_file'; fileId: number; filePath: string; nodeId: number; nodeTitle: string; missingSince: string }
+  | { type: 'wont_decode'; fileId: number; filePath: string; nodeId: number; nodeTitle: string; error: string; updatedAt: string }
 
 const TYPE_LABEL: Record<WorklistItem['type'], string> = {
   fuzzy_pending: 'possible duplicate',
   enrichment_flag: 'enrichment issue',
+  wont_decode: "won't decode",
   missing_file: 'missing file',
 }
 

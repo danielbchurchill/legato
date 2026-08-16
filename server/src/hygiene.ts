@@ -11,7 +11,8 @@ export type WorklistItem =
       candidateTitle: string;
     }
   | { type: "enrichment_flag"; nodeId: number; nodeTitle: string; note: string | null; updatedAt: string }
-  | { type: "missing_file"; fileId: number; filePath: string; nodeId: number; nodeTitle: string; missingSince: string };
+  | { type: "missing_file"; fileId: number; filePath: string; nodeId: number; nodeTitle: string; missingSince: string }
+  | { type: "wont_decode"; fileId: number; filePath: string; nodeId: number; nodeTitle: string; error: string; updatedAt: string };
 
 // Aggregates every "needs a human" signal already produced elsewhere in
 // the pipeline: tier-3 fuzzy candidates (M2, never auto-merged),
@@ -101,6 +102,42 @@ export function getWorklist(db: Database.Database, typeFilter?: string): Worklis
         nodeId: r.node_id,
         nodeTitle: r.node_title,
         missingSince: r.missing_since,
+      });
+    }
+  }
+
+  if (!typeFilter || typeFilter === "wont_decode") {
+    // B-4: a real ffmpeg decode failure (waveform/backfill.ts) used to only
+    // reach a console.warn — a file that scans fine and will not play was
+    // invisible to the one screen built to surface exactly that. Same
+    // latest-row-per-node-per-field pattern as enrichment_flag above, just
+    // filtered the other direction: a failure writes the error as `value`,
+    // a later successful decode writes NULL, so the most recent row is
+    // whichever actually happened last.
+    const rows = db
+      .prepare(
+        `SELECT fp.node_id, n.title AS node_title, fp.value, fp.updated_at,
+                f.id AS file_id, f.file_path
+         FROM field_provenance fp
+         JOIN nodes n ON n.id = fp.node_id
+         JOIN files f ON f.recording_node_id = fp.node_id AND f.missing_since IS NULL
+         WHERE fp.field = 'decode_error' AND fp.value IS NOT NULL
+           AND fp.id = (
+             SELECT MAX(fp2.id) FROM field_provenance fp2
+             WHERE fp2.node_id = fp.node_id AND fp2.field = 'decode_error'
+           )
+         GROUP BY fp.node_id`,
+      )
+      .all() as { node_id: number; node_title: string; value: string; updated_at: string; file_id: number; file_path: string }[];
+    for (const r of rows) {
+      items.push({
+        type: "wont_decode",
+        fileId: r.file_id,
+        filePath: r.file_path,
+        nodeId: r.node_id,
+        nodeTitle: r.node_title,
+        error: r.value,
+        updatedAt: r.updated_at,
       });
     }
   }
