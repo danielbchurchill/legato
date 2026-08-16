@@ -59,6 +59,7 @@ describe("buildFeatureVector", () => {
       releaseType: null,
       decade: null,
       durationMs: null,
+      bpm: null,
       ...overrides,
     };
   }
@@ -101,6 +102,22 @@ describe("buildFeatureVector", () => {
     const anchor = input({ nodeId: 1, decade: 1970 });
     const near = input({ nodeId: 2, decade: 1980 });
     const far = input({ nodeId: 3, decade: 2020 });
+
+    const inputs = [anchor, near, far];
+    const clusters = new Map<number, number>();
+    const space = buildFeatureSpace(inputs, clusters);
+
+    const vAnchor = buildFeatureVector(anchor, space, clusters);
+    const vNear = buildFeatureVector(near, space, clusters);
+    const vFar = buildFeatureVector(far, space, clusters);
+
+    expect(cosineSimilarity(vAnchor, vNear)).toBeGreaterThan(cosineSimilarity(vAnchor, vFar));
+  });
+
+  it("gives closer bpm a higher similarity than distant bpm, all else equal (P-3's within-album discriminator)", () => {
+    const anchor = input({ nodeId: 1, bpm: 120 });
+    const near = input({ nodeId: 2, bpm: 124 });
+    const far = input({ nodeId: 3, bpm: 70 });
 
     const inputs = [anchor, near, far];
     const clusters = new Map<number, number>();

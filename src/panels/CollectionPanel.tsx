@@ -226,7 +226,7 @@ function OverviewBlock() {
   )
 }
 
-type SimilarityItem = { id: number; title: string; has_cover: number }
+type SimilarityItem = { id: number; title: string; has_cover: boolean }
 
 function SimilarityStrip({
   title,

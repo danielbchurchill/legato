@@ -58,6 +58,13 @@ function makeRecording(
   return recording;
 }
 
+function appearsOn(db: Database.Database, recording: number, release: number): void {
+  db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+    recording,
+    release,
+  );
+}
+
 describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () => {
   it("ranks a same-artist track above an unrelated one for 'more like this'", () => {
     const db = openDb(":memory:");
@@ -125,5 +132,62 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
     const dissimilar = findMostDissimilar(db, anchor, 2);
     expect(dissimilar).toHaveLength(2);
     for (const r of dissimilar) expect(dissimilarTracks).toContain(r.nodeId);
+  });
+
+  // P-2: the app opens on the albums graph, where selecting a release used
+  // to always return []. A release's vector is the centroid of its own
+  // recordings' — this exercises that a release anchor ranks *other
+  // releases*, never the recordings that fed the average.
+  it("gives releases a similarity vector by averaging their recordings, and ranks other releases", () => {
+    const db = openDb(":memory:");
+    const beatles = makeNode(db, "artist", "The Beatles");
+    const dylan = makeNode(db, "artist", "Bob Dylan");
+
+    const abbeyRoad = makeNode(db, "release", "Abbey Road");
+    const track1 = makeRecording(db, "Come Together", { artist: beatles, year: 1969, genre: ["rock"] });
+    const track2 = makeRecording(db, "Something", { artist: beatles, year: 1969, genre: ["rock"] });
+    appearsOn(db, track1, abbeyRoad);
+    appearsOn(db, track2, abbeyRoad);
+
+    const letItBe = makeNode(db, "release", "Let It Be");
+    const track3 = makeRecording(db, "Get Back", { artist: beatles, year: 1970, genre: ["rock"] });
+    appearsOn(db, track3, letItBe);
+
+    const blonde = makeNode(db, "release", "Blonde on Blonde");
+    const track4 = makeRecording(db, "Visions of Johanna", { artist: dylan, year: 1966, genre: ["folk"] });
+    appearsOn(db, track4, blonde);
+
+    recomputeSimilarityFeatures(db);
+
+    const similar = findMostSimilar(db, abbeyRoad, 5);
+    expect(similar.map((r) => r.nodeId)).not.toContain(track1);
+    expect(similar.map((r) => r.nodeId)).not.toContain(track2);
+    expect(similar[0].nodeId).toBe(letItBe); // same artist, closer decade
+    expect(similar.map((r) => r.nodeId)).toContain(blonde);
+  });
+
+  // P-3: three tracks off one record used to be nearly indistinguishable
+  // (genre/artist/label/type/decade identical), so "more like this" on a
+  // track could only ever answer "the rest of this album". Same-release
+  // candidates are excluded outright now.
+  it("excludes a track's own release from its 'more like this' candidates", () => {
+    const db = openDb(":memory:");
+    const beatles = makeNode(db, "artist", "The Beatles");
+
+    const abbeyRoad = makeNode(db, "release", "Abbey Road");
+    const anchor = makeRecording(db, "Taxman", { artist: beatles, year: 1969, genre: ["rock"] });
+    const sameRelease = makeRecording(db, "Here Comes the Sun", { artist: beatles, year: 1969, genre: ["rock"] });
+    appearsOn(db, anchor, abbeyRoad);
+    appearsOn(db, sameRelease, abbeyRoad);
+
+    const letItBe = makeNode(db, "release", "Let It Be");
+    const otherRelease = makeRecording(db, "Get Back", { artist: beatles, year: 1970, genre: ["rock"] });
+    appearsOn(db, otherRelease, letItBe);
+
+    recomputeSimilarityFeatures(db);
+
+    const similar = findMostSimilar(db, anchor, 5);
+    expect(similar.map((r) => r.nodeId)).not.toContain(sameRelease);
+    expect(similar.map((r) => r.nodeId)).toContain(otherRelease);
   });
 });

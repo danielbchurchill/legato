@@ -12,6 +12,7 @@ export type RecordingFeatureInput = {
   releaseType: string | null;
   decade: number | null;
   durationMs: number | null;
+  bpm: number | null;
 };
 
 export type FeatureSpace = {
@@ -22,6 +23,7 @@ export type FeatureSpace = {
   releaseTypes: string[];
   decadeRange: [number, number];
   durationRange: [number, number];
+  bpmRange: [number, number];
 };
 
 // Weights for each feature group's contribution to the final cosine
@@ -47,6 +49,14 @@ const WEIGHTS = {
   releaseType: 0.25,
   decade: 0.5,
   duration: 0.25,
+  // P-3: tracks off the same record used to be indistinguishable —
+  // genre/artist/label/type/decade are identical for every track on one
+  // release, so the only prior source of separation was duration at a
+  // low weight. Tempo is a real per-track characteristic (no DSP needed,
+  // it's a tag field files.bpm already carries) that varies within an
+  // album, so it earns a comparable weight to label/decade rather than
+  // duration's.
+  bpm: 0.5,
 };
 
 function buildVocabulary<T>(values: Iterable<T>): T[] {
@@ -115,6 +125,7 @@ export function buildFeatureSpace(
 
   const decades = inputs.map((i) => i.decade).filter((v): v is number => v != null);
   const durations = inputs.map((i) => i.durationMs).filter((v): v is number => v != null);
+  const bpms = inputs.map((i) => i.bpm).filter((v): v is number => v != null);
 
   return {
     genres,
@@ -124,6 +135,7 @@ export function buildFeatureSpace(
     releaseTypes,
     decadeRange: decades.length > 0 ? [Math.min(...decades), Math.max(...decades)] : [0, 0],
     durationRange: durations.length > 0 ? [Math.min(...durations), Math.max(...durations)] : [0, 0],
+    bpmRange: bpms.length > 0 ? [Math.min(...bpms), Math.max(...bpms)] : [0, 0],
   };
 }
 
@@ -170,6 +182,7 @@ export function buildFeatureVector(
     ),
     ...scaledScalar(input.decade, space.decadeRange).map((v) => v * WEIGHTS.decade),
     ...scaledScalar(input.durationMs, space.durationRange).map((v) => v * WEIGHTS.duration),
+    ...scaledScalar(input.bpm, space.bpmRange).map((v) => v * WEIGHTS.bpm),
   ];
 }
 
