@@ -1,7 +1,10 @@
 import type Database from "better-sqlite3";
 import { coverTargetNode, recordCover, resolveCover } from "../cover/extract.js";
 import { storeCover } from "../cover/store.js";
+import { computeFingerprint } from "../match/fingerprint.js";
 import { broadcast } from "../ws.js";
+import { ACOUSTID_API_KEY } from "../config.js";
+import { lookupFingerprint } from "./acoustid.js";
 import { fetchCaaFrontImage } from "./coverArchive.js";
 import {
   fetchReleaseDetail,
@@ -17,6 +20,13 @@ import { looksSuspicious } from "./sanityCheck.js";
 import { pickBestMatch, scoreCandidate, type LocalMatchInput } from "./textSearch.js";
 
 const MAX_BACKOFF_SECONDS = 5 * 60;
+// AcoustID's own acoustic-match confidence (0-1), not textSearch.ts's
+// weighted field score — provisional, same as the similarity feature
+// weights, since this can't be tuned against real results in an
+// environment with neither fpcalc nor a client key available (see
+// enrich/acoustid.ts). AcoustID/Picard both treat scores below roughly
+// this range as too weak to trust unattended.
+const MIN_ACOUSTID_SCORE = 0.5;
 
 type EnrichJob = { id: number; node_id: number; job_type: "recording_lookup" | "cover_art_lookup"; attempts: number };
 
@@ -240,19 +250,53 @@ async function tryAlbumMatch(db: Database.Database, targetNodeId: number, input:
   return matchedTarget;
 }
 
+// M-9: text search's last resort. Reached whenever there was nothing
+// useful to search with in the first place (no artist tag, a malformed
+// one) or a real search came back with nothing — every case textSearch.ts
+// structurally cannot fix, since there's no text signal to weigh. A
+// fingerprint doesn't need one: it identifies the recording from the audio
+// itself. Quietly returns false (never throws) whenever the tier isn't
+// available at all — no local file, fpcalc missing, no duration to send
+// AcoustID, no API key configured, or nothing scored high enough to trust.
+export async function tryFingerprintMatch(db: Database.Database, nodeId: number): Promise<boolean> {
+  const file = db
+    .prepare("SELECT file_path FROM files WHERE recording_node_id = ? AND missing_since IS NULL ORDER BY id LIMIT 1")
+    .get(nodeId) as { file_path: string } | undefined;
+  if (!file) return false;
+
+  const fingerprint = await computeFingerprint(file.file_path);
+  if (!fingerprint) return false;
+
+  const recording = db.prepare("SELECT canonical_duration_ms FROM recordings WHERE node_id = ?").get(nodeId) as
+    | { canonical_duration_ms: number | null }
+    | undefined;
+  if (!recording?.canonical_duration_ms) return false; // AcoustID's lookup requires a duration
+
+  const matches = await lookupFingerprint(ACOUSTID_API_KEY, fingerprint, recording.canonical_duration_ms / 1000);
+  const best = matches[0];
+  if (!best || best.score < MIN_ACOUSTID_SCORE) return false;
+
+  applyMatch(db, nodeId, best.recordingMbid, best.score);
+  return true;
+}
+
 async function processRecordingLookup(db: Database.Database, job: EnrichJob): Promise<void> {
   const input = getSearchInput(db, job.node_id);
   if (!input) {
-    // No artist tag to search with at all — not a transient failure,
-    // nothing will change on retry.
-    recordProvenance(db, job.node_id, null, 0, "no local artist tag to search with");
+    // No artist tag to search with at all — text search structurally can't
+    // help, but the audio itself might still identify the file outright.
+    if (!(await tryFingerprintMatch(db, job.node_id))) {
+      recordProvenance(db, job.node_id, null, 0, "no local artist tag to search with");
+    }
     db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
     broadcast("hygiene:changed", { nodeId: job.node_id });
     return;
   }
 
   if (looksSuspicious(input.title) || looksSuspicious(input.artist)) {
-    recordProvenance(db, job.node_id, null, 0, "tag looks malformed — skipped search, needs a hygiene fix first");
+    if (!(await tryFingerprintMatch(db, job.node_id))) {
+      recordProvenance(db, job.node_id, null, 0, "tag looks malformed — skipped search, needs a hygiene fix first");
+    }
     db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
     broadcast("hygiene:changed", { nodeId: job.node_id });
     return;
@@ -301,7 +345,8 @@ async function processRecordingLookup(db: Database.Database, job: EnrichJob): Pr
         scoreCandidate(input, c),
       );
     }
-  } else {
+  } else if (!(await tryFingerprintMatch(db, job.node_id))) {
+    // no_match, and the fingerprint fallback couldn't do any better either.
     recordProvenance(db, job.node_id, null, 0, "no MusicBrainz match found");
   }
 

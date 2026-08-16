@@ -3,6 +3,8 @@ import type Database from "better-sqlite3";
 import { openDb } from "../db.js";
 import * as mbClient from "./mbClient.js";
 import * as coverArchive from "./coverArchive.js";
+import * as fingerprint from "../match/fingerprint.js";
+import * as acoustid from "./acoustid.js";
 
 vi.mock("./mbClient.js", () => ({
   searchRecording: vi.fn(),
@@ -13,8 +15,15 @@ vi.mock("./coverArchive.js", () => ({ fetchCaaFrontImage: vi.fn() }));
 // interesting to this suite, which only cares whether a CAA hit gets
 // recorded as a cover_art row at all.
 vi.mock("../cover/store.js", () => ({ storeCover: vi.fn().mockResolvedValue("fake-hash") }));
+// M-9: real computeFingerprint shells out to fpcalc (not installed on the
+// machine this was built on) and real lookupFingerprint hits AcoustID's
+// live API (needs a client key nobody has configured here) — mocked so
+// the fallback's own branching logic is what's under test, not either
+// external dependency's availability.
+vi.mock("../match/fingerprint.js", () => ({ computeFingerprint: vi.fn() }));
+vi.mock("./acoustid.js", () => ({ lookupFingerprint: vi.fn() }));
 
-const { runDueJobs, applyMatch } = await import("./worker.js");
+const { runDueJobs, applyMatch, tryFingerprintMatch } = await import("./worker.js");
 
 let db: Database.Database;
 
@@ -278,5 +287,86 @@ describe("runDueJobs", () => {
       .get(release.id);
     expect(caaJob).toBeUndefined();
     expect(mbClient.lookupReleaseGroupForRecording).not.toHaveBeenCalled();
+  });
+});
+
+describe("tryFingerprintMatch — M-9's text-search fallback", () => {
+  it("returns false when the node has no file at all", async () => {
+    const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id").get() as {
+      id: number;
+    };
+    expect(await tryFingerprintMatch(db, node.id)).toBe(false);
+    expect(fingerprint.computeFingerprint).not.toHaveBeenCalled();
+  });
+
+  it("returns false when fpcalc can't produce a fingerprint (missing binary, undecodable file)", async () => {
+    const nodeId = insertNode("Come Together", "The Beatles", 262000);
+    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue(null);
+
+    expect(await tryFingerprintMatch(db, nodeId)).toBe(false);
+    expect(acoustid.lookupFingerprint).not.toHaveBeenCalled();
+  });
+
+  it("returns false without calling AcoustID when the recording has no known duration", async () => {
+    const nodeId = insertNode("Come Together", "The Beatles", null);
+    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
+
+    expect(await tryFingerprintMatch(db, nodeId)).toBe(false);
+    expect(acoustid.lookupFingerprint).not.toHaveBeenCalled();
+  });
+
+  it("returns false when AcoustID has nothing, or nothing confident enough", async () => {
+    const nodeId = insertNode("Come Together", "The Beatles", 262000);
+    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
+    vi.mocked(acoustid.lookupFingerprint).mockResolvedValue([{ recordingMbid: "mb-weak", score: 0.2 }]);
+
+    expect(await tryFingerprintMatch(db, nodeId)).toBe(false);
+    const node = db.prepare("SELECT mbid FROM nodes WHERE id = ?").get(nodeId) as { mbid: string | null };
+    expect(node.mbid).toBeNull();
+  });
+
+  it("applies the top AcoustID match (trusting lookupFingerprint's own best-first order), the same way a text match does", async () => {
+    const nodeId = insertNode("Come Together", "The Beatles", 262000);
+    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
+    // Deliberately best-first, matching acoustid.ts's own parseLookupResponse
+    // contract — tryFingerprintMatch trusts matches[0] rather than
+    // re-sorting or scanning for the max itself.
+    vi.mocked(acoustid.lookupFingerprint).mockResolvedValue([
+      { recordingMbid: "mb-strong", score: 0.91 },
+      { recordingMbid: "mb-weak", score: 0.4 },
+    ]);
+
+    expect(await tryFingerprintMatch(db, nodeId)).toBe(true);
+    const node = db.prepare("SELECT mbid FROM nodes WHERE id = ?").get(nodeId) as { mbid: string };
+    expect(node.mbid).toBe("mb-strong");
+  });
+
+  it("falls back to fingerprinting when there's no local artist tag to search with at all", async () => {
+    const nodeId = insertNode("Come Together", null, 262000);
+    enqueue(nodeId);
+    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
+    vi.mocked(acoustid.lookupFingerprint).mockResolvedValue([{ recordingMbid: "mb-1", score: 0.9 }]);
+
+    await runDueJobs(db);
+
+    const node = db.prepare("SELECT mbid FROM nodes WHERE id = ?").get(nodeId) as { mbid: string };
+    expect(node.mbid).toBe("mb-1");
+    const provenance = db
+      .prepare("SELECT note FROM field_provenance WHERE node_id = ? ORDER BY id DESC LIMIT 1")
+      .get(nodeId) as { note: string | null };
+    expect(provenance.note).not.toBe("no local artist tag to search with");
+  });
+
+  it("falls back to fingerprinting when a real text search comes back with no match", async () => {
+    const nodeId = insertNode("Come Together", "The Beatles", 262000);
+    enqueue(nodeId);
+    vi.mocked(mbClient.searchRecording).mockResolvedValue([]);
+    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
+    vi.mocked(acoustid.lookupFingerprint).mockResolvedValue([{ recordingMbid: "mb-1", score: 0.9 }]);
+
+    await runDueJobs(db);
+
+    const node = db.prepare("SELECT mbid FROM nodes WHERE id = ?").get(nodeId) as { mbid: string };
+    expect(node.mbid).toBe("mb-1");
   });
 });
