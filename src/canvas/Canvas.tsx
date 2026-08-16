@@ -271,8 +271,18 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
  * area — the panels don't span the full height and the dock doesn't span
  * the full width — since sigma's bbox fit only understands a rectangle
  * anyway; erring toward extra clearance is the safe direction, a node
- * still ending up hidden is not. */
-const PANEL_INSET_PX = 51 + 360
+ * still ending up hidden is not.
+ *
+ * P-8: panel width/inset are no longer fixed pixels (tokens.css's
+ * --panel-width/--panel-inset scale with the window above 1440px) — the
+ * ratios/floor below duplicate that same formula rather than reading it
+ * back from a live DOM element, the same "sigma needs a concrete number,
+ * kept in sync by hand" tradeoff this file already makes for EDGE_COLOR.
+ * Left as a fixed pixel constant here, the camera would under-reserve
+ * space at any window wider than 1440 and G-8's fix would silently regress. */
+const PANEL_WIDTH_MIN_PX = 360
+const PANEL_INSET_MIN_PX = 51
+const PANEL_REFERENCE_WIDTH_PX = 1440
 const PANEL_TOP_INSET_PX = 59
 const DOCK_HEIGHT_PX = 121
 
@@ -281,13 +291,16 @@ function insetForShell(
   bbox: { x: [number, number]; y: [number, number] },
 ): { x: [number, number]; y: [number, number] } {
   const dims = renderer.getDimensions()
-  const innerW = dims.width - PANEL_INSET_PX * 2
+  const panelInsetPx = Math.max(PANEL_INSET_MIN_PX, (dims.width * PANEL_INSET_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
+  const panelWidthPx = Math.max(PANEL_WIDTH_MIN_PX, (dims.width * PANEL_WIDTH_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
+  const panelFootprintPx = panelInsetPx + panelWidthPx
+  const innerW = dims.width - panelFootprintPx * 2
   const innerH = dims.height - PANEL_TOP_INSET_PX - DOCK_HEIGHT_PX
   if (innerW <= 0 || innerH <= 0) return bbox // window too small to inset meaningfully
 
   const bw = bbox.x[1] - bbox.x[0]
   const bh = bbox.y[1] - bbox.y[0]
-  const padX = (PANEL_INSET_PX / innerW) * bw
+  const padX = (panelFootprintPx / innerW) * bw
   const padForScreenTop = (PANEL_TOP_INSET_PX / innerH) * bh
   const padForScreenBottom = (DOCK_HEIGHT_PX / innerH) * bh
 

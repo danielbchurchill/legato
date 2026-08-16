@@ -102,8 +102,21 @@
 
   --radius-surface: 25px;
 
+  /* P-8: 360px panel width and 51px window inset are measured at the
+   * mockup's 1440px reference only — floated as literal pixels, a real
+   * 2560px window becomes two narrow ribbons with ~1740px of empty canvas
+   * between them. Daniel's call: the panels grow with the window rather
+   * than the canvas taking the slack. Both scale by the exact 1440-
+   * reference ratio above their fixed value, which stays the floor for
+   * anything at or below 1440 wide — max() rather than a bare vw unit, so
+   * a narrow window never drops under the design's own minimum. */
+  --panel-width: max(360px, calc(100vw * 360 / 1440));
+  --panel-inset: max(51px, calc(100vw * 51 / 1440));
+
   /* Panels are 360 wide with 24px of side padding, giving 312 of content.
-   * The mockup drifts between 20 and 26; 24 is the value that reconciles it. */
+   * The mockup drifts between 20 and 26; 24 is the value that reconciles it.
+   * Side padding itself stays fixed — the panel growing is what gives its
+   * content more room, not a second scaling rule on top of the first. */
   --spacing-panel: 24px;
 
   /* Vertical pitch of a label/value row. Consistent across the overview list

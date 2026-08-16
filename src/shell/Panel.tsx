@@ -7,11 +7,16 @@ import { Surface } from './Surface'
  * Geometry comes from DESIGN.md's measured layout — 360 wide, inset 51px from
  * the window edge, 59px below the titlebar and 60px above the window's bottom.
  * Height is expressed as top/bottom insets rather than a fixed 844px so the
- * panels grow with the window instead of clipping on a shorter screen. */
+ * panels grow with the window instead of clipping on a shorter screen.
+ *
+ * P-8: width and side inset are tokens (--panel-width/--panel-inset in
+ * tokens.css), not literal pixels — both scale with the window above the
+ * 1440px reference, which stays their floor. A 2560-wide window no longer
+ * strands two 360px ribbons in a sea of empty canvas. */
 
 const SIDE_CLASSES = {
-  left: 'left-[51px]',
-  right: 'right-[51px]',
+  left: 'left-[var(--panel-inset)]',
+  right: 'right-[var(--panel-inset)]',
 } as const
 
 type PanelProps = {
@@ -24,7 +29,7 @@ type PanelProps = {
 export function Panel({ side, title, children }: PanelProps) {
   return (
     <Surface
-      className={`absolute top-[59px] bottom-[60px] w-[360px] ${SIDE_CLASSES[side]} flex flex-col overflow-hidden`}
+      className={`absolute top-[59px] bottom-[60px] w-[var(--panel-width)] ${SIDE_CLASSES[side]} flex flex-col overflow-hidden`}
     >
       <h2 className="shrink-0 pt-[21px] pb-[10px] text-center text-[length:var(--text-base)] font-normal text-[var(--color-muted)]">
         {title}
