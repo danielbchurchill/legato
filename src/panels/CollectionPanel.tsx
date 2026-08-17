@@ -251,7 +251,7 @@ function SimilarityStrip({
             key={item.id}
             type="button"
             onClick={() => onSelectNode(item.id)}
-            className="h-[75px] w-[75px]"
+            className="aspect-square w-full"
           >
             <CoverArt nodeId={item.id} size="thumb" alt={item.title} className="h-full w-full" />
           </button>
