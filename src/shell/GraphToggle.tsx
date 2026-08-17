@@ -1,6 +1,14 @@
 import { Surface } from './Surface'
 import { GRANULARITIES, type Granularity } from './granularity'
 
+// Display text only — the underlying granularity value stays 'albums'
+// (query param, positions.granularity, GRANULARITIES) to avoid a DB/API rename.
+const LABELS: Record<Granularity, string> = {
+  artists: 'artists',
+  albums: 'releases',
+  tracks: 'tracks',
+}
+
 /* The graph's granularity switch. Session 4 makes it rebuild the graph at each
  * level (three distinct node sets, edges and layouts); for now it owns the
  * state and looks right.
@@ -35,7 +43,7 @@ export function GraphToggle({ value, onChange }: GraphToggleProps) {
                   : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'
               }`}
             >
-              {granularity}
+              {LABELS[granularity]}
             </button>
           )
         })}
