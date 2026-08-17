@@ -271,14 +271,23 @@ function SimilaritySection({ anchorNodeId, onSelectNode }: { anchorNodeId: numbe
       setDissimilar([])
       return
     }
-    fetch(`${API}/nodes/${anchorNodeId}/similar`)
+    // Aborted, not just ignored, on the next anchor change: a boolean guard
+    // alone stops a stale response from overwriting the grid, but leaves the
+    // request itself running in the background, still holding a connection
+    // slot on the same origin the cover art requests compete for. Rapidly
+    // clicking through anchors piled these up and starved/delayed the real
+    // image loads, which read as artwork flashing/failing to load even
+    // after the stale-overwrite case itself was fixed.
+    const controller = new AbortController()
+    fetch(`${API}/nodes/${anchorNodeId}/similar`, { signal: controller.signal })
       .then((r) => r.json())
       .then(setSimilar)
-      .catch(() => setSimilar([]))
-    fetch(`${API}/nodes/${anchorNodeId}/dissimilar`)
+      .catch((err) => err.name !== 'AbortError' && setSimilar([]))
+    fetch(`${API}/nodes/${anchorNodeId}/dissimilar`, { signal: controller.signal })
       .then((r) => r.json())
       .then(setDissimilar)
-      .catch(() => setDissimilar([]))
+      .catch((err) => err.name !== 'AbortError' && setDissimilar([]))
+    return () => controller.abort()
   }, [anchorNodeId])
 
   return (
