@@ -1,5 +1,5 @@
 diff --git a/node_modules/@airshiplabs/cli/dist/index.js b/node_modules/@airshiplabs/cli/dist/index.js
-index 0f65edf..1d28f2f 100755
+index 0f65edf..c45bf8a 100755
 --- a/node_modules/@airshiplabs/cli/dist/index.js
 +++ b/node_modules/@airshiplabs/cli/dist/index.js
 @@ -1645,7 +1645,7 @@ function filterProxyHeaders(headers, opts) {
@@ -11,3 +11,13 @@ index 0f65edf..1d28f2f 100755
  function resolveMode(req, defaultMode) {
    const url = new URL(req.url ?? "/", "http://localhost");
    const explicit = url.searchParams.get(AIRSHIP_MODE_PARAM);
+@@ -1938,7 +1938,8 @@ function tunnelUpgrade(req, socket, head, deps) {
+     { autoSelectFamily: true, host: deps.targetHost, port: deps.targetPort },
+     () => {
+       const lines = [`${req.method} ${req.url} HTTP/1.1`];
+-      for (const [key, value] of Object.entries(req.headers)) {
++      const headers = { ...req.headers, host: `${deps.targetHost}:${deps.targetPort}` };
++      for (const [key, value] of Object.entries(headers)) {
+         if (Array.isArray(value)) {
+           for (const v of value) {
+             lines.push(`${key}: ${v}`);
