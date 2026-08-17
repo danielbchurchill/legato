@@ -6,7 +6,10 @@
   "scripts": {
     "postinstall": "patch-package",
     "dev": "vite",
-    "airship": "airship --exec \"npm run dev\"",
+    "dev:server": "LEGATO_DATA_DIR=\"${LEGATO_DATA_DIR:-$HOME/.local/share/fm.legato.app}\" npm --prefix server run dev",
+    "dev:full": "trap 'kill 0' EXIT INT TERM; npm run dev:server & npm run dev",
+    "airship": "airship --exec \"npm run dev:full\"",
+    "airship:tauri": "airship --exec \"npx tauri dev --config src-tauri/tauri.airship.conf.json\"",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
