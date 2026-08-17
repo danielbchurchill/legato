@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { access, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DATA_DIR } from "../config.js";
 
@@ -97,6 +97,15 @@ function resize(input: Buffer, maxEdge: number): Promise<Buffer> {
 // Writes both derived sizes for a blob and returns its hash. Idempotent: art
 // already in the cache is not re-encoded, which is what makes a re-scan of an
 // unchanged library cheap.
+//
+// Each size lands via a temp file and a rename rather than a direct write to
+// its final path. Writing in place published a partially-written file at the
+// name readers look for: readCover would serve a truncated JPEG (a 200 the
+// browser cannot decode, which the UI can only report as missing art), and
+// isCached — which tests existence, not completeness — would see that partial
+// file and skip re-encoding it, so the truncation stuck until the cache was
+// cleared by hand. rename within the same directory is atomic, so a concurrent
+// reader sees either no file (404, already a handled state) or the whole thing.
 export async function storeCover(bytes: Buffer): Promise<string> {
   const hash = hashBytes(bytes);
 
@@ -104,7 +113,20 @@ export async function storeCover(bytes: Buffer): Promise<string> {
     if (await isCached(hash, size)) continue;
     const target = cachePath(hash, size);
     await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, await resize(bytes, SIZES[size]));
+
+    // Same directory as the target: rename is only atomic within a
+    // filesystem, and the uuid keeps two concurrent writers of the same hash
+    // from colliding on the temp name itself.
+    const temp = `${target}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temp, await resize(bytes, SIZES[size]));
+      await rename(temp, target);
+    } catch (err) {
+      // Leaving a stray .tmp behind would be a leak nothing sweeps — the
+      // cache has no eviction pass yet (see below).
+      await unlink(temp).catch(() => {});
+      throw err;
+    }
   }
 
   return hash;
