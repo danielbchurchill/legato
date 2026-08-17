@@ -1,5 +1,6 @@
 {
   "mode": "inline",
   "target": 5173,
-  "agent": "claude"
+  "agent": "claude",
+  "maxTurns": 200
 }
