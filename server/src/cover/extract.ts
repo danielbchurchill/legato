@@ -3,13 +3,20 @@ import path from "node:path";
 import type Database from "better-sqlite3";
 import { storeCover } from "./store.js";
 
-export type CoverSource = "embedded" | "folder" | "caa" | "manual";
+export type CoverSource = "embedded" | "folder" | "caa" | "manual" | "artist_image";
 
 // Precedence when a node has art from several sources. A deliberate human
 // choice always wins; art carried inside the file beats a loose image next to
 // it (the file travels with its own art, a folder image may belong to a
 // different edition); anything fetched from the network is the last resort.
-const PRECEDENCE: CoverSource[] = ["manual", "embedded", "folder", "caa"];
+//
+// artist_image (a fetched artist photo, enrich/deezer.ts) sits directly
+// under 'manual' rather than down with the other network sources: it only
+// ever lands on an artist node, where the alternative isn't album art of
+// its own but the borrowed most-represented-album cover coverTargetNode
+// falls back to below — a real photo of the artist beats that outright. It
+// still loses to a manual override, same as everything else.
+const PRECEDENCE: CoverSource[] = ["manual", "artist_image", "embedded", "folder", "caa"];
 
 const FOLDER_ART_STEMS = new Set(["cover", "folder", "front", "album", "albumart"]);
 const FOLDER_ART_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
@@ -134,6 +141,26 @@ export function resolveCover(db: Database.Database, nodeId: number): ResolvedCov
     if (match) return match;
   }
   return null;
+}
+
+// The whole resolution chain in one call: this node's own art, else whatever
+// coverTargetNode walks to (a recording's release, an artist's most-
+// represented album).
+//
+// The single answer to "what art does this node display", used by the image
+// endpoint, the graph's node list and the similarity strip alike. Three
+// places previously each re-derived it — routes/cover.ts in JS, routes/
+// nodes.ts as a looser EXISTS in SQL, routes/similarity.ts in a third
+// shape — and the SQL one already disagreed with the others about *which*
+// of an artist's albums it borrowed from (G-7's own comment admits it).
+// Divergence there is invisible until it isn't: the graph would render one
+// album's cover on a node whose panel then shows a different one.
+export function resolveCoverForNode(db: Database.Database, nodeId: number): ResolvedCover | null {
+  const direct = resolveCover(db, nodeId);
+  if (direct) return direct;
+
+  const target = coverTargetNode(db, nodeId);
+  return target === nodeId ? null : resolveCover(db, target);
 }
 
 // Called from the scanner once a file's edges exist, so the release node it

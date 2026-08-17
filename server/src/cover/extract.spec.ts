@@ -4,7 +4,14 @@ import path from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../db.js";
-import { coverTargetNode, findFolderArt, pickFrontCover, recordCover, resolveCover } from "./extract.js";
+import {
+  coverTargetNode,
+  findFolderArt,
+  pickFrontCover,
+  recordCover,
+  resolveCover,
+  resolveCoverForNode,
+} from "./extract.js";
 
 describe("pickFrontCover", () => {
   const bytes = (n: number) => new Uint8Array([n]);
@@ -209,5 +216,67 @@ describe("cover attachment", () => {
 
     db.prepare("DELETE FROM nodes WHERE id = ?").run(rel);
     expect(db.prepare("SELECT COUNT(*) AS n FROM cover_art").get()).toEqual({ n: 0 });
+  });
+
+  // resolveCoverForNode is the single answer to "what art does this node
+  // display" — the image endpoint, the graph's node list and the similarity
+  // strip all go through it, so they cannot disagree about which cover a node
+  // shows the way the three separate versions of this logic used to.
+  describe("resolveCoverForNode", () => {
+    it("finds a recording's art on the release it appears on", () => {
+      const rec = recording("Come Together");
+      const rel = release("Abbey Road");
+      db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+        rec,
+        rel,
+      );
+      recordCover(db, { nodeId: rel, source: "embedded", hash: "abbeyroadhash", mime: null });
+
+      expect(resolveCoverForNode(db, rec)?.hash).toBe("abbeyroadhash");
+    });
+
+    it("returns null when nothing in the chain has art", () => {
+      const rec = recording("Untitled Demo");
+      expect(resolveCoverForNode(db, rec)).toBeNull();
+    });
+
+    // An artist photo is the node's own art, so it wins over the album cover
+    // the artist would otherwise borrow — the entire point of fetching one.
+    it("prefers an artist's own photo over their most-represented album's cover", () => {
+      const theBeatles = artist("The Beatles");
+      const abbeyRoad = album("Abbey Road", theBeatles, 17);
+      recordCover(db, { nodeId: abbeyRoad, source: "embedded", hash: "abbeyroadhash", mime: null });
+      expect(resolveCoverForNode(db, theBeatles)?.hash).toBe("abbeyroadhash");
+
+      recordCover(db, {
+        nodeId: theBeatles,
+        source: "artist_image",
+        hash: "photohash",
+        mime: "image/jpeg",
+        originPath: "https://cdn-images.dzcdn.net/images/artist/abc/1000x1000-000000-80-0-0.jpg",
+      });
+
+      const resolved = resolveCoverForNode(db, theBeatles);
+      expect(resolved?.hash).toBe("photohash");
+      expect(resolved?.source).toBe("artist_image");
+    });
+
+    it("still lets a manual override beat a fetched artist photo", () => {
+      const owusu = artist("Genesis Owusu");
+      recordCover(db, { nodeId: owusu, source: "artist_image", hash: "photohash", mime: null });
+      recordCover(db, { nodeId: owusu, source: "manual", hash: "chosenhash", mime: null });
+
+      expect(resolveCoverForNode(db, owusu)?.hash).toBe("chosenhash");
+    });
+
+    it("records where a fetched photo came from", () => {
+      const owusu = artist("Genesis Owusu");
+      const sourceUrl = "https://cdn-images.dzcdn.net/images/artist/e65b/1000x1000-000000-80-0-0.jpg";
+      recordCover(db, { nodeId: owusu, source: "artist_image", hash: "photohash", mime: null, originPath: sourceUrl });
+
+      expect(
+        db.prepare("SELECT origin_path FROM cover_art WHERE node_id = ? AND source = 'artist_image'").get(owusu),
+      ).toEqual({ origin_path: sourceUrl });
+    });
   });
 });

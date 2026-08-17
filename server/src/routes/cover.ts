@@ -1,24 +1,62 @@
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
-import { coverTargetNode, recordCover, resolveCover } from "../cover/extract.js";
+import { recordCover, resolveCoverForNode } from "../cover/extract.js";
 import { readCover, storeCover } from "../cover/store.js";
 import type { CoverSize } from "../cover/store.js";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
-// Art is attached to a release node, but the UI mostly holds recording ids —
-// a now-playing track, a graph node. Rather than making every caller resolve
-// the album first, accept either and walk to the release here.
-function coverForNode(db: Database.Database, nodeId: number) {
-  const direct = resolveCover(db, nodeId);
-  if (direct) return direct;
-
-  const viaRelease = coverTargetNode(db, nodeId);
-  return viaRelease === nodeId ? null : resolveCover(db, viaRelease);
-}
+// The cache key is a sha1 of the original bytes and the only thing that ever
+// reaches the filesystem through the by-hash route below — anchored, fixed
+// length, hex only, so no request can walk out of the cover cache directory.
+const HASH_PATTERN = /^[0-9a-f]{40}$/;
 
 export function coverRoutes(db: Database.Database) {
   return async function routes(app: FastifyInstance) {
+    // Art by content hash rather than by node.
+    //
+    // Every recording on an album resolves to the same cover, so the
+    // per-node URL gave a twelve-track release twelve distinct URLs for one
+    // image. The browser cached each separately, and — the reason this route
+    // exists at all — sigma's texture atlas keys on the image URL, so it
+    // held twelve copies of the same texture. That is what made rendering
+    // art on track nodes prohibitive (Canvas.tsx's old LOD gate) and what
+    // capped how many texels each cover could afford. Content-addressed, an
+    // album's art is one URL, one cached response and one atlas entry
+    // however many nodes display it.
+    app.get<{ Params: { hash: string }; Querystring: { size?: string } }>(
+      "/covers/:hash",
+      async (request, reply) => {
+        const { hash } = request.params;
+        if (!HASH_PATTERN.test(hash)) {
+          reply.code(400);
+          return { error: "invalid cover hash" };
+        }
+
+        const size: CoverSize = request.query.size === "full" ? "full" : "thumb";
+        const bytes = await readCover(hash, size);
+        if (!bytes) {
+          reply.code(404);
+          return { error: "cover art missing from cache", hash };
+        }
+
+        reply.header("Content-Type", "image/jpeg");
+        reply.header("ETag", `"${hash}-${size}"`);
+        // A year and immutable, unlike the node route's one day: the URL
+        // names the content, so these bytes can never become the wrong
+        // answer for it. Still private — a cover cache is derived from a
+        // personal library, and nothing in front of this server should be
+        // fanning it out to other people.
+        reply.header("Cache-Control", "private, max-age=31536000, immutable");
+        return reply.send(bytes);
+      },
+    );
+
+    // Art by node — for callers holding an id rather than a hash (the panels,
+    // which render whatever node is selected). Accepts any node type and
+    // walks to whatever actually carries the art, so a now-playing recording
+    // resolves to its album's cover without the client knowing that art
+    // attaches to the release.
     app.get<{ Params: { id: string }; Querystring: { size?: string } }>(
       "/nodes/:id/cover",
       async (request, reply) => {
@@ -29,7 +67,7 @@ export function coverRoutes(db: Database.Database) {
         }
 
         const size: CoverSize = request.query.size === "full" ? "full" : "thumb";
-        const cover = coverForNode(db, nodeId);
+        const cover = resolveCoverForNode(db, nodeId);
         if (!cover) {
           reply.code(404);
           return { error: "no cover art for node" };

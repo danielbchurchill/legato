@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
+import { resolveCoverForNode } from "../cover/extract.js";
 import { generateFacts } from "../facts.js";
 
 const GRANULARITIES = ["artists", "albums", "tracks"] as const;
@@ -34,41 +35,34 @@ export function nodesRoutes(db: Database.Database) {
       // are only ever written for release/artist entities, so this one
       // join does double duty as both "has a position" and "belongs to
       // this graph" without a separate node-type filter.
-      // has_cover lets the canvas decide which nodes to render as artwork
-      // without probing the cover endpoint once per node and eating a 404 for
-      // every node that never had art.
-      //
-      // G-7: a straight EXISTS against this node's own id was always false
-      // for a recording (art attaches to its release) or an artist (no
-      // cover_art row of its own, ever) — the same class of bug P-4 fixed
-      // for similarity results. Mirrors cover/extract.ts's coverTargetNode
-      // resolution chain in SQL rather than one round trip per node: direct
-      // art, then a recording's release, then (new) an artist's most-
-      // represented album. "Any album by this artist has art" rather than
-      // specifically the highest-track_count one — a looser but cheap
-      // proxy; the actual image request (coverTargetNode) picks the exact
-      // one, and CoverArt.tsx already 404s to a blank block gracefully on
-      // any mismatch.
-      return db
+      const rows = db
         .prepare(
           `SELECT n.id, n.type, n.title, n.mbid, r.canonical_duration_ms,
-                  p.seed_x, p.seed_y, p.user_x, p.user_y,
-                  EXISTS (
-                    SELECT 1 FROM cover_art ca WHERE ca.node_id = n.id
-                    UNION
-                    SELECT 1 FROM cover_art ca
-                      JOIN edges e ON e.from_node = n.id AND e.type = 'appears_on' AND e.to_node = ca.node_id
-                    UNION
-                    SELECT 1 FROM cover_art ca
-                      JOIN albums alb ON alb.primary_artist_node_id = n.id AND alb.node_id = ca.node_id
-                  ) AS has_cover
+                  p.seed_x, p.seed_y, p.user_x, p.user_y
            FROM nodes n
            JOIN positions p ON p.node_id = n.id AND p.granularity = ?
            LEFT JOIN recordings r ON r.node_id = n.id
            ORDER BY n.id
            LIMIT ?`,
         )
-        .all(granularity, limit);
+        .all(granularity, limit) as { id: number }[];
+
+      // cover_hash, not a has_cover flag: the canvas renders art through the
+      // content-addressed /covers/:hash route (routes/cover.ts), so what it
+      // needs is the identity of the image, not a boolean promising one
+      // exists. That identity is also what lets every track on an album
+      // share a single texture — see that route's comment.
+      //
+      // Resolved per node in JS through the one shared chain
+      // (resolveCoverForNode) rather than as SQL mirroring it. G-7's SQL
+      // version could only afford "any album by this artist has art",
+      // which disagreed with the image endpoint about *which* album an
+      // artist borrows from — invisible while the answer was a boolean,
+      // a visibly wrong cover the moment it names one. Three prepared
+      // statement lookups per node against an in-process SQLite file is
+      // sub-millisecond work at library scale; correctness that can't
+      // drift is worth more than the query count here.
+      return rows.map((row) => ({ ...row, cover_hash: resolveCoverForNode(db, row.id)?.hash ?? null }));
     });
 
     app.get<{ Params: { id: string }; Querystring: { granularity?: string } }>("/nodes/:id", async (request, reply) => {
