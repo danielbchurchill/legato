@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -20,14 +20,28 @@ export function CoverArt({ nodeId, size, className = '', alt = '' }: CoverArtPro
   const [failed, setFailed] = useState(false)
   const [loaded, setLoaded] = useState(false)
 
-  // Without this, moving from an album that has art to one that does not
-  // leaves the previous failure latched and hides art that exists.
-  useEffect(() => {
-    setFailed(false)
-    setLoaded(false)
-  }, [nodeId])
+  const imgRef = useRef<HTMLImageElement>(null)
 
-  if (nodeId == null || failed) {
+  const src = nodeId == null ? null : `${API}/nodes/${nodeId}/cover?size=${size}`
+
+  // Without this, moving from an album that has art to one that does not
+  // leaves the previous failure latched and hides art that exists. Keyed
+  // on `src` (not just nodeId) so a size change resets it too.
+  //
+  // `loaded` resets to whether the image has *actually* already decoded, not
+  // to a flat false. A cached thumb can finish before this effect runs — and
+  // StrictMode double-invokes effects, so this can also re-run after a real
+  // onLoad — and once an image is complete the browser never fires load for
+  // it again. Blindly resetting to false in either case stranded the <img>
+  // at opacity-0 permanently: present, correct src, no error, just invisible.
+  // That is the intermittent "artwork doesn't display" bug.
+  useLayoutEffect(() => {
+    const img = imgRef.current
+    setFailed(false)
+    setLoaded(img != null && img.complete && img.naturalWidth > 0)
+  }, [src])
+
+  if (src == null || failed) {
     // The no-art fallback doesn't fade (MO-10) — it isn't loading, it's the
     // answer.
     return <div aria-hidden className={`bg-white/6 ${className}`} />
@@ -35,11 +49,44 @@ export function CoverArt({ nodeId, size, className = '', alt = '' }: CoverArtPro
 
   return (
     <img
-      src={`${API}/nodes/${nodeId}/cover?size=${size}`}
+      // Keyed on src so React unmounts the previous <img> outright instead
+      // of mutating its src in place. Reusing one DOM node meant a stray
+      // load/error from the request React had just cancelled could still
+      // land on the listener now watching the *new* src — checking
+      // event.currentTarget.src didn't help, since the DOM node's src had
+      // already been overwritten to the new value by the time that stale
+      // event fired. A fresh node per src has no listener left for a
+      // cancelled request's event to reach.
+      key={src}
+      ref={imgRef}
+      src={src}
       alt={alt}
       draggable={false}
       onLoad={() => setLoaded(true)}
-      onError={() => setFailed(true)}
+      // Guarded against `loaded`: a stray error firing after a successful
+      // load (e.g. a tool like Airship re-touching the DOM node) must not
+      // retroactively hide art that already rendered.
+      onError={() => {
+        if (loaded) return
+        setFailed(true)
+        // The <img> error event carries no reason, which is why the
+        // intermittent "art sometimes doesn't show" bug has been so hard to
+        // pin down — a 404 (genuinely no art), a 500, a truncated body and a
+        // connection the browser dropped under load all look identical here.
+        // Re-request once, dev-only, purely to record which one it was.
+        if (import.meta.env.DEV) {
+          fetch(src)
+            .then(async (r) => {
+              const body = await r.blob()
+              console.warn(
+                `[CoverArt] load failed nodeId=${nodeId} size=${size} status=${r.status} bytes=${body.size} type=${body.type} coverSource=${r.headers.get('X-Cover-Source')}`,
+              )
+            })
+            .catch((err) => {
+              console.warn(`[CoverArt] load failed nodeId=${nodeId} size=${size} refetch threw:`, err)
+            })
+        }
+      }}
       // One-shot fade as the image decodes, rather than popping in (MO-10) —
       // a single opacity transition triggered by `loaded` flipping once,
       // not a loop. motion-reduce shows it immediately: unlike a hover or
