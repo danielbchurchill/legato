@@ -5,14 +5,21 @@ import { computeFingerprint } from "../match/fingerprint.js";
 import { broadcast } from "../ws.js";
 import { ACOUSTID_API_KEY } from "../config.js";
 import { lookupFingerprint } from "./acoustid.js";
+import { looksLikeMultipleArtists, pickArtistMatch } from "./artistName.js";
 import { fetchCaaFrontImage } from "./coverArchive.js";
+import { fetchArtistImage } from "./deezer.js";
+import { recordDescription } from "./descriptions.js";
 import {
   fetchReleaseDetail,
+  fetchUrlRelations,
   lookupReleaseGroupForRecording,
+  searchArtist,
   searchRecording,
   searchRelease,
+  type MbUrlRelation,
   type RecordingSearchInput,
 } from "./mbClient.js";
+import { fetchDescriptionFromRelations } from "./wikipedia.js";
 import { applyCredits, recordIsrc, recordReleaseFields } from "./credits.js";
 import { enqueueCoverArtLookupIfNeeded } from "./queue.js";
 import { assignTracks, pickBestRelease, scoreReleaseCandidate, type LocalAlbumInput, type LocalTrack } from "./releaseMatch.js";
@@ -28,7 +35,20 @@ const MAX_BACKOFF_SECONDS = 5 * 60;
 // this range as too weak to trust unattended.
 const MIN_ACOUSTID_SCORE = 0.5;
 
-type EnrichJob = { id: number; node_id: number; job_type: "recording_lookup" | "cover_art_lookup"; attempts: number };
+// An artist MBID resolved from a name and MusicBrainz's own relevance ranking,
+// and nothing else. Not 1: unlike recordReleaseFields' release-level facts
+// (which MusicBrainz asserts about a release this library has already matched),
+// this is the outcome of a search with one weak signal to go on. High enough to
+// act on, low enough that a later stronger source should win.
+const ARTIST_NAME_MATCH_CONFIDENCE = 0.8;
+
+// Recorded on every descriptions row so a second provider can be added later
+// without anything downstream having to guess where existing prose came from.
+const DESCRIPTION_SOURCE = "wikipedia";
+
+type EnrichJobType = "recording_lookup" | "cover_art_lookup" | "artist_image_lookup" | "description_lookup";
+
+type EnrichJob = { id: number; node_id: number; job_type: EnrichJobType; attempts: number };
 
 function getNextDueJob(db: Database.Database): EnrichJob | undefined {
   return db
@@ -389,12 +409,175 @@ async function processCoverArtLookup(db: Database.Database, job: EnrichJob): Pro
   db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
 }
 
+// Artist MBID, resolved by name and then remembered.
+//
+// Artist nodes are built from tag text (entities/aggregate.ts) and never carry
+// an MBID — only recordings get one, from the match pipeline — so this is the
+// hop every artist-level MusicBrainz question has to make first. Stored in
+// field_provenance rather than nodes.mbid deliberately: nodes.mbid is identity
+// (match/collapse.ts collapses on it), and an MBID resolved from nothing but a
+// name is not strong enough to redefine which node a file belongs to. Same
+// call recordReleaseFields already makes for release-level identifiers.
+//
+// Which of the artists sharing a name it actually is comes from
+// pickArtistMatch (enrich/artistName.ts), not from taking the first result —
+// the note records MusicBrainz's own disambiguation text for whichever one was
+// chosen, so the decision is auditable rather than implicit.
+async function resolveArtistMbid(db: Database.Database, nodeId: number, name: string): Promise<string | null> {
+  const cached = db
+    .prepare("SELECT value FROM field_provenance WHERE node_id = ? AND field = 'artist_mbid' ORDER BY id DESC LIMIT 1")
+    .get(nodeId) as { value: string | null } | undefined;
+  if (cached?.value) return cached.value;
+
+  const match = pickArtistMatch(name, await searchArtist(name));
+  if (!match) return null;
+
+  db.prepare(
+    "INSERT INTO field_provenance (node_id, field, value, source, confidence, note) VALUES (?, 'artist_mbid', ?, 'musicbrainz', ?, ?)",
+  ).run(nodeId, match.mbid, ARTIST_NAME_MATCH_CONFIDENCE, match.disambiguation);
+  return match.mbid;
+}
+
+// The release-group an album belongs to, which is what carries an album's
+// external links (a release is one edition; the article is about the record).
+// M-8's album-first match already stores this when it ran, so the common case
+// is a table read; otherwise it costs the same recording -> release-group hop
+// the Cover Art Archive lookup makes, and is written back so it only ever
+// happens once per album.
+async function resolveReleaseGroupMbid(db: Database.Database, releaseNodeId: number): Promise<string | null> {
+  const cached = db
+    .prepare(
+      "SELECT value FROM field_provenance WHERE node_id = ? AND field = 'release_group_mbid' ORDER BY id DESC LIMIT 1",
+    )
+    .get(releaseNodeId) as { value: string | null } | undefined;
+  if (cached?.value) return cached.value;
+
+  const recording = db
+    .prepare(
+      `SELECT n.mbid AS mbid
+       FROM edges e JOIN nodes n ON n.id = e.from_node
+       WHERE e.to_node = ? AND e.type = 'appears_on' AND n.mbid IS NOT NULL
+       LIMIT 1`,
+    )
+    .get(releaseNodeId) as { mbid: string } | undefined;
+  if (!recording) return null;
+
+  const releaseGroupMbid = await lookupReleaseGroupForRecording(recording.mbid);
+  if (!releaseGroupMbid) return null;
+
+  db.prepare(
+    "INSERT INTO field_provenance (node_id, field, value, source, confidence) VALUES (?, 'release_group_mbid', ?, 'musicbrainz', 1)",
+  ).run(releaseNodeId, releaseGroupMbid);
+  return releaseGroupMbid;
+}
+
+// job.node_id is an *artist* node here. Every outcome marks the job done:
+// a tag that names two artists will still name two artists tomorrow, and
+// Deezer not having a photo is an answer, not a failure. Only a thrown
+// network error reaches the retry/backoff path below.
+async function processArtistImageLookup(db: Database.Database, job: EnrichJob): Promise<void> {
+  const finish = () =>
+    db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
+
+  const node = db.prepare("SELECT title FROM nodes WHERE id = ? AND type = 'artist'").get(job.node_id) as
+    | { title: string }
+    | undefined;
+  if (!node) {
+    finish();
+    return;
+  }
+
+  // Art of its own already — a photo from an earlier run, or a manual
+  // override, which must never be displaced (cover/extract.ts's PRECEDENCE).
+  // The inherited album-art fallback doesn't count: replacing that with a real
+  // photograph is the entire point of this job.
+  if (resolveCover(db, job.node_id)) {
+    finish();
+    return;
+  }
+
+  if (looksLikeMultipleArtists(node.title)) {
+    // Not a failure and not retryable: "Pussy Riot; Slayyyter" is a credit
+    // line, and no name search can resolve it to one artist. Recorded so the
+    // maintenance view can show why this node has no photo.
+    recordProvenance(db, job.node_id, null, 0, "artist tag names more than one artist — no photo looked up");
+    finish();
+    return;
+  }
+
+  const image = await fetchArtistImage(node.title);
+  if (image) {
+    const hash = await storeCover(image.bytes);
+    recordCover(db, {
+      nodeId: job.node_id,
+      source: "artist_image",
+      hash,
+      mime: image.mime,
+      originPath: image.sourceUrl,
+    });
+    // The canvas is already on screen when this lands, minutes into a queue
+    // drain — without an event it would keep drawing the borrowed album cover
+    // until the next reload.
+    broadcast("enrich:applied", { nodeId: job.node_id, kind: "artist_image" });
+  }
+
+  finish();
+}
+
+// job.node_id is an artist or release node. Same terminal-outcome policy as
+// the artist image above, with the miss written to descriptions (found = 0) so
+// nothing re-asks on the next scan.
+async function processDescriptionLookup(db: Database.Database, job: EnrichJob): Promise<void> {
+  const finish = () =>
+    db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
+
+  const node = db.prepare("SELECT type, title FROM nodes WHERE id = ?").get(job.node_id) as
+    | { type: string; title: string }
+    | undefined;
+  if (!node) {
+    finish();
+    return;
+  }
+
+  let relations: MbUrlRelation[] = [];
+  if (node.type === "artist") {
+    if (looksLikeMultipleArtists(node.title)) {
+      recordDescription(db, job.node_id, DESCRIPTION_SOURCE, null);
+      finish();
+      return;
+    }
+    const artistMbid = await resolveArtistMbid(db, job.node_id, node.title);
+    if (artistMbid) relations = await fetchUrlRelations("artist", artistMbid);
+  } else if (node.type === "release") {
+    const releaseGroupMbid = await resolveReleaseGroupMbid(db, job.node_id);
+    if (releaseGroupMbid) relations = await fetchUrlRelations("release-group", releaseGroupMbid);
+  } else {
+    // Recordings, labels, credits and years get no description: a per-track
+    // encyclopedia article rarely exists, and where one does it repeats the
+    // album's. Left as an explicit branch rather than a filter at the enqueue
+    // site so a job created by hand for the wrong node type does nothing
+    // instead of something strange.
+    finish();
+    return;
+  }
+
+  const description = relations.length > 0 ? await fetchDescriptionFromRelations(relations) : null;
+  recordDescription(db, job.node_id, DESCRIPTION_SOURCE, description);
+  if (description) broadcast("enrich:applied", { nodeId: job.node_id, kind: "description" });
+
+  finish();
+}
+
 async function processJob(db: Database.Database, job: EnrichJob): Promise<void> {
   db.prepare("UPDATE enrich_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?").run(job.id);
 
   try {
     if (job.job_type === "cover_art_lookup") {
       await processCoverArtLookup(db, job);
+    } else if (job.job_type === "artist_image_lookup") {
+      await processArtistImageLookup(db, job);
+    } else if (job.job_type === "description_lookup") {
+      await processDescriptionLookup(db, job);
     } else {
       await processRecordingLookup(db, job);
     }

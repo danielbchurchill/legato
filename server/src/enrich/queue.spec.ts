@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { openDb } from "../db.js";
-import { enqueueCoverArtLookupIfNeeded, enqueueEnrichmentIfNeeded, isEnrichmentEnabled } from "./queue.js";
+import {
+  enqueueArtistImageLookupIfNeeded,
+  enqueueCoverArtLookupIfNeeded,
+  enqueueDescriptionLookupIfNeeded,
+  enqueueEnrichmentIfNeeded,
+  isEnrichmentEnabled,
+} from "./queue.js";
 
 let db: Database.Database;
 
@@ -93,5 +99,48 @@ describe("enqueueCoverArtLookupIfNeeded", () => {
     expect(db.prepare("SELECT COUNT(*) AS n FROM enrich_jobs WHERE node_id = ?").get(releaseNodeId)).toEqual({
       n: 1,
     });
+  });
+});
+
+describe("artist image and description lookups", () => {
+  function insertArtistNode(title = "Genesis Owusu"): number {
+    return (
+      db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get(title) as { id: number }
+    ).id;
+  }
+
+  function jobTypes(nodeId: number): string[] {
+    return (
+      db.prepare("SELECT job_type FROM enrich_jobs WHERE node_id = ? ORDER BY id").all(nodeId) as {
+        job_type: string;
+      }[]
+    ).map((row) => row.job_type);
+  }
+
+  it("queues both kinds for one artist node without colliding", () => {
+    const nodeId = insertArtistNode();
+    enqueueArtistImageLookupIfNeeded(db, nodeId);
+    enqueueDescriptionLookupIfNeeded(db, nodeId);
+    expect(jobTypes(nodeId)).toEqual(["artist_image_lookup", "description_lookup"]);
+  });
+
+  // These run from recompute() on every scan, so "already tried" — not "in
+  // flight" — has to be what stops a second one, or every no-op re-scan spends
+  // a rate-limited request per artist re-learning the same answer.
+  it("never re-queues a lookup that already finished", () => {
+    const nodeId = insertArtistNode();
+    enqueueArtistImageLookupIfNeeded(db, nodeId);
+    db.prepare("UPDATE enrich_jobs SET status = 'done' WHERE node_id = ?").run(nodeId);
+
+    enqueueArtistImageLookupIfNeeded(db, nodeId);
+    expect(jobTypes(nodeId)).toEqual(["artist_image_lookup"]);
+  });
+
+  it("respects the global enrichment switch", () => {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('enrichmentEnabled', 'false')").run();
+    const nodeId = insertArtistNode();
+    enqueueArtistImageLookupIfNeeded(db, nodeId);
+    enqueueDescriptionLookupIfNeeded(db, nodeId);
+    expect(jobTypes(nodeId)).toEqual([]);
   });
 });

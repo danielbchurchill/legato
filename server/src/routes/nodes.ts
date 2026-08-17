@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import { resolveCoverForNode } from "../cover/extract.js";
+import { getDescription } from "../enrich/descriptions.js";
 import { generateFacts } from "../facts.js";
 
 const GRANULARITIES = ["artists", "albums", "tracks"] as const;
@@ -110,6 +111,11 @@ export function nodesRoutes(db: Database.Database) {
         edges: [...outgoing, ...incoming],
         facts: generateFacts(db, Number(id)),
         article: article ?? null,
+        // Prose from outside this library (enrich/wikipedia.ts), kept
+        // separate from `article` — that one is generated from the
+        // collection itself and rewritten on every scan. Null covers both
+        // "never looked up" and "looked up, nothing there".
+        description: getDescription(db, Number(id)),
       };
     });
 

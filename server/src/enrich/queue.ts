@@ -33,6 +33,39 @@ export function enqueueEnrichmentIfNeeded(db: Database.Database, nodeId: number)
   );
 }
 
+// One job per node per type, ever, unless something deletes the row.
+//
+// Deliberately keyed on "has a job of this type ever existed" rather than "is
+// one in flight", which is the opposite of enqueueEnrichmentIfNeeded's check
+// above and the same policy recompute.ts applies to recording lookups: these
+// run on every scan, and a node whose lookup came back empty would otherwise
+// spend a rate-limited request re-learning that on every no-op re-scan. Asking
+// again is a deliberate act (delete the job row, or the eventual refresh
+// action in the maintenance view), not a side effect of pressing scan.
+function enqueueOnce(db: Database.Database, nodeId: number, jobType: string): void {
+  if (!isEnrichmentEnabled(db)) return;
+
+  const existing = db
+    .prepare("SELECT id FROM enrich_jobs WHERE node_id = ? AND job_type = ?")
+    .get(nodeId, jobType);
+  if (existing) return;
+
+  db.prepare("INSERT INTO enrich_jobs (node_id, job_type, status) VALUES (?, ?, 'queued')").run(nodeId, jobType);
+}
+
+// A photograph of the artist (enrich/deezer.ts). Priority is left at the
+// default, behind nothing and ahead of nothing: an artist photo is worth no
+// more than a recording match, and the queue drains in id order anyway.
+export function enqueueArtistImageLookupIfNeeded(db: Database.Database, artistNodeId: number): void {
+  enqueueOnce(db, artistNodeId, "artist_image_lookup");
+}
+
+// Prose about an artist or an album (enrich/wikipedia.ts). Recordings are
+// excluded at the call site *and* in the worker — see processDescriptionLookup.
+export function enqueueDescriptionLookupIfNeeded(db: Database.Database, nodeId: number): void {
+  enqueueOnce(db, nodeId, "description_lookup");
+}
+
 // Queued once a 'recording_lookup' job resolves a real MusicBrainz mbid —
 // only then does the release its recording belongs to have any MBID this
 // server can hand to Cover Art Archive (enrich/coverArchive.ts). node_id
