@@ -33,20 +33,23 @@ function buildLibrary(db: Database.Database) {
 }
 
 describe("recomputeTracksLayout", () => {
-  it("positions a recording and its connected artist/release/year nodes", () => {
+  it("positions a recording, but not its connected artist/release/year nodes", () => {
     const db = openDb(":memory:");
     db.prepare("INSERT INTO library_roots (path) VALUES ('/fake')").run();
     const { artist, release, year, recording } = buildLibrary(db);
 
     recomputeTracksLayout(db);
 
-    for (const nodeId of [artist, release, year, recording]) {
-      const row = db
-        .prepare("SELECT seed_x, seed_y FROM positions WHERE node_id = ? AND granularity = 'tracks'")
-        .get(nodeId) as { seed_x: number; seed_y: number } | undefined;
-      expect(row).toBeDefined();
-      expect(Number.isFinite(row!.seed_x)).toBe(true);
-      expect(Number.isFinite(row!.seed_y)).toBe(true);
+    const recordingRow = db
+      .prepare("SELECT seed_x, seed_y FROM positions WHERE node_id = ? AND granularity = 'tracks'")
+      .get(recording) as { seed_x: number; seed_y: number } | undefined;
+    expect(recordingRow).toBeDefined();
+    expect(Number.isFinite(recordingRow!.seed_x)).toBe(true);
+    expect(Number.isFinite(recordingRow!.seed_y)).toBe(true);
+
+    for (const nodeId of [artist, release, year]) {
+      const row = db.prepare("SELECT 1 FROM positions WHERE node_id = ? AND granularity = 'tracks'").get(nodeId);
+      expect(row).toBeUndefined();
     }
   });
 
@@ -164,6 +167,9 @@ describe("recomputeAllLayouts", () => {
     const release = makeNode(db, "release", "Abbey Road");
     const recording = makeNode(db, "recording", "Come Together");
     db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+    db.prepare(
+      "INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size) VALUES (?, (SELECT id FROM library_roots LIMIT 1), '/fake/x.flac', datetime('now'), 0)",
+    ).run(recording);
     insertEdge(db, recording, artist, "performed_by");
     insertEdge(db, recording, release, "appears_on");
     db.prepare(

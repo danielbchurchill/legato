@@ -9,37 +9,6 @@ function decadeOf(year: number | null): number | null {
   return year == null || Number.isNaN(year) ? null : Math.floor(year / 10) * 10;
 }
 
-// Centroid of every recording a non-recording node (artist/release/label)
-// connects to via an edge. Without this, only recording nodes would ever
-// have a position — but every hard edge derives recording -> other, so a
-// recording-only canvas would render zero visible connections, which
-// defeats the actual point ("the library is a graph"). Only used for the
-// 'tracks' granularity's satellite node types (artist/release/label/credit/
-// year) — the albums/artists granularities have their own dedicated
-// cluster layout below, since their primary nodes ARE artists/releases.
-function computeCentroidSeeds(
-  nodeIds: number[],
-  connectedRecordingIds: Map<number, number[]>,
-  recordingSeeds: Map<number, Seed>,
-  fallback: Seed,
-): Map<number, Seed> {
-  const result = new Map<number, Seed>();
-  for (const nodeId of nodeIds) {
-    const positions = (connectedRecordingIds.get(nodeId) ?? [])
-      .map((id) => recordingSeeds.get(id))
-      .filter((s): s is Seed => s != null);
-
-    if (positions.length === 0) {
-      result.set(nodeId, fallback);
-      continue;
-    }
-    const x = positions.reduce((sum, p) => sum + p.x, 0) / positions.length;
-    const y = positions.reduce((sum, p) => sum + p.y, 0) / positions.length;
-    result.set(nodeId, { x, y });
-  }
-  return result;
-}
-
 // seed_version only bumps when the computed position actually differs — a
 // no-op recompute (nothing about the underlying data changed) must leave
 // the row byte-identical, not just numerically equal. granularity is part
@@ -61,9 +30,10 @@ function upsertSeeds(db: Database.Database, granularity: "tracks" | "albums" | "
   applyAll();
 }
 
-// The full mixed graph — every recording plus every artist/release/label/
-// credit/year node connected to one, unchanged in node-set terms from
-// before granularities existed. What changed is how recordings are placed:
+// Recording nodes only — the tracks graph used to also carry every
+// artist/release/label/credit/year node a recording connected to (a
+// centroid of its neighbors' positions), but that made the "tracks" tab
+// show the whole mixed library rather than just tracks. Positioned by
 // deterministic cell assignment (primary artist, falling back to label,
 // falling back to unclustered) crossed with decade, then local force
 // relaxation within each cell — replacing the old plain (decade, year)
@@ -94,39 +64,17 @@ export function recomputeTracksLayout(db: Database.Database): void {
   }));
   const seeds = computeClusteredSeeds(clusterInputs);
 
-  const otherRows = db
-    .prepare(
-      `SELECT DISTINCT n.id AS node_id FROM nodes n
-       WHERE n.type != 'recording'
-         AND (EXISTS (SELECT 1 FROM edges e WHERE e.from_node = n.id)
-           OR EXISTS (SELECT 1 FROM edges e WHERE e.to_node = n.id))`,
-    )
-    .all() as { node_id: number }[];
-
-  const connections = new Map<number, number[]>();
-  for (const { node_id } of otherRows) {
-    const rows = db
-      .prepare(
-        `SELECT DISTINCT CASE WHEN from_node = ? THEN to_node ELSE from_node END AS other
-         FROM edges WHERE from_node = ? OR to_node = ?`,
-      )
-      .all(node_id, node_id, node_id) as { other: number }[];
-    connections.set(
-      node_id,
-      rows.map((r) => r.other),
-    );
-  }
-
-  const fallbackX = Math.min(0, ...[...seeds.values()].map((s) => s.x)) - 1200;
-  const centroidSeeds = computeCentroidSeeds(
-    otherRows.map((r) => r.node_id),
-    connections,
-    seeds,
-    { x: fallbackX, y: 0 },
-  );
-  for (const [nodeId, seed] of centroidSeeds) seeds.set(nodeId, seed);
-
   upsertSeeds(db, "tracks", seeds);
+
+  // Installs that ran a recompute before the satellite-node centroid
+  // seeding above was removed still have stale artist/release/label/year
+  // rows sitting under granularity = 'tracks' — upsertSeeds only ever
+  // inserts/updates the recording set above, it never deletes what it
+  // didn't write, so those rows would otherwise linger forever.
+  db.prepare(
+    `DELETE FROM positions WHERE granularity = 'tracks'
+       AND node_id NOT IN (SELECT id FROM nodes WHERE type = 'recording')`,
+  ).run();
 }
 
 // Album entities only, connected to each other via same_artist/same_label
