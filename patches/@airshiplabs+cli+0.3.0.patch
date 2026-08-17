@@ -1,0 +1,13 @@
+diff --git a/node_modules/@airshiplabs/cli/dist/index.js b/node_modules/@airshiplabs/cli/dist/index.js
+index 0f65edf..1d28f2f 100755
+--- a/node_modules/@airshiplabs/cli/dist/index.js
++++ b/node_modules/@airshiplabs/cli/dist/index.js
+@@ -1645,7 +1645,7 @@ function filterProxyHeaders(headers, opts) {
+   }
+   return out2;
+ }
+-var TUNNEL_TIMEOUT_MS = 6e4;
++var TUNNEL_TIMEOUT_MS = 1.8e6;
+ function resolveMode(req, defaultMode) {
+   const url = new URL(req.url ?? "/", "http://localhost");
+   const explicit = url.searchParams.get(AIRSHIP_MODE_PARAM);
