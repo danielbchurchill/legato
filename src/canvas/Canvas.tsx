@@ -15,6 +15,14 @@ const API = 'http://127.0.0.1:8899/api/v1'
  * stay small colored dots so the artwork carries the eye. */
 const ART_SIZE = 22
 
+/* Which shape a node's cover is cut to, by node type. Releases are squares —
+ * an album cover is a square object, and in the albums graph the square *is*
+ * the release. Everything else that carries art (a track inheriting its
+ * album's cover, an artist showing a photo) stays a circle, so the two are
+ * never ambiguous at a glance in the mixed tracks graph. See DESIGN.md
+ * "Nodes". */
+const SQUARE_COVER_TYPES = new Set(['release'])
+
 const NODE_COLOR: Record<string, string> = {
   recording: '#e8e8e8',
   artist: '#ff8a3d',
@@ -94,19 +102,9 @@ const EDGE_WIDTH_AT_RATIO_1 = 0.5
 const DIMMED_NODE_COLOR = '#20262a'
 const DIMMED_EDGE_COLOR = '#1b2023'
 
-/* LOD: only bind real cover textures once the camera is zoomed in enough that
- * they'd actually be legible — at the whole-library view, thumbnails would be
- * a few pixels across and every one is still a unique texture in sigma's
- * atlas for effectively no visual benefit. Below the threshold, art-eligible
- * nodes render as the same flat colored dot as everything else. Sigma's own
- * camera ratio is inverse-zoom: smaller ratio = more zoomed in. */
-const ART_ZOOM_RATIO_THRESHOLD = 1.4
-
-/* Camera ratio flyToNode animates to — comfortably past
- * ART_ZOOM_RATIO_THRESHOLD so the destination node's art is already bound
- * and visible by the time the animation lands, not one more zoom step away.
- * 0.3 dropped the destination into a wall of thick edges with almost no
- * context; 0.7 lands with its neighborhood still visible. */
+/* Camera ratio flyToNode animates to. 0.3 dropped the destination into a wall
+ * of thick edges with almost no context; 0.7 lands with its neighborhood
+ * still visible. */
 const FLY_TO_RATIO = 0.7
 
 /* MO-7: a flat fly duration makes a forty-pixel hop crawl and a jump across
@@ -203,14 +201,46 @@ function mixTowardDim(color: string, dim: string, t: number): string {
   return `rgb(${r},${g},${b})`
 }
 
-/* Default NodeImageProgram sizes its atlas cell off the source image's own
- * resolution ('auto' mode) — a 128px cover thumb squeezed into a ~44px node
- * (ART_SIZE 22) then gets minified across the atlas's 1px inter-image
- * margin, which bleeds in as a white fringe around every cover. Forcing a
- * cell size close to the actual render size removes the mismatch outright
- * (confirmed live: raising node size to 80, which sidesteps the same
- * minification, also removed the fringe). */
-const NodeImageProgram = createNodeImageProgram({ size: { mode: 'force', value: 64 } })
+/* Atlas cell size, in texels, for one cover.
+ *
+ * Default NodeImageProgram sizes its cell off the source image's own
+ * resolution ('auto' mode) — a cover squeezed into a much smaller cell then
+ * gets minified across the atlas's 1px inter-image margin, which bleeds in as
+ * a white fringe around every node. Forcing the cell removes that mismatch.
+ *
+ * The forced value was 64, which is where the low-resolution artwork came
+ * from: a 44px node is 88 device pixels on a 2x display and grows further as
+ * the camera zooms in, so 64 texels were being stretched over two to four
+ * times their own size. 256 matches the cover cache's small derived size
+ * exactly (server/src/cover/store.ts), so a cover is resampled once on the
+ * server and copied 1:1 into the atlas here.
+ *
+ * Cost is real and worth naming: sigma keeps this atlas in GPU memory, at
+ * 4 bytes per texel — 256KB per distinct cover. The by-hash image URL is what
+ * makes that affordable, since a 12-track album is one texture rather than
+ * twelve identical ones. */
+const COVER_ATLAS_PX = 256
+
+/* Two programs, same atlas configuration, differing only in the shape the
+ * cover is cut to. keepWithinCircle is baked into each program's fragment
+ * shader — it cannot be swapped per node by a render-time reducer, which is
+ * why this is two programs rather than one attribute. */
+const NodeCoverProgram = createNodeImageProgram({ size: { mode: 'force', value: COVER_ATLAS_PX } })
+const NodeCoverSquareProgram = createNodeImageProgram({
+  size: { mode: 'force', value: COVER_ATLAS_PX },
+  keepWithinCircle: false,
+})
+
+/* Ratio of a square node's on-screen half-side to the radius sigma reports
+ * for it in hover-layer data — needed only to draw the selection ring around
+ * a square at the same clearance a circle gets.
+ *
+ * From @sigma/node-image's own geometry: the square program renders with
+ * sizeRatio divided by √2 (so the quad's radius is √2 larger), then its
+ * shader crops to a half-side of radius × √½ × cos(π/12). Net, a square node
+ * covers almost exactly the same width as a circle of the same size — which
+ * is what keeps DESIGN.md's single 44px figure true for both. */
+const SQUARE_HALF_SIDE_RATIO = Math.SQRT2 * Math.SQRT1_2 * Math.cos(Math.PI / 12)
 
 function nodeKey(id: number): string {
   return String(id)
@@ -319,29 +349,33 @@ function insetForShell(
   }
 }
 
-/* Art is only ever bound to release nodes today — every recording resolves
- * to its album's cover through the endpoint, but binding thousands of
- * recordings would put thousands of unique textures in sigma's atlas for
- * images that are mostly duplicates of each other, which is what
- * artEnabled (the LOD gate above) exists to protect against. Release art
- * stays bound at every zoom regardless — 26 textures on this library, not
- * thousands — so the whole-library view still reads as a field of album
- * art rather than stripping it exactly where the mockup shows the most of
- * it. The gate is left wired for any future, much larger art-eligible node
- * type instead of deleted, since release nodes never actually reach it. */
-function nodeAttributes(node: GraphNode, artEnabled: boolean): Record<string, unknown> {
+/* Every node that resolves to art renders as that art, at every zoom level
+ * and whatever its type — a track shows its album's cover exactly the way
+ * that album does, rather than a colored dot standing in for one.
+ *
+ * This used to be gated by zoom (art bound only past a camera threshold) for
+ * one reason: art was requested per node id, so a 12-track album was 12
+ * identical textures in sigma's atlas and a library's worth of tracks was
+ * thousands. The by-hash cover URL removes that — the atlas now holds one
+ * texture per distinct cover, no matter how many nodes display it, so there
+ * is nothing left for a level-of-detail gate to protect. */
+function nodeAttributes(node: GraphNode): Record<string, unknown> {
   const x = node.user_x ?? node.seed_x
   const y = node.user_y ?? node.seed_y
-  const hasArt = node.type === 'release' ? node.has_cover === 1 : artEnabled && node.has_cover === 1
 
-  if (hasArt) {
+  if (node.cover_hash) {
+    const square = SQUARE_COVER_TYPES.has(node.type)
     return {
       label: node.title,
       x,
       y,
       size: ART_SIZE,
-      type: 'image',
-      image: `${API}/nodes/${node.id}/cover?size=thumb`,
+      type: square ? 'coverSquare' : 'cover',
+      // `square` is carried as its own attribute rather than re-derived from
+      // `type` inside defaultDrawNodeHover: the hover layer only sees display
+      // data, and the ring has to match the shape it's drawn around.
+      square,
+      image: `${API}/covers/${node.cover_hash}?size=thumb`,
       color: '#ffffff',
       origSize: ART_SIZE,
     }
@@ -349,7 +383,7 @@ function nodeAttributes(node: GraphNode, artEnabled: boolean): Record<string, un
 
   const size = NODE_SIZE[node.type] ?? 3
   const color = NODE_COLOR[node.type] ?? '#999'
-  return { label: node.title, x, y, size, color, type: 'circle', origSize: size }
+  return { label: node.title, x, y, size, color, type: 'circle', square: false, origSize: size }
 }
 
 /* Updates the existing graphology instance in place to match the latest
@@ -358,7 +392,7 @@ function nodeAttributes(node: GraphNode, artEnabled: boolean): Record<string, un
  * data refresh. This is the actual fix for the bug that used to reset the
  * camera on every refetch: the renderer effect below now only depends on
  * `granularity`, not on `nodes`/`edges`. */
-function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], artEnabled: boolean): void {
+function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[]): void {
   const wantedNodes = new Map<string, GraphNode>()
   for (const node of nodes) {
     const x = node.user_x ?? node.seed_x
@@ -371,7 +405,7 @@ function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], artEnab
     if (!wantedNodes.has(key)) graph.dropNode(key)
   })
   for (const [key, node] of wantedNodes) {
-    const attrs = nodeAttributes(node, artEnabled)
+    const attrs = nodeAttributes(node)
     if (graph.hasNode(key)) graph.mergeNodeAttributes(key, attrs)
     else graph.addNode(key, attrs)
   }
@@ -399,22 +433,6 @@ function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], artEnab
   graph.forEachEdge((edgeKey) => {
     if (!wantedEdgeKeys.has(edgeKey)) graph.dropEdge(edgeKey)
   })
-}
-
-// Re-attributes every art-eligible node when the LOD threshold is crossed —
-// an event-driven bulk update on camera 'updated', not a per-frame reducer:
-// NodeImageProgram needs a real 'image' attribute and a real 'image' node
-// type on the graph, which a render-time reducer can override for color/size
-// but not reliably swap the rendering program for.
-function applyArtLOD(graph: Graph, nodes: GraphNode[], artEnabled: boolean): void {
-  for (const node of nodes) {
-    const key = nodeKey(node.id)
-    if (!graph.hasNode(key)) continue
-    const shouldHaveArt = node.type === 'release' ? node.has_cover === 1 : artEnabled && node.has_cover === 1
-    const currentlyHasArt = graph.getNodeAttribute(key, 'type') === 'image'
-    if (shouldHaveArt === currentlyHasArt) continue
-    graph.mergeNodeAttributes(key, nodeAttributes(node, artEnabled))
-  }
 }
 
 type Props = {
@@ -477,8 +495,6 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // re-render must never tear down the renderer or reset the camera.
   const onSelectNodeRef = useRef(onSelectNode)
   const onStatsRef = useRef(onStats)
-  const nodesRef = useRef(nodes)
-  const artEnabledRef = useRef(true)
   const lastCameraRatioRef = useRef<number | null>(null)
 
   // Selection-ring animation state (MO-5), read by defaultDrawNodeHover on
@@ -490,7 +506,6 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   useEffect(() => {
     onSelectNodeRef.current = onSelectNode
     onStatsRef.current = onStats
-    nodesRef.current = nodes
   })
 
   // Renderer lifecycle — created once per granularity (a genuinely different
@@ -516,9 +531,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       renderLabels: false,
       renderEdgeLabels: false,
       defaultEdgeType: 'line',
-      nodeProgramClasses: { image: NodeImageProgram },
-      // Covers are clipped to circles on the canvas, and only here — the same
-      // artwork stays square inside a panel. DESIGN.md "Radius".
+      nodeProgramClasses: { cover: NodeCoverProgram, coverSquare: NodeCoverSquareProgram },
+      // Nodes with no art at all — a colored dot, and the only thing sigma's
+      // own built-in program ever draws here.
       defaultNodeType: 'circle',
       // sigma routes both `highlighted:true` nodes AND the live mouse-hovered
       // node through this same drawer — there is no way to tell them apart
@@ -534,11 +549,22 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       // own radius and fades in alongside, rather than snapping into place
       // (MO-5). A node with `ring: true` but no in-flight animation (the
       // steady-state selected node, most of the time) draws at progress 1.
+      // The ring follows the node's own geometry — a square cover gets a
+      // square ring, concentric and at the same clearance. A circle drawn
+      // around a square node either clips its corners or floats away from its
+      // edges, and either one reads as a second shape rather than as that
+      // node being selected.
       defaultDrawNodeHover: (context, data) => {
         const progress = ringProgressRef.current.get(data.key) ?? (data.ring ? 1 : 0)
         if (progress <= 0) return
+        const clearance = NODE_RING_CLEARANCE * progress
         context.beginPath()
-        context.arc(data.x, data.y, data.size + NODE_RING_CLEARANCE * progress, 0, Math.PI * 2)
+        if (data.square) {
+          const half = data.size * SQUARE_HALF_SIDE_RATIO + clearance
+          context.rect(data.x - half, data.y - half, half * 2, half * 2)
+        } else {
+          context.arc(data.x, data.y, data.size + clearance, 0, Math.PI * 2)
+        }
         context.lineWidth = 1
         context.globalAlpha = progress
         context.strokeStyle = NODE_RING_COLOR
@@ -551,13 +577,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     if (lastCameraRatioRef.current != null) {
       renderer.getCamera().setState({ ratio: lastCameraRatioRef.current })
     }
+    // Carried across granularity switches so the renderer this effect
+    // rebuilds doesn't zoom back out to fit-all every time.
     renderer.getCamera().on('updated', (state) => {
       lastCameraRatioRef.current = state.ratio
-      const shouldHaveArt = state.ratio <= ART_ZOOM_RATIO_THRESHOLD
-      if (shouldHaveArt !== artEnabledRef.current) {
-        artEnabledRef.current = shouldHaveArt
-        applyArtLOD(graph, nodesRef.current, shouldHaveArt)
-      }
     })
 
     // Hover/neighbor highlighting — dims everything not connected to the
@@ -589,14 +612,25 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     renderer.setSetting('nodeReducer', (node, data) => {
       if (dimProgress <= 0 || node === hoveredNode || hoveredNeighbors?.has(node)) return data
-      // Forced to 'circle' rather than left as 'image' with no image — an
-      // art-bound node dimmed mid-hover must reliably fall back to a plain
-      // dimmed dot, not depend on NodeImageProgram handling a missing image
-      // gracefully. The crossfade itself mixes from the node's own color
-      // (white, for art still loading/dimmed) toward the dim tone — sigma
-      // has no notion of fading an image out, so the art->circle swap
+      // Forced to 'circle' rather than left on a cover program with no image
+      // — an art-bound node dimmed mid-hover must reliably fall back to a
+      // plain dimmed dot, not depend on NodeImageProgram handling a missing
+      // image gracefully. The crossfade itself mixes from the node's own
+      // color (white, for art still loading/dimmed) toward the dim tone —
+      // sigma has no notion of fading an image out, so the art->circle swap
       // stays a hard cut; only the circle's own color crossfades.
-      return { ...data, type: 'circle', color: mixTowardDim(data.color, DIMMED_NODE_COLOR, dimProgress), zIndex: 0 }
+      //
+      // `square` is cleared alongside the type: a selected release dimmed
+      // because the pointer is elsewhere renders as a dot, and its ring has to
+      // follow it back to a circle rather than staying a square drawn around
+      // nothing.
+      return {
+        ...data,
+        type: 'circle',
+        square: false,
+        color: mixTowardDim(data.color, DIMMED_NODE_COLOR, dimProgress),
+        zIndex: 0,
+      }
     })
     renderer.setSetting('edgeReducer', (edge, data) => {
       const size = EDGE_WIDTH_AT_RATIO_1 * Math.sqrt(renderer.getCamera().ratio)
@@ -693,7 +727,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     if (!graph || !renderer || loading) return
 
     const hadNoNodes = graph.order === 0
-    syncGraph(graph, nodes, edges, artEnabledRef.current)
+    syncGraph(graph, nodes, edges)
     onStatsRef.current?.({ nodes: graph.order, edges: graph.size })
 
     // Only fit the camera to the data on the graph's first population for

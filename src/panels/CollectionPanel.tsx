@@ -253,6 +253,9 @@ function SimilarityStrip({
             onClick={() => onSelectNode(item.id)}
             className="aspect-square w-full"
           >
+            {/* 'thumb' is 256px, comfortably over the 75px slot's 150 device
+                pixels on a 2x display — 'full' would be four times the bytes
+                for a quarter of the grid. */}
             <CoverArt nodeId={item.id} size="thumb" alt={item.title} className="h-full w-full" />
           </button>
         ))}

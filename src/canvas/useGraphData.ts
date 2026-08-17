@@ -1,7 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useWsEvent } from '../hooks/useWs'
 import type { Granularity } from '../shell/granularity'
 
 const API = 'http://127.0.0.1:8899/api/v1'
+
+/* How long to wait for a burst of enrichment events to stop before refetching
+ * the graph. Longer than the enrichment queue's own ~1/sec spacing, so a
+ * drain of many nodes collapses into one refetch at the end rather than one
+ * per node. */
+const REFETCH_COALESCE_MS = 1500
 
 export type GraphNode = {
   id: number
@@ -13,8 +20,12 @@ export type GraphNode = {
   seed_y: number | null
   user_x: number | null
   user_y: number | null
-  /** SQLite EXISTS, so 0 or 1 rather than a boolean. */
-  has_cover: number
+  /** sha1 of the art this node displays — its own, or whatever it inherits
+   * (a track's album, an artist's most-represented album). Null when there
+   * is no art anywhere in that chain. Names the image rather than just
+   * promising one exists, so every node sharing a cover shares one URL and
+   * therefore one texture in sigma's atlas — see server/src/routes/cover.ts. */
+  cover_hash: string | null
 }
 
 export type GraphEdge = {
@@ -49,6 +60,27 @@ export function useGraphData(granularity: Granularity) {
   useEffect(() => {
     refetch()
   }, [refetch])
+
+  // An artist photo arriving replaces the album cover that node was borrowing,
+  // and a scan changes the node set outright — both while the canvas is on
+  // screen. Refetching is safe here specifically because Canvas.tsx syncs the
+  // graph in place and only fits the camera on a *first* population, so the
+  // view the user is looking at doesn't move.
+  //
+  // Coalesced, because these arrive one per finished job: a queue draining
+  // twenty artists at roughly one per second would otherwise mean twenty full
+  // graph refetches. One, shortly after the burst stops, is enough.
+  const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useWsEvent(['enrich:applied', 'scan:done'], () => {
+    if (refetchTimerRef.current != null) clearTimeout(refetchTimerRef.current)
+    refetchTimerRef.current = setTimeout(() => {
+      refetchTimerRef.current = null
+      void refetch()
+    }, REFETCH_COALESCE_MS)
+  })
+  useEffect(() => () => {
+    if (refetchTimerRef.current != null) clearTimeout(refetchTimerRef.current)
+  }, [])
 
   return { nodes, edges, loading, refetch }
 }

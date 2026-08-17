@@ -5,6 +5,7 @@ import { DataRow, SectionHeader } from '../ui/DataRow'
 import { ArticleBody } from '../ui/ArticleBody'
 import { Button } from '../ui/Button'
 import { Tooltip } from '../ui/Tooltip'
+import { useWsEvent } from '../hooks/useWs'
 import type { QueueEntry } from '../playback/usePlayback'
 
 const API = 'http://127.0.0.1:8899/api/v1'
@@ -71,6 +72,9 @@ type NodeDetail = {
   edges: Edge[]
   facts: Fact[]
   article: { body_md: string } | null
+  /** Fetched prose about the artist or album (not about this collection) —
+   * null when nothing was found or nothing has been looked up yet. */
+  description: { body: string; source: string; source_url: string | null; license: string | null } | null
 }
 type FieldDiff = { field: string; oldValue: string | number; newValue: string | number }
 type TagWriteRow = { id: number; status: string; diff_json: string }
@@ -338,11 +342,20 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPla
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId])
 
+  // Enrichment lands minutes after a scan, over a rate-limited queue, while
+  // the panel is already open — so a description arriving has to reload the
+  // node being looked at rather than waiting for the next selection. Filtered
+  // on the payload's own node id: a queue draining a hundred artists must not
+  // refetch this panel a hundred times.
+  useWsEvent(['enrich:applied'], (payload) => {
+    if (nodeId != null && (payload as { nodeId?: number } | undefined)?.nodeId === nodeId) load()
+  })
+
   const pages: Array<'metadata' | 'lyrics' | 'article'> = node
     ? [
         'metadata' as const,
         ...(node.type === 'recording' ? (['lyrics'] as const) : []),
-        ...(node.article ? (['article'] as const) : []),
+        ...(node.article || node.description ? (['article'] as const) : []),
       ]
     : ['metadata']
 
@@ -781,14 +794,46 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPla
             </div>
           )}
 
-          {pages.includes('article') && node.article && (
+          {pages.includes('article') && (
             <div className="w-full shrink-0" inert={pages[page] !== 'article'}>
-              <SectionHeader title="article" />
-              <ArticleBody
-                bodyMd={node.article.body_md}
-                onSelectNode={onSelectNode}
-                className="mt-[8px] text-[length:var(--text-base)] leading-relaxed text-[var(--color-ink)]"
-              />
+              {/* Two kinds of prose on one page, in this order: who this is,
+                * then what it is in *your* collection. The description comes
+                * from outside (Wikipedia, via server/src/enrich/wikipedia.ts)
+                * and is the same for everyone; the article below it is
+                * generated from this library and is true of nobody else's. */}
+              {node.description && (
+                <>
+                  <SectionHeader title="about" />
+                  <p className="mt-[8px] text-[length:var(--text-base)] leading-relaxed text-[var(--color-ink)]">
+                    {node.description.body}
+                  </p>
+                  {/* Attribution, not decoration: Wikipedia's text is CC BY-SA,
+                    * so naming the source and its licence is an obligation the
+                    * UI carries. The URL lives in the tooltip because this app
+                    * has no way to open an external browser yet (no Tauri
+                    * opener plugin) — a link that silently does nothing would
+                    * be worse than text that can be read and typed. */}
+                  <div className="mt-[8px] flex items-center gap-[6px] text-[length:var(--text-base)] text-[var(--color-muted)]">
+                    <span>from {node.description.source}</span>
+                    {node.description.license && <span>· {node.description.license}</span>}
+                    {node.description.source_url && (
+                      <Tooltip label={node.description.source_url}>
+                        <Icon name="info" size={16} />
+                      </Tooltip>
+                    )}
+                  </div>
+                </>
+              )}
+              {node.article && (
+                <>
+                  <SectionHeader title="article" />
+                  <ArticleBody
+                    bodyMd={node.article.body_md}
+                    onSelectNode={onSelectNode}
+                    className="mt-[8px] text-[length:var(--text-base)] leading-relaxed text-[var(--color-ink)]"
+                  />
+                </>
+              )}
             </div>
           )}
         </div>
