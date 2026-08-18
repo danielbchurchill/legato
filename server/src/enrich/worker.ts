@@ -157,7 +157,7 @@ export function applyMatch(db: Database.Database, nodeId: number, mbid: string, 
   }
 }
 
-type SiblingFile = { fileId: number; nodeId: number; trackNo: number | null; durationMs: number | null };
+type SiblingFile = { fileId: number; nodeId: number; trackNo: number | null; discNo: number | null; durationMs: number | null };
 
 // Every currently-unmatched file sharing this album (and, when both sides
 // have one, this album artist) — the group M-6's single release lookup
@@ -183,10 +183,17 @@ function findUnmatchedAlbumSiblings(db: Database.Database, album: string, albuma
       album?: string | null;
       albumartist?: string | null;
       trackNo?: number | null;
+      discNo?: number | null;
     };
     if (tags.album !== album) continue;
     if (albumartist && tags.albumartist && tags.albumartist !== albumartist) continue;
-    siblings.push({ fileId: row.fileId, nodeId: row.nodeId, trackNo: tags.trackNo ?? null, durationMs: row.durationMs });
+    siblings.push({
+      fileId: row.fileId,
+      nodeId: row.nodeId,
+      trackNo: tags.trackNo ?? null,
+      discNo: tags.discNo ?? null,
+      durationMs: row.durationMs,
+    });
   }
   return siblings;
 }
@@ -226,9 +233,24 @@ async function tryAlbumMatch(db: Database.Database, targetNodeId: number, input:
   const localTracks: LocalTrack[] = siblings.map((s) => ({
     fileId: s.fileId,
     trackNo: s.trackNo,
+    discNo: s.discNo,
     durationMs: s.durationMs,
   }));
-  const assignments = assignTracks(localTracks, detail);
+  // Every recording MBID already sitting on a node for this album — the
+  // files an earlier pass resolved, which are no longer siblings and so are
+  // otherwise invisible to the assignment.
+  const alreadyUsedMbids = new Set(
+    (
+      db
+        .prepare(
+          `SELECT DISTINCT n.mbid FROM nodes n
+             JOIN files f ON f.recording_node_id = n.id
+            WHERE n.type = 'recording' AND n.mbid IS NOT NULL AND f.missing_since IS NULL`,
+        )
+        .all() as { mbid: string }[]
+    ).map((r) => r.mbid),
+  );
+  const assignments = assignTracks(localTracks, detail, alreadyUsedMbids);
   if (assignments.length === 0) return false;
 
   const confidence = scoreReleaseCandidate(localAlbum, best);

@@ -1,4 +1,4 @@
-import type { MbReleaseCandidateSearch, MbReleaseDetail } from "./mbClient.js";
+import type { MbReleaseCandidateSearch, MbReleaseDetail, MbReleaseTrack } from "./mbClient.js";
 import { similarity2 } from "./textSearch.js";
 
 // M-6: Legato issued one independent lookup per recording — for a real
@@ -105,6 +105,7 @@ export function pickBestRelease(
 export type LocalTrack = {
   fileId: number;
   trackNo: number | null;
+  discNo: number | null;
   durationMs: number | null;
 };
 
@@ -116,17 +117,69 @@ export type TrackAssignment = { fileId: number; recordingMbid: string };
 // already claimed when a file has no track number or its number doesn't
 // appear on this release (a bonus/hidden track, a mismatched edition).
 // Never assigns the same release track twice.
-export function assignTracks(localFiles: LocalTrack[], release: MbReleaseDetail): TrackAssignment[] {
-  const claimed = new Set<number>(); // release track positions already used
+//
+// Position matching is disc-aware, and has to be. MusicBrainz numbers each
+// medium from 1, so a two-disc release has two track 1s, two track 2s, and
+// so on. Keying a lookup on the bare position silently lets the last disc
+// overwrite every earlier one, which is not a near-miss: on Blonde on
+// Blonde (8 + 6) it handed the first six local tracks the MBIDs of six
+// completely different songs off disc two, and left the real disc-two
+// tracks to the duration fallback, where they collided with recordings
+// already claimed and merged unrelated songs onto shared nodes.
+//
+// Two shapes of tagging have to work, so both keys are built:
+//   disc+track   files tagged with a real disc number, matched (2, 1)
+//   absolute     files numbered straight through 1..14 with no disc number
+//                (or with every track claiming disc 1), which is how a
+//                double LP ripped into a single folder usually looks —
+//                exactly the case above
+// Disc+track is tried first and absolute catches what it misses, so a file
+// insisting it is disc 1 track 9 of an 8-track disc still lands on disc 2
+// track 1 rather than falling through to a duration guess.
+export function assignTracks(
+  localFiles: LocalTrack[],
+  release: MbReleaseDetail,
+  alreadyUsedMbids: ReadonlySet<string> = new Set(),
+): TrackAssignment[] {
+  const claimed = new Set<number>(); // absolutePosition — unique release-wide, unlike position
   const assignments: TrackAssignment[] = [];
 
-  const byPosition = new Map(release.tracks.map((t) => [t.position, t]));
+  // Recordings already assigned to other files of this same release, on an
+  // earlier run. tryAlbumMatch only ever sees the files still unmatched, so
+  // without this the duration fallback happily re-hands a recording that a
+  // previous pass already gave to a different track — and applyMatch then
+  // reads that as "these two files are the same recording" and merges two
+  // unrelated songs onto one node. Two different tracks of one release are
+  // never the same recording, so claiming them up front is simply true.
+  for (const track of release.tracks) {
+    if (alreadyUsedMbids.has(track.recordingMbid)) claimed.add(track.absolutePosition);
+  }
+
+  const byDiscAndTrack = new Map<string, MbReleaseTrack>();
+  const byAbsolute = new Map<number, MbReleaseTrack>();
+  for (const track of release.tracks) {
+    // First writer wins on both maps: a malformed release listing the same
+    // slot twice should not have the later copy silently displace the
+    // earlier, which is the exact failure this function is fixing.
+    const discKey = `${track.mediumPosition}:${track.position}`;
+    if (!byDiscAndTrack.has(discKey)) byDiscAndTrack.set(discKey, track);
+    if (!byAbsolute.has(track.absolutePosition)) byAbsolute.set(track.absolutePosition, track);
+  }
+
+  const locateByPosition = (file: LocalTrack): MbReleaseTrack | undefined => {
+    if (file.trackNo == null) return undefined;
+    if (file.discNo != null) {
+      const onDisc = byDiscAndTrack.get(`${file.discNo}:${file.trackNo}`);
+      if (onDisc) return onDisc;
+    }
+    return byAbsolute.get(file.trackNo);
+  };
 
   const unresolved: LocalTrack[] = [];
   for (const file of localFiles) {
-    const track = file.trackNo != null ? byPosition.get(file.trackNo) : undefined;
-    if (track && !claimed.has(track.position)) {
-      claimed.add(track.position);
+    const track = locateByPosition(file);
+    if (track && !claimed.has(track.absolutePosition)) {
+      claimed.add(track.absolutePosition);
       assignments.push({ fileId: file.fileId, recordingMbid: track.recordingMbid });
     } else {
       unresolved.push(file);
@@ -135,10 +188,10 @@ export function assignTracks(localFiles: LocalTrack[], release: MbReleaseDetail)
 
   for (const file of unresolved) {
     if (file.durationMs == null) continue;
-    let best: (typeof release.tracks)[number] | undefined;
+    let best: MbReleaseTrack | undefined;
     let bestDiff = Infinity;
     for (const track of release.tracks) {
-      if (claimed.has(track.position) || track.durationMs == null) continue;
+      if (claimed.has(track.absolutePosition) || track.durationMs == null) continue;
       const diff = Math.abs(track.durationMs - file.durationMs);
       if (diff < bestDiff) {
         bestDiff = diff;
@@ -146,7 +199,7 @@ export function assignTracks(localFiles: LocalTrack[], release: MbReleaseDetail)
       }
     }
     if (best) {
-      claimed.add(best.position);
+      claimed.add(best.absolutePosition);
       assignments.push({ fileId: file.fileId, recordingMbid: best.recordingMbid });
     }
   }
