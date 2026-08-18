@@ -72,9 +72,19 @@ export function recomputeTracksLayout(db: Database.Database): void {
   // rows sitting under granularity = 'tracks' — upsertSeeds only ever
   // inserts/updates the recording set above, it never deletes what it
   // didn't write, so those rows would otherwise linger forever.
+  // Scoped to "a recording that still has a file", matching the source set
+  // the seeds are computed from above rather than merely the node type. A
+  // recording whose last file is gone — the library root removed, the file
+  // deleted off disk — is no longer in that set, so upsertSeeds stops
+  // writing it while its old row lives on, and routes/nodes.ts selects the
+  // canvas by position row.
   db.prepare(
     `DELETE FROM positions WHERE granularity = 'tracks'
-       AND node_id NOT IN (SELECT id FROM nodes WHERE type = 'recording')`,
+       AND node_id NOT IN (
+         SELECT n.id FROM nodes n
+          WHERE n.type = 'recording'
+            AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = n.id)
+       )`,
   ).run();
 }
 
