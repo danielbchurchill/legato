@@ -78,6 +78,18 @@ export function recomputeTracksLayout(db: Database.Database): void {
   ).run();
 }
 
+// Same sweep as the tracks one above, for the two entity graphs: upsertSeeds
+// only writes the set handed to it, so a node that has stopped being an
+// album or an artist keeps whatever position it last held, and the canvas
+// keys off position rows (routes/nodes.ts) rather than edges. Runs after
+// recomputeEntities has already pruned the entity tables themselves, which
+// is the order both callers use.
+function pruneStalePositions(db: Database.Database, granularity: "albums" | "artists"): void {
+  db.prepare(
+    `DELETE FROM positions WHERE granularity = ? AND node_id NOT IN (SELECT node_id FROM ${granularity})`,
+  ).run(granularity);
+}
+
 // Album entities only, connected to each other via same_artist/same_label
 // edges (entities/collaboration.ts) — a distinct graph, not the tracks
 // graph filtered down. Clustered by the same artist/label affinity as the
@@ -97,6 +109,7 @@ export function recomputeAlbumsLayout(db: Database.Database): void {
   }));
 
   upsertSeeds(db, "albums", computeClusteredSeeds(clusterInputs));
+  pruneStalePositions(db, "albums");
 }
 
 // Artist entities only, connected to each other via collaborated_with
@@ -135,6 +148,7 @@ export function recomputeArtistsLayout(db: Database.Database): void {
   });
 
   upsertSeeds(db, "artists", computeClusteredSeeds(clusterInputs));
+  pruneStalePositions(db, "artists");
 }
 
 // user_x/user_y are never touched by any of these — only a PATCH
