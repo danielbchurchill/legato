@@ -36,10 +36,11 @@ export function computeAlbumAggregates(
     else recordingsByRelease.set(e.toNode, [e.fromNode]);
   }
 
-  // At most one performed_by edge per recording today (deriveLocalEdges
-  // creates exactly one, from tags.artist) — .set() on first-seen is a
-  // no-op in practice, and stays correct if that ever changes to "keep the
-  // first credited artist" for a multi-performer recording.
+  // A recording can carry several performed_by edges — deriveLocalEdges
+  // creates one per artist named in the credit, so "JPEGMAFIA; Danny
+  // Brown" produces two. First-seen wins, and since match/edges.ts inserts
+  // in credit order that is the primary performer: an album stays filed
+  // under JPEGMAFIA rather than under whoever the mode happened to favour.
   const artistByRecording = new Map<number, number>();
   for (const e of performedBy) {
     if (!artistByRecording.has(e.fromNode)) artistByRecording.set(e.fromNode, e.toNode);

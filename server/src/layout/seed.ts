@@ -48,7 +48,8 @@ export function recomputeTracksLayout(db: Database.Database): void {
                  JOIN nodes y ON y.id = e.to_node
                 WHERE e.from_node = n.id AND e.type = 'released_in' LIMIT 1) AS year,
               (SELECT e.to_node FROM edges e
-                WHERE e.from_node = n.id AND e.type = 'performed_by' LIMIT 1) AS artist_id,
+                WHERE e.from_node = n.id AND e.type = 'performed_by'
+                ORDER BY e.id LIMIT 1) AS artist_id,
               (SELECT e.to_node FROM edges e
                 WHERE e.from_node = n.id AND e.type = 'released_on' LIMIT 1) AS label_id
        FROM nodes n

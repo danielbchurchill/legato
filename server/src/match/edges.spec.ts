@@ -37,6 +37,56 @@ function edgesFrom(nodeId: number): { type: string; other_id: number; other_type
     .all(nodeId) as { type: string; other_id: number; other_type: string; other_title: string }[];
 }
 
+describe("deriveLocalEdges — multi-artist credits", () => {
+  function performersOf(tags: Record<string, unknown>): string[] {
+    const fileId = insertFile(tags);
+    const { recording_node_id: nodeId } = db
+      .prepare("SELECT recording_node_id FROM files WHERE id = ?")
+      .get(fileId) as { recording_node_id: number };
+    deriveLocalEdges(db, fileId);
+    // Edge id order, not title order — credit order is the contract.
+    return (
+      db
+        .prepare(
+          `SELECT n.title FROM edges e JOIN nodes n ON n.id = e.to_node
+           WHERE e.from_node = ? AND e.type = 'performed_by' ORDER BY e.id`,
+        )
+        .all(nodeId) as { title: string }[]
+    ).map((r) => r.title);
+  }
+
+  it("gives every artist in a semicolon credit its own node", () => {
+    expect(performersOf({ artist: "JPEGMAFIA; Danny Brown" })).toEqual(["JPEGMAFIA", "Danny Brown"]);
+  });
+
+  it("reuses one node for an artist credited across different collaborations", () => {
+    performersOf({ artist: "Pussy Riot; Big Freedia" });
+    performersOf({ artist: "Pussy Riot; salem ilese" });
+    const pussyRiot = db.prepare("SELECT id FROM nodes WHERE type = 'artist' AND title = 'Pussy Riot'").all();
+    expect(pussyRiot).toHaveLength(1);
+    // Three artists total, not four — no combined "Pussy Riot; X" node.
+    expect(db.prepare("SELECT id FROM nodes WHERE type = 'artist'").all()).toHaveLength(3);
+  });
+
+  it("keeps a band whose name contains 'and' as a single node", () => {
+    expect(performersOf({ artist: "Peter Bjorn and John" })).toEqual(["Peter Bjorn and John"]);
+  });
+
+  it("keeps an ensemble whole and does not mint nodes from its ARTISTS breakdown", () => {
+    const performers = performersOf({
+      artist: "George Martin and His Orchestra",
+      featuredArtists: ["George Martin", "His Orchestra"],
+    });
+    expect(performers).toEqual(["George Martin and His Orchestra"]);
+    const artists = db.prepare("SELECT title FROM nodes WHERE type = 'artist'").all() as { title: string }[];
+    expect(artists.map((a) => a.title)).toEqual(["George Martin and His Orchestra"]);
+  });
+
+  it("derives no performed_by edge at all when the credit is missing", () => {
+    expect(performersOf({ album: "Untitled" })).toEqual([]);
+  });
+});
+
 describe("deriveLocalEdges — widened credit/label edges", () => {
   it("derives a released_on edge to a label node", () => {
     const fileId = insertFile({ artist: "The Beatles", label: "Apple Records" });

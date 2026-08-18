@@ -1,5 +1,6 @@
 import { parseFile } from "music-metadata";
 import type { ICommonTagsResult, IFormat } from "music-metadata";
+import { extraCreditedArtists } from "./artist-credit.js";
 import { pickFrontCover } from "../cover/extract.js";
 import type { EmbeddedPicture } from "../cover/extract.js";
 
@@ -38,9 +39,11 @@ export type NormalizedTags = {
   producer: string[] | null;
   engineer: string[] | null;
   // Every credited artist (music-metadata's `artists`, not the primary
-  // `artist`), minus the primary — the "featured artist" credits. No
-  // dedicated tag exists for "featured" specifically; this is the standard
-  // proxy every tagger (including MusicBrainz Picard) uses for it.
+  // `artist`), minus everyone the ARTIST credit already names — the
+  // "featured artist" credits. No dedicated tag exists for "featured"
+  // specifically; this is the standard proxy every tagger (including
+  // MusicBrainz Picard) uses for it. See scan/artist-credit.ts for why the
+  // subtraction is by mention rather than exact string equality.
   featuredArtists: string[] | null;
 };
 
@@ -81,15 +84,12 @@ export function normalizeTags(common: ICommonTagsResult, format: IFormat): Norma
     genre: common.genre && common.genre.length > 0 ? common.genre : null,
     producer: common.producer && common.producer.length > 0 ? common.producer : null,
     engineer: common.engineer && common.engineer.length > 0 ? common.engineer : null,
-    featuredArtists: featuredArtists(common.artist, common.artists),
+    featuredArtists: emptyToNull(extraCreditedArtists(common.artist, common.artists)),
   };
 }
 
-function featuredArtists(primary: string | undefined, all: string[] | undefined): string[] | null {
-  if (!all || all.length === 0) return null;
-  const normalizedPrimary = primary?.trim().toLowerCase();
-  const rest = all.filter((name) => name.trim().toLowerCase() !== normalizedPrimary);
-  return rest.length > 0 ? rest : null;
+function emptyToNull(list: string[]): string[] | null {
+  return list.length > 0 ? list : null;
 }
 
 export type ParsedFile = {
