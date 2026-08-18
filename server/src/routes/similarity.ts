@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import { findMostDissimilar, findMostSimilar } from "../similarity/similarity.js";
-import { coverTargetNode, resolveCover } from "../cover/extract.js";
+import { resolveCoverForNode } from "../cover/extract.js";
 
 type RankedResult = { nodeId: number; score: number };
 
@@ -15,12 +15,19 @@ type RankedResult = { nodeId: number; score: number };
 // image endpoint (GET /nodes/:id/cover) already resolves this correctly, so
 // this was stale-but-harmless data rather than a broken thumbnail; fixed
 // here so the field means what it says for whatever does start reading it.
+// Now resolved through the same shared chain both the image endpoint and the
+// graph's node list use, rather than a third local rendition of it.
 function hydrate(db: Database.Database, ranked: RankedResult[]) {
   const nodeRow = db.prepare(`SELECT title, type FROM nodes WHERE id = ?`);
   return ranked.map((r) => {
     const node = nodeRow.get(r.nodeId) as { title: string; type: string };
-    const hasCover = resolveCover(db, r.nodeId) != null || resolveCover(db, coverTargetNode(db, r.nodeId)) != null;
-    return { id: r.nodeId, title: node.title, type: node.type, has_cover: hasCover, score: r.score };
+    return {
+      id: r.nodeId,
+      title: node.title,
+      type: node.type,
+      has_cover: resolveCoverForNode(db, r.nodeId) != null,
+      score: r.score,
+    };
   });
 }
 

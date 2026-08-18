@@ -142,9 +142,9 @@ The 33px row pitch is consistent across both the overview list and the metadata 
 
 - **Glass surfaces:** 25px.
 - **Album artwork: square.** Both the 75×75 thumbnails and the 255×255 now-playing cover have no radius in the file. Cover art is reproduced, not restyled.
-- **Graph nodes: circular.** Covers are clipped to circles on the canvas and only there.
+- **Graph nodes: shaped by type.** Releases are square, everything else with art is circular — see "Nodes" below. Nothing on the canvas is rounded-cornered; a cover is either cut to a circle or left square.
 
-Artwork being square in panels and circular in the graph is the deliberate signal for "this is a list item" versus "this is a node."
+Panels are the one place where *every* piece of artwork is square, whatever it depicts — a list item is a list item. On the canvas the shape is doing a different job: it says what kind of thing the node is.
 
 ### Measured layout
 
@@ -169,12 +169,15 @@ Panels are inset 51px from the window edge and 120px from the top — they float
 
 ### Nodes
 
-- **44px** circular album cover — the default.
-- **74px** concentric ring, `--color-node-ring` at 1px, for the selected node. The node itself does not change size or color; the ring is drawn around it with 15px of clearance.
+- **44px** album cover or artist photo — the default. Every node that resolves to art shows that art, at every zoom level.
+- **Shape carries the node's type.** A release is a **square** — an album cover is a square object, and in the albums graph the square *is* the release. Everything else that carries art is a **circle**: a track showing the cover of the album it belongs to, an artist showing a photograph of themselves. In the mixed tracks graph, where both appear at once, that is the difference between "this is the record" and "this is one track on it".
+- **74px** concentric ring, `--color-node-ring` at 1px, for the selected node. The node itself does not change size or color; the ring is drawn around it with 15px of clearance, and it follows the node's own shape — a square ring around a square cover, a circle around a circular one.
 
 Selection is an addition, never a substitution. Do not brighten, scale, or recolor a cover to indicate state — the artwork must stay readable as artwork.
 
-A node with no cover art falls back to a filled circle in `--color-muted`. (Worth knowing: the solid red node in the mockup is not a fallback state, it is the actual cover of *Struggler* by Genesis Owusu.)
+A node with no art at all falls back to a filled circle in its type color, small enough that the artwork around it carries the eye. (Worth knowing: the solid red node in the mockup is not a fallback state, it is the actual cover of *Struggler* by Genesis Owusu.)
+
+**Resolution.** Node art is a 256px texture for a 44px node, not because 44px needs it but because the graph zooms: a cover grows with the camera, and a HiDPI display already doubles it before that. 256 is what `server/src/cover/store.ts` derives and what the atlas cell in `Canvas.tsx` forces, deliberately the same number so a cover is resampled once rather than twice. Art reaches the canvas by content hash, never by node id — one texture per distinct cover, however many nodes display it, which is what makes covers on every track affordable at all.
 
 ### Edge palette
 

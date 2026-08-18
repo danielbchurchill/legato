@@ -1,6 +1,10 @@
 import type Database from "better-sqlite3";
 import { deriveLocalEdges } from "./match/edges.js";
-import { enqueueEnrichmentIfNeeded } from "./enrich/queue.js";
+import {
+  enqueueArtistImageLookupIfNeeded,
+  enqueueDescriptionLookupIfNeeded,
+  enqueueEnrichmentIfNeeded,
+} from "./enrich/queue.js";
 import { recomputeEntities } from "./entities/aggregate.js";
 import { recomputeCollaborationEdges } from "./entities/collaboration.js";
 import { recomputeAllLayouts } from "./layout/seed.js";
@@ -56,4 +60,17 @@ export function recompute(db: Database.Database): void {
   recomputeAllLayouts(db);
   recomputeSimilarityFeatures(db);
   recomputeArticles(db);
+
+  // Artist photos and encyclopedia descriptions — queued after
+  // recomputeEntities, because artist and release nodes are what it creates.
+  // Both helpers are one-shot per node (see enrich/queue.ts), so running this
+  // on every recompute costs a pair of indexed lookups per node rather than a
+  // network request.
+  const enrichable = db
+    .prepare("SELECT id, type FROM nodes WHERE type IN ('artist','release')")
+    .all() as { id: number; type: string }[];
+  for (const node of enrichable) {
+    if (node.type === "artist") enqueueArtistImageLookupIfNeeded(db, node.id);
+    enqueueDescriptionLookupIfNeeded(db, node.id);
+  }
 }

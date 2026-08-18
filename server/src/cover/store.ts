@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DATA_DIR } from "../config.js";
 
@@ -11,11 +11,21 @@ export type CoverSize = "thumb" | "full";
 // Embedded art in the wild is routinely 3000px and several megabytes, which
 // would make the cover cache larger than the entire rest of the app's data for
 // a UI whose biggest cover is 255 CSS px. 512 serves that at 2x DPI with room
-// to spare; 128 serves the 75px similarity thumbnails and the 44px graph nodes.
+// to spare.
+//
+// 'thumb' was 128, sized against CSS pixels — 75px similarity thumbnails,
+// 44px graph nodes — which is the whole reason art looked soft: a 2x display
+// asks for 150 and 88 *device* pixels, and the graph's texture atlas asks for
+// more still, since a node's cover keeps growing as the camera zooms in. 256
+// is the smallest size that covers all three honestly, and it exactly matches
+// the atlas cell Canvas.tsx forces, so a cover reaching the graph is resampled
+// once (here) rather than twice. Deep zoom (past roughly a 3x camera) does
+// magnify it — the alternative is 4x the atlas memory for a view nobody sits
+// at, and sigma holds every visible cover in that atlas at once.
 //
 // If a genuine need for originals appears (exporting art, a full-screen cover
 // view), that is a third size here, not a change to this policy.
-const SIZES: Record<CoverSize, number> = { thumb: 128, full: 512 };
+const SIZES: Record<CoverSize, number> = { thumb: 256, full: 512 };
 
 const CACHE_DIR = path.join(DATA_DIR, "covers");
 
@@ -26,8 +36,16 @@ export function hashBytes(bytes: Buffer): string {
 // Sharded by hash prefix so the cache directory stays navigable — a library
 // with thousands of albums otherwise puts thousands of entries in one folder,
 // which some filesystems handle poorly and every file manager handles badly.
+//
+// The top level is the pixel bound, not the size *name*: raising 'thumb' from
+// 128 to 256 under a name-keyed path would have left every already-cached
+// cover serving its old 128px file forever, since isCached() tests existence
+// and a cover that never changes is never re-encoded. Naming the directory
+// after what is actually in it makes a ladder change self-invalidating —
+// the new size is simply a cache miss — and pruneStaleSizes() below sweeps
+// what the old ladder left behind.
 export function cachePath(hash: string, size: CoverSize): string {
-  return path.join(CACHE_DIR, size, hash.slice(0, 2), `${hash}.jpg`);
+  return path.join(CACHE_DIR, String(SIZES[size]), hash.slice(0, 2), `${hash}.jpg`);
 }
 
 export async function isCached(hash: string, size: CoverSize): Promise<boolean> {
@@ -132,16 +150,90 @@ export async function storeCover(bytes: Buffer): Promise<string> {
   return hash;
 }
 
+// Every copy of one cover already on disk, whatever size directory it landed
+// in — including directories a superseded ladder wrote (`covers/full/`,
+// `covers/thumb/`). Sorted largest file first, which for the same image at
+// different bounds is the same order as largest *dimensions* first.
+async function existingCopies(hash: string): Promise<string[]> {
+  let sizeDirs: string[];
+  try {
+    sizeDirs = (await readdir(CACHE_DIR, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return []; // no cache directory yet
+  }
+
+  const copies: { path: string; bytes: number }[] = [];
+  for (const dir of sizeDirs) {
+    const candidate = path.join(CACHE_DIR, dir, hash.slice(0, 2), `${hash}.jpg`);
+    try {
+      copies.push({ path: candidate, bytes: (await stat(candidate)).size });
+    } catch {
+      // This size was never written for this hash. Normal.
+    }
+  }
+
+  return copies.sort((a, b) => b.bytes - a.bytes).map((copy) => copy.path);
+}
+
+// Re-derives one missing size from the largest copy of that cover already
+// cached. What makes a change to the size ladder above a plain cache miss
+// rather than a migration: the original bytes are gone, but a 512px copy is a
+// perfectly good source for a 256px one, so nothing has to re-read the audio
+// files (the backfill this project has had to write four times already — see
+// recompute.ts's B-1 note).
+//
+// Two things it does not try to be clever about. If the only surviving copy is
+// *smaller* than the size being asked for, this upscales it — the result is no
+// blurrier than what the same cache was already serving, and a rescan of the
+// file writes the real thing. And when a legacy copy happens to already be at
+// the requested bound (the old ladder's 512 answering a request for 512), it is
+// re-encoded rather than copied, which costs one generation of JPEG loss on a
+// one-time path. Detecting that would mean trusting a directory name to
+// describe its contents, which is exactly the assumption the pixel-named paths
+// above exist to stop making.
+async function deriveSize(hash: string, size: CoverSize): Promise<Buffer | null> {
+  const [largest] = await existingCopies(hash);
+  if (!largest) return null;
+
+  const target = cachePath(hash, size);
+  if (path.resolve(largest) === path.resolve(target)) return null; // the miss *is* this file
+
+  let derived: Buffer;
+  try {
+    derived = await resize(await readFile(largest), SIZES[size]);
+  } catch {
+    return null;
+  }
+
+  await mkdir(path.dirname(target), { recursive: true });
+  const temp = `${target}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temp, derived);
+    await rename(temp, target);
+  } catch {
+    await unlink(temp).catch(() => {});
+    // Failing to *cache* the derived bytes doesn't make them any less
+    // correct — serve them and let the next request try the write again.
+  }
+  return derived;
+}
+
 // Known gap: nothing evicts the cache. Replacing or deleting a manual override
-// leaves its blob on disk with no cover_art row pointing at it. Harmless (a few
-// tens of KB per orphan) and bounded by how often art is overridden by hand,
-// but it is a real leak. The cover_art_hash index exists so a sweep can find
-// live hashes cheaply; write that alongside the Cover Art Archive fetcher,
-// which will be the first thing to churn cached art in volume.
+// leaves its blob on disk with no cover_art row pointing at it, and a
+// superseded size ladder leaves its whole directory behind (still useful, as
+// deriveSize's source, but permanently). Harmless (a few tens of KB per
+// orphan) and bounded by how often art is overridden by hand, but it is a real
+// leak. The cover_art_hash index exists so a sweep can find live hashes
+// cheaply; write that alongside the Cover Art Archive fetcher, which will be
+// the first thing to churn cached art in volume.
 export async function readCover(hash: string, size: CoverSize): Promise<Buffer | null> {
   try {
     return await readFile(cachePath(hash, size));
   } catch {
-    return null;
+    // Not cached at this size. Either art stored under an older ladder, or a
+    // blob someone cleared by hand — both recoverable from another size.
+    return await deriveSize(hash, size);
   }
 }

@@ -364,3 +364,73 @@ export async function lookupReleaseGroupForRecording(mbid: string): Promise<stri
   const data = (await res.json()) as { releases?: { "release-group"?: { id: string } }[] };
   return data.releases?.[0]?.["release-group"]?.id ?? null;
 }
+
+export type MbArtistCandidate = {
+  mbid: string;
+  name: string;
+  /** MusicBrainz's own relevance score, 0-100. */
+  score: number;
+  /** MB's own tiebreaker text for artists sharing a name ("US rapper"). */
+  disambiguation: string | null;
+};
+
+// Artist nodes are built from tag text and carry no MBID of their own (only
+// recordings get one, from the match pipeline), so anything that needs to ask
+// MusicBrainz about an artist has to resolve one by name first.
+//
+// artist:"..." rather than a bare query, so the name is matched as a phrase
+// against the artist field instead of loosely against everything MB indexes.
+// The caller still has to check the result actually names the same artist —
+// MB scores a phrase hit 100 whether or not it is the one you meant, exactly
+// as it does for recordings (see buildRecordingQuery's M-2 note).
+export async function searchArtist(name: string): Promise<MbArtistCandidate[]> {
+  await throttle();
+
+  const query = `artist:"${escapeLucene(name)}"`;
+  const url = `${API_ROOT}/artist?query=${encodeURIComponent(query)}&fmt=json&limit=5`;
+
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+  if (!res.ok) {
+    throw new Error(`MusicBrainz artist search failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = (await res.json()) as {
+    artists?: { id: string; name: string; score: number; disambiguation?: string }[];
+  };
+  return (data.artists ?? []).map((a) => ({
+    mbid: a.id,
+    name: a.name,
+    score: a.score,
+    disambiguation: a.disambiguation ?? null,
+  }));
+}
+
+export type MbUrlRelation = { type: string; url: string };
+
+// An entity's external links. The one this project cares about is 'wikidata',
+// which is the route to an encyclopedia article about the artist or album:
+// MusicBrainz itself stores no prose, but it does store the identity mapping
+// that makes finding the right article possible without guessing at a title.
+//
+// Works for any MB entity type that has url relations; 'artist' and
+// 'release-group' are the two used today. Confirmed live: a modern artist
+// carries 'wikidata' and no 'wikipedia' relation at all — MB migrated those
+// years ago — so a caller that only looks for 'wikipedia' finds nothing.
+export async function fetchUrlRelations(
+  entity: "artist" | "release-group",
+  mbid: string,
+): Promise<MbUrlRelation[]> {
+  await throttle();
+
+  const url = `${API_ROOT}/${entity}/${mbid}?inc=url-rels&fmt=json`;
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    throw new Error(`MusicBrainz ${entity} lookup failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = (await res.json()) as { relations?: { type?: string; url?: { resource?: string } }[] };
+  return (data.relations ?? []).flatMap((relation) =>
+    relation.type && relation.url?.resource ? [{ type: relation.type, url: relation.url.resource }] : [],
+  );
+}
