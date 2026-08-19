@@ -14,6 +14,7 @@ import type { Granularity } from './shell/granularity'
 import { TransportDock } from './shell/TransportDock'
 import { CollectionPanel } from './panels/CollectionPanel'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
+import { NodeInspector } from './panels/NodeInspector'
 import { SettingsView } from './settings/SettingsView'
 import { useSettings } from './hooks/useSettings'
 import type { ReplayGainMode } from './playback/usePlayback'
@@ -182,6 +183,7 @@ function MainApp() {
   const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
   const [hygieneOpen, setHygieneOpen] = useState(false)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [granularity, setGranularity] = useState<Granularity>('albums')
   const { settings, updateSettings } = useSettings()
@@ -208,6 +210,19 @@ function MainApp() {
     canvasRef.current?.flyToNode(id)
   }
 
+  // Escape unwinds one layer at a time. The inspector owns its own Escape
+  // handling (useModalTransition), so this only has to cover the layer under
+  // it — clearing a selection, and with it the canvas card. Guarded on the
+  // modal being shut so one press never does both.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape' || inspectorOpen || hygieneOpen || settingsOpen) return
+      setSelectedNodeId(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [inspectorOpen, hygieneOpen, settingsOpen])
+
   useEffect(() => {
     fetch('http://127.0.0.1:8899/api/v1/library-roots')
       .then((r) => r.json())
@@ -228,7 +243,13 @@ function MainApp() {
         ref={canvasRef}
         granularity={granularity}
         selectedNodeId={selectedNodeId}
-        onSelectNode={setSelectedNodeId}
+        onSelectNode={(id) => {
+          setSelectedNodeId(id)
+          // Deselecting has to take the inspector with it — it is a view of
+          // the selected node, and there would be nothing behind it.
+          if (id == null) setInspectorOpen(false)
+        }}
+        onOpenInspector={() => setInspectorOpen(true)}
       />
 
       <GraphToggle value={granularity} onChange={setGranularity} />
@@ -242,18 +263,19 @@ function MainApp() {
         />
       </Panel>
 
-      {/* P-5: one node-detail surface. The node you selected takes
-       * precedence over what is playing, since selecting is the more
-       * recent intent; playback is an attribute of whatever node is being
-       * shown (isPlaying), not a fork into a separate component. */}
-      <Panel side="right" title={selectedNodeId != null ? 'selected' : 'now playing'}>
+      {/* Now playing, and only now playing. Selection used to take this
+       * panel over (P-5's "one node-detail surface"), which meant looking at
+       * anything cost you sight of what was playing; the selected node now
+       * has its own surface on the canvas, and the deeper half of P-5's
+       * argument survives inside NodeDetailPages — one component renders a
+       * node's detail for both this panel and the inspector. */}
+      <Panel side="right" title="now playing">
         <NowPlayingPanel
-          nodeId={anchorNodeId}
-          isPlaying={anchorNodeId != null && anchorNodeId === playback.status.currentRecordingNodeId}
+          nodeId={playback.status.currentRecordingNodeId ?? null}
+          isPlaying={playback.status.currentRecordingNodeId != null}
           upNext={playback.upNext}
           onSelectNode={selectAndFly}
           onPlay={playback.playNode}
-          onClose={selectedNodeId != null ? () => setSelectedNodeId(null) : undefined}
         />
       </Panel>
 
@@ -265,6 +287,21 @@ function MainApp() {
         onSeek={playback.seek}
         onSetVolume={playback.setVolume}
       />
+
+      {inspectorOpen && selectedNodeId != null && (
+        <NodeInspector
+          nodeId={selectedNodeId}
+          isPlaying={selectedNodeId === playback.status.currentRecordingNodeId}
+          onSelectNode={(id) => {
+            // Following a fact or edge link inside the inspector moves the
+            // selection — and the canvas underneath — rather than opening a
+            // second inspector on top of the first.
+            selectAndFly(id)
+          }}
+          onPlay={playback.playNode}
+          onClose={() => setInspectorOpen(false)}
+        />
+      )}
 
       {hygieneOpen && (
         <HygieneView

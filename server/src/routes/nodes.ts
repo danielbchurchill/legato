@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { resolveCoverForNode } from "../cover/extract.js";
 import { getDescription } from "../enrich/descriptions.js";
 import { generateFacts } from "../facts.js";
+import { nodeSummary } from "../summary.js";
 
 const GRANULARITIES = ["artists", "albums", "tracks"] as const;
 type Granularity = (typeof GRANULARITIES)[number];
@@ -36,13 +37,31 @@ export function nodesRoutes(db: Database.Database) {
       // are only ever written for release/artist entities, so this one
       // join does double duty as both "has a position" and "belongs to
       // this graph" without a separate node-type filter.
+      // subtitle is the second line of the canvas hover plate, so it has to
+      // arrive with the graph rather than be fetched per hover — a plate
+      // that appears 90ms after the pointer lands cannot also wait on a
+      // round trip. Correlated subqueries rather than joins: a recording
+      // holds one performed_by edge per credited artist since 8a3426c, and
+      // a join would multiply the node row by that count. Taking the
+      // lowest-id credit matches what NowPlayingPanel's title block already
+      // shows for the same node (its `artist` lookup takes the first
+      // performed_by edge), so the plate and the panel never disagree.
       const rows = db
         .prepare(
           `SELECT n.id, n.type, n.title, n.mbid, r.canonical_duration_ms,
-                  p.seed_x, p.seed_y, p.user_x, p.user_y
+                  p.seed_x, p.seed_y, p.user_x, p.user_y,
+                  COALESCE(
+                    (SELECT an.title FROM nodes an WHERE an.id = al.primary_artist_node_id),
+                    (SELECT an.title
+                       FROM edges e JOIN nodes an ON an.id = e.to_node
+                      WHERE e.from_node = n.id AND e.type = 'performed_by'
+                      ORDER BY e.id
+                      LIMIT 1)
+                  ) AS subtitle
            FROM nodes n
            JOIN positions p ON p.node_id = n.id AND p.granularity = ?
            LEFT JOIN recordings r ON r.node_id = n.id
+           LEFT JOIN albums al ON al.node_id = n.id
            ORDER BY n.id
            LIMIT ?`,
         )
@@ -117,6 +136,18 @@ export function nodesRoutes(db: Database.Database) {
         // "never looked up" and "looked up, nothing there".
         description: getDescription(db, Number(id)),
       };
+    });
+
+    // The selected-node card's three metadata rows. Logic lives in
+    // summary.ts so it is testable the way facts.ts is — this file holds no
+    // route that isn't a thin wrapper over a query or a module.
+    app.get<{ Params: { id: string } }>("/nodes/:id/summary", async (request, reply) => {
+      const summary = nodeSummary(db, Number(request.params.id));
+      if (!summary) {
+        reply.code(404);
+        return { error: "not found" };
+      }
+      return summary;
     });
 
     // Writes user_x/user_y only — seed_x/seed_y are derived and only ever

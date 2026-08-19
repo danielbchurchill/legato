@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -14,9 +14,11 @@ type CoverArtProps = {
   size: 'thumb' | 'full'
   className?: string
   alt?: string
+  /** For callers whose layout maths owns the dimensions — see NodeCard. */
+  style?: CSSProperties
 }
 
-export function CoverArt({ nodeId, size, className = '', alt = '' }: CoverArtProps) {
+export function CoverArt({ nodeId, size, className = '', alt = '', style }: CoverArtProps) {
   const [failed, setFailed] = useState(false)
   const [loaded, setLoaded] = useState(false)
 
@@ -44,7 +46,7 @@ export function CoverArt({ nodeId, size, className = '', alt = '' }: CoverArtPro
   if (src == null || failed) {
     // The no-art fallback doesn't fade (MO-10) — it isn't loading, it's the
     // answer.
-    return <div aria-hidden className={`bg-white/6 ${className}`} />
+    return <div aria-hidden className={`bg-white/6 ${className}`} style={style} />
   }
 
   return (
@@ -60,6 +62,7 @@ export function CoverArt({ nodeId, size, className = '', alt = '' }: CoverArtPro
       key={src}
       ref={imgRef}
       src={src}
+      style={style}
       alt={alt}
       draggable={false}
       onLoad={() => setLoaded(true)}

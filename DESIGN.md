@@ -160,6 +160,8 @@ At the 1440 × 1024 reference size:
 | Similarity thumbnails | 90px pitch | 75 × 75 |
 | Now-playing cover | `1081,180` | 255 × 255 |
 | Transport dock | `463,903` | 514 × 121 |
+| Selected-node card | anchored to its node | 665 × 312, cover slot at `26,30` |
+| Hover plate | centred under its node | width follows the title |
 
 Panels are inset 51px from the window edge and 120px from the top — they float, and they do not reach the bottom of the window. That gap is where the graph shows through, so it is structural.
 
@@ -171,13 +173,37 @@ Panels are inset 51px from the window edge and 120px from the top — they float
 
 - **44px** album cover or artist photo — the default. Every node that resolves to art shows that art, at every zoom level.
 - **Shape carries the node's type.** A release is a **square** — an album cover is a square object, and in the albums graph the square *is* the release. Everything else that carries art is a **circle**: a track showing the cover of the album it belongs to, an artist showing a photograph of themselves. In the mixed tracks graph, where both appear at once, that is the difference between "this is the record" and "this is one track on it".
-- **74px** concentric ring, `--color-node-ring` at 1px, for the selected node. The node itself does not change size or color; the ring is drawn around it with 15px of clearance, and it follows the node's own shape — a square ring around a square cover, a circle around a circular one.
+Selection and hover are surfaces of their own — see "In place on a node" below. Neither changes the node. Do not brighten, scale, or recolor a cover to indicate state; the artwork must stay readable as artwork, and anything a state needs to say gets said on glass next to it.
 
-Selection is an addition, never a substitution. Do not brighten, scale, or recolor a cover to indicate state — the artwork must stay readable as artwork.
+A 74px concentric ring used to mark the selected node, at `--color-node-ring` with 15px of clearance, following the node's own shape. The card replaced it: at every zoom the app can reach, the card's 255px cover sits over the node and swallows a ring around a 130px one, so the ring had become UI nothing could see. The token went with it.
 
 A node with no art at all falls back to a filled circle in its type color, small enough that the artwork around it carries the eye. (Worth knowing: the solid red node in the mockup is not a fallback state, it is the actual cover of *Struggler* by Genesis Owusu.)
 
 **Resolution.** Node art is a 256px texture for a 44px node, not because 44px needs it but because the graph zooms: a cover grows with the camera, and a HiDPI display already doubles it before that. 256 is what `server/src/cover/store.ts` derives and what the atlas cell in `Canvas.tsx` forces, deliberately the same number so a cover is resampled once rather than twice. Art reaches the canvas by content hash, never by node id — one texture per distinct cover, however many nodes display it, which is what makes covers on every track affordable at all.
+
+### In place on a node
+
+Both states appear at the node, on the canvas, rather than in a panel — Figma frames `31:247` (Hovered) and `31:246` (Selected). The right-hand panel used to become a node inspector the moment anything was selected, which meant looking at a record cost you sight of the one playing. It doesn't any more; it means now playing and nothing else.
+
+**Hover — a plate.** A glass plate carrying the node's title and, below it, its artist. Centred on the node, its top edge tucked behind the node's bottom by 9% of the node's diameter (capped at 23px, the frame's figure against a 255px cover), text starting 15px below the node's edge. Width is whatever the title measures. Both lines are Sometype Mono in `--color-ink`: a title and an artist are both data, and there is no label here to be muted. An artist node has no second line — that is the whole state, not a missing value. It arrives on the same 90ms dwell as the hover dim, so one gesture produces one response.
+
+**Selection — a card.** 665 × 312 of the standard glass, its 255px cover slot centred exactly on the node so the card reads as the node opening rather than as a panel arriving. Beside the cover, a 314px column on the panels' own rhythm — 31px header-to-rule, 16px rule-to-first-row, 33px row pitch, values at 57% — because it is the same rhythm, not a second layout language. `selected artist` / `selected release` / `selected track` in Rubik muted names what you picked; the title and artist under it are mono ink; then `metadata`, its rule, and three rows:
+
+| Artist | Release | Track |
+|---|---|---|
+| releases | tracks | track no. |
+| tracks | length | length |
+| top album | release date | release date |
+
+Three rows for every type, so the column never outgrows the cover that sets the card's height. `top album` is play-derived and reads as an em dash until there is play history — the app's one answer for "no value here", and the reason a muted-looking value is acceptable in a card that otherwise obeys the type rule.
+
+The cover in the card is square whatever the node's own shape, following the panel rule rather than the canvas one: this is a glass surface, and every piece of artwork on glass is square. It is also deliberately about twice the size of the nodes around it. Making it match would mean flying the camera to ratio 0.03, where a selected node has no visible neighbourhood left.
+
+**Selecting flies the camera.** Clicking a node zooms until nodes render `SELECT_NODE_PX` (130) across — stated as a size rather than a camera ratio, because the size is what the design cares about. Everything else that navigates to a node — search results, fact links, the hygiene worklist — lands at the same zoom, so arriving from the canvas and arriving from a search leave the graph in the same place. The camera aims the *card* at the middle of the canvas the panels leave free, not the node at the middle of the window: the card reaches ~511px to its node's right, and centring the node put that entire column under the right-hand panel every single time.
+
+Because the working zoom is now much deeper than the 0.7 to 1 it used to be, switching granularity frames the new graph rather than carrying the ratio across. Carrying it dropped the camera onto 11% of a bbox it had never seen, which is empty canvas more often than not.
+
+Three ways out of a selection, and none of them move the camera: click empty canvas, press Escape, or click the selected node again. The camera stays where it was asked to go.
 
 ### Edge palette
 

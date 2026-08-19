@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import { createNormalizationFunction } from 'sigma/utils'
@@ -7,6 +7,8 @@ import { patchNodePosition, useGraphData, type GraphEdge, type GraphNode } from 
 import type { Granularity } from '../shell/granularity'
 import { useScanStatus } from '../hooks/useScanStatus'
 import { Button } from '../ui/Button'
+import { NodeCard, NODE_CARD_COVER_CENTER_X, NODE_CARD_WIDTH_PX } from './NodeCard'
+import { NodeHoverPlate } from './NodeHoverPlate'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -102,10 +104,25 @@ const EDGE_WIDTH_AT_RATIO_1 = 0.5
 const DIMMED_NODE_COLOR = '#20262a'
 const DIMMED_EDGE_COLOR = '#1b2023'
 
-/* Camera ratio flyToNode animates to. 0.3 dropped the destination into a wall
- * of thick edges with almost no context; 0.7 lands with its neighborhood
- * still visible. */
-const FLY_TO_RATIO = 0.7
+/* How wide a node should render once the camera has flown to it.
+ *
+ * Stated as a size rather than as a camera ratio because the size is the
+ * thing the design actually cares about — the artwork has to be big enough
+ * to read as artwork, and 0.7 (the old literal) left it at 53px, barely
+ * larger than the 44px it sits at when the whole graph is in frame. Selecting
+ * a node was navigation that didn't visibly go anywhere.
+ *
+ * Sigma's item sizes are screen-referenced (itemSizesReference defaults to
+ * "screen") and scale by 1/sqrt(ratio), so ART_SIZE 22 is a 44px node at
+ * ratio 1 and this inverts that relationship.
+ *
+ * 130 rather than the 255 the Figma card draws its cover at: the deeper zoom
+ * that would make a node literally 255px puts the camera at ratio 0.03, where
+ * cluster-mates sit far enough apart that a selected node has no visible
+ * neighbourhood left. The card's cover is deliberately about twice the size of
+ * the nodes around it — see DESIGN.md "Nodes". */
+const SELECT_NODE_PX = 130
+const FLY_TO_RATIO = (2 * ART_SIZE / SELECT_NODE_PX) ** 2 // ~0.115
 
 /* MO-7: a flat fly duration makes a forty-pixel hop crawl and a jump across
  * the whole library feel abrupt. Sub-linear (sqrt) so a merely-far target
@@ -123,19 +140,16 @@ function flyToDurationForDistance(distancePx: number): number {
   return FLY_TO_DURATION_MIN_MS + (FLY_TO_DURATION_MAX_MS - FLY_TO_DURATION_MIN_MS) * Math.sqrt(t)
 }
 
-/* Selection ring — mirrors --color-node-ring in tokens.css (sigma's hover
- * canvas is plain 2D context, same reasoning as EDGE_COLOR/DIMMED_*_COLOR
- * above: it never sees our CSS). 15px of clearance around the node's own
- * rendered radius, per DESIGN.md "Nodes". */
-const NODE_RING_COLOR = '#ffffff'
-const NODE_RING_CLEARANCE = 15
-const RING_IN_MS = 140 // --motion-fast — the ring arriving
-const RING_OUT_MS = 120 // --motion-exit — leaving is faster than arriving
-
 /* Hover dwell + dim crossfade (MO-6). Engaging the dim only after a short
  * dwell keeps a cursor merely passing over a dense cluster from strobing
  * enterNode/leaveNode dozens of times; crossfading it in and out keeps
  * leaving a node from snapping the whole canvas back at once. */
+/* How far the pointer has to travel between mousedown and mouseup for the
+ * gesture to be a drag rather than a click. Four pixels is below the smallest
+ * deliberate drag and above the jitter a hand produces holding still on a
+ * button. */
+const DRAG_THRESHOLD_PX = 4
+
 const HOVER_DWELL_MS = 90 // --motion-instant — used here as a debounce threshold, not a transition
 const DIM_CROSSFADE_MS = 120 // --motion-exit
 
@@ -231,17 +245,6 @@ const NodeCoverSquareProgram = createNodeImageProgram({
   keepWithinCircle: false,
 })
 
-/* Ratio of a square node's on-screen half-side to the radius sigma reports
- * for it in hover-layer data — needed only to draw the selection ring around
- * a square at the same clearance a circle gets.
- *
- * From @sigma/node-image's own geometry: the square program renders with
- * sizeRatio divided by √2 (so the quad's radius is √2 larger), then its
- * shader crops to a half-side of radius × √½ × cos(π/12). Net, a square node
- * covers almost exactly the same width as a circle of the same size — which
- * is what keeps DESIGN.md's single 44px figure true for both. */
-const SQUARE_HALF_SIDE_RATIO = Math.SQRT2 * Math.SQRT1_2 * Math.cos(Math.PI / 12)
-
 function nodeKey(id: number): string {
   return String(id)
 }
@@ -316,16 +319,53 @@ const PANEL_REFERENCE_WIDTH_PX = 1440
 const PANEL_TOP_INSET_PX = 59
 const DOCK_HEIGHT_PX = 121
 
+/* The rectangle of canvas the shell leaves uncovered, in viewport pixels.
+ * Both the initial bbox fit and the fly target need the same answer. */
+function shellFreeArea(renderer: Sigma): { left: number; right: number; top: number; bottom: number } {
+  const dims = renderer.getDimensions()
+  const panelInsetPx = Math.max(PANEL_INSET_MIN_PX, (dims.width * PANEL_INSET_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
+  const panelWidthPx = Math.max(PANEL_WIDTH_MIN_PX, (dims.width * PANEL_WIDTH_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
+  const panelFootprintPx = panelInsetPx + panelWidthPx
+  return {
+    left: panelFootprintPx,
+    right: dims.width - panelFootprintPx,
+    top: PANEL_TOP_INSET_PX,
+    bottom: dims.height - DOCK_HEIGHT_PX,
+  }
+}
+
+/* Where on screen a node should land when the camera flies to it.
+ *
+ * Not the viewport's centre, which is what this used to be. A selected node
+ * grows the 665px card whose cover slot *is* that node, and the card reaches
+ * ~511px to the node's right — so centring the node parked the card's entire
+ * metadata column under the right-hand panel on every single selection, with
+ * the edit control unreachable and the artist's name cut in half. Aiming the
+ * card at the middle of the free canvas instead, and letting the node land
+ * wherever that puts it, is the same fix G-8 already makes for the initial
+ * bbox: sigma has no idea the panels are there, so this file has to.
+ *
+ * The card stays rigidly anchored to its node either way — this only chooses
+ * where the node ends up. When the free strip is narrower than the card the
+ * target clamps left rather than centring, which keeps the cover and the
+ * start of every row on screen and lets only the far edge slide under. */
+function flyTargetViewportPoint(renderer: Sigma): { x: number; y: number } {
+  const area = shellFreeArea(renderer)
+  const freeWidth = area.right - area.left
+  const cardLeft =
+    freeWidth >= NODE_CARD_WIDTH_PX ? area.left + (freeWidth - NODE_CARD_WIDTH_PX) / 2 : area.left
+  return { x: cardLeft + NODE_CARD_COVER_CENTER_X, y: (area.top + area.bottom) / 2 }
+}
+
 function insetForShell(
   renderer: Sigma,
   bbox: { x: [number, number]; y: [number, number] },
 ): { x: [number, number]; y: [number, number] } {
   const dims = renderer.getDimensions()
-  const panelInsetPx = Math.max(PANEL_INSET_MIN_PX, (dims.width * PANEL_INSET_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
-  const panelWidthPx = Math.max(PANEL_WIDTH_MIN_PX, (dims.width * PANEL_WIDTH_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
-  const panelFootprintPx = panelInsetPx + panelWidthPx
-  const innerW = dims.width - panelFootprintPx * 2
-  const innerH = dims.height - PANEL_TOP_INSET_PX - DOCK_HEIGHT_PX
+  const area = shellFreeArea(renderer)
+  const panelFootprintPx = area.left
+  const innerW = area.right - area.left
+  const innerH = area.bottom - area.top
   if (innerW <= 0 || innerH <= 0) return bbox // window too small to inset meaningfully
 
   const bw = bbox.x[1] - bbox.x[0]
@@ -439,6 +479,10 @@ type Props = {
   granularity: Granularity
   selectedNodeId: number | null
   onSelectNode: (id: number | null) => void
+  /** Opens the full node inspector for whatever is selected — the card is a
+   * summary, and everything deeper (facts, edges, lyrics, tag write-back)
+   * lives behind this. */
+  onOpenInspector: () => void
   onStats?: (stats: { nodes: number; edges: number }) => void
 }
 
@@ -452,7 +496,7 @@ export type CanvasHandle = {
 }
 
 export default forwardRef<CanvasHandle, Props>(function Canvas(
-  { granularity, selectedNodeId, onSelectNode, onStats },
+  { granularity, selectedNodeId, onSelectNode, onOpenInspector, onStats },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -461,59 +505,92 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const { nodes, edges, loading } = useGraphData(granularity)
   const scanStatus = useScanStatus()
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      flyToNode(nodeId: number) {
-        const graph = graphRef.current
-        const renderer = rendererRef.current
-        const key = nodeKey(nodeId)
-        if (!graph || !renderer || !graph.hasNode(key)) return
+  // Shared by the imperative handle and by clicking a node on the canvas —
+  // both mean "go look at this", and they must land in the same place at the
+  // same zoom or the graph would move differently depending on whether you
+  // arrived from search or from the canvas itself.
+  const flyTo = useCallback((nodeId: number) => {
+    const graph = graphRef.current
+    const renderer = rendererRef.current
+    const key = nodeKey(nodeId)
+    if (!graph || !renderer || !graph.hasNode(key)) return
 
-        const attrs = graph.getNodeAttributes(key)
-        const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
-        const normalize = createNormalizationFunction(bbox)
-        const { x, y } = normalize({ x: attrs.x as number, y: attrs.y as number })
+    const attrs = graph.getNodeAttributes(key)
+    const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
+    const normalize = createNormalizationFunction(bbox)
+    const { x, y } = normalize({ x: attrs.x as number, y: attrs.y as number })
 
-        // Distance the camera is actually about to travel, in the same
-        // on-screen pixels the user perceives — where the target already
-        // sits on screen right now, relative to the viewport center it's
-        // about to be centered on. Graph-unit distance wouldn't mean the
-        // same thing at every zoom level; this does.
-        const dims = renderer.getDimensions()
-        const targetViewport = renderer.graphToViewport({ x: attrs.x as number, y: attrs.y as number })
-        const distancePx = Math.hypot(targetViewport.x - dims.width / 2, targetViewport.y - dims.height / 2)
-        const duration = prefersReducedMotion() ? 0 : flyToDurationForDistance(distancePx)
+    // Distance the camera is actually about to travel, in the same
+    // on-screen pixels the user perceives — where the target already
+    // sits on screen right now, relative to where it is about to sit.
+    // Graph-unit distance wouldn't mean the same thing at every zoom
+    // level; this does.
+    const landing = flyTargetViewportPoint(renderer)
+    const currentViewport = renderer.graphToViewport({ x: attrs.x as number, y: attrs.y as number })
+    const distancePx = Math.hypot(currentViewport.x - landing.x, currentViewport.y - landing.y)
+    const duration = prefersReducedMotion() ? 0 : flyToDurationForDistance(distancePx)
 
-        void renderer.getCamera().animate({ x, y, ratio: FLY_TO_RATIO }, { duration })
-      },
-    }),
-    [],
-  )
+    // The camera centres whatever it points at, and the node is not going to
+    // the centre. Ask sigma which framed-graph point *would* sit at the
+    // landing point if the camera were centred on the node, then reflect the
+    // camera through the node by that much: a point twice as far from the
+    // offending direction puts the node exactly where it is wanted. Done
+    // through viewportToFramedGraph rather than by hand so it stays correct
+    // through sigma's own padding and dimension handling.
+    const camera = renderer.getCamera()
+    const atLanding = renderer.viewportToFramedGraph(landing, {
+      cameraState: { x, y, ratio: FLY_TO_RATIO, angle: camera.angle },
+    })
+    void camera.animate({ x: 2 * x - atLanding.x, y: 2 * y - atLanding.y, ratio: FLY_TO_RATIO }, { duration })
+  }, [])
+
+  useImperativeHandle(ref, () => ({ flyToNode: flyTo }), [flyTo])
 
   // Held in refs so effects below don't list them as dependencies — a parent
   // re-render must never tear down the renderer or reset the camera.
   const onSelectNodeRef = useRef(onSelectNode)
   const onStatsRef = useRef(onStats)
-  const lastCameraRatioRef = useRef<number | null>(null)
+  const flyToRef = useRef(flyTo)
+  // Read inside the renderer effect's click handler to decide whether a
+  // click is a new selection or a toggle-off of the current one. A ref, not
+  // the prop, because that effect is deliberately keyed on [granularity]
+  // alone — depending on selectedNodeId would tear the renderer down and
+  // reset the camera on every click.
+  const selectedNodeIdRef = useRef(selectedNodeId)
 
-  // Selection-ring animation state (MO-5), read by defaultDrawNodeHover on
-  // the renderer-lifecycle effect below and written by the selection effect
-  // further down — both need the same instance across renders, hence a
-  // component-level ref rather than a local inside either effect.
-  const ringProgressRef = useRef<Map<string, number>>(new Map())
-  const ringCancelRef = useRef<Map<string, () => void>>(new Map())
+  // Which node the hover plate is currently describing. Distinct from
+  // sigma's own hover tracking below: that fires on every enterNode, this
+  // only flips once the dwell has been held, so the plate and the dim
+  // arrive as one event rather than two.
+  const [hoveredNodeId, setHoveredNodeId] = useState<number | null>(null)
+
+  // The same instance rendererRef holds, exposed as state purely so the
+  // overlays below re-subscribe when a granularity switch kills one renderer
+  // and builds another — a ref's identity never changes, so an effect keyed
+  // on it would keep listening to a dead one.
+  const [activeRenderer, setActiveRenderer] = useState<Sigma | null>(null)
+
   useEffect(() => {
     onSelectNodeRef.current = onSelectNode
     onStatsRef.current = onStats
+    flyToRef.current = flyTo
+    selectedNodeIdRef.current = selectedNodeId
   })
 
   // Renderer lifecycle — created once per granularity (a genuinely different
   // graph: different node set, different edges, different layout), NOT on
-  // every data refresh. The zoom ratio (not pan/x/y, which have no shared
-  // meaning across two different node sets) carries over from whichever
-  // graph was active before, so switching artists -> albums -> tracks doesn't
-  // suddenly zoom back out to fit-all every time.
+  // every data refresh.
+  //
+  // The zoom ratio used to carry over from whichever graph was active
+  // before, so switching artists -> albums -> tracks didn't zoom back out to
+  // fit-all every time. That held while the working range was roughly 0.7
+  // to 1 — carrying the ratio kept you at a comparable scale, and pan has no
+  // shared meaning across two different node sets anyway. It stopped holding
+  // when selection began flying to FLY_TO_RATIO: carrying ~0.115 into a
+  // graph the selected node is not even in lands the camera on 11% of a
+  // bbox it has never seen, centred wherever that bbox's middle happens to
+  // fall, which is empty canvas far more often than not. Each graph now
+  // frames itself.
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -535,53 +612,24 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       // Nodes with no art at all — a colored dot, and the only thing sigma's
       // own built-in program ever draws here.
       defaultNodeType: 'circle',
-      // sigma routes both `highlighted:true` nodes AND the live mouse-hovered
-      // node through this same drawer — there is no way to tell them apart
-      // from inside it except by attribute. Only nodes we explicitly flag
-      // `ring: true` (the selection effect below) get the ring; a node the
-      // pointer merely happens to be over draws nothing, in favour of the
-      // dim/neighbor-highlight reducers and the panel already doing that
-      // job. Without this override sigma falls back to its stock
-      // black-on-white label-box hover renderer.
+      // Kept as a no-op on purpose, and it has to stay here. Sigma routes
+      // both `highlighted:true` nodes and the live mouse-hovered node
+      // through this drawer, and without an override it falls back to a
+      // stock black-on-white label box — so deleting this function does not
+      // remove drawing from the hover layer, it restores sigma's own.
       //
-      // Progress (0-1) comes from ringProgressRef, driven by animateScalar
-      // in the selection effect below — the ring scales out from the node's
-      // own radius and fades in alongside, rather than snapping into place
-      // (MO-5). A node with `ring: true` but no in-flight animation (the
-      // steady-state selected node, most of the time) draws at progress 1.
-      // The ring follows the node's own geometry — a square cover gets a
-      // square ring, concentric and at the same clearance. A circle drawn
-      // around a square node either clips its corners or floats away from its
-      // edges, and either one reads as a second shape rather than as that
-      // node being selected.
-      defaultDrawNodeHover: (context, data) => {
-        const progress = ringProgressRef.current.get(data.key) ?? (data.ring ? 1 : 0)
-        if (progress <= 0) return
-        const clearance = NODE_RING_CLEARANCE * progress
-        context.beginPath()
-        if (data.square) {
-          const half = data.size * SQUARE_HALF_SIDE_RATIO + clearance
-          context.rect(data.x - half, data.y - half, half * 2, half * 2)
-        } else {
-          context.arc(data.x, data.y, data.size + clearance, 0, Math.PI * 2)
-        }
-        context.lineWidth = 1
-        context.globalAlpha = progress
-        context.strokeStyle = NODE_RING_COLOR
-        context.stroke()
-        context.globalAlpha = 1
-      },
+      // Nothing is drawn on the hover canvas any more. Selection used to
+      // grow a 74px ring here; it is now the glass card in NodeCard.tsx,
+      // whose 255px cover completely covers a node and any ring around it
+      // at every zoom the app can reach. Hover is the dim reducers below
+      // plus NodeHoverPlate.tsx. Drag still sets `highlighted` (see the
+      // drag recipe further down), which is what would otherwise surface
+      // that stock label box mid-drag.
+      defaultDrawNodeHover: () => {},
     })
     rendererRef.current = renderer
+    setActiveRenderer(renderer)
 
-    if (lastCameraRatioRef.current != null) {
-      renderer.getCamera().setState({ ratio: lastCameraRatioRef.current })
-    }
-    // Carried across granularity switches so the renderer this effect
-    // rebuilds doesn't zoom back out to fit-all every time.
-    renderer.getCamera().on('updated', (state) => {
-      lastCameraRatioRef.current = state.ratio
-    })
 
     // Hover/neighbor highlighting — dims everything not connected to the
     // hovered node, via sigma's render-time reducers rather than mutating
@@ -620,10 +668,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       // sigma has no notion of fading an image out, so the art->circle swap
       // stays a hard cut; only the circle's own color crossfades.
       //
-      // `square` is cleared alongside the type: a selected release dimmed
-      // because the pointer is elsewhere renders as a dot, and its ring has to
-      // follow it back to a circle rather than staying a square drawn around
-      // nothing.
+      // `square` is cleared alongside the type: nothing downstream should be
+      // told a node is still a square cover while it is being drawn as a
+      // plain dot.
       return {
         ...data,
         type: 'circle',
@@ -647,9 +694,17 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       dwellTimeout = setTimeout(() => {
         dwellTimeout = null
         setDimTarget(1)
+        // The plate rides the same dwell as the dim rather than getting its
+        // own threshold: they are one response to one gesture, and staggering
+        // them would read as two things happening.
+        setHoveredNodeId(Number(node))
       }, HOVER_DWELL_MS)
     })
     renderer.on('leaveNode', () => {
+      // Unconditional, unlike the dim below — a plate that was never shown
+      // costs nothing to hide, and this is also the path out of a hover that
+      // ended because the node was dragged or the graph resynced.
+      setHoveredNodeId(null)
       if (dwellTimeout != null) {
         // Dwell never engaged — nothing was ever dimmed, so there is
         // nothing to reverse. This is what stops a cursor sweeping across
@@ -665,22 +720,66 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // downNode -> mousemovebody -> mouseup, reposition it live, and PATCH
     // the server only once the drag actually ends — not on every frame.
     let draggedNode: string | null = null
-    let isDragging = false
+    let downAt: { x: number; y: number } | null = null
+    // Whether the pointer has moved far enough since mousedown for this to be
+    // a drag rather than a click.
+    //
+    // This was a bare boolean set by the first mousemove, which is not the
+    // same question: sigma fires mousemovebody on sub-pixel jitter, so every
+    // ordinary click on a node counted as a drag. It cost nothing while the
+    // consequence was rewriting a node's position to where it already was,
+    // and became load-bearing the moment a click also had to select and fly —
+    // a click that registers as a drag now silently does nothing at all.
+    let didDrag = false
 
     renderer.on('downNode', (e) => {
-      isDragging = true
       draggedNode = e.node
-      graph.setNodeAttribute(draggedNode, 'highlighted', true)
+      didDrag = false
+      downAt = { x: e.event.x, y: e.event.y }
     })
 
     renderer.on('clickNode', (e) => {
-      onSelectNodeRef.current(Number(e.node))
+      if (didDrag) return
+      const id = Number(e.node)
+      // Clicking the selected node again clears it — one of the three ways
+      // out of a selection, alongside clicking empty canvas and Escape
+      // (App.tsx). No fly on the way out: the camera has already arrived
+      // where the user asked it to go, and moving it again on dismissal
+      // would undo a deliberate framing.
+      if (selectedNodeIdRef.current === id) {
+        onSelectNodeRef.current(null)
+        return
+      }
+      onSelectNodeRef.current(id)
+      flyToRef.current(id)
     })
+
+    // Clicking the canvas itself is the deselect gesture. Nothing outside a
+    // node has any other meaning here — panning is a drag, and sigma reports
+    // that separately.
+    renderer.on('clickStage', () => {
+      if (selectedNodeIdRef.current != null) onSelectNodeRef.current(null)
+    })
+
+    // Sigma's captor answers a double-click by animating the camera to
+    // ratio/2.2 over 200ms. DESIGN.md is explicit that the graph's own
+    // pan/zoom is direct manipulation and never eased, and now that a single
+    // click flies, a double-click would also race two camera animations
+    // against each other. Suppressed on both the node and the stage.
+    renderer.on('doubleClickNode', (e) => e.preventSigmaDefault())
+    renderer.on('doubleClickStage', (e) => e.preventSigmaDefault())
 
     const mouseCaptor = renderer.getMouseCaptor()
 
     mouseCaptor.on('mousemovebody', (e) => {
-      if (!isDragging || !draggedNode) return
+      if (!draggedNode || !downAt) return
+      if (!didDrag) {
+        if (Math.hypot(e.x - downAt.x, e.y - downAt.y) < DRAG_THRESHOLD_PX) return
+        didDrag = true
+        // Flagged only once this is a real drag, so an ordinary click never
+        // routes the node through the hover canvas on its way to selecting.
+        graph.setNodeAttribute(draggedNode, 'highlighted', true)
+      }
       const pos = renderer.viewportToGraph(e)
       graph.setNodeAttribute(draggedNode, 'x', pos.x)
       graph.setNodeAttribute(draggedNode, 'y', pos.y)
@@ -688,15 +787,15 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     })
 
     const handleMouseUp = () => {
-      if (draggedNode) {
+      if (draggedNode && didDrag) {
         const id = Number(draggedNode)
         const x = graph.getNodeAttribute(draggedNode, 'x') as number
         const y = graph.getNodeAttribute(draggedNode, 'y') as number
         graph.removeNodeAttribute(draggedNode, 'highlighted')
         void patchNodePosition(id, x, y, granularity)
       }
-      isDragging = false
       draggedNode = null
+      downAt = null
     }
 
     // Pins the projection while dragging so the graph does not reflow under
@@ -714,6 +813,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       renderer.kill()
       rendererRef.current = null
       graphRef.current = null
+      setActiveRenderer(null)
     }
     // Deliberately [granularity] only, not [nodes, edges] — see the comment
     // above the effect. onSelectNode/onStats/nodes are read through refs.
@@ -740,70 +840,6 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     }
   }, [nodes, edges, loading])
 
-  // Selection can arrive from a canvas click, a search result, or an inline
-  // link — either way the canvas marks the same node.
-  //
-  // Selection is an addition, never a substitution: the node grows a ring
-  // rather than changing color, so a cover stays readable as artwork.
-  // DESIGN.md "Nodes".
-  const previousSelectionRef = useRef<string | null>(null)
-  useEffect(() => {
-    const graph = graphRef.current
-    if (!graph) return
-
-    // Scales from the node's own radius out to full clearance and fades in
-    // alongside, rather than snapping into place; reverses over RING_OUT_MS
-    // on the way out, since leaving is faster than arriving (MO-5). Once an
-    // animation settles, the progress entry is dropped — a steady selected
-    // node falls back to defaultDrawNodeHover's `data.ring ? 1 : 0`, so the
-    // map only ever holds nodes actually mid-transition.
-    const animateRing = (key: string, target: 0 | 1) => {
-      ringCancelRef.current.get(key)?.()
-      const from = ringProgressRef.current.get(key) ?? (target === 1 ? 0 : 1)
-      const cancel = animateScalar(
-        from,
-        target,
-        target === 1 ? RING_IN_MS : RING_OUT_MS,
-        (v) => {
-          ringProgressRef.current.set(key, v)
-          rendererRef.current?.refresh()
-        },
-        () => {
-          ringCancelRef.current.delete(key)
-          ringProgressRef.current.delete(key)
-          if (target === 0 && graph.hasNode(key)) {
-            graph.removeNodeAttribute(key, 'highlighted')
-            graph.removeNodeAttribute(key, 'ring')
-          }
-        },
-      )
-      ringCancelRef.current.set(key, cancel)
-    }
-
-    const prev = previousSelectionRef.current
-    const nextKey = selectedNodeId != null ? nodeKey(selectedNodeId) : null
-
-    if (prev !== nextKey) {
-      // A genuine selection change — animate the old node out and the new
-      // one in. `highlighted`/`ring` go on immediately so the new node is
-      // eligible for hover-layer rendering from the first frame; the ramp
-      // itself is what animateRing drives.
-      if (prev && graph.hasNode(prev)) animateRing(prev, 0)
-      if (nextKey != null && graph.hasNode(nextKey)) {
-        graph.setNodeAttribute(nextKey, 'highlighted', true)
-        graph.setNodeAttribute(nextKey, 'ring', true)
-        animateRing(nextKey, 1)
-      }
-      previousSelectionRef.current = nextKey != null && graph.hasNode(nextKey) ? nextKey : null
-    } else if (nextKey != null && graph.hasNode(nextKey) && !graph.getNodeAttribute(nextKey, 'ring')) {
-      // Selection didn't change — just a background data refresh. syncGraph
-      // may have dropped and re-added this node with fresh attributes, so
-      // make sure it's still flagged, but don't replay the arrival animation.
-      graph.setNodeAttribute(nextKey, 'highlighted', true)
-      graph.setNodeAttribute(nextKey, 'ring', true)
-    }
-  }, [selectedNodeId, nodes, edges, loading])
-
   // One sentence, muted, centered, no illustration — DESIGN.md's empty-state
   // rule. Ordered error > scanning > plain-empty: a failed scan is the most
   // specific and actionable thing to tell someone, an in-progress one at
@@ -811,9 +847,49 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // (a library that scanned clean with nothing in it) is the fallback.
   const showEmptyState = !loading && nodes.length === 0
 
+  // The two in-place node states. Both are DOM rather than anything sigma
+  // draws, because both are glass and backdrop-filter has no equivalent
+  // inside a WebGL renderer — they sit in a layer over the canvas and are
+  // pinned to their node by useNodeAnchor.
+  //
+  // Looked up from the fetched node list rather than from graphology so the
+  // card and plate read the same title/subtitle the rest of the app does; a
+  // few hundred nodes makes find() the cheaper of the two anyway.
+  const selectedNode = selectedNodeId != null ? nodes.find((n) => n.id === selectedNodeId) : undefined
+  // A node showing its card does not also get a plate: it already says what
+  // it is, in more detail, in the same place.
+  const hoveredNode =
+    hoveredNodeId != null && hoveredNodeId !== selectedNodeId ? nodes.find((n) => n.id === hoveredNodeId) : undefined
+
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="absolute inset-0" />
+
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        {hoveredNode && (
+          <NodeHoverPlate
+            key={hoveredNode.id}
+            renderer={activeRenderer}
+            nodeKey={nodeKey(hoveredNode.id)}
+            title={hoveredNode.title}
+            subtitle={hoveredNode.subtitle}
+          />
+        )}
+        {selectedNode && (
+          <div className="pointer-events-auto">
+            <NodeCard
+              key={selectedNode.id}
+              renderer={activeRenderer}
+              nodeId={selectedNode.id}
+              nodeKey={nodeKey(selectedNode.id)}
+              type={selectedNode.type}
+              title={selectedNode.title}
+              subtitle={selectedNode.subtitle}
+              onOpenInspector={onOpenInspector}
+            />
+          </div>
+        )}
+      </div>
       {showEmptyState && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-[12px] text-center">
           {scanStatus.error ? (

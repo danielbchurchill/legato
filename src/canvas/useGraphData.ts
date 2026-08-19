@@ -26,6 +26,12 @@ export type GraphNode = {
    * promising one exists, so every node sharing a cover shares one URL and
    * therefore one texture in sigma's atlas — see server/src/routes/cover.ts. */
   cover_hash: string | null
+  /** Second line of the hover plate and the selected card: a release's
+   * primary artist, a recording's first credited artist, null for an artist
+   * (who is already named on the first line). Carried with the graph rather
+   * than fetched per node — the plate appears 90ms after the pointer lands
+   * and cannot also wait on a round trip. */
+  subtitle: string | null
 }
 
 export type GraphEdge = {

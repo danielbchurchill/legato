@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useMountFade } from './useMountFade'
 
 /* C-1: native title= tooltips render as OS chrome — wrong typeface, wrong
  * colors, roughly a second of delay, positioned by the window manager,
@@ -16,7 +17,7 @@ const DWELL_MS = 400
 
 export function Tooltip({ label, children }: { label: string; children: ReactNode }) {
   const [mounted, setMounted] = useState(false)
-  const [shown, setShown] = useState(false)
+  const shown = useMountFade(mounted)
   const dwellRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const clearDwell = () => {
@@ -32,18 +33,10 @@ export function Tooltip({ label, children }: { label: string; children: ReactNod
   const hide = () => {
     clearDwell()
     setMounted(false)
-    setShown(false)
   }
 
   useEffect(() => clearDwell, [])
 
-  // Mount at opacity 0, then flip to opacity 1 on the next frame — a
-  // transition can't animate from and to the same paint.
-  useEffect(() => {
-    if (!mounted) return
-    const raf = requestAnimationFrame(() => setShown(true))
-    return () => cancelAnimationFrame(raf)
-  }, [mounted])
 
   return (
     <span

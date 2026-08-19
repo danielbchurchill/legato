@@ -71,9 +71,6 @@
   --color-edge-same-label: #ea667c; /*      350deg 76% 66% — albums */
   --color-edge-collaborated-with: #ea8766; /* 15deg 76% 66% — artists */
 
-  /* Selection ring drawn around a node, not a fill change on it. */
-  --color-node-ring: #ffffff;
-
   /* Hover dimming for uninvolved nodes/edges. Must be opaque — sigma's WebGL
    * path renders a translucent rgba() as solid white rather than compositing
    * it, so these can never be alpha values no matter how tempting that reads
