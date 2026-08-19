@@ -11,7 +11,12 @@ import {
 function edgeTargets(db: Database.Database, fromNode: number, type: string): NodeRef[] {
   return db
     .prepare(
-      `SELECT n.id, n.title FROM edges e JOIN nodes n ON n.id = e.to_node WHERE e.from_node = ? AND e.type = ?`,
+      // Ordered by edge id so edgeTarget() below means "the first credited
+      // one" — a multi-artist recording has several performed_by edges and
+      // an article that named an arbitrary one would churn between
+      // recomputes.
+      `SELECT n.id, n.title FROM edges e JOIN nodes n ON n.id = e.to_node
+        WHERE e.from_node = ? AND e.type = ? ORDER BY e.id`,
     )
     .all(fromNode, type) as NodeRef[];
 }

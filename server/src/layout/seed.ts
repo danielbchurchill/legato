@@ -48,7 +48,8 @@ export function recomputeTracksLayout(db: Database.Database): void {
                  JOIN nodes y ON y.id = e.to_node
                 WHERE e.from_node = n.id AND e.type = 'released_in' LIMIT 1) AS year,
               (SELECT e.to_node FROM edges e
-                WHERE e.from_node = n.id AND e.type = 'performed_by' LIMIT 1) AS artist_id,
+                WHERE e.from_node = n.id AND e.type = 'performed_by'
+                ORDER BY e.id LIMIT 1) AS artist_id,
               (SELECT e.to_node FROM edges e
                 WHERE e.from_node = n.id AND e.type = 'released_on' LIMIT 1) AS label_id
        FROM nodes n
@@ -71,10 +72,32 @@ export function recomputeTracksLayout(db: Database.Database): void {
   // rows sitting under granularity = 'tracks' — upsertSeeds only ever
   // inserts/updates the recording set above, it never deletes what it
   // didn't write, so those rows would otherwise linger forever.
+  // Scoped to "a recording that still has a file", matching the source set
+  // the seeds are computed from above rather than merely the node type. A
+  // recording whose last file is gone — the library root removed, the file
+  // deleted off disk — is no longer in that set, so upsertSeeds stops
+  // writing it while its old row lives on, and routes/nodes.ts selects the
+  // canvas by position row.
   db.prepare(
     `DELETE FROM positions WHERE granularity = 'tracks'
-       AND node_id NOT IN (SELECT id FROM nodes WHERE type = 'recording')`,
+       AND node_id NOT IN (
+         SELECT n.id FROM nodes n
+          WHERE n.type = 'recording'
+            AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = n.id)
+       )`,
   ).run();
+}
+
+// Same sweep as the tracks one above, for the two entity graphs: upsertSeeds
+// only writes the set handed to it, so a node that has stopped being an
+// album or an artist keeps whatever position it last held, and the canvas
+// keys off position rows (routes/nodes.ts) rather than edges. Runs after
+// recomputeEntities has already pruned the entity tables themselves, which
+// is the order both callers use.
+function pruneStalePositions(db: Database.Database, granularity: "albums" | "artists"): void {
+  db.prepare(
+    `DELETE FROM positions WHERE granularity = ? AND node_id NOT IN (SELECT node_id FROM ${granularity})`,
+  ).run(granularity);
 }
 
 // Album entities only, connected to each other via same_artist/same_label
@@ -96,6 +119,7 @@ export function recomputeAlbumsLayout(db: Database.Database): void {
   }));
 
   upsertSeeds(db, "albums", computeClusteredSeeds(clusterInputs));
+  pruneStalePositions(db, "albums");
 }
 
 // Artist entities only, connected to each other via collaborated_with
@@ -134,6 +158,7 @@ export function recomputeArtistsLayout(db: Database.Database): void {
   });
 
   upsertSeeds(db, "artists", computeClusteredSeeds(clusterInputs));
+  pruneStalePositions(db, "artists");
 }
 
 // user_x/user_y are never touched by any of these — only a PATCH

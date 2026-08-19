@@ -36,10 +36,11 @@ export function computeAlbumAggregates(
     else recordingsByRelease.set(e.toNode, [e.fromNode]);
   }
 
-  // At most one performed_by edge per recording today (deriveLocalEdges
-  // creates exactly one, from tags.artist) — .set() on first-seen is a
-  // no-op in practice, and stays correct if that ever changes to "keep the
-  // first credited artist" for a multi-performer recording.
+  // A recording can carry several performed_by edges — deriveLocalEdges
+  // creates one per artist named in the credit, so "JPEGMAFIA; Danny
+  // Brown" produces two. First-seen wins, and since match/edges.ts inserts
+  // in credit order that is the primary performer: an album stays filed
+  // under JPEGMAFIA rather than under whoever the mode happened to favour.
   const artistByRecording = new Map<number, number>();
   for (const e of performedBy) {
     if (!artistByRecording.has(e.fromNode)) artistByRecording.set(e.fromNode, e.toNode);
@@ -126,6 +127,27 @@ export function computeArtistAggregates(appearsOn: EdgeRef[], performerEdges: Ed
 // sync across collapse, re-scan, and manual-edge flows. Rows for entities
 // that no longer have any tracks are left stale rather than deleted, the
 // same tolerance layout/seed.ts's positions table already has.
+// Entities are recomputed as a complete set every run, so a row already in
+// the table that this run didn't produce has stopped being one: a release
+// whose last file left the library, or — far more common — an artist node
+// that only existed because a multi-artist credit was once stored verbatim
+// as a single name. Upsert-only left those behind forever, and a stale
+// artists row keeps a stale positions row alive with it (layout/seed.ts),
+// which is all it takes to leave a ghost sitting on the graph long after
+// every edge that justified it is gone.
+//
+// Prunes against the ids this run computed rather than a SQL rewrite of the
+// same rule — two expressions of "what counts as an artist" would drift,
+// and the one in SQL would be the one nobody remembered to update.
+function pruneEntities(db: Database.Database, table: "albums" | "artists", keep: number[]): void {
+  db.prepare("CREATE TEMP TABLE IF NOT EXISTS entity_keep (node_id INTEGER PRIMARY KEY)").run();
+  db.prepare("DELETE FROM entity_keep").run();
+  const insert = db.prepare("INSERT OR IGNORE INTO entity_keep (node_id) VALUES (?)");
+  for (const id of keep) insert.run(id);
+  // Table name is a literal union, not caller input — no injection surface.
+  db.prepare(`DELETE FROM ${table} WHERE node_id NOT IN (SELECT node_id FROM entity_keep)`).run();
+}
+
 export function recomputeEntities(db: Database.Database): void {
   const appearsOn = db
     .prepare("SELECT from_node AS fromNode, to_node AS toNode FROM edges WHERE type = 'appears_on'")
@@ -187,6 +209,8 @@ export function recomputeEntities(db: Database.Database): void {
     for (const a of artists) {
       upsertArtist.run(a.nodeId, a.trackCount, a.albumCount);
     }
+    pruneEntities(db, "albums", albums.map((a) => a.nodeId));
+    pruneEntities(db, "artists", artists.map((a) => a.nodeId));
   });
   applyAll();
 }

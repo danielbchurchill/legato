@@ -1,6 +1,8 @@
 import { existsSync, statSync } from "node:fs";
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
+import { countLibraryRootContents, removeLibraryRootCascade } from "../library-roots.js";
+import { recompute } from "../recompute.js";
 import { createScanJob, executeScan } from "../scan/scanner.js";
 import { unwatchLibraryRoot, watchLibraryRoot } from "../scan/watcher.js";
 import { broadcast } from "../ws.js";
@@ -55,16 +57,50 @@ export function libraryRootsRoutes(db: Database.Database) {
       },
     );
 
-    app.delete<{ Params: { id: string } }>("/library-roots/:id", async (request, reply) => {
-      const result = db
-        .prepare("DELETE FROM library_roots WHERE id = ?")
-        .run(request.params.id);
-      if (result.changes === 0) {
-        reply.code(404);
-        return { error: "not found" };
-      }
-      unwatchLibraryRoot(Number(request.params.id));
-      reply.code(204);
-    });
+    // Removing a root has to take everything hanging off it with it, in
+    // foreign-key order. The original one-line DELETE could never succeed:
+    // POST /library-roots creates a scan job the moment a root is added, and
+    // scan_jobs.library_root_id is NOT NULL with no cascade, so every root
+    // that had ever existed failed with SQLITE_CONSTRAINT_FOREIGNKEY and a
+    // 500. files.library_root_id is the same shape, and files in turn carry
+    // plays, tag_writes and merge_overrides. (cover_art is the one that
+    // handles itself, via ON DELETE SET NULL.)
+    //
+    // Refuses by default when the root still holds files, because one of
+    // those tables is the play history and no amount of re-scanning brings
+    // it back. force=true is the caller saying so out loud; the 409 body
+    // names what would be destroyed so the answer can be an informed one.
+    app.delete<{ Params: { id: string }; Querystring: { force?: string } }>(
+      "/library-roots/:id",
+      async (request, reply) => {
+        const id = Number(request.params.id);
+        const root = db.prepare("SELECT id FROM library_roots WHERE id = ?").get(id);
+        if (!root) {
+          reply.code(404);
+          return { error: "not found" };
+        }
+
+        const counts = countLibraryRootContents(db, id);
+
+        if (counts.files > 0 && request.query.force !== "true") {
+          reply.code(409);
+          return {
+            error: "library root still has files",
+            ...counts,
+            hint: "repeat with ?force=true to remove the root and everything derived from it",
+          };
+        }
+
+        removeLibraryRootCascade(db, id);
+
+        unwatchLibraryRoot(id);
+        // Entity rows, positions and collaboration edges all outlive the
+        // files they were derived from unless something recomputes — which
+        // is exactly what leaves removed music sitting on the canvas.
+        recompute(db);
+        broadcast("scan:done", { jobId: null, libraryRootId: id });
+        reply.code(204);
+      },
+    );
   };
 }

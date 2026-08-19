@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { extraCreditedArtists, splitArtistCredit } from "../scan/artist-credit.js";
 
 type LocalTags = {
   artist?: string | null;
@@ -81,8 +82,16 @@ export function deriveLocalEdges(db: Database.Database, fileId: number): void {
 
   if (!tags) return;
 
-  if (tags.artist) {
-    insertEdge(db, recordingNodeId, findOrCreateNode(db, "artist", tags.artist), "performed_by");
+  // One edge per artist the credit names, in credit order. A single ARTIST
+  // tag routinely carries several artists ("JPEGMAFIA; Danny Brown"), and
+  // storing that string as one node's title gave the graph an artist that
+  // doesn't exist while giving Danny Brown none. Order matters downstream:
+  // everything that needs one artist for a recording takes the first edge,
+  // so the primary performer stays primary. See scan/artist-credit.ts for
+  // which separators are safe to split on and, more importantly, which
+  // aren't.
+  for (const name of splitArtistCredit(tags.artist)) {
+    insertEdge(db, recordingNodeId, findOrCreateNode(db, "artist", name), "performed_by");
   }
   // M-7: derived from the same originaldate-first precedence releaseDate
   // itself uses (scan/tags.ts) — previously this read music-metadata's own
@@ -114,7 +123,12 @@ export function deriveLocalEdges(db: Database.Database, fileId: number): void {
   // 'artist' nodes so they're the same kind of entity performed_by already
   // creates, which is what lets the collaboration graph (session 4) treat
   // "performed on" and "featured on" as the same kind of tie.
-  for (const name of tags.featuredArtists ?? []) {
+  // Re-filtered against the credit here and not only at scan time, so
+  // re-deriving edges repairs a library scanned before the splitter
+  // existed: those tags_raw rows still list every ARTISTS value, ensemble
+  // fragments included. On a fresh scan this is a no-op, scan/tags.ts
+  // having already applied the same rule.
+  for (const name of extraCreditedArtists(tags.artist, tags.featuredArtists)) {
     insertEdge(db, recordingNodeId, findOrCreateNode(db, "artist", name), "featured_artist");
   }
 }

@@ -224,7 +224,17 @@ export async function searchRelease(input: ReleaseSearchInput): Promise<MbReleas
 export type MbCredit = { type: string; artistName: string; attributes: string[] };
 
 export type MbReleaseTrack = {
+  // Position within this track's own medium — 1-based and, on a multi-disc
+  // release, NOT unique across the release: a 2-LP set numbers both sides
+  // from 1. Pair it with mediumPosition, or use absolutePosition, whenever
+  // a track needs identifying; on its own it collides.
   position: number;
+  mediumPosition: number;
+  // Running position across the whole release (disc 1 track 1 is 1, and
+  // the first track of disc 2 continues rather than restarting). This is
+  // the one that matches a library tagged with flat track numbers, which
+  // is how a 14-track double LP ripped to one folder is usually numbered.
+  absolutePosition: number;
   recordingMbid: string;
   durationMs: number | null;
   isrc: string | null;
@@ -259,7 +269,7 @@ type RawDetailTrack = {
   length?: number | null;
   recording?: { id: string; length?: number | null; isrcs?: string[]; relations?: RawArtistRel[] };
 };
-type RawDetailMedium = { format?: string | null; tracks?: RawDetailTrack[] };
+type RawDetailMedium = { position?: number; format?: string | null; tracks?: RawDetailTrack[] };
 type RawLabelInfo = { "catalog-number"?: string | null; label?: { name?: string | null } };
 type RawReleaseGroup = { id?: string; "first-release-date"?: string | null };
 export type RawReleaseDetail = {
@@ -285,8 +295,14 @@ export type RawReleaseDetail = {
 // used below.
 export function parseReleaseDetail(data: RawReleaseDetail): MbReleaseDetail {
   const tracks: MbReleaseTrack[] = [];
-  for (const medium of data.media ?? []) {
+  // Counts every track the release lists, including any skipped below for
+  // want of a recording id — absolutePosition has to keep step with the
+  // real running order or every track after a gap is off by one.
+  let absolutePosition = 0;
+  for (const [index, medium] of (data.media ?? []).entries()) {
+    const mediumPosition = medium.position ?? index + 1;
     for (const t of medium.tracks ?? []) {
+      absolutePosition += 1;
       const recordingMbid = t.recording?.id;
       if (recordingMbid == null) continue;
       const credits: MbCredit[] = (t.recording?.relations ?? [])
@@ -294,6 +310,8 @@ export function parseReleaseDetail(data: RawReleaseDetail): MbReleaseDetail {
         .map((r) => ({ type: r.type, artistName: r.artist!.name, attributes: r.attributes ?? [] }));
       tracks.push({
         position: t.position,
+        mediumPosition,
+        absolutePosition,
         // The track's own length can differ slightly from the recording's
         // canonical length (a different edit/fade) — the track length is
         // what actually played on *this* release, so it wins when both exist.

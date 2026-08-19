@@ -162,6 +162,64 @@ describe("recomputeEntities", () => {
     expect(artistRow.album_count).toBe(1);
   });
 
+  // The exact shape a credit fix produces: "JPEGMAFIA; Danny Brown" was one
+  // artist node, re-deriving edges moves its recordings onto two real ones,
+  // and the node that started it all must not linger on the graph.
+  it("drops an artist row once nothing credits that node any more", () => {
+    db = openDb(":memory:");
+
+    const stale = makeNode("artist", "JPEGMAFIA; Danny Brown");
+    const real = makeNode("artist", "JPEGMAFIA");
+    const release = makeNode("release", "SCARING THE HOES");
+    const recording = makeNode("recording", "Lean Beef Patty");
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+      recording,
+      release,
+    );
+    const creditTo = (artistNode: number) =>
+      db
+        .prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')")
+        .run(recording, artistNode);
+
+    creditTo(stale);
+    recomputeEntities(db);
+    expect(db.prepare("SELECT node_id FROM artists WHERE node_id = ?").get(stale)).toBeTruthy();
+
+    // Re-derive: the combined credit is gone, the real artist takes over.
+    db.prepare("DELETE FROM edges WHERE type = 'performed_by'").run();
+    creditTo(real);
+    recomputeEntities(db);
+
+    expect(db.prepare("SELECT node_id FROM artists WHERE node_id = ?").get(stale)).toBeUndefined();
+    expect(db.prepare("SELECT node_id FROM artists WHERE node_id = ?").get(real)).toBeTruthy();
+  });
+
+  it("drops an album row once its last recording is gone", () => {
+    db = openDb(":memory:");
+    const artist = makeNode("artist", "Bob Dylan");
+    const release = makeNode("release", "Blonde on Blonde");
+    const recording = makeNode("recording", "Visions of Johanna");
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+      recording,
+      release,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+      recording,
+      artist,
+    );
+
+    recomputeEntities(db);
+    expect(db.prepare("SELECT node_id FROM albums WHERE node_id = ?").get(release)).toBeTruthy();
+
+    db.prepare("DELETE FROM edges").run();
+    recomputeEntities(db);
+
+    expect(db.prepare("SELECT node_id FROM albums WHERE node_id = ?").get(release)).toBeUndefined();
+    expect(db.prepare("SELECT node_id FROM artists WHERE node_id = ?").get(artist)).toBeUndefined();
+  });
+
   it("is idempotent — recomputing twice with no data change leaves the same rows", () => {
     db = openDb(":memory:");
     const artist = makeNode("artist", "Genesis Owusu");

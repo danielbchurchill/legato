@@ -33,9 +33,20 @@ function track(
   position: number,
   recordingMbid: string,
   durationMs: number,
-  overrides: Partial<Pick<MbReleaseDetail["tracks"][number], "isrc" | "credits">> = {},
+  overrides: Partial<Pick<MbReleaseDetail["tracks"][number], "isrc" | "credits" | "mediumPosition" | "absolutePosition">> = {},
 ): MbReleaseDetail["tracks"][number] {
-  return { position, recordingMbid, durationMs, isrc: null, credits: [], ...overrides };
+  // Single-medium defaults: one disc, so position, medium position and
+  // running position all agree. The multi-disc cases below override them.
+  return {
+    position,
+    mediumPosition: 1,
+    absolutePosition: position,
+    recordingMbid,
+    durationMs,
+    isrc: null,
+    credits: [],
+    ...overrides,
+  };
 }
 
 const REAL_TRACKLIST: MbReleaseDetail = {
@@ -111,11 +122,115 @@ describe("scoreReleaseCandidate / pickBestRelease — M-6 cluster weights", () =
   });
 });
 
+// The real Blonde on Blonde: MusicBrainz splits it 8 + 6 across two media
+// and numbers each from 1, so positions 1-6 exist twice. Structure and
+// recording MBIDs taken from a live GET /release/189efa45-...?inc=recordings.
+// Every local file is tagged disc 1, tracks 1-14 straight through, which is
+// how the double LP actually sits on disk in one folder.
+const TWO_DISC: MbReleaseDetail = {
+  mbid: "189efa45-def2-3b1c-b619-ba1640774705",
+  status: null,
+  country: null,
+  barcode: null,
+  asin: null,
+  disambiguation: null,
+  language: null,
+  script: null,
+  format: null,
+  releaseGroupMbid: null,
+  firstReleaseDate: null,
+  labelName: null,
+  catalogNumber: null,
+  tracks: [
+    track(1, "ab1d0ca0-rainy-day-women", 275000, { mediumPosition: 1, absolutePosition: 1 }),
+    track(2, "ffe699b0-pledging-my-time", 221000, { mediumPosition: 1, absolutePosition: 2 }),
+    track(3, "b9c93771-visions-of-johanna", 454000, { mediumPosition: 1, absolutePosition: 3 }),
+    track(4, "24ebb63c-one-of-us-must-know", 294000, { mediumPosition: 1, absolutePosition: 4 }),
+    track(5, "123b0bb8-i-want-you", 187000, { mediumPosition: 1, absolutePosition: 5 }),
+    track(6, "90567658-stuck-inside-of-mobile", 420000, { mediumPosition: 1, absolutePosition: 6 }),
+    track(7, "e4b3fe25-leopard-skin", 205000, { mediumPosition: 1, absolutePosition: 7 }),
+    track(8, "0d24a997-just-like-a-woman", 292000, { mediumPosition: 1, absolutePosition: 8 }),
+    track(1, "9a366514-most-likely", 213000, { mediumPosition: 2, absolutePosition: 9 }),
+    track(2, "6a837e1c-temporary-like-achilles", 305000, { mediumPosition: 2, absolutePosition: 10 }),
+    track(3, "f91804ae-absolutely-sweet-marie", 281000, { mediumPosition: 2, absolutePosition: 11 }),
+    track(4, "4ce35d5d-fourth-time-around", 195000, { mediumPosition: 2, absolutePosition: 12 }),
+    track(5, "9545ac5c-obviously-five-believers", 215000, { mediumPosition: 2, absolutePosition: 13 }),
+    track(6, "1b83e46d-sad-eyed-lady", 691000, { mediumPosition: 2, absolutePosition: 14 }),
+  ],
+};
+
+describe("assignTracks — multi-disc releases", () => {
+  it("matches flat 1..14 numbering straight through both discs", () => {
+    const localFiles: LocalTrack[] = Array.from({ length: 14 }, (_, i) => ({
+      fileId: i + 1,
+      trackNo: i + 1,
+      discNo: 1, // what the files actually claim: everything is "disc 1"
+      durationMs: null,
+    }));
+
+    const assignments = assignTracks(localFiles, TWO_DISC);
+    expect(assignments).toHaveLength(14);
+
+    const byFile = new Map(assignments.map((a) => [a.fileId, a.recordingMbid]));
+    // File 1 is Rainy Day Women. Keying on bare position let disc 2 overwrite
+    // disc 1 and handed this file "Most Likely You Go Your Way" instead.
+    expect(byFile.get(1)).toBe("ab1d0ca0-rainy-day-women");
+    expect(byFile.get(6)).toBe("90567658-stuck-inside-of-mobile");
+    // Track 9 has no disc-1 counterpart; it is disc 2's first track.
+    expect(byFile.get(9)).toBe("9a366514-most-likely");
+    expect(byFile.get(14)).toBe("1b83e46d-sad-eyed-lady");
+  });
+
+  it("gives every file a distinct recording", () => {
+    const localFiles: LocalTrack[] = Array.from({ length: 14 }, (_, i) => ({
+      fileId: i + 1,
+      trackNo: i + 1,
+      discNo: 1,
+      durationMs: null,
+    }));
+    const mbids = assignTracks(localFiles, TWO_DISC).map((a) => a.recordingMbid);
+    expect(new Set(mbids).size).toBe(14);
+  });
+
+it("will not re-hand a recording an earlier pass already assigned", () => {
+    // The leftover shape: 13 of 14 files resolved on a previous run, so only
+    // this one is still a sibling and its own track number is missing. The
+    // duration fallback would otherwise hand it Sad-Eyed Lady, which another
+    // file already holds — and applyMatch would merge two unrelated songs.
+    const localFiles: LocalTrack[] = [{ fileId: 99, trackNo: null, discNo: null, durationMs: 691000 }];
+    const used = new Set(["1b83e46d-sad-eyed-lady"]);
+
+    const assignments = assignTracks(localFiles, TWO_DISC, used);
+
+    expect(assignments.map((a) => a.recordingMbid)).not.toContain("1b83e46d-sad-eyed-lady");
+  });
+
+  it("honours a real disc number when the files carry one", () => {
+    const localFiles: LocalTrack[] = [
+      { fileId: 1, trackNo: 1, discNo: 2, durationMs: null },
+      { fileId: 2, trackNo: 1, discNo: 1, durationMs: null },
+    ];
+    const assignments = assignTracks(localFiles, TWO_DISC);
+    const byFile = new Map(assignments.map((a) => [a.fileId, a.recordingMbid]));
+    expect(byFile.get(1)).toBe("9a366514-most-likely");
+    expect(byFile.get(2)).toBe("ab1d0ca0-rainy-day-women");
+  });
+
+  it("does not let one disc's track claim block the other disc's same-numbered track", () => {
+    const localFiles: LocalTrack[] = [
+      { fileId: 1, trackNo: 1, discNo: 1, durationMs: null },
+      { fileId: 2, trackNo: 1, discNo: 2, durationMs: null },
+    ];
+    expect(assignTracks(localFiles, TWO_DISC)).toHaveLength(2);
+  });
+});
+
 describe("assignTracks — M-6 track assignment", () => {
   it("assigns every local file to its recording by track position, the real 14-track case", () => {
     const localFiles: LocalTrack[] = REAL_TRACKLIST.tracks.map((t, i) => ({
       fileId: i + 1,
       trackNo: t.position,
+      discNo: null,
       durationMs: null,
     }));
 
@@ -130,21 +245,21 @@ describe("assignTracks — M-6 track assignment", () => {
   });
 
   it("falls back to closest duration when a file has no track number", () => {
-    const localFiles: LocalTrack[] = [{ fileId: 1, trackNo: null, durationMs: 454000 }]; // ~Visions of Johanna
+    const localFiles: LocalTrack[] = [{ fileId: 1, trackNo: null, discNo: null, durationMs: 454000 }]; // ~Visions of Johanna
     const assignments = assignTracks(localFiles, REAL_TRACKLIST);
     expect(assignments).toEqual([{ fileId: 1, recordingMbid: "a9a1c164-f261-4072-96b4-ef4e4f1f4608" }]);
   });
 
   it("falls back to duration when the track number doesn't exist on this release (a bonus-track edition)", () => {
-    const localFiles: LocalTrack[] = [{ fileId: 1, trackNo: 99, durationMs: 229500 }]; // ~Pledging My Time
+    const localFiles: LocalTrack[] = [{ fileId: 1, trackNo: 99, discNo: null, durationMs: 229500 }]; // ~Pledging My Time
     const assignments = assignTracks(localFiles, REAL_TRACKLIST);
     expect(assignments).toEqual([{ fileId: 1, recordingMbid: "5a27b48c-c688-42fd-b68c-73f4cdb102b9" }]);
   });
 
   it("never assigns the same release track to two different local files", () => {
     const localFiles: LocalTrack[] = [
-      { fileId: 1, trackNo: null, durationMs: 454000 }, // both want "Visions of Johanna" by duration
-      { fileId: 2, trackNo: null, durationMs: 454100 },
+      { fileId: 1, trackNo: null, discNo: null, durationMs: 454000 }, // both want "Visions of Johanna" by duration
+      { fileId: 2, trackNo: null, discNo: null, durationMs: 454100 },
     ];
     const assignments = assignTracks(localFiles, REAL_TRACKLIST);
     const mbids = assignments.map((a) => a.recordingMbid);
@@ -152,7 +267,7 @@ describe("assignTracks — M-6 track assignment", () => {
   });
 
   it("leaves a file unassigned when nothing on the release plausibly matches", () => {
-    const localFiles: LocalTrack[] = [{ fileId: 1, trackNo: null, durationMs: null }];
+    const localFiles: LocalTrack[] = [{ fileId: 1, trackNo: null, discNo: null, durationMs: null }];
     expect(assignTracks(localFiles, REAL_TRACKLIST)).toEqual([]);
   });
 });
