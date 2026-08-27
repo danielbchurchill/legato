@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
 import type { Granularity } from '../shell/granularity'
+import { SERVER_HOST } from '../config/serverHost'
 
-const API = 'http://127.0.0.1:8899/api/v1'
+const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* How long to wait for a burst of enrichment events to stop before refetching
  * the graph. Longer than the enrichment queue's own ~1/sec spacing, so a

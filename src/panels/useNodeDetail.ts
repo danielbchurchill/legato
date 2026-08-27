@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
+import { SERVER_HOST } from '../config/serverHost'
 
-export const API = 'http://127.0.0.1:8899/api/v1'
+export const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* Everything the node-detail surfaces are made of: the payload shape, and the
  * one fetch that produces it.

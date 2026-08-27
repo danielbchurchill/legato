@@ -10,8 +10,9 @@ import { useScanStatus } from '../hooks/useScanStatus'
 import { Button } from '../ui/Button'
 import { NodeCard, NODE_CARD_COVER_CENTER_X, NODE_CARD_WIDTH_PX } from './NodeCard'
 import { NodeHoverPlate } from './NodeHoverPlate'
+import { SERVER_HOST } from '../config/serverHost'
 
-const API = 'http://127.0.0.1:8899/api/v1'
+const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* Node sizing. Sigma sizes are in its own units, not pixels — 22 renders at
  * roughly the mockup's 44px cover at the default camera. Nodes without art

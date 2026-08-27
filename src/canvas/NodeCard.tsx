@@ -7,8 +7,9 @@ import { Icon } from '../ui/Icon'
 import { useMountFade } from '../ui/useMountFade'
 import { formatDuration, formatLongDuration, NO_VALUE } from '../ui/format'
 import { useNodeAnchor, type NodeAnchor } from './useNodeAnchor'
+import { SERVER_HOST } from '../config/serverHost'
 
-const API = 'http://127.0.0.1:8899/api/v1'
+const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* Figma frame 31:246 ("Selected"). The node you clicked, opened in place on
  * the canvas: its cover at 255px with a title block and three metadata rows
