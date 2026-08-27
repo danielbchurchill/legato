@@ -2,9 +2,9 @@
 
 **This file is ground truth for how Legato looks and why.** [CLAUDE.md](CLAUDE.md) owns how to work in this repo; [Legato.md](~/Documents/Fifth%20Brain/projects/Legato.md) owns what the product is and why. This file owns the visual language, and `src/styles/tokens.css` is its machine-readable half — when the two disagree, this file explains the intent and the token file wins on values.
 
-Source of truth for the design itself: Figma file `NSaK1N64NwcKzlKpqaYs49`, frame **Desktop - 1**, 1440 × 1024.
+Source of truth for the design itself: Figma file `NSaK1N64NwcKzlKpqaYs49`. The original **Desktop - 1** frame (1440 × 1024) is still ground truth for anything not called out below. **Design v2** (canvas "version 2", frames **Search**, **Music Map**, **Panel Collapse**) is a new direction, still WIP as of 2026-08-27 — sections below marked *v2* reflect decisions confirmed against it so far; the rest of v2's frames haven't been reviewed yet.
 
-Every value below was measured from that frame and then cross-checked against the exported render by sampling pixels. Where the two disagreed, the note says so.
+Every value below was measured from the relevant frame and then cross-checked against the exported render by sampling pixels, where a render exists to sample. v2 values are measured from Figma's own dev-mode output instead — no exported render to verify against yet, so treat those as provisional until one exists. Where a value disagreed with its render, the note says so.
 
 ---
 
@@ -32,10 +32,15 @@ Legato is one dark theme. There is no light mode and no theme switcher; the app 
 | `--color-surface` | `rgb(30 36 38 / 0.8)` | Floating glass panels |
 | `--color-surface-flat` | `#1C2124` | Opaque equivalent, for no-blur fallback |
 | `--color-hairline` | `rgb(255 255 255 / 0.3)` | Panel and control edges |
-| `--color-divider` | `rgb(113 113 113 / 0.35)` | Rules inside a panel |
-| `--color-ink` | `#FFFFFF` | Values |
+| `--color-divider` | `rgb(100 100 100 / 0.35)` | Rules inside a panel |
+| `--color-ink` | `#fefefe` | Values |
 | `--color-signal` | `#D9D9D9` | Waveform bars, page dots |
-| `--color-muted` | `#717171` | Labels, dividers, inactive states |
+| `--color-muted` | `#646464` | Labels, dividers, inactive states |
+| `--color-control` | `#646464` *(v2)* | Toggle/slider/radio/swatch chrome, resting state |
+
+### v2: one muted tone, not two
+
+The v2 mockup carried two near-identical greys forward from two different origins — a label color and a separate control-chrome color — that turned out to share the exact same hex, `#646464`. Collapsed to one on 2026-08-27: `--color-muted` is the app's only muted text tone now, and `--color-control` is a separate token at the same value for control chrome specifically (toggle tracks, slider tracks, radio dots, swatch borders), kept distinct for the same reason `--color-inset` stays its own token even while identical to `--color-canvas` — see below. `--color-ink` moved off pure white to `#fefefe` in the same pass; visually identical, keeps the app off a true-black-on-true-white pair that was never a deliberate choice. `--color-divider`'s base value tracks `--color-muted`'s shift (113 → 100 per channel), same derivation as before. `--color-muted-hi` (`#a0a0a0`, the hover step) is untouched — it wasn't part of this decision, and it still sits cleanly between the new muted and ink values.
 
 ### Raised and inset
 
@@ -77,7 +82,7 @@ Surfaces differ only in which edges they keep:
 
 Figma specifies `0.25px solid white` on every surface. Do not implement that literally. A quarter of a pixel is not a width any display can commit to — depending on device pixel ratio it either disappears or snaps up to a full pixel, so the same build looks different on two machines.
 
-Measured in the render, that 0.25px white line peaks at `rgb(90–101)` against the panel interior. `1px solid rgb(255 255 255 / 0.3)` composites to `rgb(96)`. Same appearance, stable at every scale factor. Dividers get the same treatment: Figma's 0.25px `#717171` measures `rgb(57, 61, 62)`, and `1px` at 35% alpha computes to `rgb(58)`.
+Measured in the render, that 0.25px white line peaks at `rgb(90–101)` against the panel interior. `1px solid rgb(255 255 255 / 0.3)` composites to `rgb(96)`. Same appearance, stable at every scale factor. Dividers get the same treatment: the original mockup's 0.25px `#717171` measured `rgb(57, 61, 62)` against a `1px` line at 35% alpha computing to `rgb(58)`. v2's divider base shifted to `#646464` alongside the muted-tone collapse above — not yet re-verified against an exported render, since v2 doesn't have one yet, but it's the same 35%-alpha derivation that held for the original value.
 
 **Rule: hairlines are always 1px with alpha doing the work. Never sub-pixel widths.**
 
@@ -99,26 +104,28 @@ Three families, and the division of labor is strict.
 | `--font-ui` | Rubik Variable | Labels, section headers, controls, prose |
 | `--font-mono` | Sometype Mono Variable | Values, data, anything the library supplied |
 
-### The one rule
+### The one rule (v2)
 
-**Rubik in `--color-muted` names a thing. Sometype Mono in `--color-ink` is the thing.**
+**Rubik is UI. Sometype Mono is metadata that came off a disk file.**
+
+The split moved off label-vs-value (the original rule) onto provenance, decided 2026-08-27. In practice this changes less than it sounds: everything that used to read as mono data — track titles, artist names, durations, file paths, IDs, and read-only *stats about* the library (play counts, a computed "top album") — is still mono, because it's still data the app is showing you about your library, whether it came straight off a tag or got derived from one. What actually moves is the app's own interactive chrome: a slider's live readout (`1.00`), a toggle's state (`on`/`off`), anything that is UI state rather than a fact about a file, is Rubik now, in `--color-control`, not mono in ink. That's the one case the original rule got wrong — it made a slider value look like library data when it isn't one.
 
 ```
-artists          5              ← Rubik #717171   |  Sometype Mono #FFFFFF
+artists          5              ← Rubik #646464   |  Sometype Mono #fefefe   (library data)
 collection size  7GB
 top artist       The Beatles
-release date     2022-08-05
+size          [====○────] 1.00  ← Rubik #646464 label AND value              (control state)
 ```
 
-This is what makes the panels legible at a glance without any boxes, alignment aids, or weight changes. A grey value or a mono label breaks the pattern and should be treated as a defect. Track titles, artist names, durations, file paths, IDs — all data, all mono, all white. Section headers (`collection`, `now playing`, `overview`, `metadata`, `maintenance`, `up next`) are Rubik muted.
+A grey mono value or an ink-colored label still breaks the pattern and is a defect, same as before. Section headers (`collection`, `now playing`, `overview`, `metadata`, `maintenance`, `up next`, `nodes`, `links`, `forces`) are Rubik muted, same as always.
 
 `--color-ink` is reserved for values and for genuinely active state (the current tab, the current filter) — never for hover. A hovered label steps to `--color-muted-hi` instead: distinct enough from `--color-muted` to read as a response, but not the color of a value, so hovering a label never makes it look like data.
 
-### Size
+### Size (v2)
 
-The mockup is single-size: **every label and every value is 16px.** The only other size in the file is the 40px wordmark.
+Two sizes now, not one. `--text-base` (16px) is still every label and value in the panels — that part of the original rule holds. `--text-sm` (12px) is new, and scoped tightly: control chrome only — settings labels, sub-labels, and the live readouts next to a slider or toggle. The 40px wordmark is unchanged and remains its own case.
 
-That is unusual and it is worth keeping. There is no type ramp here yet and none should be invented speculatively — the hierarchy comes from the family/color split and from spacing, not from size. Add a size only when a real screen needs one, and add it to the tokens when you do.
+Don't reach for `--text-sm` outside control chrome. The hierarchy in every panel still comes from the family/color split and from spacing, not from size — 12px exists because the Music Map settings panel is a genuinely denser register than a data list, not because panels earned a type ramp.
 
 Weight axis is available on both variable fonts and currently unused. Same principle: if hierarchy needs more than color and family provide, reach for weight before size.
 
@@ -129,6 +136,7 @@ Weight axis is available on both variable fonts and currently unused. Same princ
 | Token | Value | Meaning |
 |---|---|---|
 | `--radius-surface` | `25px` | Every glass surface |
+| `--radius-control` | `15px` *(v2)* | Bordered control wells — the search field, any future bordered input |
 | `--spacing-panel` | `24px` | Panel side padding → 312px of content in a 360px panel |
 | `--spacing-row` | `33px` | Vertical pitch of a label/value row |
 | `--spacing-header-rule` | `31px` | Section header baseline to its divider |
@@ -137,6 +145,20 @@ Weight axis is available on both variable fonts and currently unused. Same princ
 The 33px row pitch is consistent across both the overview list and the metadata list — it is a real rhythm, not a coincidence, and new lists should adopt it.
 
 `--spacing-panel` is a reconciliation: the mockup drifts between 20px and 26px of side padding across panels. 24px is the value that makes 360 − 48 = 312 match the 314px dividers as drawn. Use 24 everywhere and treat the drift as mockup noise.
+
+### Control density (v2)
+
+A second, tighter scale for control chrome — the Music Map settings panel, and anything built to the same density — alongside the panel rhythm above, not replacing it:
+
+| Token | Value |
+|---|---|
+| `--spacing-xs` | `5px` |
+| `--spacing-sm` | `10px` |
+| `--spacing-lg` | `20px` |
+
+The pattern that shows up everywhere in the settings panel: a control's own dot or swatch, `--spacing-xs` below it, then its label — the same 5px gap under a toggle knob, a radio dot, and a color swatch alike. `--spacing-sm` is the pitch between one setting row and the next; `--spacing-lg` separates one settings group (`nodes`, `links`, `forces`) from the next.
+
+Daniel's stated goal is tighter spacing across the app as a whole, not just in new control chrome — but retrofitting the panel rhythm above (33px rows, 24px padding) to run tighter is a separate, deliberate pass with a much wider blast radius, since every shipped panel depends on those exact numbers today. Not done here; this section is scoped to control-density UI only until that pass happens on purpose.
 
 ### Radius, and what does not get it
 
@@ -164,6 +186,17 @@ At the 1440 × 1024 reference size:
 | Hover plate | centred under its node | width follows the title |
 
 Panels are inset 51px from the window edge and 120px from the top — they float, and they do not reach the bottom of the window. That gap is where the graph shows through, so it is structural.
+
+### Panel collapsed (v2)
+
+A real global state, not a narrower version of the panels — collapsed removes the glass entirely rather than shrinking it. Confirmed against the v2 "Panel Collapse" frame:
+
+- **Left side** shrinks to the 50px icon rail alone. No panel glass, no search field, no expanded content of any kind — just the six rail icons floating directly on the canvas.
+- **Right side** keeps a content column but drops its glass, its width (300px → 214px), and everything below the track header — no `track metadata`, `lyrics`, `connections`, or `notes`, collapsed or otherwise. What's left: cover art at 194 × 194 (down from 279.5) and the three-line track/album/artist block at a 24px line pitch (down from 29px).
+- **Both collapse-toggle icons disappear once already collapsed.** There is no dedicated "expand" affordance — re-expanding the left side happens by clicking one of the six rail icons (which is also how you switch what the expanded panel shows), and the right side's toggle icon only exists in the expanded state next to the `DC` avatar.
+- **The header bar, toggle pill, and transport dock are unaffected.** Same position and size whether the panels are expanded or collapsed — only the two side columns respond to this state.
+
+This is a new interaction the current app doesn't have at all: today's side panels are always present. Whatever holds this state (component-local, or a real setting) needs to persist across the state the panels are already deriving from — worth deciding once this gets built rather than assuming.
 
 ---
 
@@ -244,6 +277,16 @@ The original three types' hues were spaced ~80° apart (283°/203°/115°) — t
 
 The type-to-color assignment within the tracks graph is still provisional in the same sense the original three were — no meaningful-order convention (e.g., "hard metadata warmest, personal edges coolest") has been decided, just clearance-based spacing. Revisit if that becomes worth doing deliberately.
 
+### v2: user-colorable types
+
+Decided 2026-08-27: every hex in the tables above becomes a **user-editable default**, not a fixed value. The taxonomy itself doesn't change — still the same 10 types, still grouped by which graph they render in, still nothing beyond hue distinguishes one from another. What changes is that a user can override any type's hue for themselves, strongest reason being accessibility: the fixed palette optimizes hue-spacing for typical vision, and someone with a color vision deficiency has no way today to pick hues that actually work for them.
+
+The v2 mockup's "links > colours" legend shows 4 swatches (collab/year/style/note) — those are placeholder labels from a WIP mockup, not the real list. The real picker needs to show whichever types are actually active for the current graph (7 for tracks, 2 for albums, 1 for artists), not a fixed 4.
+
+**The picker must stay constrained, not a free color wheel.** An unconstrained picker lets a user pick near-identical hues for two types that then render indistinguishably in the same graph, which defeats the entire point of the spacing work above. Offer a curated set of pre-spaced hues at the same 76%/66% saturation/lightness the fixed palette already uses — real choice, including room to pick a CVD-safe subset, without the ability to break the distinguishability guarantee. Exact picker mechanics (how many hue options, whether the app warns on a too-close pick) are an implementation decision for whoever builds this, not fixed here.
+
+Storage: a type → hex override map, most naturally in the existing `settings` key-value store (`server/src/routes/settings.ts` — already a generic string store, no new migration needed for this). Unset types fall back to the curated defaults above.
+
 ---
 
 ## Iconography
@@ -282,6 +325,19 @@ Underline was the only button affordance in the app (C-3) — "retry", "rescan",
 `destructive` is distinguished by shape, not color. The palette has no danger token, deliberately (`--color-*` in tokens.css is glass/ink/muted/edge-hue, full stop — inventing a red for one rare state would be the first exception), so weight carries what color can't: a bordered pill reads as a control to commit to, a plain underline reads as a link to follow.
 
 Both variants share the toggle pill's rounding language (`rounded-full`, no new radius token) and MO-1's motion tokens (`--motion-fast`, `--ease-out`) rather than a literal duration.
+
+### v2: settings primitives
+
+Four new controls, all first appearing in the Music Map settings panel, all needing to be built — none of them exist in `src/ui/` today. All four share one geometry: an indicator (dot, knob, or swatch), `--spacing-xs` (5px) below it, a `--text-sm` (12px) Rubik label in `--color-control`, the whole group centered in its column. Same rounding language as the buttons above — `rounded-full` for anything circular, no dedicated radius token.
+
+| Control | Geometry | Notes |
+|---|---|---|
+| **Toggle** | 20 × 10px pill track, 10px circular knob, both `--color-control` | Knob sits left (off) or right (on); track border and knob fill are the same resting color, so state reads from knob position, not from a color change |
+| **Slider** | 3px pill track spanning the available width, 10px circular thumb, both `--color-control`; numeric readout (`1.00`) in `--text-sm` Rubik `--color-control` to the right | The readout is a live control value, not library data — see "The one rule (v2)" above for why it's Rubik, not mono |
+| **Radio dot** | 10px circle, `--color-control`, label below at `--spacing-xs` | Used for the "default view" granularity preference — separate from the artists/releases/tracks toggle pill, which stays the *active* view, not the *default* one |
+| **Color swatch** | 15px rounded square, `--spacing-xs` above its label | The per-type edge-color picker — see "Edge palette" → "v2: user-colorable types". Shows whichever types are active for the current graph, not a fixed 4 |
+
+None of these have a defined hover/active/focus treatment yet — the mockup is static, same caveat Motion already states for the rest of the app. Don't invent one speculatively; add it here once a real interaction needs it.
 
 ---
 
@@ -355,10 +411,10 @@ The catalogue to build against:
 
 1. **Tokens, not values.** No hex, no px radius, no blur value inline in a component. If something needs a value that is not a token, add the token.
 2. **Hairlines are 1px with alpha.** Never sub-pixel.
-3. **Rubik/muted labels, Mono/ink values.** No exceptions.
+3. **Rubik is UI, Mono is metadata from a disk file.** *(v2)* Library data — raw tag or derived stat — is mono ink; the app's own interactive state (a slider readout, a toggle's on/off) is Rubik control-color. No exceptions.
 4. **Artwork is reproduced, not styled.** Square in panels, circular in the graph, never tinted or filtered.
 5. **Panels stay translucent.** Blur may degrade to `--color-surface-flat`; opacity may not go to 1.
-6. **One size until a screen earns another.** 16px everywhere; reach for weight before size.
+6. **Two sizes, not a ramp.** *(v2)* 16px for every panel label and value; 12px only for control chrome (settings labels, slider/toggle readouts). Reach for weight before inventing a third size.
 
 ---
 

@@ -34,16 +34,21 @@
    * the render, and it renders identically at every scale factor. */
   --color-hairline: rgb(255 255 255 / 0.3);
 
-  /* In-panel rules under section headers. The mockup uses the label grey at
-   * 0.25px; same reasoning as above, 1px at 35% matches the measured rgb(58). */
-  --color-divider: rgb(113 113 113 / 0.35);
+  /* In-panel rules under section headers. Same reasoning as the hairline —
+   * 1px at 35% alpha standing in for a sub-pixel line — with a base value
+   * that now tracks --color-muted's own shift (design v2, 2026-08-27). */
+  --color-divider: rgb(100 100 100 / 0.35);
 
   /* ---- Text ----------------------------------------------------------- */
 
-  /* Two roles, and the split is strict: Rubik grey names a thing, Sometype Mono
-   * white is the thing's value. Never a grey value or a mono label. */
-  --color-ink: #ffffff;
-  --color-muted: #717171;
+  /* Design v2 (2026-08-27): the mockup's two near-identical greys — a label
+   * color and a separate control-chrome color — turned out to be the exact
+   * same hex. Collapsed to one: --color-muted is the only muted text tone
+   * now. --color-ink also shifted off pure white; #fefefe reads identically
+   * but keeps the app off the one true-black-on-true-white pair, which was
+   * never a deliberate choice, just Figma's default. */
+  --color-ink: #fefefe;
+  --color-muted: #646464;
 
   /* Hover's own step (C-2) — of 23 hover rules in the app, 20 jumped straight
    * to --color-ink, which is also the color of every value in the panels, so
@@ -52,6 +57,14 @@
    * stays reserved for genuinely active state (the current tab, the current
    * filter). See DESIGN.md's type rule. */
   --color-muted-hi: #a0a0a0;
+
+  /* Interactive control chrome — toggle tracks, slider tracks, radio dots,
+   * swatch borders — in their default/inactive state. Same hex as
+   * --color-muted today, kept as its own token on purpose: a text color and
+   * a control's resting color are different roles that happen to agree
+   * right now, the same reasoning --color-inset stays separate from
+   * --color-canvas. See DESIGN.md "Controls". */
+  --color-control: #646464;
 
   /* ---- Graph ---------------------------------------------------------- */
 
@@ -90,14 +103,22 @@
   --font-mono: 'Sometype Mono Variable', ui-monospace, monospace;
   --font-display: 'Luxurious Script', cursive;
 
-  /* The mockup is single-size: every label and every value is 16px. Resisting
-   * the urge to invent a ramp — sizes get added when a real need appears. */
+  /* Design v2 (2026-08-27): a second size, for control chrome — settings
+   * labels, sub-labels, slider/toggle readouts. --text-base stays what it
+   * was: the one size for library data and UI prose. See DESIGN.md "Size". */
   --text-base: 16px;
+  --text-sm: 12px;
   --text-wordmark: 40px;
 
   /* ---- Geometry ------------------------------------------------------- */
 
   --radius-surface: 25px;
+
+  /* Design v2 (2026-08-27): a second radius tier for bordered control wells
+   * — the search field today, any future bordered input. Glass surfaces
+   * keep --radius-surface; this is for things that punch through the glass
+   * rather than float on it. */
+  --radius-control: 15px;
 
   /* P-8: 360px panel width and 51px window inset are measured at the
    * mockup's 1440px reference only — floated as literal pixels, a real
@@ -123,6 +144,17 @@
   /* Section header -> divider -> first row. */
   --spacing-header-rule: 31px;
   --spacing-rule-body: 16px;
+
+  /* Design v2 (2026-08-27): a generic scale for control-density UI — the
+   * Music Map settings panel and anything built like it — which runs
+   * tighter than the panel rhythm above. Purpose-named tokens still win
+   * wherever a purpose-named one already exists; reach for these only in
+   * new control chrome, not as a substitute for --spacing-row et al.
+   * Retrofitting the existing panel rhythm to run tighter overall is a
+   * separate, deliberate pass — not done here. See DESIGN.md "Geometry". */
+  --spacing-xs: 5px;
+  --spacing-sm: 10px;
+  --spacing-lg: 20px;
 
   /* ---- Depth ---------------------------------------------------------- */
 
