@@ -335,7 +335,7 @@ Four new controls, all first appearing in the Music Map settings panel, all need
 | **Toggle** | 20 × 10px pill track, 10px circular knob, both `--color-control` | Knob sits left (off) or right (on); track border and knob fill are the same resting color, so state reads from knob position, not from a color change |
 | **Slider** | 3px pill track spanning the available width, 10px circular thumb, both `--color-control`; numeric readout (`1.00`) in `--text-sm` Rubik `--color-control` to the right | The readout is a live control value, not library data — see "The one rule (v2)" above for why it's Rubik, not mono |
 | **Radio dot** | 10px circle, `--color-control`, label below at `--spacing-xs` | Used for the "default view" granularity preference — separate from the artists/releases/tracks toggle pill, which stays the *active* view, not the *default* one |
-| **Color swatch** | 15px rounded square, `--spacing-xs` above its label | The per-type edge-color picker — see "Edge palette" → "v2: user-colorable types". Shows whichever types are active for the current graph, not a fixed 4 |
+| **Color swatch** | 15px square, no radius — confirmed via Figma dev-mode, not rounded despite first impression from the screenshot | The per-type edge-color picker — see "Edge palette" → "v2: user-colorable types". Shows whichever types are active for the current graph, not a fixed 4 |
 
 None of these have a defined hover/active/focus treatment yet — the mockup is static, same caveat Motion already states for the rest of the app. Don't invent one speculatively; add it here once a real interaction needs it.
 
