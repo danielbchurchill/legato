@@ -4,6 +4,7 @@ import Sigma from 'sigma'
 import { createNormalizationFunction } from 'sigma/utils'
 import { createNodeImageProgram } from '@sigma/node-image'
 import { patchNodePosition, useGraphData, type GraphEdge, type GraphNode } from './useGraphData'
+import { PANEL_REFERENCE_WIDTH_PX } from './panelSizing'
 import type { Granularity } from '../shell/granularity'
 import { useScanStatus } from '../hooks/useScanStatus'
 import { Button } from '../ui/Button'
@@ -153,24 +154,27 @@ const DRAG_THRESHOLD_PX = 4
 const HOVER_DWELL_MS = 90 // --motion-instant — used here as a debounce threshold, not a transition
 const DIM_CROSSFADE_MS = 120 // --motion-exit
 
-function prefersReducedMotion(): boolean {
+function osPrefersReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
 /* The only two things in this file that can't be CSS — WebGL has no
  * transitions of its own. One scalar, one rAF loop, terminates on reaching
  * its target: not an ongoing animation, so it doesn't fall foul of "nothing
- * animates on a loop". Snaps straight to the target under reduced motion.
- * Returns a cancel function so a new animation can interrupt one in flight
- * without it fighting over the same value. */
+ * animates on a loop". Snaps straight to the target when reduced motion
+ * applies — the OS preference, or the app's own force-on override (see the
+ * Settings "reduced motion" toggle). Returns a cancel function so a new
+ * animation can interrupt one in flight without it fighting over the same
+ * value. */
 function animateScalar(
   from: number,
   to: number,
   durationMs: number,
   onFrame: (value: number) => void,
+  reducedMotion: boolean,
   onDone?: () => void,
 ): () => void {
-  if (prefersReducedMotion()) {
+  if (reducedMotion) {
     onFrame(to)
     onDone?.()
     return () => {}
@@ -306,29 +310,36 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
  * anyway; erring toward extra clearance is the safe direction, a node
  * still ending up hidden is not.
  *
- * P-8: panel width/inset are no longer fixed pixels (tokens.css's
- * --panel-width/--panel-inset scale with the window above 1440px) — the
- * ratios/floor below duplicate that same formula rather than reading it
- * back from a live DOM element, the same "sigma needs a concrete number,
- * kept in sync by hand" tradeoff this file already makes for EDGE_COLOR.
- * Left as a fixed pixel constant here, the camera would under-reserve
- * space at any window wider than 1440 and G-8's fix would silently regress. */
-const PANEL_WIDTH_MIN_PX = 360
+ * P-8: panel inset is no longer a fixed pixel (tokens.css's --panel-inset
+ * scales with the window above 1440px) — the ratio/floor below duplicates
+ * that same formula rather than reading it back from a live DOM element,
+ * the same "sigma needs a concrete number, kept in sync by hand" tradeoff
+ * this file already makes for EDGE_COLOR. Left as a fixed pixel constant
+ * here, the camera would under-reserve space at any window wider than 1440
+ * and G-8's fix would silently regress.
+ *
+ * Panel *width* used to be a second duplicate of the same formula here, but
+ * panels are now independently resizable (Settings has no control for this
+ * — it's a drag on the panel's own inner edge) and App.tsx is the single
+ * owner of each panel's actual current width, default or dragged. Canvas
+ * takes both as props and this file no longer needs to guess — see
+ * ./panelSizing.ts, shared with App.tsx's resize logic. */
 const PANEL_INSET_MIN_PX = 51
-const PANEL_REFERENCE_WIDTH_PX = 1440
 const PANEL_TOP_INSET_PX = 59
 const DOCK_HEIGHT_PX = 121
 
 /* The rectangle of canvas the shell leaves uncovered, in viewport pixels.
  * Both the initial bbox fit and the fly target need the same answer. */
-function shellFreeArea(renderer: Sigma): { left: number; right: number; top: number; bottom: number } {
+function shellFreeArea(
+  renderer: Sigma,
+  leftPanelWidthPx: number,
+  rightPanelWidthPx: number,
+): { left: number; right: number; top: number; bottom: number } {
   const dims = renderer.getDimensions()
   const panelInsetPx = Math.max(PANEL_INSET_MIN_PX, (dims.width * PANEL_INSET_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
-  const panelWidthPx = Math.max(PANEL_WIDTH_MIN_PX, (dims.width * PANEL_WIDTH_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
-  const panelFootprintPx = panelInsetPx + panelWidthPx
   return {
-    left: panelFootprintPx,
-    right: dims.width - panelFootprintPx,
+    left: panelInsetPx + leftPanelWidthPx,
+    right: dims.width - panelInsetPx - rightPanelWidthPx,
     top: PANEL_TOP_INSET_PX,
     bottom: dims.height - DOCK_HEIGHT_PX,
   }
@@ -349,8 +360,12 @@ function shellFreeArea(renderer: Sigma): { left: number; right: number; top: num
  * where the node ends up. When the free strip is narrower than the card the
  * target clamps left rather than centring, which keeps the cover and the
  * start of every row on screen and lets only the far edge slide under. */
-function flyTargetViewportPoint(renderer: Sigma): { x: number; y: number } {
-  const area = shellFreeArea(renderer)
+function flyTargetViewportPoint(
+  renderer: Sigma,
+  leftPanelWidthPx: number,
+  rightPanelWidthPx: number,
+): { x: number; y: number } {
+  const area = shellFreeArea(renderer, leftPanelWidthPx, rightPanelWidthPx)
   const freeWidth = area.right - area.left
   const cardLeft =
     freeWidth >= NODE_CARD_WIDTH_PX ? area.left + (freeWidth - NODE_CARD_WIDTH_PX) / 2 : area.left
@@ -360,10 +375,16 @@ function flyTargetViewportPoint(renderer: Sigma): { x: number; y: number } {
 function insetForShell(
   renderer: Sigma,
   bbox: { x: [number, number]; y: [number, number] },
+  leftPanelWidthPx: number,
+  rightPanelWidthPx: number,
 ): { x: [number, number]; y: [number, number] } {
   const dims = renderer.getDimensions()
-  const area = shellFreeArea(renderer)
-  const panelFootprintPx = area.left
+  const area = shellFreeArea(renderer, leftPanelWidthPx, rightPanelWidthPx)
+  // Independently resizable panels can differ in width, so the left/right
+  // footprint can too — padding by whichever is larger stays the safe
+  // direction G-8's own comment already calls out (a node ending up hidden
+  // under the wider one is worse than slightly over-padding the narrower).
+  const panelFootprintPx = Math.max(area.left, dims.width - area.right)
   const innerW = area.right - area.left
   const innerH = area.bottom - area.top
   if (innerW <= 0 || innerH <= 0) return bbox // window too small to inset meaningfully
@@ -484,6 +505,19 @@ type Props = {
    * lives behind this. */
   onOpenInspector: () => void
   onStats?: (stats: { nodes: number; edges: number }) => void
+  /** Settings "hover-dim" toggle. Gates only the neighbor-dim effect —
+   * NodeHoverPlate still shows regardless, since naming the node under the
+   * pointer is wayfinding, not the more aggressive dim-everything-else cue. */
+  dimOnHoverEnabled?: boolean
+  /** Settings "reduced motion" toggle — force-on only, layered on top of the
+   * OS's own prefers-reduced-motion rather than a way to override it off. */
+  reducedMotionForced?: boolean
+  /** The collection/now-playing panels' actual current width in px — App.tsx
+   * owns whether that's the P-8 default or a dragged override. G-8's
+   * free-canvas math needs the real number or a widened panel silently
+   * covers nodes this file still thinks are reachable. */
+  leftPanelWidthPx: number
+  rightPanelWidthPx: number
 }
 
 export type CanvasHandle = {
@@ -496,7 +530,17 @@ export type CanvasHandle = {
 }
 
 export default forwardRef<CanvasHandle, Props>(function Canvas(
-  { granularity, selectedNodeId, onSelectNode, onOpenInspector, onStats },
+  {
+    granularity,
+    selectedNodeId,
+    onSelectNode,
+    onOpenInspector,
+    onStats,
+    dimOnHoverEnabled = true,
+    reducedMotionForced = false,
+    leftPanelWidthPx,
+    rightPanelWidthPx,
+  },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -525,10 +569,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // sits on screen right now, relative to where it is about to sit.
     // Graph-unit distance wouldn't mean the same thing at every zoom
     // level; this does.
-    const landing = flyTargetViewportPoint(renderer)
+    const landing = flyTargetViewportPoint(renderer, leftPanelWidthPxRef.current, rightPanelWidthPxRef.current)
     const currentViewport = renderer.graphToViewport({ x: attrs.x as number, y: attrs.y as number })
     const distancePx = Math.hypot(currentViewport.x - landing.x, currentViewport.y - landing.y)
-    const duration = prefersReducedMotion() ? 0 : flyToDurationForDistance(distancePx)
+    const duration =
+      osPrefersReducedMotion() || reducedMotionForcedRef.current ? 0 : flyToDurationForDistance(distancePx)
 
     // The camera centres whatever it points at, and the node is not going to
     // the centre. Ask sigma which framed-graph point *would* sit at the
@@ -557,6 +602,14 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // alone — depending on selectedNodeId would tear the renderer down and
   // reset the camera on every click.
   const selectedNodeIdRef = useRef(selectedNodeId)
+  // Read by the renderer effect's dim/fly logic below, which is keyed on
+  // [granularity] alone — same "ref, not the prop" reasoning as
+  // selectedNodeIdRef, so a Settings toggle change doesn't tear the
+  // renderer down.
+  const dimOnHoverEnabledRef = useRef(dimOnHoverEnabled)
+  const reducedMotionForcedRef = useRef(reducedMotionForced)
+  const leftPanelWidthPxRef = useRef(leftPanelWidthPx)
+  const rightPanelWidthPxRef = useRef(rightPanelWidthPx)
 
   // Which node the hover plate is currently describing. Distinct from
   // sigma's own hover tracking below: that fires on every enterNode, this
@@ -575,6 +628,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     onStatsRef.current = onStats
     flyToRef.current = flyTo
     selectedNodeIdRef.current = selectedNodeId
+    dimOnHoverEnabledRef.current = dimOnHoverEnabled
+    reducedMotionForcedRef.current = reducedMotionForced
+    leftPanelWidthPxRef.current = leftPanelWidthPx
+    rightPanelWidthPxRef.current = rightPanelWidthPx
   })
 
   // Renderer lifecycle — created once per granularity (a genuinely different
@@ -652,25 +709,35 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     const setDimTarget = (target: number) => {
       cancelDimAnim?.()
-      cancelDimAnim = animateScalar(dimProgress, target, DIM_CROSSFADE_MS, (v) => {
-        dimProgress = v
-        rendererRef.current?.refresh()
-      })
+      cancelDimAnim = animateScalar(
+        dimProgress,
+        target,
+        DIM_CROSSFADE_MS,
+        (v) => {
+          dimProgress = v
+          rendererRef.current?.refresh()
+        },
+        osPrefersReducedMotion() || reducedMotionForcedRef.current,
+      )
     }
 
     renderer.setSetting('nodeReducer', (node, data) => {
       if (dimProgress <= 0 || node === hoveredNode || hoveredNeighbors?.has(node)) return data
-      // Forced to 'circle' rather than left on a cover program with no image
-      // — an art-bound node dimmed mid-hover must reliably fall back to a
-      // plain dimmed dot, not depend on NodeImageProgram handling a missing
-      // image gracefully. The crossfade itself mixes from the node's own
-      // color (white, for art still loading/dimmed) toward the dim tone —
-      // sigma has no notion of fading an image out, so the art->circle swap
-      // stays a hard cut; only the circle's own color crossfades.
-      //
-      // `square` is cleared alongside the type: nothing downstream should be
-      // told a node is still a square cover while it is being drawn as a
-      // plain dot.
+      // Art-bound nodes are never recolored or reshaped to indicate state
+      // (DESIGN.md "Nodes": "do not brighten, scale, or recolor a cover").
+      // This used to force `type: 'circle'` and crossfade `color` from the
+      // node's inert white placeholder (nodeAttributes' `color: '#ffffff'`,
+      // never read by NodeImageProgram at rest) toward DIMMED_NODE_COLOR —
+      // which read as a bright white flash cutting to a flat dot, and lost
+      // the release/track shape distinction, on every node dimmed mid-hover.
+      // @sigma/node-image has no multiply-darken over an opaque texture
+      // (drawingMode "background" is a no-op once texel.a is 1; "color"
+      // replaces the image outright rather than darkening it), so there is
+      // no way to dim art itself without one of those two violations —
+      // zIndex alone still sends it behind the hovered node's neighborhood.
+      if (data.type === 'cover' || data.type === 'coverSquare') {
+        return { ...data, zIndex: 0 }
+      }
       return {
         ...data,
         type: 'circle',
@@ -693,7 +760,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       hoveredNeighbors = new Set(graph.neighbors(node))
       dwellTimeout = setTimeout(() => {
         dwellTimeout = null
-        setDimTarget(1)
+        // The Settings hover-dim toggle gates only this — the plate below
+        // still names the node regardless, since that's wayfinding, not the
+        // more aggressive "recede everything else" effect being toggled.
+        if (dimOnHoverEnabledRef.current) setDimTarget(1)
         // The plate rides the same dwell as the dim rather than getting its
         // own threshold: they are one response to one gesture, and staggering
         // them would read as two things happening.
@@ -713,7 +783,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         dwellTimeout = null
         return
       }
-      setDimTarget(0)
+      if (dimOnHoverEnabledRef.current) setDimTarget(0)
     })
 
     // Standard sigma.js drag-node recipe: track the dragged node across
@@ -836,7 +906,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // whatever the user is currently looking at.
     if (hadNoNodes) {
       const bbox = robustBBox(graph)
-      if (bbox) renderer.setCustomBBox(insetForShell(renderer, bbox))
+      if (bbox) {
+        renderer.setCustomBBox(
+          insetForShell(renderer, bbox, leftPanelWidthPxRef.current, rightPanelWidthPxRef.current),
+        )
+      }
     }
   }, [nodes, edges, loading])
 

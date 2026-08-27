@@ -5,14 +5,15 @@ import PlaybackSpike from './PlaybackSpike'
 import LibrarySetup, { Centered } from './LibrarySetup'
 import { useServerReady } from './hooks/useServerReady'
 import Canvas, { type CanvasHandle } from './canvas/Canvas'
+import { defaultPanelWidthPx } from './canvas/panelSizing'
 import { usePlayback } from './playback/usePlayback'
 import HygieneView from './hygiene/HygieneView'
 import { AppShell } from './shell/AppShell'
 import { Panel } from './shell/Panel'
 import { GraphToggle } from './shell/GraphToggle'
-import type { Granularity } from './shell/granularity'
+import { GRANULARITIES, type Granularity } from './shell/granularity'
 import { TransportDock } from './shell/TransportDock'
-import { CollectionPanel } from './panels/CollectionPanel'
+import { CollectionPanel, type CollectionPanelHandle } from './panels/CollectionPanel'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
 import { SettingsView } from './settings/SettingsView'
@@ -186,10 +187,82 @@ function MainApp() {
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [granularity, setGranularity] = useState<Granularity>('albums')
-  const { settings, updateSettings } = useSettings()
+  const { settings, loaded: settingsLoaded, updateSettings } = useSettings()
   const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
   const playback = usePlayback(replaygainMode)
   const canvasRef = useRef<CanvasHandle>(null)
+  const collectionPanelRef = useRef<CollectionPanelHandle>(null)
+
+  // Settings gating Canvas's hover-dim effect and reduced-motion override —
+  // string flags, matching the store's existing string-only convention
+  // (enrichmentEnabled above uses the same '!== "false"' idiom).
+  const dimOnHoverEnabled = settings.hoverDimEnabled !== 'false'
+  const reducedMotionForced = settings.reducedMotionForced === 'true'
+
+  // Applied once, when settings first arrive, not on every settings change —
+  // switching granularity mid-session is the user's live choice and
+  // shouldn't be fought by a stale default the moment something else in
+  // Settings is saved.
+  const appliedDefaultGranularity = useRef(false)
+  useEffect(() => {
+    if (!settingsLoaded || appliedDefaultGranularity.current) return
+    appliedDefaultGranularity.current = true
+    const preferred = settings.defaultGranularity
+    if ((GRANULARITIES as readonly string[]).includes(preferred)) setGranularity(preferred as Granularity)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsLoaded])
+
+  // CSS-driven motion (see src/index.css) has no access to a React prop, so
+  // the force-on override is mirrored onto the root element as a data
+  // attribute the base reduced-motion layer also matches against.
+  useEffect(() => {
+    if (reducedMotionForced) document.documentElement.dataset.reducedMotion = 'true'
+    else delete document.documentElement.dataset.reducedMotion
+  }, [reducedMotionForced])
+
+  // Mirrors the P-8 CSS formula's own vw-based scaling (tokens.css
+  // --panel-width used to be this, before panels became independently
+  // resizable) — window.innerWidth is a live equivalent of 100vw for a
+  // full-bleed frameless window with no horizontal chrome, the same
+  // assumption Canvas.tsx's own dims.width already makes.
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth)
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  // A fixed cap, not a measured one (DESIGN.md has no opinion on a resized
+  // panel) — raised automatically past the P-8 default so a very wide window
+  // can never make "as wide as it already renders" register as "past the
+  // max you're allowed to drag to."
+  const PANEL_MAX_WIDTH_PX = 560
+  const panelDefaultWidthPx = defaultPanelWidthPx(windowWidth)
+  const panelMaxWidthPx = Math.max(PANEL_MAX_WIDTH_PX, panelDefaultWidthPx)
+
+  // null = no drag override yet, i.e. "use the P-8 default." Loaded once
+  // from settings (same one-time-on-load shape as defaultGranularity above)
+  // rather than re-derived every render, so a live drag isn't fought by its
+  // own not-yet-updated settings value.
+  const [leftPanelWidthOverride, setLeftPanelWidthOverride] = useState<number | null>(null)
+  const [rightPanelWidthOverride, setRightPanelWidthOverride] = useState<number | null>(null)
+  const appliedPanelWidths = useRef(false)
+  useEffect(() => {
+    if (!settingsLoaded || appliedPanelWidths.current) return
+    appliedPanelWidths.current = true
+    if (settings.panelWidthLeft) setLeftPanelWidthOverride(Number(settings.panelWidthLeft))
+    if (settings.panelWidthRight) setRightPanelWidthOverride(Number(settings.panelWidthRight))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsLoaded])
+
+  // Re-clamped against the *current* window's floor/cap on every render
+  // (not just at drag time) — a persisted override from a much wider
+  // session shouldn't render narrower than today's minimum, or wider than
+  // today's maximum, just because the window is a different size now.
+  const clampPanelWidth = (override: number | null): number =>
+    override == null ? panelDefaultWidthPx : Math.min(panelMaxWidthPx, Math.max(panelDefaultWidthPx, override))
+  const leftPanelWidthPx = clampPanelWidth(leftPanelWidthOverride)
+  const rightPanelWidthPx = clampPanelWidth(rightPanelWidthOverride)
 
   // Applies a saved device preference on launch (Rust's own device_name
   // starts at None every fresh process) and again on any change made from
@@ -223,6 +296,44 @@ function MainApp() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [inspectorOpen, hygieneOpen, settingsOpen])
 
+  // Core shortcuts (documented in the Settings "shortcuts" section, so none
+  // of this is hidden): Space toggles playback, "/" focuses search, 1/2/3
+  // switch granularity. Suppressed while any modal is open — they'd either
+  // do nothing useful behind it or double up with the modal's own controls
+  // — and while focus is on an element that already has its own meaning for
+  // these keys (typing, or a focused control's native Space-to-activate).
+  useEffect(() => {
+    function isTypingTarget(el: Element | null): boolean {
+      if (!el) return false
+      if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(el.tagName)) return true
+      return (el as HTMLElement).isContentEditable
+    }
+
+    function handleShortcut(e: KeyboardEvent) {
+      if (inspectorOpen || hygieneOpen || settingsOpen) return
+      if (isTypingTarget(document.activeElement)) return
+
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (playback.currentTitle == null) return
+        if (playback.status.playing) playback.pause()
+        else playback.resume()
+        return
+      }
+      if (e.key === '/') {
+        e.preventDefault()
+        collectionPanelRef.current?.focusSearch()
+        return
+      }
+      const granularityIndex = ['1', '2', '3'].indexOf(e.key)
+      if (granularityIndex !== -1) {
+        setGranularity(GRANULARITIES[granularityIndex])
+      }
+    }
+    window.addEventListener('keydown', handleShortcut)
+    return () => window.removeEventListener('keydown', handleShortcut)
+  }, [inspectorOpen, hygieneOpen, settingsOpen, playback])
+
   useEffect(() => {
     fetch('http://127.0.0.1:8899/api/v1/library-roots')
       .then((r) => r.json())
@@ -250,12 +361,28 @@ function MainApp() {
           if (id == null) setInspectorOpen(false)
         }}
         onOpenInspector={() => setInspectorOpen(true)}
+        dimOnHoverEnabled={dimOnHoverEnabled}
+        reducedMotionForced={reducedMotionForced}
+        leftPanelWidthPx={leftPanelWidthPx}
+        rightPanelWidthPx={rightPanelWidthPx}
       />
 
       <GraphToggle value={granularity} onChange={setGranularity} />
 
-      <Panel side="left" title="collection">
+      <Panel
+        side="left"
+        title="collection"
+        widthPx={leftPanelWidthPx}
+        minWidthPx={panelDefaultWidthPx}
+        maxWidthPx={panelMaxWidthPx}
+        onWidthChange={setLeftPanelWidthOverride}
+        onWidthCommit={(px) => {
+          setLeftPanelWidthOverride(px)
+          void updateSettings({ panelWidthLeft: String(px) })
+        }}
+      >
         <CollectionPanel
+          ref={collectionPanelRef}
           anchorNodeId={anchorNodeId}
           onSelectNode={selectAndFly}
           onOpenMaintenance={() => setHygieneOpen(true)}
@@ -269,7 +396,18 @@ function MainApp() {
        * has its own surface on the canvas, and the deeper half of P-5's
        * argument survives inside NodeDetailPages — one component renders a
        * node's detail for both this panel and the inspector. */}
-      <Panel side="right" title="now playing">
+      <Panel
+        side="right"
+        title="now playing"
+        widthPx={rightPanelWidthPx}
+        minWidthPx={panelDefaultWidthPx}
+        maxWidthPx={panelMaxWidthPx}
+        onWidthChange={setRightPanelWidthOverride}
+        onWidthCommit={(px) => {
+          setRightPanelWidthOverride(px)
+          void updateSettings({ panelWidthRight: String(px) })
+        }}
+      >
         <NowPlayingPanel
           nodeId={playback.status.currentRecordingNodeId ?? null}
           isPlaying={playback.status.currentRecordingNodeId != null}

@@ -93,7 +93,11 @@
   /* The mockup is single-size: every label and every value is 16px. Resisting
    * the urge to invent a ramp — sizes get added when a real need appears. */
   --text-base: 16px;
-  --text-wordmark: 40px;
+
+  /* P-8-style scaling (see --panel-width below): the wordmark is 40px at the
+   * 1440px reference and grows past it rather than staying pinned while the
+   * rest of the chrome grows around it. */
+  --text-wordmark: max(40px, calc(100vw * 40 / 1440));
 
   /* ---- Geometry ------------------------------------------------------- */
 
@@ -109,6 +113,17 @@
    * a narrow window never drops under the design's own minimum. */
   --panel-width: max(360px, calc(100vw * 360 / 1440));
   --panel-inset: max(51px, calc(100vw * 51 / 1440));
+
+  /* Titlebar chrome, same P-8 formula: the bar's width already reflows (it
+   * spans the window via flex stretch), but its height and every fixed
+   * content dimension inside it — button size, icon size, control gap and
+   * inset — never got this treatment and stayed pinned to the 1440px
+   * reference while the rest of the shell grew past it. */
+  --titlebar-height: max(61px, calc(100vw * 61 / 1440));
+  --titlebar-control-size: max(32px, calc(100vw * 32 / 1440));
+  --titlebar-icon-size: max(24px, calc(100vw * 24 / 1440));
+  --titlebar-control-gap: max(18px, calc(100vw * 18 / 1440));
+  --titlebar-control-inset: max(14px, calc(100vw * 14 / 1440));
 
   /* Panels are 360 wide with 24px of side padding, giving 312 of content.
    * The mockup drifts between 20 and 26; 24 is the value that reconciles it.

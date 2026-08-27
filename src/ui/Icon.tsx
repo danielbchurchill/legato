@@ -31,8 +31,11 @@ export type IconName = keyof typeof GLYPHS
 
 type IconProps = {
   name: IconName
-  /** Rendered box in px. The source SVGs are sized in em, so this drives both. */
-  size?: number
+  /** Rendered box in px. The source SVGs are sized in em, so this drives
+   * both. A CSS length string (e.g. `var(--titlebar-control-size)`) works
+   * too — React writes a string style value verbatim — for icons that need
+   * to track a scaling token rather than a fixed number. */
+  size?: number | string
   className?: string
   /** Omit for icons that sit inside an already-labelled control. */
   title?: string

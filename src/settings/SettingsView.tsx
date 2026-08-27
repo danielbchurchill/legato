@@ -9,6 +9,7 @@ import { useWsEvent } from '../hooks/useWs'
 import { useModalTransition } from '../hooks/useModalTransition'
 import type { Settings } from '../hooks/useSettings'
 import type { ReplayGainMode } from '../playback/usePlayback'
+import { GRANULARITIES, type Granularity } from '../shell/granularity'
 
 const API = 'http://127.0.0.1:8899/api/v1'
 
@@ -63,6 +64,30 @@ const REPLAYGAIN_OPTIONS = [
   { value: 'album', label: 'album' },
   { value: 'off', label: 'off' },
 ] as const satisfies readonly { value: ReplayGainMode; label: string }[]
+
+const GRANULARITY_OPTIONS = GRANULARITIES.map((g) => ({ value: g, label: g })) as readonly {
+  value: Granularity
+  label: string
+}[]
+
+const ON_OFF_OPTIONS = [
+  { value: 'on', label: 'on' },
+  { value: 'off', label: 'off' },
+] as const
+
+// A keybinding is UI chrome, not library data — DataRow's value slot
+// hardcodes font-mono/ink for the latter (see DESIGN.md "The one rule"), so
+// this deliberately does not reuse it. Both sides stay Rubik; the key steps
+// to --color-ink the same way an active tab does, since it's the answer to
+// the row's own question rather than a value describing something else.
+function ShortcutRow({ action, keys }: { action: string; keys: string }) {
+  return (
+    <div className="grid h-[var(--spacing-row)] grid-cols-[57%_43%] items-center">
+      <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">{action}</span>
+      <span className="text-[length:var(--text-base)] text-[var(--color-ink)]">{keys}</span>
+    </div>
+  )
+}
 
 type SettingsViewProps = {
   settings: Settings
@@ -143,6 +168,9 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
   const enrichmentEnabled = settings.enrichmentEnabled !== 'false'
   const replaygainMode: ReplayGainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
   const audioDevice = settings.audioDevice || ''
+  const hoverDimEnabled = settings.hoverDimEnabled !== 'false'
+  const defaultGranularity: Granularity = (settings.defaultGranularity as Granularity) || 'albums'
+  const reducedMotionForced = settings.reducedMotionForced === 'true'
 
   // Arriving is slower than leaving (MO-8: --motion-base in, --motion-exit
   // out) — the scrim and panel share one duration class so both layers
@@ -302,6 +330,44 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
                 </option>
               ))}
             </select>
+          </div>
+
+          <SectionHeader title="graph" />
+          <div className="mt-[8px] flex items-center justify-between">
+            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">default view on launch</p>
+            <Toggle
+              options={GRANULARITY_OPTIONS}
+              value={defaultGranularity}
+              onChange={(v) => void updateSettings({ defaultGranularity: v })}
+            />
+          </div>
+          <div className="mt-[8px] flex items-center justify-between">
+            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">dim other nodes on hover</p>
+            <Toggle
+              options={ON_OFF_OPTIONS}
+              value={hoverDimEnabled ? 'on' : 'off'}
+              onChange={(v) => void updateSettings({ hoverDimEnabled: v === 'on' ? 'true' : 'false' })}
+            />
+          </div>
+
+          <SectionHeader title="motion" />
+          <div className="mt-[8px] flex items-center justify-between">
+            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+              reduce motion, regardless of system setting
+            </p>
+            <Toggle
+              options={ON_OFF_OPTIONS}
+              value={reducedMotionForced ? 'on' : 'off'}
+              onChange={(v) => void updateSettings({ reducedMotionForced: v === 'on' ? 'true' : 'false' })}
+            />
+          </div>
+
+          <SectionHeader title="shortcuts" />
+          <div className="mt-[8px]">
+            <ShortcutRow action="play / pause" keys="space" />
+            <ShortcutRow action="focus search" keys="/" />
+            <ShortcutRow action="switch graph view" keys="1 – 3" />
+            <ShortcutRow action="deselect / close" keys="esc" />
           </div>
         </div>
       </Surface>

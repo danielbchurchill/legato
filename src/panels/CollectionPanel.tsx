@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Icon } from '../ui/Icon'
 import { CoverArt } from '../ui/CoverArt'
 import { DataRow, SectionHeader } from '../ui/DataRow'
@@ -23,7 +23,19 @@ type SearchResult = { id: number; type: string; title: string }
 // cleared), not once per keystroke. The list *contents* inside it never
 // animate: they're replaced wholesale on every debounced fetch, and a
 // transition there would just smear.
-function SearchField({ onSelectNode }: { onSelectNode: (id: number) => void }) {
+export type SearchFieldHandle = {
+  /** Backs the app-wide "/" shortcut — focusing the field is enough to let
+   * the user start typing immediately. */
+  focus: () => void
+}
+
+const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) => void }>(function SearchField(
+  { onSelectNode },
+  ref,
+) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  useImperativeHandle(ref, () => ({ focus: () => inputRef.current?.focus() }), [])
+
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   // Distinct from "results is empty because nothing was typed yet" —
@@ -121,6 +133,7 @@ function SearchField({ onSelectNode }: { onSelectNode: (id: number) => void }) {
           }`}
         />
         <input
+          ref={inputRef}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleKeyDown}
@@ -174,7 +187,7 @@ function SearchField({ onSelectNode }: { onSelectNode: (id: number) => void }) {
       )}
     </div>
   )
-}
+})
 
 type Stats = {
   artists: number
@@ -365,8 +378,11 @@ function MaintenancePreview({
           onClick={() => onSelectNode(items[0].nodeId)}
           className="mt-[8px] block w-full text-left"
         >
-          <span className="block truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
-            {TYPE_LABEL[items[0].type]} — {items[0].nodeTitle}
+          <span className="block truncate text-[length:var(--text-base)] text-[var(--color-muted)]">
+            {TYPE_LABEL[items[0].type]} —{' '}
+            <span className="font-[family-name:var(--font-mono)] text-[var(--color-ink)]">
+              {items[0].nodeTitle}
+            </span>
           </span>
           {items.length > 1 && (
             <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">
@@ -386,7 +402,18 @@ type CollectionPanelProps = {
   onOpenSettings: () => void
 }
 
-export function CollectionPanel({ anchorNodeId, onSelectNode, onOpenMaintenance, onOpenSettings }: CollectionPanelProps) {
+export type CollectionPanelHandle = {
+  /** Backs the app-wide "/" shortcut. */
+  focusSearch: () => void
+}
+
+export const CollectionPanel = forwardRef<CollectionPanelHandle, CollectionPanelProps>(function CollectionPanel(
+  { anchorNodeId, onSelectNode, onOpenMaintenance, onOpenSettings },
+  ref,
+) {
+  const searchRef = useRef<SearchFieldHandle>(null)
+  useImperativeHandle(ref, () => ({ focusSearch: () => searchRef.current?.focus() }), [])
+
   return (
     <div className="flex flex-col">
       {/* P-9: the gear used to sit inside the search row, shifting the
@@ -405,7 +432,7 @@ export function CollectionPanel({ anchorNodeId, onSelectNode, onOpenMaintenance,
       </div>
       <div className="mt-[8px] flex justify-center">
         <div className="w-[257px]">
-          <SearchField onSelectNode={onSelectNode} />
+          <SearchField ref={searchRef} onSelectNode={onSelectNode} />
         </div>
       </div>
       <SimilaritySection anchorNodeId={anchorNodeId} onSelectNode={onSelectNode} />
@@ -413,4 +440,4 @@ export function CollectionPanel({ anchorNodeId, onSelectNode, onOpenMaintenance,
       <MaintenancePreview onSelectNode={onSelectNode} onOpenMaintenance={onOpenMaintenance} />
     </div>
   )
-}
+})

@@ -15,7 +15,15 @@ import { useMountFade } from './useMountFade'
 
 const DWELL_MS = 400
 
-export function Tooltip({ label, children }: { label: string; children: ReactNode }) {
+type TooltipProps = {
+  label: string
+  children: ReactNode
+  /** The label is data (a URL, a path) rather than UI copy — Sometype Mono
+   * instead of the default Rubik. See DESIGN.md "The one rule". */
+  monospace?: boolean
+}
+
+export function Tooltip({ label, children, monospace = false }: TooltipProps) {
   const [mounted, setMounted] = useState(false)
   const shown = useMountFade(mounted)
   const dwellRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -50,7 +58,7 @@ export function Tooltip({ label, children }: { label: string; children: ReactNod
       {mounted && (
         <span
           role="tooltip"
-          className="pointer-events-none absolute top-full left-1/2 z-30 mt-[6px] -translate-x-1/2 rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] px-[10px] py-[4px] text-[length:var(--text-base)] whitespace-nowrap text-[var(--color-ink)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-opacity duration-[var(--motion-fast)] ease-[var(--ease-out)]"
+          className={`pointer-events-none absolute top-full left-1/2 z-30 mt-[6px] -translate-x-1/2 rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] px-[10px] py-[4px] text-[length:var(--text-base)] whitespace-nowrap text-[var(--color-ink)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-opacity duration-[var(--motion-fast)] ease-[var(--ease-out)] ${monospace ? 'font-[family-name:var(--font-mono)]' : ''}`}
           style={{ opacity: shown ? 1 : 0 }}
         >
           {label}

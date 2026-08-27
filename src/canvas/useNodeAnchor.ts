@@ -20,11 +20,25 @@ import type Sigma from 'sigma'
  * re-rendering a cover and three data rows on every frame of a camera fly
  * would be work done for nothing. */
 
+/* @sigma/node-image's own fragment shader crops a "square" node to
+ * `v_radius * Math.SQRT1_2 * Math.cos(Math.PI / 12)` as its half-width, not
+ * the full radius — a defensive shrink (fits a square in the node's
+ * circular hit-radius with headroom for camera rotation) baked into the
+ * shared library, not something Legato's createNodeImageProgram options can
+ * turn off. A square (release) node's actual visible artwork is therefore
+ * noticeably smaller than `scaleSize(size)` alone suggests — using the raw
+ * value here put the hover plate and selected-node card a visible gap below
+ * the artwork instead of tucked against it. Must track that exact constant
+ * or the two drift apart again. */
+const SQUARE_VISIBLE_RATIO = Math.SQRT1_2 * Math.cos(Math.PI / 12)
+
 export type NodeAnchor = {
   /** Node centre, in pixels from the canvas's top-left corner. */
   x: number
   y: number
-  /** The node's on-screen radius in pixels at the camera's current zoom. */
+  /** The node's actual on-screen half-extent in pixels at the camera's
+   * current zoom — corrected for shape, so it already matches the visible
+   * edge of the artwork rather than the node's underlying circular size. */
   radiusPx: number
 }
 
@@ -61,8 +75,12 @@ export function useNodeAnchor(
       // scaleSize rather than deriving the radius from the camera ratio by
       // hand: it is sigma's own answer, so it stays correct through
       // zoomToSizeRatioFunction and itemSizesReference without this file
-      // needing to know either of them.
-      placeRef.current(element, { x, y, radiusPx: renderer.scaleSize(display.size) })
+      // needing to know either of them. `square` isn't part of sigma's own
+      // display data, so it's read off the graph directly — see
+      // SQUARE_VISIBLE_RATIO above for why it changes the answer.
+      const isSquare = renderer.getGraph().getNodeAttribute(nodeKey, 'square') === true
+      const radiusPx = renderer.scaleSize(display.size) * (isSquare ? SQUARE_VISIBLE_RATIO : 1)
+      placeRef.current(element, { x, y, radiusPx })
     }
 
     update()

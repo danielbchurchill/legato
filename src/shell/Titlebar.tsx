@@ -21,9 +21,9 @@ function WindowButton({ control }: { control: Control }) {
         aria-label={control.label}
         // Muted at rest so the chrome stays quiet, full white on hover — the
         // only hover affordance in the titlebar.
-        className="grid h-[32px] w-[32px] place-items-center rounded-[6px] text-[var(--color-muted)] transition-colors duration-150 hover:bg-white/8 hover:text-[var(--color-muted-hi)]"
+        className="grid h-[var(--titlebar-control-size)] w-[var(--titlebar-control-size)] place-items-center rounded-[6px] text-[var(--color-muted)] transition-colors duration-150 hover:bg-white/8 hover:text-[var(--color-muted-hi)]"
       >
-        <Icon name={control.name} size={24} />
+        <Icon name={control.name} size="var(--titlebar-icon-size)" />
       </button>
     </Tooltip>
   )
@@ -66,7 +66,7 @@ export function Titlebar() {
   ]
 
   return (
-    <Surface edges="bottom" className="relative z-20 h-[61px] shrink-0">
+    <Surface edges="bottom" className="relative z-20 h-[var(--titlebar-height)] shrink-0">
       {/* The drag region is the bar itself; the buttons are children without
        * the attribute, so they stay clickable. */}
       <div data-tauri-drag-region className="flex h-full items-center justify-center">
@@ -75,7 +75,7 @@ export function Titlebar() {
         </span>
       </div>
 
-      <div className="absolute inset-y-0 right-[14px] flex items-center gap-[18px]">
+      <div className="absolute inset-y-0 right-[var(--titlebar-control-inset)] flex items-center gap-[var(--titlebar-control-gap)]">
         {controls.map((control) => (
           <WindowButton key={control.label} control={control} />
         ))}

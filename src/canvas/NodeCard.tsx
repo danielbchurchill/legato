@@ -51,8 +51,31 @@ export const NODE_CARD_WIDTH_PX = PAD_LEFT + COVER_PX + COLUMN_GAP + COLUMN_PX +
 export const NODE_CARD_COVER_CENTER_X = PAD_LEFT + COVER_PX / 2
 export const NODE_CARD_COVER_CENTER_Y = PAD_TOP + COVER_PX / 2
 
-function place(element: HTMLDivElement, { x, y }: NodeAnchor): void {
-  element.style.transform = `translate(${x - NODE_CARD_COVER_CENTER_X}px, ${y - NODE_CARD_COVER_CENTER_Y}px)`
+/* Duplicated from Canvas.tsx's own SELECT_NODE_PX rather than imported —
+ * Canvas.tsx imports NodeCard, so importing back would be circular, and this
+ * file already duplicates other cross-file constants (EDGE_COLOR-style) the
+ * same way, kept in sync by hand. This is the node's on-screen width, in
+ * pixels, at the zoom the camera flies to on selection — the reference the
+ * card's own geometry above was measured against. */
+const SELECT_NODE_PX = 130
+
+/* Sanity bounds, not measured values: the camera has no zoom limits (see
+ * Canvas.tsx), so an unclamped scale could shrink the card to nothing or
+ * blow it up past readability at the extremes of a scroll-wheel zoom. */
+const MIN_CARD_SCALE = 0.4
+const MAX_CARD_SCALE = 2.5
+
+function place(element: HTMLDivElement, { x, y, radiusPx }: NodeAnchor): void {
+  // The card's geometry is measured at SELECT_NODE_PX/2 radius (DESIGN.md's
+  // fly-to zoom). Scrolling the camera in or out after selecting changes the
+  // node's own on-screen radius but used to leave the card's size fixed, so
+  // its 255px cover visibly stopped matching the node it was supposed to be
+  // opening. Scaling by the same ratio keeps the card locked to its node at
+  // any zoom, the same way NodeHoverPlate already does for its own geometry.
+  const scale = Math.min(MAX_CARD_SCALE, Math.max(MIN_CARD_SCALE, radiusPx / (SELECT_NODE_PX / 2)))
+  element.style.transformOrigin = `${NODE_CARD_COVER_CENTER_X}px ${NODE_CARD_COVER_CENTER_Y}px`
+  element.style.transform =
+    `translate(${x - NODE_CARD_COVER_CENTER_X}px, ${y - NODE_CARD_COVER_CENTER_Y}px) scale(${scale})`
 }
 
 /** Mirrors NodeSummary in server/src/summary.ts. */

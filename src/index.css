@@ -68,7 +68,12 @@
  * that fight without reaching for !important. Components introducing their
  * own transform-based transitions outside Tailwind's utility classes (the
  * pager, the disclosure, canvas rAF loops) implement reduced motion
- * themselves; this is the floor everything else stands on. */
+ * themselves; this is the floor everything else stands on.
+ *
+ * The Settings "reduce motion" toggle is a force-on override layered on top
+ * of this, not a replacement for it — App.tsx mirrors it onto
+ * documentElement's data-reduced-motion attribute (there's no CSS-only way
+ * to read a React setting), so the same rule fires for either source. */
 @media (prefers-reduced-motion: reduce) {
   .transition-transform {
     transition-duration: 0ms;
@@ -77,6 +82,18 @@
   *,
   *::before,
   *::after {
+    animation-duration: 0ms;
+    animation-iteration-count: 1;
+  }
+}
+:root[data-reduced-motion='true'] {
+  & .transition-transform {
+    transition-duration: 0ms;
+  }
+
+  & *,
+  & *::before,
+  & *::after {
     animation-duration: 0ms;
     animation-iteration-count: 1;
   }

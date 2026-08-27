@@ -148,7 +148,9 @@ function WorklistRow({
   return (
     <div className="flex flex-col gap-[6px] border-b border-[var(--color-divider)] py-[15px] last:border-b-0">
       <div className="flex items-baseline justify-between gap-[12px]">
-        <Button onClick={() => onSelectNode(item.nodeId)}>{item.nodeTitle}</Button>
+        <Button className="font-[family-name:var(--font-mono)]" onClick={() => onSelectNode(item.nodeId)}>
+          {item.nodeTitle}
+        </Button>
         <span className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">
           {TYPE_LABEL[item.type]}
         </span>
@@ -156,8 +158,14 @@ function WorklistRow({
 
       {item.type === 'fuzzy_pending' && (
         <div className="flex flex-wrap items-baseline justify-between gap-[12px]">
-          <span className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
-            looks like <Button onClick={() => onSelectNode(item.candidateNodeId)}>{item.candidateTitle}</Button>
+          <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+            looks like{' '}
+            <Button
+              className="font-[family-name:var(--font-mono)]"
+              onClick={() => onSelectNode(item.candidateNodeId)}
+            >
+              {item.candidateTitle}
+            </Button>
           </span>
           <div className="flex gap-[16px]">
             <Button onClick={() => onResolveFuzzy(item.fileId, item.candidateNodeId)}>merge</Button>
@@ -174,13 +182,15 @@ function WorklistRow({
         </>
       )}
       {item.type === 'missing_file' && (
-        <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
-          {item.filePath} — missing since {item.missingSince}
+        <p className="truncate text-[length:var(--text-base)] text-[var(--color-muted)]">
+          <span className="font-[family-name:var(--font-mono)]">{item.filePath}</span> — missing since{' '}
+          <span className="font-[family-name:var(--font-mono)]">{item.missingSince}</span>
         </p>
       )}
       {item.type === 'wont_decode' && (
-        <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
-          {item.filePath} — {item.error}
+        <p className="truncate text-[length:var(--text-base)] text-[var(--color-muted)]">
+          <span className="font-[family-name:var(--font-mono)]">{item.filePath}</span> —{' '}
+          <span className="font-[family-name:var(--font-mono)]">{item.error}</span>
         </p>
       )}
     </div>
@@ -211,18 +221,22 @@ function TagWriteRow({
   return (
     <div className="flex flex-col gap-[6px] border-b border-[var(--color-divider)] py-[15px] last:border-b-0">
       <div className="flex items-baseline justify-between gap-[12px]">
-        <span className="text-[length:var(--text-base)] text-[var(--color-ink)]">tag write #{tagWrite.id}</span>
+        <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+          tag write{' '}
+          <span className="font-[family-name:var(--font-mono)] text-[var(--color-ink)]">#{tagWrite.id}</span>
+        </span>
         <span className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">
           {TAG_WRITE_STATUS_LABEL[tagWrite.status]}
         </span>
       </div>
       <ul className="flex flex-col gap-[2px]">
         {diff.map((d) => (
-          <li
-            key={d.field}
-            className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]"
-          >
-            {d.field}: {formatDiffValue(d.oldValue)} → <span className="text-[var(--color-ink)]">{formatDiffValue(d.newValue)}</span>
+          <li key={d.field} className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+            {d.field}:{' '}
+            <span className="font-[family-name:var(--font-mono)]">{formatDiffValue(d.oldValue)}</span> →{' '}
+            <span className="font-[family-name:var(--font-mono)] text-[var(--color-ink)]">
+              {formatDiffValue(d.newValue)}
+            </span>
           </li>
         ))}
       </ul>

@@ -514,11 +514,11 @@ export function NodeDetailPages({ node, reload, isPlaying, onSelectNode, onPlay 
                   <SectionHeader title="review diff" />
                   <ul className="mt-[8px] flex flex-col gap-[2px]">
                     {pendingWrite.diff.map((d) => (
-                      <li
-                        key={d.field}
-                        className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]"
-                      >
-                        {d.field}: {String(d.oldValue)} → <span className="text-[var(--color-ink)]">{String(d.newValue)}</span>
+                      <li key={d.field} className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+                        {d.field}: <span className="font-[family-name:var(--font-mono)]">{String(d.oldValue)}</span> →{' '}
+                        <span className="font-[family-name:var(--font-mono)] text-[var(--color-ink)]">
+                          {String(d.newValue)}
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -679,7 +679,7 @@ export function NodeDetailPages({ node, reload, isPlaying, onSelectNode, onPlay 
                     <span>from {node.description.source}</span>
                     {node.description.license && <span>· {node.description.license}</span>}
                     {node.description.source_url && (
-                      <Tooltip label={node.description.source_url}>
+                      <Tooltip label={node.description.source_url} monospace>
                         <Icon name="info" size={16} />
                       </Tooltip>
                     )}
