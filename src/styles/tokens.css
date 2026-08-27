@@ -110,6 +110,13 @@
   --text-sm: 12px;
   --text-wordmark: 40px;
 
+  /* v2's Left Panel Header wordmark, measured at 32px in the raw Figma
+   * export against a much shorter, tightly-padded header than the old
+   * 61px-tall titlebar --text-wordmark was sized for. Kept as its own token
+   * rather than shrinking --text-wordmark itself, since LibrarySetup.tsx's
+   * splash screen still wants the full 40px. See DESIGN.md's shell section. */
+  --text-wordmark-header: 32px;
+
   /* ---- Geometry ------------------------------------------------------- */
 
   --radius-surface: 25px;
@@ -120,16 +127,36 @@
    * rather than float on it. */
   --radius-control: 15px;
 
-  /* P-8: 360px panel width and 51px window inset are measured at the
-   * mockup's 1440px reference only — floated as literal pixels, a real
-   * 2560px window becomes two narrow ribbons with ~1740px of empty canvas
-   * between them. Daniel's call: the panels grow with the window rather
-   * than the canvas taking the slack. Both scale by the exact 1440-
-   * reference ratio above their fixed value, which stays the floor for
-   * anything at or below 1440 wide — max() rather than a bare vw unit, so
-   * a narrow window never drops under the design's own minimum. */
-  --panel-width: max(360px, calc(100vw * 360 / 1440));
-  --panel-inset: max(51px, calc(100vw * 51 / 1440));
+  /* P-8: panel width is measured at the mockup's 1440px reference only —
+   * floated as a literal pixel, a real 2560px window becomes a narrow
+   * ribbon with a lot of empty canvas next to it. Daniel's call: panels
+   * grow with the window rather than the canvas taking the slack. Scales by
+   * the exact 1440-reference ratio above its fixed value, which stays the
+   * floor for anything at or below 1440 wide — max() rather than a bare vw
+   * unit, so a narrow window never drops under the design's own minimum.
+   *
+   * v2 (2026-08-27): 300px, down from 360 — both the Inspector Panel (left,
+   * next to the rail) and the now-playing panel (right) share this one
+   * value. v2 also drops the old 51px side inset entirely: panels dock
+   * flush to the window edge now instead of floating with a gap, so there
+   * is no --panel-inset token any more — see DESIGN.md's shell section. */
+  --panel-width: max(300px, calc(100vw * 300 / 1440));
+
+  /* v2: the right panel's collapsed width (DESIGN.md "Panel collapsed
+   * (v2)": 300px -> 214px). Scaled the same way --panel-width is, for the
+   * same reason — a wide window shouldn't strand a fixed-pixel ribbon. */
+  --panel-width-collapsed: max(214px, calc(100vw * 214 / 1440));
+
+  /* v2: the left icon rail. Fixed, never scales — it holds six 24px icons
+   * and nothing else, so a wider window has no reason to widen it. */
+  --rail-width: 50px;
+
+  /* v2: both LeftPanelHeader and RightPanelHeader, one shared height so
+   * their bottom edges (and the rail/panels docked below them) line up.
+   * Fixed like the old titlebar's 61px was — headers hold fixed-size
+   * content (a 32px wordmark, 24px icons, a 29.5px avatar), not anything
+   * that scales with the window. */
+  --header-height: 52px;
 
   /* Panels are 360 wide with 24px of side padding, giving 312 of content.
    * The mockup drifts between 20 and 26; 24 is the value that reconciles it.

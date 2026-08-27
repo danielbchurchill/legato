@@ -8,7 +8,6 @@ import Canvas, { type CanvasHandle } from './canvas/Canvas'
 import { usePlayback } from './playback/usePlayback'
 import HygieneView from './hygiene/HygieneView'
 import { AppShell } from './shell/AppShell'
-import { Panel } from './shell/Panel'
 import { GraphToggle } from './shell/GraphToggle'
 import type { Granularity } from './shell/granularity'
 import { TransportDock } from './shell/TransportDock'
@@ -19,6 +18,12 @@ import { NodeInspector } from './panels/NodeInspector'
 import { SettingsView } from './settings/SettingsView'
 import { useSettings } from './hooks/useSettings'
 import type { ReplayGainMode } from './playback/usePlayback'
+import { LeftPanelHeader } from './shell/LeftPanelHeader'
+import { RightPanelHeader } from './shell/RightPanelHeader'
+import { InspectorRail } from './shell/InspectorRail'
+import { InspectorPanel } from './shell/InspectorPanel'
+import { RightPanel } from './shell/RightPanel'
+import type { RailDestination } from './shell/rail'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -187,6 +192,15 @@ function MainApp() {
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [granularity, setGranularity] = useState<Granularity>('albums')
+  // The rail's own selection doubles as the left shell's expand/collapse
+  // state — "exactly one active at a time, or none when collapsed" is
+  // literally what DESIGN.md's shell section specifies, so there is no
+  // separate boolean to keep in sync with it. The right (now-playing) side
+  // collapses independently, via its own header icon — the two sides never
+  // shared a single collapse state in the mockup to begin with, only a
+  // shared *concept* of one. Both default open, matching today's baseline.
+  const [activeRailDestination, setActiveRailDestination] = useState<RailDestination | null>('search')
+  const [rightPanelExpanded, setRightPanelExpanded] = useState(true)
   const { settings, updateSettings } = useSettings()
   const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
   const playback = usePlayback(replaygainMode)
@@ -255,22 +269,34 @@ function MainApp() {
 
       <GraphToggle value={granularity} onChange={setGranularity} />
 
-      <Panel side="left" title="collection">
-        <CollectionPanel
-          anchorNodeId={anchorNodeId}
-          onSelectNode={selectAndFly}
-          onOpenMaintenance={() => setHygieneOpen(true)}
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
-      </Panel>
+      <LeftPanelHeader
+        expanded={activeRailDestination != null}
+        onCollapse={() => setActiveRailDestination(null)}
+      />
+      <InspectorRail active={activeRailDestination} onSelect={setActiveRailDestination} />
+      {activeRailDestination && (
+        <InspectorPanel active={activeRailDestination}>
+          <CollectionPanel
+            anchorNodeId={anchorNodeId}
+            onSelectNode={selectAndFly}
+            onOpenMaintenance={() => setHygieneOpen(true)}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+        </InspectorPanel>
+      )}
 
+      <RightPanelHeader expanded={rightPanelExpanded} onCollapse={() => setRightPanelExpanded(false)} />
       {/* Now playing, and only now playing. Selection used to take this
        * panel over (P-5's "one node-detail surface"), which meant looking at
        * anything cost you sight of what was playing; the selected node now
        * has its own surface on the canvas, and the deeper half of P-5's
        * argument survives inside NodeDetailPages — one component renders a
        * node's detail for both this panel and the inspector. */}
-      <Panel side="right" title="now playing">
+      <RightPanel
+        expanded={rightPanelExpanded}
+        collapsedNodeId={playback.status.currentRecordingNodeId ?? null}
+        onExpand={() => setRightPanelExpanded(true)}
+      >
         <NowPlayingPanel
           nodeId={playback.status.currentRecordingNodeId ?? null}
           isPlaying={playback.status.currentRecordingNodeId != null}
@@ -278,7 +304,7 @@ function MainApp() {
           onSelectNode={selectAndFly}
           onPlay={playback.playNode}
         />
-      </Panel>
+      </RightPanel>
 
       <TransportDock
         status={playback.status}

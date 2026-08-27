@@ -196,7 +196,27 @@ A real global state, not a narrower version of the panels — collapsed removes 
 - **Both collapse-toggle icons disappear once already collapsed.** There is no dedicated "expand" affordance — re-expanding the left side happens by clicking one of the six rail icons (which is also how you switch what the expanded panel shows), and the right side's toggle icon only exists in the expanded state next to the `DC` avatar.
 - **The header bar, toggle pill, and transport dock are unaffected.** Same position and size whether the panels are expanded or collapsed — only the two side columns respond to this state.
 
-This is a new interaction the current app doesn't have at all: today's side panels are always present. Whatever holds this state (component-local, or a real setting) needs to persist across the state the panels are already deriving from — worth deciding once this gets built rather than assuming.
+This is a new interaction the current app doesn't have at all: today's side panels are always present. See "The shell (v2)" below for how this actually got built, including where it holds this state.
+
+### The shell (v2)
+
+The left rail (`src/shell/InspectorRail.tsx`), the Inspector Panel it opens (`src/shell/InspectorPanel.tsx`), and the two headers (`src/shell/LeftPanelHeader.tsx`, `src/shell/RightPanelHeader.tsx`) replace the app's one continuous titlebar (`src/shell/Titlebar.tsx`, now gone) — the whole point being that the canvas between the two side columns now runs edge to edge, with nothing reserved above it. `src/shell/rail.ts` names the six destinations; only `search` has real content (the existing collection panel, adapted in place — see below), the rest render the standard empty-state treatment naming what's coming.
+
+Geometry, all in tokens.css: `--rail-width` (50px, fixed — an icon strip has no reason to scale), `--header-height` (52px, fixed, shared by both headers so their bottom edges line up), `--panel-width` (300px, scales with the window past 1440px the same way it always has, P-8), `--panel-width-collapsed` (the right panel's 214px, scaled the same way). Both side columns dock flush to their window edge now — v1's floating 51px inset is gone, along with the `--panel-inset` token that held it.
+
+A few things the brief flagged as open, resolved here:
+
+- **Hairline color.** The raw Figma export draws the rail/header borders as 0.5px solid `--color-control` (grey), not the app's `--color-hairline` (white at 30% alpha) every other glass edge uses. Normalized to `--color-hairline`: v2 has no exported render to sample against yet for this specific value (same caveat this file already states for every v2 token), so there's no evidence the grey is deliberate rather than Figma's default stroke color on a frame nobody restyled — the same class of noise "why it is not 0.25px" already documents for the sub-pixel width. A second, solid-grey hairline language for one region of the app would fragment "hairlines are 1px with alpha" (Working rules #2) for a distinction with no stated reason.
+- **Header wordmark size.** 32px, not the existing 40px `--text-wordmark`. Treated as real, not mockup noise: the new headers are built to a tight 10px padding, not the old titlebar's fixed 61px, and 32px is what that tighter frame is actually proportioned for. Kept as its own token, `--text-wordmark-header` — `--text-wordmark` stays 40px for LibrarySetup.tsx's splash screen, an unrelated context this decision doesn't touch.
+- **Window controls.** The Figma mockup has no native window chrome to measure at all — it's a web design file, and this is a frameless Tauri window that still needs real minimize/maximize/close buttons somewhere. They moved into RightPanelHeader (`src/shell/WindowControls.tsx`, factored out of the old Titlebar), which already owns the window's top-right corner — the OS-conventional home for that cluster. Not a measured value, just the least-surprising place to put it.
+- **One collapse state or two?** Two, independent: the rail's own selection (`RailDestination | null`) doubles as the left side's expand/collapse state, and the right panel has its own boolean. The Figma frames never show a mixed state, but they also describe genuinely separate triggers per side (a rail icon click for the left, each side's own header icon to collapse) — nothing suggested they were meant to move together, and forcing them into one shared flag would have made up a coupling the mockup never asked for.
+- **The right panel's missing way back.** Worth flagging plainly: as specified, the right side's collapse has no expand affordance at all once collapsed — the Figma frames only show a collapse icon that disappears, same as the left, but the left's escape hatch is "click any rail icon," and the right side has no equivalent in the mockup. Shipping a state with no way out of it isn't acceptable regardless of what the frames show, so clicking the collapsed content itself (the cover/track block) re-expands the panel. This is this codebase's own addition, not a measured or confirmed Figma behavior.
+- **Persistence.** Component state (`MainApp` in `App.tsx`), not written to the settings store — resets to both-expanded on every relaunch. This is closer to "which tab is open" than a durable preference, and nothing in the brief asked for it to survive a restart; revisit if that turns out wrong.
+
+Two structural notes for whoever picks up the pieces this pass deliberately left alone:
+
+- **Canvas camera reservation is static, not collapse-aware.** `Canvas.tsx`'s `shellFreeArea` always reserves each side's *expanded* footprint, even while that side is actually collapsed — the same conservative direction G-8's original fix already argued for (a node ending up hidden under glass is the failure mode to avoid; a little unreachable canvas while collapsed is not). Tracking live collapse state to reclaim that space is a reasonable follow-up.
+- **`src/panels/CollectionPanel.tsx`'s own settings gear** (top-right of the search content, opens the real `SettingsView` with working audio-device controls) still exists side by side with the rail's `sliders` "Legato Settings" destination, which is placeholder-only per the brief. Two settings entry points, one real and one not yet, is a real seam — not resolved here since removing working functionality to match an unbuilt placeholder would be a regression, not a fix.
 
 ---
 
@@ -297,7 +317,7 @@ Every glyph is 24 × 24, `fill="none"`, `stroke="currentColor"`, `stroke-width="
 
 Never hand-draw an icon or inline a `<path>`. If a needed glyph is missing, pull it from proicons; if proicons does not have it, that is a design decision, not an implementation one.
 
-Icons in use: `search`, `cancel`, `arrow-minimize`, `spacebar`, `chevron-down`, `pencil`, `info`, `pause`, `play`, `volume`.
+Icons in use: `search`, `cancel`, `arrow-minimize`, `spacebar`, `chevron-down`, `pencil`, `info`, `pause`, `play`, `volume`, `map`, `database`, `heart`, `tag`, `sliders`, `panel-left-collapse` (the last six vendored for v2's rail and panel-collapse icon — see "The shell (v2)").
 
 ### Window controls
 

@@ -111,9 +111,13 @@ function SearchField({ onSelectNode }: { onSelectNode: (id: number) => void }) {
 
   return (
     <div className="relative">
-      {/* Inset, not raised: the field's fill is the canvas color and it casts
-       * no shadow. See DESIGN.md "Raised and inset". */}
-      <div className="flex h-[61px] items-center gap-[12px] rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-inset)] px-[20px]">
+      {/* v2: a "search" label above the field (16px Rubik ink) — the field
+       * itself moves off --radius-surface onto --radius-control, the
+       * bordered-well radius the v2 mockup actually specifies here. Still
+       * inset, not raised: the field's fill is the canvas color and it
+       * casts no shadow. See DESIGN.md "Raised and inset". */}
+      <p className="mb-[8px] text-[length:var(--text-base)] text-[var(--color-ink)]">search</p>
+      <div className="flex h-[61px] items-center gap-[12px] rounded-[var(--radius-control)] border border-[var(--color-hairline)] bg-[var(--color-inset)] px-[20px]">
         <Icon
           name="search"
           size={24}
@@ -404,10 +408,12 @@ export function CollectionPanel({ anchorNodeId, onSelectNode, onOpenMaintenance,
           </button>
         </Tooltip>
       </div>
-      <div className="mt-[8px] flex justify-center">
-        <div className="w-[257px]">
-          <SearchField onSelectNode={onSelectNode} />
-        </div>
+      {/* v2: the search field now runs the full width of the Inspector
+       * Panel's content column rather than a fixed 257px centred block —
+       * that width was tuned for the old 360px panel, and the v2 panel is
+       * narrower (300px) besides. */}
+      <div className="mt-[8px]">
+        <SearchField onSelectNode={onSelectNode} />
       </div>
       <SimilaritySection anchorNodeId={anchorNodeId} onSelectNode={onSelectNode} />
       <OverviewBlock />

@@ -294,43 +294,53 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
 }
 
 /* G-8: the camera fits the given bbox to the FULL viewport, edge to edge —
- * sigma has no notion of the ~820px of that viewport the two panels and the
- * transport dock actually cover. At every granularity, several nodes ended
- * up placed permanently underneath them: visible through the blur,
- * unreachable by a click.
+ * sigma has no notion of the screen space the shell's chrome actually
+ * covers. At every granularity, several nodes ended up placed permanently
+ * underneath it: visible through the blur, unreachable by a click.
  *
- * Geometry mirrors Panel.tsx (51px inset + 360px width per side, 59px below
- * the titlebar) and TransportDock.tsx (121px tall, docked to the bottom).
- * A conservative rectangular inset rather than the true L-shaped reserved
- * area — the panels don't span the full height and the dock doesn't span
- * the full width — since sigma's bbox fit only understands a rectangle
- * anyway; erring toward extra clearance is the safe direction, a node
- * still ending up hidden is not.
+ * v2 shell geometry (see DESIGN.md's shell section): a rail + Inspector
+ * Panel on the left, a now-playing panel on the right, both docked flush to
+ * their own window edge — no floating 51px inset any more, and the two
+ * sides no longer reserve equal widths (350px left, 300px right). There is
+ * also no continuous titlebar across the top any more — LeftPanelHeader and
+ * RightPanelHeader only cover their own column, each stacked directly above
+ * the rail/panel it belongs to — so nothing is reserved along the top
+ * between the two side columns, and the top inset drops to 0.
  *
- * P-8: panel width/inset are no longer fixed pixels (tokens.css's
- * --panel-width/--panel-inset scale with the window above 1440px) — the
- * ratios/floor below duplicate that same formula rather than reading it
- * back from a live DOM element, the same "sigma needs a concrete number,
- * kept in sync by hand" tradeoff this file already makes for EDGE_COLOR.
- * Left as a fixed pixel constant here, the camera would under-reserve
- * space at any window wider than 1440 and G-8's fix would silently regress. */
-const PANEL_WIDTH_MIN_PX = 360
-const PANEL_INSET_MIN_PX = 51
+ * This always reserves each side's *expanded* footprint, even while that
+ * side is actually collapsed — conservative in the same direction as the
+ * rest of this comment already argues for: a node still ending up hidden is
+ * the failure mode to avoid, a little unused canvas while collapsed is not.
+ * Tracking live collapse state here to reclaim that space is a reasonable
+ * follow-up, not done in this pass.
+ *
+ * A conservative rectangular inset rather than the true reserved shape,
+ * since sigma's bbox fit only understands a rectangle anyway; erring toward
+ * extra clearance is the safe direction, a node still ending up hidden is
+ * not. TransportDock.tsx (121px tall, docked to the bottom) is unaffected
+ * by any of this and keeps its own reservation as before.
+ *
+ * P-8: panel width is not a fixed pixel (tokens.css's --panel-width scales
+ * with the window above 1440px) — the ratio/floor below duplicates that
+ * same formula rather than reading it back from a live DOM element, the
+ * same "sigma needs a concrete number, kept in sync by hand" tradeoff this
+ * file already makes for EDGE_COLOR. The rail itself never scales — it is a
+ * fixed 50px icon strip, not content, so widening the window has no reason
+ * to widen it. */
+const RAIL_WIDTH_PX = 50
+const PANEL_WIDTH_MIN_PX = 300
 const PANEL_REFERENCE_WIDTH_PX = 1440
-const PANEL_TOP_INSET_PX = 59
 const DOCK_HEIGHT_PX = 121
 
 /* The rectangle of canvas the shell leaves uncovered, in viewport pixels.
  * Both the initial bbox fit and the fly target need the same answer. */
 function shellFreeArea(renderer: Sigma): { left: number; right: number; top: number; bottom: number } {
   const dims = renderer.getDimensions()
-  const panelInsetPx = Math.max(PANEL_INSET_MIN_PX, (dims.width * PANEL_INSET_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
   const panelWidthPx = Math.max(PANEL_WIDTH_MIN_PX, (dims.width * PANEL_WIDTH_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
-  const panelFootprintPx = panelInsetPx + panelWidthPx
   return {
-    left: panelFootprintPx,
-    right: dims.width - panelFootprintPx,
-    top: PANEL_TOP_INSET_PX,
+    left: RAIL_WIDTH_PX + panelWidthPx,
+    right: dims.width - panelWidthPx,
+    top: 0,
     bottom: dims.height - DOCK_HEIGHT_PX,
   }
 }
@@ -364,15 +374,18 @@ function insetForShell(
 ): { x: [number, number]; y: [number, number] } {
   const dims = renderer.getDimensions()
   const area = shellFreeArea(renderer)
-  const panelFootprintPx = area.left
   const innerW = area.right - area.left
   const innerH = area.bottom - area.top
   if (innerW <= 0 || innerH <= 0) return bbox // window too small to inset meaningfully
 
   const bw = bbox.x[1] - bbox.x[0]
   const bh = bbox.y[1] - bbox.y[0]
-  const padX = (panelFootprintPx / innerW) * bw
-  const padForScreenTop = (PANEL_TOP_INSET_PX / innerH) * bh
+  // v2's two side columns reserve different widths (rail + panel on the
+  // left, panel alone on the right) — no longer the same footprint mirrored
+  // on both sides, so each edge of the bbox needs its own padding.
+  const padXLeft = (area.left / innerW) * bw
+  const padXRight = ((dims.width - area.right) / innerW) * bw
+  const padForScreenTop = (area.top / innerH) * bh
   const padForScreenBottom = (DOCK_HEIGHT_PX / innerH) * bh
 
   // Whether increasing graph-space y maps to the top or bottom of the
@@ -385,7 +398,7 @@ function insetForShell(
     yAtScreenTop > yAtScreenBottom ? [padForScreenBottom, padForScreenTop] : [padForScreenTop, padForScreenBottom]
 
   return {
-    x: [bbox.x[0] - padX, bbox.x[1] + padX],
+    x: [bbox.x[0] - padXLeft, bbox.x[1] + padXRight],
     y: [bbox.y[0] - padAtYMin, bbox.y[1] + padAtYMax],
   }
 }
