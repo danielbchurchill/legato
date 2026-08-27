@@ -5,8 +5,9 @@ import { Icon } from '../ui/Icon'
 import { Surface } from '../shell/Surface'
 import { SectionHeader } from '../ui/DataRow'
 import { Button } from '../ui/Button'
+import { SERVER_HOST } from '../config/serverHost'
 
-const API = 'http://127.0.0.1:8899/api/v1'
+const API = `http://${SERVER_HOST}:8899/api/v1`
 
 type WorklistItem =
   | {

@@ -13,6 +13,7 @@ import { GraphToggle } from './shell/GraphToggle'
 import type { Granularity } from './shell/granularity'
 import { TransportDock } from './shell/TransportDock'
 import { CollectionPanel } from './panels/CollectionPanel'
+import { SERVER_HOST } from './config/serverHost'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
 import { SettingsView } from './settings/SettingsView'
@@ -224,7 +225,7 @@ function MainApp() {
   }, [inspectorOpen, hygieneOpen, settingsOpen])
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8899/api/v1/library-roots')
+    fetch(`http://${SERVER_HOST}:8899/api/v1/library-roots`)
       .then((r) => r.json())
       .then((roots: unknown[]) => setHasLibrary(roots.length > 0))
   }, [])

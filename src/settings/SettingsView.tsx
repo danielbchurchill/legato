@@ -9,8 +9,9 @@ import { useWsEvent } from '../hooks/useWs'
 import { useModalTransition } from '../hooks/useModalTransition'
 import type { Settings } from '../hooks/useSettings'
 import type { ReplayGainMode } from '../playback/usePlayback'
+import { SERVER_HOST } from '../config/serverHost'
 
-const API = 'http://127.0.0.1:8899/api/v1'
+const API = `http://${SERVER_HOST}:8899/api/v1`
 
 type LibraryRoot = { id: number; path: string; label: string | null; enabled: number }
 type ScanProgress = {

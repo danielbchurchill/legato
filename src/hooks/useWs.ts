@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
+import { SERVER_HOST } from '../config/serverHost'
 
-const WS_URL = 'ws://127.0.0.1:8899/api/v1/ws'
+const WS_URL = `ws://${SERVER_HOST}:8899/api/v1/ws`
 
 // First real consumer of the WS broadcaster (server/src/ws.ts) built back
 // in M1 — scan/enrich/hygiene events all flow through the same

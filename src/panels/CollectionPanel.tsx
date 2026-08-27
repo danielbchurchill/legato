@@ -6,8 +6,9 @@ import { Tooltip } from '../ui/Tooltip'
 import { Popover } from '../ui/Popover'
 import { useWsEvent } from '../hooks/useWs'
 import { formatBytes, formatDurationHours } from './format'
+import { SERVER_HOST } from '../config/serverHost'
 
-const API = 'http://127.0.0.1:8899/api/v1'
+const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* The left-hand panel: search, the real collection overview, similarity
  * strips anchored on whatever is selected (or playing), and a condensed

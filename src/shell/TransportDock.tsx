@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../ui/Icon'
 import type { PlaybackStatus } from '../playback/usePlayback'
 import { Surface } from './Surface'
+import { SERVER_HOST } from '../config/serverHost'
 
-const API = 'http://127.0.0.1:8899/api/v1'
+const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* The transport, docked to the window's bottom edge.
  *

@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { FLACDecoder } from '@wasm-audio-decoders/flac'
 import { invoke } from '@tauri-apps/api/core'
+import { SERVER_HOST } from './config/serverHost'
 
 // Phase 3 of THE SPIKE (see projects/Legato.md): does the "server decodes
 // any source -> PCM -> FLAC, client decodes via WASM and schedules gapless
@@ -9,7 +10,7 @@ import { invoke } from '@tauri-apps/api/core'
 // were rejected in the design doc (the former can't be gapless, the latter
 // behaves differently per-webview).
 
-const SERVER_URL = 'http://localhost:8899'
+const SERVER_URL = `http://${SERVER_HOST}:8899`
 
 // The Abbey Road medley: three tracks mastered to flow into each other with
 // zero silence at the boundary. If this pipeline introduces even a few
