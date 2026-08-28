@@ -290,8 +290,11 @@ function MainApp() {
        * panel over (P-5's "one node-detail surface"), which meant looking at
        * anything cost you sight of what was playing; the selected node now
        * has its own surface on the canvas, and the deeper half of P-5's
-       * argument survives inside NodeDetailPages — one component renders a
-       * node's detail for both this panel and the inspector. */}
+       * argument survives as shared logic (panels/MetadataFields.tsx,
+       * ConnectionsContent.tsx, useLyrics.ts, useMetadataEditing.ts) behind
+       * two different layouts — this panel's stacked disclosures
+       * (NowPlayingSections.tsx) and the inspector's unchanged pager
+       * (NodeDetailPages.tsx). */}
       <RightPanel
         expanded={rightPanelExpanded}
         collapsedNodeId={playback.status.currentRecordingNodeId ?? null}

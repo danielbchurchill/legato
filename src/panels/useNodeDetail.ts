@@ -49,6 +49,9 @@ export type NodeDetail = {
   /** Fetched prose about the artist or album (not about this collection) —
    * null when nothing was found or nothing has been looked up yet. */
   description: { body: string; source: string; source_url: string | null; license: string | null } | null
+  /** Real listen count from the plays table (migration 0013) — recording
+   * nodes only, null for everything else. */
+  playCount: number | null
 }
 export type FieldDiff = { field: string; oldValue: string | number; newValue: string | number }
 export type TagWriteRow = { id: number; status: string; diff_json: string }

@@ -1,6 +1,6 @@
 import { CoverArt } from '../ui/CoverArt'
 import { SectionHeader } from '../ui/DataRow'
-import { NodeDetailPages } from './NodeDetailPages'
+import { AboutDisclosure, ConnectionsDisclosure, LyricsDisclosure, NotesDisclosure, TrackMetadataDisclosure } from './NowPlayingSections'
 import { NodeTitleBlock } from './NodeTitleBlock'
 import { useNodeDetail } from './useNodeDetail'
 import type { QueueEntry } from '../playback/usePlayback'
@@ -12,10 +12,18 @@ import type { QueueEntry } from '../playback/usePlayback'
  * re-titled this panel and swapped its node, so looking at something meant
  * losing sight of what was playing for as long as you looked. Selection moved
  * onto the graph itself (canvas/NodeCard.tsx), and everything deeper than the
- * card's three rows opens as the inspector modal. What is left here is the
- * cover, who it is, what is coming next, and NodeDetailPages for the rest —
- * the same component the inspector renders, so a track's metadata reads
- * identically whichever way you arrived at it.
+ * card's three rows opens as the inspector modal (NodeInspector.tsx), which
+ * still uses NodeDetailPages' paginated layout unchanged.
+ *
+ * This panel stopped sharing that pager with the modal once v2's Detail
+ * Panel mockup called for stacked Disclosure sections instead (track
+ * metadata / lyrics / connections / notes — NowPlayingSections.tsx). The
+ * underlying data and logic (facts, edges, lyrics fetch, the edit -> dry-run
+ * -> approve flow) is still one shared implementation — see
+ * MetadataFields.tsx, ConnectionsContent.tsx, useLyrics.ts and
+ * useMetadataEditing.ts — only the layout diverged, since a modal over the
+ * canvas and a panel that's always present read differently and nothing in
+ * DESIGN.md or the Figma frames said the modal should change too.
  *
  * P-5 still holds where it was actually about playback: isPlaying is an
  * attribute of the node being shown, not a fork into a separate component. */
@@ -47,7 +55,13 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPla
 
       {/* P-7: always present and expanded when non-empty, not hidden behind
        * a chevron. The one piece of this panel that is genuinely about
-       * playback rather than about the node. */}
+       * playback rather than about the node. Kept exactly where it sat
+       * before the disclosure restructure — least disruptive to the new
+       * stack below it — since nothing in v2's Detail Panel frames shows
+       * "up next" at all. Real, working functionality (P-7), so this is
+       * carried forward rather than cut, but its existence and position
+       * here are this session's judgment call, not a confirmed part of the
+       * v2 design; flagging for Daniel to confirm. */}
       {upNext.length > 0 && (
         <div className="mt-[15px]">
           <SectionHeader title="up next" />
@@ -67,13 +81,17 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPla
         </div>
       )}
 
-      <NodeDetailPages
-        node={node}
-        reload={reload}
-        isPlaying={isPlaying}
-        onSelectNode={onSelectNode}
-        onPlay={onPlay}
-      />
+      {/* v2's five stacked sections. Order and open-by-default follow the
+       * brief exactly for the four named ones (metadata open, the rest
+       * closed); "about" is this session's own addition slotted in after
+       * connections — see NowPlayingSections.tsx's top comment. */}
+      <div className="mt-[15px] flex flex-col gap-[15px]">
+        <TrackMetadataDisclosure node={node} reload={reload} isPlaying={isPlaying} onPlay={onPlay} />
+        <LyricsDisclosure node={node} />
+        <ConnectionsDisclosure node={node} reload={reload} onSelectNode={onSelectNode} />
+        <AboutDisclosure node={node} onSelectNode={onSelectNode} />
+        <NotesDisclosure />
+      </div>
     </div>
   )
 }
