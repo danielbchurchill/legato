@@ -4,7 +4,7 @@ import Sigma from 'sigma'
 import { createNormalizationFunction } from 'sigma/utils'
 import { createNodeImageProgram } from '@sigma/node-image'
 import { patchNodePosition, useGraphData, type GraphEdge, type GraphNode } from './useGraphData'
-import { PANEL_REFERENCE_WIDTH_PX } from './panelSizing'
+import { EDGE_COLOR } from './edgeTypes'
 import type { Granularity } from '../shell/granularity'
 import { useScanStatus } from '../hooks/useScanStatus'
 import { Button } from '../ui/Button'
@@ -47,23 +47,6 @@ const NODE_SIZE: Record<string, number> = {
   credit: 4,
 }
 
-/* Edge color encodes relationship type — one family, identical saturation and
- * lightness at every hue. Mirrors --color-edge-* in tokens.css; sigma needs
- * concrete values because it renders to WebGL and never sees our CSS. Grouped
- * by which graph a type actually renders in (they never render together), not
- * spaced as one flat 10-color wheel — see DESIGN.md "Edge palette". */
-const EDGE_COLOR: Record<string, string> = {
-  performed_by: '#bf68eb',
-  appears_on: '#68b6eb',
-  released_in: '#68eb79',
-  featured_artist: '#66eabc',
-  released_on: '#ea66a6',
-  produced_by: '#ea9066',
-  engineered_by: '#dbea66',
-  same_artist: '#7166ea',
-  same_label: '#ea667c',
-  collaborated_with: '#ea8766',
-}
 const EDGE_COLOR_FALLBACK = 'rgba(255,255,255,0.12)'
 
 /* G-6: 26 albums carry 103 same_artist edges (21 of those albums are one
@@ -220,6 +203,17 @@ function mixTowardDim(color: string, dim: string, t: number): string {
   return `rgb(${r},${g},${b})`
 }
 
+/* The color an edge of this type should render at, folding in both the
+ * Music Map settings panel's per-type override (src/panels/MusicMapSettings.tsx,
+ * settings key `edgeColor:${type}`) and the same_artist quiet-mix above —
+ * shared by syncGraph's creation-time paint and the edgeReducer's live
+ * recompute below, so a color change made while looking at the canvas and a
+ * freshly created edge never disagree about what "current" means. */
+function edgeBaseColor(type: string, overrides: Record<string, string>): string {
+  const raw = overrides[type] ?? EDGE_COLOR[type] ?? EDGE_COLOR_FALLBACK
+  return type === 'same_artist' ? mixTowardDim(raw, DIMMED_EDGE_COLOR, SAME_ARTIST_QUIET_MIX) : raw
+}
+
 /* Atlas cell size, in texels, for one cover.
  *
  * Default NodeImageProgram sizes its cell off the source image's own
@@ -298,50 +292,53 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
 }
 
 /* G-8: the camera fits the given bbox to the FULL viewport, edge to edge —
- * sigma has no notion of the ~820px of that viewport the two panels and the
- * transport dock actually cover. At every granularity, several nodes ended
- * up placed permanently underneath them: visible through the blur,
- * unreachable by a click.
+ * sigma has no notion of the screen space the shell's chrome actually
+ * covers. At every granularity, several nodes ended up placed permanently
+ * underneath it: visible through the blur, unreachable by a click.
  *
- * Geometry mirrors Panel.tsx (51px inset + 360px width per side, 59px below
- * the titlebar) and TransportDock.tsx (121px tall, docked to the bottom).
- * A conservative rectangular inset rather than the true L-shaped reserved
- * area — the panels don't span the full height and the dock doesn't span
- * the full width — since sigma's bbox fit only understands a rectangle
- * anyway; erring toward extra clearance is the safe direction, a node
- * still ending up hidden is not.
+ * v2 shell geometry (see DESIGN.md's shell section): a rail + Inspector
+ * Panel on the left, a now-playing panel on the right, both docked flush to
+ * their own window edge — no floating 51px inset any more, and the two
+ * sides no longer reserve equal widths (350px left, 300px right). There is
+ * also no continuous titlebar across the top any more — LeftPanelHeader and
+ * RightPanelHeader only cover their own column, each stacked directly above
+ * the rail/panel it belongs to — so nothing is reserved along the top
+ * between the two side columns, and the top inset drops to 0.
  *
- * P-8: panel inset is no longer a fixed pixel (tokens.css's --panel-inset
- * scales with the window above 1440px) — the ratio/floor below duplicates
- * that same formula rather than reading it back from a live DOM element,
- * the same "sigma needs a concrete number, kept in sync by hand" tradeoff
- * this file already makes for EDGE_COLOR. Left as a fixed pixel constant
- * here, the camera would under-reserve space at any window wider than 1440
- * and G-8's fix would silently regress.
+ * This always reserves each side's *expanded* footprint, even while that
+ * side is actually collapsed — conservative in the same direction as the
+ * rest of this comment already argues for: a node still ending up hidden is
+ * the failure mode to avoid, a little unused canvas while collapsed is not.
+ * Tracking live collapse state here to reclaim that space is a reasonable
+ * follow-up, not done in this pass.
  *
- * Panel *width* used to be a second duplicate of the same formula here, but
- * panels are now independently resizable (Settings has no control for this
- * — it's a drag on the panel's own inner edge) and App.tsx is the single
- * owner of each panel's actual current width, default or dragged. Canvas
- * takes both as props and this file no longer needs to guess — see
- * ./panelSizing.ts, shared with App.tsx's resize logic. */
-const PANEL_INSET_MIN_PX = 51
-const PANEL_TOP_INSET_PX = 59
+ * A conservative rectangular inset rather than the true reserved shape,
+ * since sigma's bbox fit only understands a rectangle anyway; erring toward
+ * extra clearance is the safe direction, a node still ending up hidden is
+ * not. TransportDock.tsx (121px tall, docked to the bottom) is unaffected
+ * by any of this and keeps its own reservation as before.
+ *
+ * P-8: panel width is not a fixed pixel (tokens.css's --panel-width scales
+ * with the window above 1440px) — the ratio/floor below duplicates that
+ * same formula rather than reading it back from a live DOM element, the
+ * same "sigma needs a concrete number, kept in sync by hand" tradeoff this
+ * file already makes for EDGE_COLOR. The rail itself never scales — it is a
+ * fixed 50px icon strip, not content, so widening the window has no reason
+ * to widen it. */
+const RAIL_WIDTH_PX = 50
+const PANEL_WIDTH_MIN_PX = 300
+const PANEL_REFERENCE_WIDTH_PX = 1440
 const DOCK_HEIGHT_PX = 121
 
 /* The rectangle of canvas the shell leaves uncovered, in viewport pixels.
  * Both the initial bbox fit and the fly target need the same answer. */
-function shellFreeArea(
-  renderer: Sigma,
-  leftPanelWidthPx: number,
-  rightPanelWidthPx: number,
-): { left: number; right: number; top: number; bottom: number } {
+function shellFreeArea(renderer: Sigma): { left: number; right: number; top: number; bottom: number } {
   const dims = renderer.getDimensions()
-  const panelInsetPx = Math.max(PANEL_INSET_MIN_PX, (dims.width * PANEL_INSET_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
+  const panelWidthPx = Math.max(PANEL_WIDTH_MIN_PX, (dims.width * PANEL_WIDTH_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
   return {
-    left: panelInsetPx + leftPanelWidthPx,
-    right: dims.width - panelInsetPx - rightPanelWidthPx,
-    top: PANEL_TOP_INSET_PX,
+    left: RAIL_WIDTH_PX + panelWidthPx,
+    right: dims.width - panelWidthPx,
+    top: 0,
     bottom: dims.height - DOCK_HEIGHT_PX,
   }
 }
@@ -361,12 +358,8 @@ function shellFreeArea(
  * where the node ends up. When the free strip is narrower than the card the
  * target clamps left rather than centring, which keeps the cover and the
  * start of every row on screen and lets only the far edge slide under. */
-function flyTargetViewportPoint(
-  renderer: Sigma,
-  leftPanelWidthPx: number,
-  rightPanelWidthPx: number,
-): { x: number; y: number } {
-  const area = shellFreeArea(renderer, leftPanelWidthPx, rightPanelWidthPx)
+function flyTargetViewportPoint(renderer: Sigma): { x: number; y: number } {
+  const area = shellFreeArea(renderer)
   const freeWidth = area.right - area.left
   const cardLeft =
     freeWidth >= NODE_CARD_WIDTH_PX ? area.left + (freeWidth - NODE_CARD_WIDTH_PX) / 2 : area.left
@@ -376,24 +369,21 @@ function flyTargetViewportPoint(
 function insetForShell(
   renderer: Sigma,
   bbox: { x: [number, number]; y: [number, number] },
-  leftPanelWidthPx: number,
-  rightPanelWidthPx: number,
 ): { x: [number, number]; y: [number, number] } {
   const dims = renderer.getDimensions()
-  const area = shellFreeArea(renderer, leftPanelWidthPx, rightPanelWidthPx)
-  // Independently resizable panels can differ in width, so the left/right
-  // footprint can too — padding by whichever is larger stays the safe
-  // direction G-8's own comment already calls out (a node ending up hidden
-  // under the wider one is worse than slightly over-padding the narrower).
-  const panelFootprintPx = Math.max(area.left, dims.width - area.right)
+  const area = shellFreeArea(renderer)
   const innerW = area.right - area.left
   const innerH = area.bottom - area.top
   if (innerW <= 0 || innerH <= 0) return bbox // window too small to inset meaningfully
 
   const bw = bbox.x[1] - bbox.x[0]
   const bh = bbox.y[1] - bbox.y[0]
-  const padX = (panelFootprintPx / innerW) * bw
-  const padForScreenTop = (PANEL_TOP_INSET_PX / innerH) * bh
+  // v2's two side columns reserve different widths (rail + panel on the
+  // left, panel alone on the right) — no longer the same footprint mirrored
+  // on both sides, so each edge of the bbox needs its own padding.
+  const padXLeft = (area.left / innerW) * bw
+  const padXRight = ((dims.width - area.right) / innerW) * bw
+  const padForScreenTop = (area.top / innerH) * bh
   const padForScreenBottom = (DOCK_HEIGHT_PX / innerH) * bh
 
   // Whether increasing graph-space y maps to the top or bottom of the
@@ -406,7 +396,7 @@ function insetForShell(
     yAtScreenTop > yAtScreenBottom ? [padForScreenBottom, padForScreenTop] : [padForScreenTop, padForScreenBottom]
 
   return {
-    x: [bbox.x[0] - padX, bbox.x[1] + padX],
+    x: [bbox.x[0] - padXLeft, bbox.x[1] + padXRight],
     y: [bbox.y[0] - padAtYMin, bbox.y[1] + padAtYMax],
   }
 }
@@ -420,12 +410,17 @@ function insetForShell(
  * identical textures in sigma's atlas and a library's worth of tracks was
  * thousands. The by-hash cover URL removes that — the atlas now holds one
  * texture per distinct cover, no matter how many nodes display it, so there
- * is nothing left for a level-of-detail gate to protect. */
-function nodeAttributes(node: GraphNode): Record<string, unknown> {
+ * is nothing left for a level-of-detail gate to protect.
+ *
+ * `showCoverArt` is this granularity's Music Map settings "images" toggle
+ * (src/panels/MusicMapSettings.tsx) — off falls back to the same colored-dot
+ * treatment a node with no art at all already gets, one flag per
+ * granularity so switching graphs doesn't need to re-derive anything. */
+function nodeAttributes(node: GraphNode, showCoverArt: boolean): Record<string, unknown> {
   const x = node.user_x ?? node.seed_x
   const y = node.user_y ?? node.seed_y
 
-  if (node.cover_hash) {
+  if (node.cover_hash && showCoverArt) {
     const square = SQUARE_COVER_TYPES.has(node.type)
     return {
       label: node.title,
@@ -454,7 +449,7 @@ function nodeAttributes(node: GraphNode): Record<string, unknown> {
  * data refresh. This is the actual fix for the bug that used to reset the
  * camera on every refetch: the renderer effect below now only depends on
  * `granularity`, not on `nodes`/`edges`. */
-function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[]): void {
+function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], showCoverArt: boolean): void {
   const wantedNodes = new Map<string, GraphNode>()
   for (const node of nodes) {
     const x = node.user_x ?? node.seed_x
@@ -467,7 +462,7 @@ function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[]): void {
     if (!wantedNodes.has(key)) graph.dropNode(key)
   })
   for (const [key, node] of wantedNodes) {
-    const attrs = nodeAttributes(node)
+    const attrs = nodeAttributes(node, showCoverArt)
     if (graph.hasNode(key)) graph.mergeNodeAttributes(key, attrs)
     else graph.addNode(key, attrs)
   }
@@ -486,10 +481,11 @@ function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[]): void {
     const edgeKey = `${from}->${to}::${edge.type}`
     wantedEdgeKeys.add(edgeKey)
     if (graph.hasEdge(edgeKey)) continue
-    const baseColor = EDGE_COLOR[edge.type] ?? EDGE_COLOR_FALLBACK
-    const color =
-      edge.type === 'same_artist' ? mixTowardDim(baseColor, DIMMED_EDGE_COLOR, SAME_ARTIST_QUIET_MIX) : baseColor
-    graph.addEdgeWithKey(edgeKey, from, to, { size: 0.5, color })
+    // `color` here is only the pre-first-paint placeholder — the edgeReducer
+    // below is what's actually authoritative on every draw, recomputed live
+    // from `relType` so a color changed in the settings panel while looking
+    // at the canvas doesn't need this edge re-created to show up.
+    graph.addEdgeWithKey(edgeKey, from, to, { size: 0.5, color: EDGE_COLOR[edge.type] ?? EDGE_COLOR_FALLBACK, relType: edge.type })
   }
 
   graph.forEachEdge((edgeKey) => {
@@ -513,12 +509,20 @@ type Props = {
   /** Settings "reduced motion" toggle — force-on only, layered on top of the
    * OS's own prefers-reduced-motion rather than a way to override it off. */
   reducedMotionForced?: boolean
-  /** The collection/now-playing panels' actual current width in px — App.tsx
-   * owns whether that's the P-8 default or a dragged override. G-8's
-   * free-canvas math needs the real number or a widened panel silently
-   * covers nodes this file still thinks are reachable. */
-  leftPanelWidthPx: number
-  rightPanelWidthPx: number
+  /** Music Map settings "nodes > images" for the *current* granularity —
+   * App.tsx resolves which of the three per-granularity settings applies,
+   * so this file doesn't need to know about the other two. */
+  showCoverArt: boolean
+  /** Music Map settings "nodes > size" — multiplies every node's base size
+   * (ART_SIZE or NODE_SIZE[type]) live, via nodeReducer. 1 is unchanged. */
+  nodeSizeMultiplier: number
+  /** Music Map settings "links > thickness" — multiplies EDGE_WIDTH_AT_RATIO_1
+   * live, via edgeReducer. 1 is unchanged. */
+  edgeThicknessMultiplier: number
+  /** Music Map settings "links > colours" — type -> hex, for whichever types
+   * have a user override; unlisted types render at their EDGE_COLOR default.
+   * See edgeBaseColor above. */
+  edgeColorOverrides: Record<string, string>
 }
 
 export type CanvasHandle = {
@@ -539,8 +543,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     onStats,
     dimOnHoverEnabled = true,
     reducedMotionForced = false,
-    leftPanelWidthPx,
-    rightPanelWidthPx,
+    showCoverArt,
+    nodeSizeMultiplier,
+    edgeThicknessMultiplier,
+    edgeColorOverrides,
   },
   ref,
 ) {
@@ -570,7 +576,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // sits on screen right now, relative to where it is about to sit.
     // Graph-unit distance wouldn't mean the same thing at every zoom
     // level; this does.
-    const landing = flyTargetViewportPoint(renderer, leftPanelWidthPxRef.current, rightPanelWidthPxRef.current)
+    const landing = flyTargetViewportPoint(renderer)
     const currentViewport = renderer.graphToViewport({ x: attrs.x as number, y: attrs.y as number })
     const distancePx = Math.hypot(currentViewport.x - landing.x, currentViewport.y - landing.y)
     const duration =
@@ -609,8 +615,21 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // renderer down.
   const dimOnHoverEnabledRef = useRef(dimOnHoverEnabled)
   const reducedMotionForcedRef = useRef(reducedMotionForced)
-  const leftPanelWidthPxRef = useRef(leftPanelWidthPx)
-  const rightPanelWidthPxRef = useRef(rightPanelWidthPx)
+
+  // Read live, every frame, by the reducers below — a slider drag fires
+  // onChange continuously, and re-running syncGraph's full node/edge diff on
+  // every intermediate value would be real cost on a library-sized graph.
+  // Refs instead of state: changing them must never re-run the renderer
+  // lifecycle effect below (keyed on [granularity] alone).
+  const nodeSizeMultiplierRef = useRef(nodeSizeMultiplier)
+  const edgeThicknessMultiplierRef = useRef(edgeThicknessMultiplier)
+  const edgeColorOverridesRef = useRef(edgeColorOverrides)
+  useEffect(() => {
+    nodeSizeMultiplierRef.current = nodeSizeMultiplier
+    edgeThicknessMultiplierRef.current = edgeThicknessMultiplier
+    edgeColorOverridesRef.current = edgeColorOverrides
+    rendererRef.current?.refresh()
+  }, [nodeSizeMultiplier, edgeThicknessMultiplier, edgeColorOverrides])
 
   // Which node the hover plate is currently describing. Distinct from
   // sigma's own hover tracking below: that fires on every enterNode, this
@@ -631,8 +650,6 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     selectedNodeIdRef.current = selectedNodeId
     dimOnHoverEnabledRef.current = dimOnHoverEnabled
     reducedMotionForcedRef.current = reducedMotionForced
-    leftPanelWidthPxRef.current = leftPanelWidthPx
-    rightPanelWidthPxRef.current = rightPanelWidthPx
   })
 
   // Renderer lifecycle — created once per granularity (a genuinely different
@@ -723,7 +740,13 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     }
 
     renderer.setSetting('nodeReducer', (node, data) => {
-      if (dimProgress <= 0 || node === hoveredNode || hoveredNeighbors?.has(node)) return data
+      // Music Map settings "nodes > size" — applied before anything below,
+      // to every node regardless of dim/hover state: a persistent size
+      // preference isn't a per-frame state signal, so it doesn't run into
+      // the art-preservation rule just below.
+      const multiplier = nodeSizeMultiplierRef.current
+      const scaled = multiplier === 1 ? data : { ...data, size: (data.size as number) * multiplier }
+      if (dimProgress <= 0 || node === hoveredNode || hoveredNeighbors?.has(node)) return scaled
       // Art-bound nodes are never recolored or reshaped to indicate state
       // (DESIGN.md "Nodes": "do not brighten, scale, or recolor a cover").
       // This used to force `type: 'circle'` and crossfade `color` from the
@@ -737,22 +760,30 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       // no way to dim art itself without one of those two violations —
       // zIndex alone still sends it behind the hovered node's neighborhood.
       if (data.type === 'cover' || data.type === 'coverSquare') {
-        return { ...data, zIndex: 0 }
+        return { ...scaled, zIndex: 0 }
       }
+      // Every other type has no art to protect, so it's forced to 'circle'
+      // and its color crossfades toward the dim tone — sigma has no notion
+      // of fading an image out, so the art->circle branch above stays a
+      // hard cut instead; only this branch's own color crossfades. `square`
+      // is cleared alongside the type: nothing downstream should be told a
+      // node is still a square cover while it is being drawn as a plain dot.
       return {
-        ...data,
+        ...scaled,
         type: 'circle',
         square: false,
-        color: mixTowardDim(data.color, DIMMED_NODE_COLOR, dimProgress),
+        color: mixTowardDim(scaled.color, DIMMED_NODE_COLOR, dimProgress),
         zIndex: 0,
       }
     })
     renderer.setSetting('edgeReducer', (edge, data) => {
-      const size = EDGE_WIDTH_AT_RATIO_1 * Math.sqrt(renderer.getCamera().ratio)
-      if (dimProgress <= 0) return { ...data, size }
+      const size = EDGE_WIDTH_AT_RATIO_1 * edgeThicknessMultiplierRef.current * Math.sqrt(renderer.getCamera().ratio)
+      const relType = data.relType as string | undefined
+      const baseColor = relType ? edgeBaseColor(relType, edgeColorOverridesRef.current) : (data.color as string)
+      if (dimProgress <= 0) return { ...data, size, color: baseColor }
       const [source, target] = graph.extremities(edge)
-      if (source === hoveredNode || target === hoveredNode) return { ...data, size }
-      return { ...data, size, color: mixTowardDim(data.color, DIMMED_EDGE_COLOR, dimProgress) }
+      if (source === hoveredNode || target === hoveredNode) return { ...data, size, color: baseColor }
+      return { ...data, size, color: mixTowardDim(baseColor, DIMMED_EDGE_COLOR, dimProgress) }
     })
 
     renderer.on('enterNode', ({ node }) => {
@@ -898,7 +929,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     if (!graph || !renderer || loading) return
 
     const hadNoNodes = graph.order === 0
-    syncGraph(graph, nodes, edges)
+    syncGraph(graph, nodes, edges, showCoverArt)
     onStatsRef.current?.({ nodes: graph.order, edges: graph.size })
 
     // Only fit the camera to the data on the graph's first population for
@@ -908,12 +939,14 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     if (hadNoNodes) {
       const bbox = robustBBox(graph)
       if (bbox) {
-        renderer.setCustomBBox(
-          insetForShell(renderer, bbox, leftPanelWidthPxRef.current, rightPanelWidthPxRef.current),
-        )
+        renderer.setCustomBBox(insetForShell(renderer, bbox))
       }
     }
-  }, [nodes, edges, loading])
+    // showCoverArt is a plain dependency, not a ref like the three settings
+    // above — toggling it is a discrete click, not a continuous drag, so
+    // re-running the full node diff once per toggle (rather than every
+    // frame) is the cheaper and simpler of the two options.
+  }, [nodes, edges, loading, showCoverArt])
 
   // One sentence, muted, centered, no illustration — DESIGN.md's empty-state
   // rule. Ordered error > scanning > plain-empty: a failed scan is the most

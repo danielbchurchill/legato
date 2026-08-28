@@ -9,7 +9,7 @@ import type { CSSProperties, ReactNode } from 'react'
  * has to be dropped for performance, it degrades to --color-surface-flat, which
  * is the same perceived color without the compositing cost. */
 
-export type SurfaceEdges = 'all' | 'bottom' | 'top-dock'
+export type SurfaceEdges = 'all' | 'bottom' | 'top-dock' | 'right' | 'left' | 'bottom-right' | 'bottom-left'
 
 const EDGE_CLASSES: Record<SurfaceEdges, string> = {
   // A floating panel: every edge, fully rounded.
@@ -20,6 +20,16 @@ const EDGE_CLASSES: Record<SurfaceEdges, string> = {
   // and bottom corners would sit outside the window.
   'top-dock':
     'rounded-t-[var(--radius-surface)] border-t border-l border-r',
+  // v2's rail and left Inspector Panel: docked flush to the window's left
+  // edge and full height, so only the inner (right) edge is real — no
+  // radius, same reasoning as the titlebar spanning the window.
+  right: 'border-r',
+  // v2's right (now-playing) panel: the mirror image, docked flush right.
+  left: 'border-l',
+  // v2's Left Panel Header: docked to the top-left corner.
+  'bottom-right': 'border-b border-r',
+  // v2's Right Panel Header: docked to the top-right corner.
+  'bottom-left': 'border-b border-l',
 }
 
 type SurfaceProps = {

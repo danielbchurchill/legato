@@ -9,20 +9,49 @@ function decadeOf(year: number | null): number | null {
   return year == null || Number.isNaN(year) ? null : Math.floor(year / 10) * 10;
 }
 
+// Music Map settings panel's "nodes > lock" toggle (settings key
+// nodePositionsLocked, src/panels/MusicMapSettings.tsx) — a global sibling
+// to the per-node lock a drag already gives you for free (user_x/user_y,
+// once set, are never touched by anything in this file). Un-dragged nodes
+// have no such protection: their seed position is free to drift on every
+// rescan as the clustering inputs shift, which is what this flag stops.
+function isPositionsLocked(db: Database.Database): boolean {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'nodePositionsLocked'").get() as
+    | { value: string }
+    | undefined;
+  return row?.value === "true";
+}
+
 // seed_version only bumps when the computed position actually differs — a
 // no-op recompute (nothing about the underlying data changed) must leave
 // the row byte-identical, not just numerically equal. granularity is part
 // of the conflict key (migration 0015): the same node can hold up to three
 // independent seed positions, one per graph it appears in.
-function upsertSeeds(db: Database.Database, granularity: "tracks" | "albums" | "artists", seeds: Map<number, Seed>): void {
+//
+// Locked (isPositionsLocked above): existing rows are left completely
+// untouched (DO NOTHING) rather than DO UPDATE — a node that already has a
+// seed position keeps exactly the one it has, whatever the newly computed
+// value would have been. A node with no row yet still gets INSERTed, so a
+// track added by a rescan while locked still gets a position and isn't
+// silently dropped from the graph (routes/nodes.ts serves the node list by
+// joining on this table).
+function upsertSeeds(
+  db: Database.Database,
+  granularity: "tracks" | "albums" | "artists",
+  seeds: Map<number, Seed>,
+  locked: boolean,
+): void {
   const upsert = db.prepare(
-    `INSERT INTO positions (node_id, granularity, seed_x, seed_y, seed_version) VALUES (?, ?, ?, ?, 1)
-     ON CONFLICT(node_id, granularity) DO UPDATE SET
-       seed_version = CASE
-         WHEN positions.seed_x = excluded.seed_x AND positions.seed_y = excluded.seed_y
-         THEN positions.seed_version ELSE positions.seed_version + 1
-       END,
-       seed_x = excluded.seed_x, seed_y = excluded.seed_y`,
+    locked
+      ? `INSERT INTO positions (node_id, granularity, seed_x, seed_y, seed_version) VALUES (?, ?, ?, ?, 1)
+         ON CONFLICT(node_id, granularity) DO NOTHING`
+      : `INSERT INTO positions (node_id, granularity, seed_x, seed_y, seed_version) VALUES (?, ?, ?, ?, 1)
+         ON CONFLICT(node_id, granularity) DO UPDATE SET
+           seed_version = CASE
+             WHEN positions.seed_x = excluded.seed_x AND positions.seed_y = excluded.seed_y
+             THEN positions.seed_version ELSE positions.seed_version + 1
+           END,
+           seed_x = excluded.seed_x, seed_y = excluded.seed_y`,
   );
   const applyAll = db.transaction(() => {
     for (const [nodeId, seed] of seeds) upsert.run(nodeId, granularity, seed.x, seed.y);
@@ -65,7 +94,7 @@ export function recomputeTracksLayout(db: Database.Database): void {
   }));
   const seeds = computeClusteredSeeds(clusterInputs);
 
-  upsertSeeds(db, "tracks", seeds);
+  upsertSeeds(db, "tracks", seeds, isPositionsLocked(db));
 
   // Installs that ran a recompute before the satellite-node centroid
   // seeding above was removed still have stale artist/release/label/year
@@ -118,7 +147,7 @@ export function recomputeAlbumsLayout(db: Database.Database): void {
     decade: decadeOf(a.year_min),
   }));
 
-  upsertSeeds(db, "albums", computeClusteredSeeds(clusterInputs));
+  upsertSeeds(db, "albums", computeClusteredSeeds(clusterInputs), isPositionsLocked(db));
   pruneStalePositions(db, "albums");
 }
 
@@ -157,7 +186,7 @@ export function recomputeArtistsLayout(db: Database.Database): void {
     return { nodeId: artist.node_id, groupKey: pickMode(labelCounts), decade: decadeOf(earliestYear) };
   });
 
-  upsertSeeds(db, "artists", computeClusteredSeeds(clusterInputs));
+  upsertSeeds(db, "artists", computeClusteredSeeds(clusterInputs), isPositionsLocked(db));
   pruneStalePositions(db, "artists");
 }
 

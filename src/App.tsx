@@ -1,25 +1,31 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import PlaybackSpike from './PlaybackSpike'
 import LibrarySetup, { Centered } from './LibrarySetup'
 import { useServerReady } from './hooks/useServerReady'
 import Canvas, { type CanvasHandle } from './canvas/Canvas'
-import { defaultPanelWidthPx } from './canvas/panelSizing'
+import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
 import { usePlayback } from './playback/usePlayback'
 import HygieneView from './hygiene/HygieneView'
 import { AppShell } from './shell/AppShell'
-import { Panel } from './shell/Panel'
 import { GraphToggle } from './shell/GraphToggle'
-import { GRANULARITIES, type Granularity } from './shell/granularity'
+import { GRANULARITIES, SHOW_IMAGES_SETTING_KEY, type Granularity } from './shell/granularity'
 import { TransportDock } from './shell/TransportDock'
 import { CollectionPanel, type CollectionPanelHandle } from './panels/CollectionPanel'
+import { MusicMapSettings } from './panels/MusicMapSettings'
 import { SERVER_HOST } from './config/serverHost'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
 import { SettingsView } from './settings/SettingsView'
 import { useSettings } from './hooks/useSettings'
 import type { ReplayGainMode } from './playback/usePlayback'
+import { LeftPanelHeader } from './shell/LeftPanelHeader'
+import { RightPanelHeader } from './shell/RightPanelHeader'
+import { InspectorRail } from './shell/InspectorRail'
+import { InspectorPanel } from './shell/InspectorPanel'
+import { RightPanel } from './shell/RightPanel'
+import type { RailDestination } from './shell/rail'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -188,6 +194,15 @@ function MainApp() {
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [granularity, setGranularity] = useState<Granularity>('albums')
+  // The rail's own selection doubles as the left shell's expand/collapse
+  // state — "exactly one active at a time, or none when collapsed" is
+  // literally what DESIGN.md's shell section specifies, so there is no
+  // separate boolean to keep in sync with it. The right (now-playing) side
+  // collapses independently, via its own header icon — the two sides never
+  // shared a single collapse state in the mockup to begin with, only a
+  // shared *concept* of one. Both default open, matching today's baseline.
+  const [activeRailDestination, setActiveRailDestination] = useState<RailDestination | null>('search')
+  const [rightPanelExpanded, setRightPanelExpanded] = useState(true)
   const { settings, loaded: settingsLoaded, updateSettings } = useSettings()
   const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
   const playback = usePlayback(replaygainMode)
@@ -200,19 +215,6 @@ function MainApp() {
   const dimOnHoverEnabled = settings.hoverDimEnabled !== 'false'
   const reducedMotionForced = settings.reducedMotionForced === 'true'
 
-  // Applied once, when settings first arrive, not on every settings change —
-  // switching granularity mid-session is the user's live choice and
-  // shouldn't be fought by a stale default the moment something else in
-  // Settings is saved.
-  const appliedDefaultGranularity = useRef(false)
-  useEffect(() => {
-    if (!settingsLoaded || appliedDefaultGranularity.current) return
-    appliedDefaultGranularity.current = true
-    const preferred = settings.defaultGranularity
-    if ((GRANULARITIES as readonly string[]).includes(preferred)) setGranularity(preferred as Granularity)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settingsLoaded])
-
   // CSS-driven motion (see src/index.css) has no access to a React prop, so
   // the force-on override is mirrored onto the root element as a data
   // attribute the base reduced-motion layer also matches against.
@@ -221,49 +223,32 @@ function MainApp() {
     else delete document.documentElement.dataset.reducedMotion
   }, [reducedMotionForced])
 
-  // Mirrors the P-8 CSS formula's own vw-based scaling (tokens.css
-  // --panel-width used to be this, before panels became independently
-  // resizable) — window.innerWidth is a live equivalent of 100vw for a
-  // full-bleed frameless window with no horizontal chrome, the same
-  // assumption Canvas.tsx's own dims.width already makes.
-  const [windowWidth, setWindowWidth] = useState(window.innerWidth)
+  // Music Map settings' "music map > default view" (src/panels/MusicMapSettings.tsx)
+  // — applied once, on the first settings load, so it seeds the initial
+  // granularity without fighting a manual switch made afterward via
+  // GraphToggle. Settings load asynchronously (useSettings starts at {}
+  // before its fetch resolves), so this can't just be granularity's own
+  // useState initializer.
+  const appliedDefaultGranularityRef = useRef(false)
   useEffect(() => {
-    const onResize = () => setWindowWidth(window.innerWidth)
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
+    if (!settingsLoaded || appliedDefaultGranularityRef.current) return
+    appliedDefaultGranularityRef.current = true
+    const preferred = settings.defaultGranularity
+    if (preferred && (GRANULARITIES as readonly string[]).includes(preferred)) {
+      setGranularity(preferred as Granularity)
+    }
+  }, [settingsLoaded, settings.defaultGranularity])
 
-  // A fixed cap, not a measured one (DESIGN.md has no opinion on a resized
-  // panel) — raised automatically past the P-8 default so a very wide window
-  // can never make "as wide as it already renders" register as "past the
-  // max you're allowed to drag to."
-  const PANEL_MAX_WIDTH_PX = 560
-  const panelDefaultWidthPx = defaultPanelWidthPx(windowWidth)
-  const panelMaxWidthPx = Math.max(PANEL_MAX_WIDTH_PX, panelDefaultWidthPx)
-
-  // null = no drag override yet, i.e. "use the P-8 default." Loaded once
-  // from settings (same one-time-on-load shape as defaultGranularity above)
-  // rather than re-derived every render, so a live drag isn't fought by its
-  // own not-yet-updated settings value.
-  const [leftPanelWidthOverride, setLeftPanelWidthOverride] = useState<number | null>(null)
-  const [rightPanelWidthOverride, setRightPanelWidthOverride] = useState<number | null>(null)
-  const appliedPanelWidths = useRef(false)
-  useEffect(() => {
-    if (!settingsLoaded || appliedPanelWidths.current) return
-    appliedPanelWidths.current = true
-    if (settings.panelWidthLeft) setLeftPanelWidthOverride(Number(settings.panelWidthLeft))
-    if (settings.panelWidthRight) setRightPanelWidthOverride(Number(settings.panelWidthRight))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settingsLoaded])
-
-  // Re-clamped against the *current* window's floor/cap on every render
-  // (not just at drag time) — a persisted override from a much wider
-  // session shouldn't render narrower than today's minimum, or wider than
-  // today's maximum, just because the window is a different size now.
-  const clampPanelWidth = (override: number | null): number =>
-    override == null ? panelDefaultWidthPx : Math.min(panelMaxWidthPx, Math.max(panelDefaultWidthPx, override))
-  const leftPanelWidthPx = clampPanelWidth(leftPanelWidthOverride)
-  const rightPanelWidthPx = clampPanelWidth(rightPanelWidthOverride)
+  // Music Map settings' "nodes > size" / "links > thickness" / "links >
+  // colours" — read live by Canvas.tsx's reducers, so a change made while
+  // looking at the canvas shows up immediately. edgeColorOverrides is
+  // memoized so its identity is stable across renders that don't touch any
+  // edgeColor:* key — Canvas re-reads it (and calls renderer.refresh()) on
+  // every identity change.
+  const nodeSizeMultiplier = Number(settings.nodeSizeMultiplier ?? '1')
+  const edgeThicknessMultiplier = Number(settings.edgeThicknessMultiplier ?? '1')
+  const showCoverArt = settings[SHOW_IMAGES_SETTING_KEY[granularity]] !== 'false'
+  const edgeColorOverrides = useMemo(() => resolveEdgeColorOverrides(settings), [settings])
 
   // Applies a saved device preference on launch (Rust's own device_name
   // starts at None every fresh process) and again on any change made from
@@ -364,50 +349,50 @@ function MainApp() {
         onOpenInspector={() => setInspectorOpen(true)}
         dimOnHoverEnabled={dimOnHoverEnabled}
         reducedMotionForced={reducedMotionForced}
-        leftPanelWidthPx={leftPanelWidthPx}
-        rightPanelWidthPx={rightPanelWidthPx}
+        showCoverArt={showCoverArt}
+        nodeSizeMultiplier={nodeSizeMultiplier}
+        edgeThicknessMultiplier={edgeThicknessMultiplier}
+        edgeColorOverrides={edgeColorOverrides}
       />
 
       <GraphToggle value={granularity} onChange={setGranularity} />
 
-      <Panel
-        side="left"
-        title="collection"
-        widthPx={leftPanelWidthPx}
-        minWidthPx={panelDefaultWidthPx}
-        maxWidthPx={panelMaxWidthPx}
-        onWidthChange={setLeftPanelWidthOverride}
-        onWidthCommit={(px) => {
-          setLeftPanelWidthOverride(px)
-          void updateSettings({ panelWidthLeft: String(px) })
-        }}
-      >
-        <CollectionPanel
-          ref={collectionPanelRef}
-          anchorNodeId={anchorNodeId}
-          onSelectNode={selectAndFly}
-          onOpenMaintenance={() => setHygieneOpen(true)}
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
-      </Panel>
+      <LeftPanelHeader
+        expanded={activeRailDestination != null}
+        onCollapse={() => setActiveRailDestination(null)}
+      />
+      <InspectorRail active={activeRailDestination} onSelect={setActiveRailDestination} />
+      {activeRailDestination && (
+        <InspectorPanel
+          active={activeRailDestination}
+          graphContent={
+            <MusicMapSettings settings={settings} updateSettings={updateSettings} granularity={granularity} />
+          }
+        >
+          <CollectionPanel
+            ref={collectionPanelRef}
+            anchorNodeId={anchorNodeId}
+            onSelectNode={selectAndFly}
+            onOpenMaintenance={() => setHygieneOpen(true)}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+        </InspectorPanel>
+      )}
 
+      <RightPanelHeader expanded={rightPanelExpanded} onCollapse={() => setRightPanelExpanded(false)} />
       {/* Now playing, and only now playing. Selection used to take this
        * panel over (P-5's "one node-detail surface"), which meant looking at
        * anything cost you sight of what was playing; the selected node now
        * has its own surface on the canvas, and the deeper half of P-5's
-       * argument survives inside NodeDetailPages — one component renders a
-       * node's detail for both this panel and the inspector. */}
-      <Panel
-        side="right"
-        title="now playing"
-        widthPx={rightPanelWidthPx}
-        minWidthPx={panelDefaultWidthPx}
-        maxWidthPx={panelMaxWidthPx}
-        onWidthChange={setRightPanelWidthOverride}
-        onWidthCommit={(px) => {
-          setRightPanelWidthOverride(px)
-          void updateSettings({ panelWidthRight: String(px) })
-        }}
+       * argument survives as shared logic (panels/MetadataFields.tsx,
+       * ConnectionsContent.tsx, useLyrics.ts, useMetadataEditing.ts) behind
+       * two different layouts — this panel's stacked disclosures
+       * (NowPlayingSections.tsx) and the inspector's unchanged pager
+       * (NodeDetailPages.tsx). */}
+      <RightPanel
+        expanded={rightPanelExpanded}
+        collapsedNodeId={playback.status.currentRecordingNodeId ?? null}
+        onExpand={() => setRightPanelExpanded(true)}
       >
         <NowPlayingPanel
           nodeId={playback.status.currentRecordingNodeId ?? null}
@@ -416,7 +401,7 @@ function MainApp() {
           onSelectNode={selectAndFly}
           onPlay={playback.playNode}
         />
-      </Panel>
+      </RightPanel>
 
       <TransportDock
         status={playback.status}

@@ -159,6 +159,55 @@ describe("recomputeArtistsLayout", () => {
   });
 });
 
+describe("nodePositionsLocked setting", () => {
+  it("leaves an existing seed position untouched on recompute while locked", () => {
+    const db = openDb(":memory:");
+    const artistA = makeNode(db, "artist", "Artist A");
+    const release = makeNode(db, "release", "Abbey Road");
+    db.prepare(
+      "INSERT INTO albums (node_id, primary_artist_node_id, track_count, total_duration_ms, year_min, year_max) VALUES (?, ?, 1, 0, 1969, 1969)",
+    ).run(release, artistA);
+
+    recomputeAlbumsLayout(db);
+    const before = db
+      .prepare("SELECT seed_x, seed_y, seed_version FROM positions WHERE node_id = ? AND granularity = 'albums'")
+      .get(release) as { seed_x: number; seed_y: number; seed_version: number };
+
+    db.prepare("INSERT INTO settings (key, value) VALUES ('nodePositionsLocked', 'true')").run();
+
+    // Reassigning the primary artist changes what recomputeAlbumsLayout would
+    // otherwise cluster this release toward — if lock were a no-op, the seed
+    // would move and/or seed_version would bump.
+    const artistB = makeNode(db, "artist", "Artist B");
+    db.prepare("UPDATE albums SET primary_artist_node_id = ? WHERE node_id = ?").run(artistB, release);
+    recomputeAlbumsLayout(db);
+
+    const after = db
+      .prepare("SELECT seed_x, seed_y, seed_version FROM positions WHERE node_id = ? AND granularity = 'albums'")
+      .get(release) as { seed_x: number; seed_y: number; seed_version: number };
+    expect(after).toEqual(before);
+  });
+
+  it("still seeds a brand new node while locked, so a rescan can't drop it from the graph", () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO settings (key, value) VALUES ('nodePositionsLocked', 'true')").run();
+
+    const artist = makeNode(db, "artist", "The Beatles");
+    const release = makeNode(db, "release", "Abbey Road");
+    db.prepare(
+      "INSERT INTO albums (node_id, primary_artist_node_id, track_count, total_duration_ms, year_min, year_max) VALUES (?, ?, 1, 0, 1969, 1969)",
+    ).run(release, artist);
+
+    recomputeAlbumsLayout(db);
+
+    const row = db
+      .prepare("SELECT seed_x, seed_y FROM positions WHERE node_id = ? AND granularity = 'albums'")
+      .get(release) as { seed_x: number; seed_y: number } | undefined;
+    expect(row).toBeDefined();
+    expect(Number.isFinite(row!.seed_x)).toBe(true);
+  });
+});
+
 describe("recomputeAllLayouts", () => {
   it("computes all three granularities in one call", () => {
     const db = openDb(":memory:");

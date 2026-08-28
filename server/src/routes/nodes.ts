@@ -122,6 +122,15 @@ export function nodesRoutes(db: Database.Database) {
 
       const article = db.prepare("SELECT body_md, updated_at FROM articles WHERE node_id = ?").get(id);
 
+      // v2's "track metadata" disclosure wants a play count alongside length
+      // and the file tags. Real data already, via migration 0013 — recording
+      // nodes only, and indexed on recording_node_id so this is one cheap
+      // COUNT rather than a join against the full plays table.
+      const playCount =
+        (node as { type: string }).type === "recording"
+          ? (db.prepare("SELECT COUNT(*) AS n FROM plays WHERE recording_node_id = ?").get(id) as { n: number }).n
+          : null;
+
       return {
         ...node,
         recording,
@@ -130,6 +139,7 @@ export function nodesRoutes(db: Database.Database) {
         edges: [...outgoing, ...incoming],
         facts: generateFacts(db, Number(id)),
         article: article ?? null,
+        playCount,
         // Prose from outside this library (enrich/wikipedia.ts), kept
         // separate from `article` — that one is generated from the
         // collection itself and rewritten on every scan. Null covers both
