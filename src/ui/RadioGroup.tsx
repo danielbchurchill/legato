@@ -12,10 +12,20 @@ type RadioGroupProps<T extends string> = {
   options: readonly T[]
   value: T
   onChange: (value: T) => void
+  /** Display text per option — falls back to the raw option value when an
+   * option has no entry, so a caller with no separate display text can
+   * still pass options straight through. */
+  labels?: Partial<Record<T, string>>
   className?: string
 }
 
-export function RadioGroup<T extends string>({ options, value, onChange, className = '' }: RadioGroupProps<T>) {
+export function RadioGroup<T extends string>({
+  options,
+  value,
+  onChange,
+  labels,
+  className = '',
+}: RadioGroupProps<T>) {
   return (
     <div role="radiogroup" className={`flex items-start justify-between ${className}`}>
       {options.map((option) => (
@@ -32,7 +42,9 @@ export function RadioGroup<T extends string>({ options, value, onChange, classNa
               option === value ? 'bg-[var(--color-control)]' : 'bg-transparent'
             }`}
           />
-          <span className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{option}</span>
+          <span className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+            {labels?.[option] ?? option}
+          </span>
         </button>
       ))}
     </div>

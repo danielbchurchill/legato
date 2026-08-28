@@ -1,17 +1,19 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import PlaybackSpike from './PlaybackSpike'
 import LibrarySetup, { Centered } from './LibrarySetup'
 import { useServerReady } from './hooks/useServerReady'
 import Canvas, { type CanvasHandle } from './canvas/Canvas'
+import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
 import { usePlayback } from './playback/usePlayback'
 import HygieneView from './hygiene/HygieneView'
 import { AppShell } from './shell/AppShell'
 import { GraphToggle } from './shell/GraphToggle'
-import type { Granularity } from './shell/granularity'
+import { GRANULARITIES, SHOW_IMAGES_SETTING_KEY, type Granularity } from './shell/granularity'
 import { TransportDock } from './shell/TransportDock'
 import { CollectionPanel } from './panels/CollectionPanel'
+import { MusicMapSettings } from './panels/MusicMapSettings'
 import { SERVER_HOST } from './config/serverHost'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
@@ -201,10 +203,37 @@ function MainApp() {
   // shared *concept* of one. Both default open, matching today's baseline.
   const [activeRailDestination, setActiveRailDestination] = useState<RailDestination | null>('search')
   const [rightPanelExpanded, setRightPanelExpanded] = useState(true)
-  const { settings, updateSettings } = useSettings()
+  const { settings, loaded: settingsLoaded, updateSettings } = useSettings()
   const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
   const playback = usePlayback(replaygainMode)
   const canvasRef = useRef<CanvasHandle>(null)
+
+  // Music Map settings' "music map > default view" (src/panels/MusicMapSettings.tsx)
+  // — applied once, on the first settings load, so it seeds the initial
+  // granularity without fighting a manual switch made afterward via
+  // GraphToggle. Settings load asynchronously (useSettings starts at {}
+  // before its fetch resolves), so this can't just be granularity's own
+  // useState initializer.
+  const appliedDefaultGranularityRef = useRef(false)
+  useEffect(() => {
+    if (!settingsLoaded || appliedDefaultGranularityRef.current) return
+    appliedDefaultGranularityRef.current = true
+    const preferred = settings.defaultGranularity
+    if (preferred && (GRANULARITIES as readonly string[]).includes(preferred)) {
+      setGranularity(preferred as Granularity)
+    }
+  }, [settingsLoaded, settings.defaultGranularity])
+
+  // Music Map settings' "nodes > size" / "links > thickness" / "links >
+  // colours" — read live by Canvas.tsx's reducers, so a change made while
+  // looking at the canvas shows up immediately. edgeColorOverrides is
+  // memoized so its identity is stable across renders that don't touch any
+  // edgeColor:* key — Canvas re-reads it (and calls renderer.refresh()) on
+  // every identity change.
+  const nodeSizeMultiplier = Number(settings.nodeSizeMultiplier ?? '1')
+  const edgeThicknessMultiplier = Number(settings.edgeThicknessMultiplier ?? '1')
+  const showCoverArt = settings[SHOW_IMAGES_SETTING_KEY[granularity]] !== 'false'
+  const edgeColorOverrides = useMemo(() => resolveEdgeColorOverrides(settings), [settings])
 
   // Applies a saved device preference on launch (Rust's own device_name
   // starts at None every fresh process) and again on any change made from
@@ -265,6 +294,10 @@ function MainApp() {
           if (id == null) setInspectorOpen(false)
         }}
         onOpenInspector={() => setInspectorOpen(true)}
+        showCoverArt={showCoverArt}
+        nodeSizeMultiplier={nodeSizeMultiplier}
+        edgeThicknessMultiplier={edgeThicknessMultiplier}
+        edgeColorOverrides={edgeColorOverrides}
       />
 
       <GraphToggle value={granularity} onChange={setGranularity} />
@@ -275,7 +308,12 @@ function MainApp() {
       />
       <InspectorRail active={activeRailDestination} onSelect={setActiveRailDestination} />
       {activeRailDestination && (
-        <InspectorPanel active={activeRailDestination}>
+        <InspectorPanel
+          active={activeRailDestination}
+          graphContent={
+            <MusicMapSettings settings={settings} updateSettings={updateSettings} granularity={granularity} />
+          }
+        >
           <CollectionPanel
             anchorNodeId={anchorNodeId}
             onSelectNode={selectAndFly}
