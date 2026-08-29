@@ -199,6 +199,13 @@ function MainApp() {
   // shared *concept* of one. Both default open, matching today's baseline.
   const [activeRailDestination, setActiveRailDestination] = useState<RailDestination | null>('search')
   const [rightPanelExpanded, setRightPanelExpanded] = useState(true)
+  // The left header's collapsed-state expand icon (Figma's later "Panel
+  // Collapse" revision, node 66:85 — see DESIGN.md "Panel collapsed (v2)")
+  // has no destination of its own to open, unlike a rail icon click. This
+  // remembers whichever destination was active before collapsing so the
+  // header button restores it, rather than forcing back to 'search' every
+  // time.
+  const lastRailDestinationRef = useRef<RailDestination>('search')
   const { settings, updateSettings } = useSettings()
   const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
   const playback = usePlayback(replaygainMode)
@@ -350,8 +357,15 @@ function MainApp() {
       <LeftPanelHeader
         expanded={activeRailDestination != null}
         onCollapse={() => setActiveRailDestination(null)}
+        onExpand={() => setActiveRailDestination(lastRailDestinationRef.current)}
       />
-      <InspectorRail active={activeRailDestination} onSelect={setActiveRailDestination} />
+      <InspectorRail
+        active={activeRailDestination}
+        onSelect={(id) => {
+          lastRailDestinationRef.current = id
+          setActiveRailDestination(id)
+        }}
+      />
       {activeRailDestination && (
         <InspectorPanel
           active={activeRailDestination}
@@ -369,7 +383,11 @@ function MainApp() {
         </InspectorPanel>
       )}
 
-      <RightPanelHeader expanded={rightPanelExpanded} onCollapse={() => setRightPanelExpanded(false)} />
+      <RightPanelHeader
+        expanded={rightPanelExpanded}
+        onCollapse={() => setRightPanelExpanded(false)}
+        onExpand={() => setRightPanelExpanded(true)}
+      />
       {/* Now playing, and only now playing. Selection used to take this
        * panel over (P-5's "one node-detail surface"), which meant looking at
        * anything cost you sight of what was playing; the selected node now
