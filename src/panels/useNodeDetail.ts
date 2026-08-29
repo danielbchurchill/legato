@@ -52,6 +52,9 @@ export type NodeDetail = {
   /** Real listen count from the plays table (migration 0013) — recording
    * nodes only, null for everything else. */
   playCount: number | null
+  /** Presence in the favourites table (migration 0020) — the manual
+   * bookmark toggle NodeTitleBlock.tsx renders as a heart. */
+  is_favourite: boolean
 }
 export type FieldDiff = { field: string; oldValue: string | number; newValue: string | number }
 export type TagWriteRow = { id: number; status: string; diff_json: string }
@@ -95,7 +98,13 @@ export function useNodeDetail(nodeId: number | null): NodeDetailState {
   // node being looked at rather than waiting for the next selection. Filtered
   // on the payload's own node id: a queue draining a hundred artists must not
   // refetch this a hundred times.
-  useWsEvent(['enrich:applied'], (payload) => {
+  //
+  // favourites:changed rides the same listener — NodeTitleBlock.tsx already
+  // flips its heart optimistically on click, so this exists purely as a
+  // self-correction path (a failed request, or the same node favourited
+  // from a second surface) rather than something the toggle depends on to
+  // feel instant.
+  useWsEvent(['enrich:applied', 'favourites:changed'], (payload) => {
     if (nodeId != null && (payload as { nodeId?: number } | undefined)?.nodeId === nodeId) load()
   })
 

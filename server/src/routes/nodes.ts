@@ -140,6 +140,12 @@ export function nodesRoutes(db: Database.Database) {
           ? (db.prepare("SELECT COUNT(*) AS n FROM plays WHERE recording_node_id = ?").get(id) as { n: number }).n
           : null;
 
+      // Cheap enough (a PK lookup against a tiny table) not to need folding
+      // into the main SELECT above — the toggle in NodeTitleBlock.tsx needs
+      // to know current state wherever a node is open, and this is the one
+      // place every node detail already flows through.
+      const isFavourite = db.prepare("SELECT 1 FROM favourites WHERE node_id = ?").get(id) != null;
+
       return {
         ...node,
         recording,
@@ -154,6 +160,7 @@ export function nodesRoutes(db: Database.Database) {
         // collection itself and rewritten on every scan. Null covers both
         // "never looked up" and "looked up, nothing there".
         description: getDescription(db, Number(id)),
+        is_favourite: isFavourite,
       };
     });
 
