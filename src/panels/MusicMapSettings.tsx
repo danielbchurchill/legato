@@ -1,34 +1,38 @@
-import { useState, type ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 import { Toggle } from '../ui/Toggle'
 import { Slider } from '../ui/Slider'
-import { RadioGroup } from '../ui/RadioGroup'
 import { ColorSwatch } from '../ui/ColorSwatch'
-import { GRANULARITIES, GRANULARITY_LABELS, SHOW_IMAGES_SETTING_KEY, type Granularity } from '../shell/granularity'
-import { CURATED_EDGE_HUES, edgeColorSettingKey, edgeTypesForGranularity, isHueTooClose, type EdgeTypeInfo } from '../canvas/edgeTypes'
+import { CURATED_EDGE_HUES, edgeColorSettingKey, edgeTypes, isHueTooClose, type EdgeTypeInfo } from '../canvas/edgeTypes'
 import type { Settings } from '../hooks/useSettings'
 
 /* The Music Map settings panel — DESIGN.md's "v2: settings primitives" and
  * "Edge palette" -> "v2: user-colorable types". Mounted by App.tsx into
  * InspectorPanel's 'graph' rail destination.
  *
- * "forces" (center/repel/link, bottom of this file) is UI ONLY. This app's
- * graph layout is a static one-shot computation (server/src/layout/cluster.ts,
- * whose own comment reads "Deliberately NOT a global force simulation") —
- * there is no running physics to wire these sliders to, and building fake
- * ones that looked wired would be a worse outcome than three sliders that
- * visibly just move. Same treatment for "links > distance": it only means
- * something in a live force layout, so it's local-only state too, right
- * alongside forces below rather than up with the real "links" controls it
- * sits next to in the mockup. */
-
-function isGranularity(value: string | undefined): value is Granularity {
-  return (GRANULARITIES as readonly string[]).includes(value ?? '')
-}
+ * 2026-08-29: "forces" and "links > distance" are now real, live physics —
+ * src/canvas/forceSimulation.ts reads these settings every tick. They used
+ * to be UI-only placeholders (this app's graph was a static one-shot
+ * layout, server/src/layout/cluster.ts, "Deliberately NOT a global force
+ * simulation") before Daniel asked for Obsidian-style live physics; see
+ * Legato.md for the change. Same session removed the granularity tabs
+ * (artists/albums/tracks are now one combined graph, not three switchable
+ * ones), so this file also lost its "music map > default view" section and
+ * the "images" row's per-tab meaning became per-node-type instead. */
 
 function parseMultiplier(value: string | undefined, fallback: number): number {
   const n = Number(value)
   return value != null && Number.isFinite(n) ? n : fallback
 }
+
+/* Node-type image toggles — one flag per node type in the combined graph.
+ * Same three settings keys the old per-granularity "images" toggle used
+ * (showImagesArtists/Albums/Tracks): unchanged storage, just re-scoped from
+ * "when this tab is active" to "for this node type, always". */
+const NODE_TYPE_IMAGE_TOGGLES: { key: string; label: string }[] = [
+  { key: 'showImagesArtists', label: 'artists' },
+  { key: 'showImagesAlbums', label: 'releases' },
+  { key: 'showImagesTracks', label: 'tracks' },
+]
 
 function GroupHeader({ title }: { title: string }) {
   return <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{title}</p>
@@ -70,16 +74,14 @@ function resolveEdgeHex(info: EdgeTypeInfo, settings: Settings): string {
 }
 
 function EdgeColorPicker({
-  granularity,
   settings,
   updateSettings,
 }: {
-  granularity: Granularity
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>
 }) {
   const [editingType, setEditingType] = useState<string | null>(null)
-  const types = edgeTypesForGranularity(granularity)
+  const types = edgeTypes()
   const editingInfo = types.find((t) => t.type === editingType)
 
   return (
@@ -123,37 +125,19 @@ function EdgeColorPicker({
 type MusicMapSettingsProps = {
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>
-  /** The canvas's CURRENT active granularity (GraphToggle) — the edge-color
-   * section shows whichever types belong to this graph, not the "default
-   * view" preference below. */
-  granularity: Granularity
 }
 
-export function MusicMapSettings({ settings, updateSettings, granularity }: MusicMapSettingsProps) {
-  const defaultGranularity = isGranularity(settings.defaultGranularity) ? settings.defaultGranularity : 'albums'
+export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsProps) {
   const nodesLocked = settings.nodePositionsLocked === 'true'
   const nodeSize = parseMultiplier(settings.nodeSizeMultiplier, 1)
   const edgeThickness = parseMultiplier(settings.edgeThicknessMultiplier, 1)
-
-  // Local-only, not persisted — see this file's top comment.
-  const [distance, setDistance] = useState(1)
-  const [forceCenter, setForceCenter] = useState(1)
-  const [forceRepel, setForceRepel] = useState(1)
-  const [forceLink, setForceLink] = useState(1)
+  const linkDistance = parseMultiplier(settings.linkDistance, 80)
+  const forceCenter = parseMultiplier(settings.forceCenterStrength, 0.03)
+  const forceRepel = parseMultiplier(settings.forceRepelStrength, 150)
+  const forceLink = parseMultiplier(settings.forceLinkStrength, 0.15)
 
   return (
     <div className="flex flex-col gap-[var(--spacing-lg)] pb-[var(--spacing-lg)]">
-      <div>
-        <p className="text-[length:var(--text-base)] text-[var(--color-ink)]">music map</p>
-        <RadioGroup
-          className="mt-[var(--spacing-sm)]"
-          options={GRANULARITIES}
-          value={defaultGranularity}
-          labels={GRANULARITY_LABELS}
-          onChange={(v) => void updateSettings({ defaultGranularity: v })}
-        />
-      </div>
-
       <div className="flex flex-col gap-[var(--spacing-sm)]">
         <GroupHeader title="nodes" />
         <SettingsRow label="lock">
@@ -172,12 +156,12 @@ export function MusicMapSettings({ settings, updateSettings, granularity }: Musi
         </SettingsRow>
         <SettingsRow label="images">
           <div className="flex items-center gap-[var(--spacing-lg)]">
-            {GRANULARITIES.map((g) => (
+            {NODE_TYPE_IMAGE_TOGGLES.map(({ key, label }) => (
               <LabeledToggle
-                key={g}
-                label={GRANULARITY_LABELS[g]}
-                checked={settings[SHOW_IMAGES_SETTING_KEY[g]] !== 'false'}
-                onChange={(v) => void updateSettings({ [SHOW_IMAGES_SETTING_KEY[g]]: v ? 'true' : 'false' })}
+                key={key}
+                label={label}
+                checked={settings[key] !== 'false'}
+                onChange={(v) => void updateSettings({ [key]: v ? 'true' : 'false' })}
               />
             ))}
           </div>
@@ -187,13 +171,17 @@ export function MusicMapSettings({ settings, updateSettings, granularity }: Musi
       <div className="flex flex-col gap-[var(--spacing-sm)]">
         <GroupHeader title="links" />
         <SettingsRow label="colours">
-          <EdgeColorPicker granularity={granularity} settings={settings} updateSettings={updateSettings} />
+          <EdgeColorPicker settings={settings} updateSettings={updateSettings} />
         </SettingsRow>
-        {/* distance only means something in a live force-directed layout —
-         * this app's is a static one-shot computation, so this slider moves
-         * and nothing else. See this file's top comment. */}
         <SettingsRow label="distance">
-          <Slider value={distance} onChange={setDistance} label="edge distance" />
+          <Slider
+            value={linkDistance}
+            onChange={(v) => void updateSettings({ linkDistance: v.toFixed(0) })}
+            min={20}
+            max={300}
+            step={1}
+            label="link distance"
+          />
         </SettingsRow>
         <SettingsRow label="thickness">
           <Slider
@@ -204,18 +192,31 @@ export function MusicMapSettings({ settings, updateSettings, granularity }: Musi
         </SettingsRow>
       </div>
 
-      {/* UI shell only — not wired to real physics. See this file's top
-       * comment for why. */}
       <div className="flex flex-col gap-[var(--spacing-sm)]">
         <GroupHeader title="forces" />
         <SettingsRow label="center">
-          <Slider value={forceCenter} onChange={setForceCenter} label="center force" />
+          <Slider
+            value={forceCenter}
+            onChange={(v) => void updateSettings({ forceCenterStrength: v.toFixed(2) })}
+            label="center force"
+          />
         </SettingsRow>
         <SettingsRow label="repel">
-          <Slider value={forceRepel} onChange={setForceRepel} label="repel force" />
+          <Slider
+            value={forceRepel}
+            onChange={(v) => void updateSettings({ forceRepelStrength: v.toFixed(0) })}
+            min={0}
+            max={200}
+            step={1}
+            label="repel force"
+          />
         </SettingsRow>
         <SettingsRow label="link">
-          <Slider value={forceLink} onChange={setForceLink} label="link force" />
+          <Slider
+            value={forceLink}
+            onChange={(v) => void updateSettings({ forceLinkStrength: v.toFixed(2) })}
+            label="link force"
+          />
         </SettingsRow>
       </div>
     </div>

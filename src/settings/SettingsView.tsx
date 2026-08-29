@@ -9,7 +9,6 @@ import { useWsEvent } from '../hooks/useWs'
 import { useModalTransition } from '../hooks/useModalTransition'
 import type { Settings } from '../hooks/useSettings'
 import type { ReplayGainMode } from '../playback/usePlayback'
-import { GRANULARITIES, type Granularity } from '../shell/granularity'
 import { SERVER_HOST } from '../config/serverHost'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
@@ -65,11 +64,6 @@ const REPLAYGAIN_OPTIONS = [
   { value: 'album', label: 'album' },
   { value: 'off', label: 'off' },
 ] as const satisfies readonly { value: ReplayGainMode; label: string }[]
-
-const GRANULARITY_OPTIONS = GRANULARITIES.map((g) => ({ value: g, label: g })) as readonly {
-  value: Granularity
-  label: string
-}[]
 
 const ON_OFF_OPTIONS = [
   { value: 'on', label: 'on' },
@@ -170,7 +164,6 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
   const replaygainMode: ReplayGainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
   const audioDevice = settings.audioDevice || ''
   const hoverDimEnabled = settings.hoverDimEnabled !== 'false'
-  const defaultGranularity: Granularity = (settings.defaultGranularity as Granularity) || 'albums'
   const reducedMotionForced = settings.reducedMotionForced === 'true'
 
   // Arriving is slower than leaving (MO-8: --motion-base in, --motion-exit
@@ -335,14 +328,6 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
 
           <SectionHeader title="graph" />
           <div className="mt-[8px] flex items-center justify-between">
-            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">default view on launch</p>
-            <Toggle
-              options={GRANULARITY_OPTIONS}
-              value={defaultGranularity}
-              onChange={(v) => void updateSettings({ defaultGranularity: v })}
-            />
-          </div>
-          <div className="mt-[8px] flex items-center justify-between">
             <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">dim other nodes on hover</p>
             <Toggle
               options={ON_OFF_OPTIONS}
@@ -367,7 +352,6 @@ export function SettingsView({ settings, updateSettings, onSetAudioDevice, onClo
           <div className="mt-[8px]">
             <ShortcutRow action="play / pause" keys="space" />
             <ShortcutRow action="focus search" keys="/" />
-            <ShortcutRow action="switch graph view" keys="1 – 3" />
             <ShortcutRow action="deselect / close" keys="esc" />
           </div>
         </div>

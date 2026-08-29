@@ -3,7 +3,7 @@ import {
   CURATED_EDGE_HUES,
   EDGE_COLOR,
   edgeColorSettingKey,
-  edgeTypesForGranularity,
+  edgeTypes,
   isHueTooClose,
   resolveEdgeColorOverrides,
 } from './edgeTypes'
@@ -12,19 +12,15 @@ import {
 // CLAUDE.md's "Root app has vitest installed but no tests yet". Everything
 // here is deterministic and needs no DOM, no server, no settings store.
 
-describe('edgeTypesForGranularity', () => {
-  it('returns the 7/2/1 type counts DESIGN.md documents per graph', () => {
-    expect(edgeTypesForGranularity('tracks')).toHaveLength(7)
-    expect(edgeTypesForGranularity('albums')).toHaveLength(2)
-    expect(edgeTypesForGranularity('artists')).toHaveLength(1)
+describe('edgeTypes', () => {
+  it('returns the 7 curated types DESIGN.md documents for the combined graph', () => {
+    expect(edgeTypes()).toHaveLength(7)
   })
 
   it('every returned type has a label and a default hex from EDGE_COLOR', () => {
-    for (const granularity of ['tracks', 'albums', 'artists'] as const) {
-      for (const info of edgeTypesForGranularity(granularity)) {
-        expect(info.label.length).toBeGreaterThan(0)
-        expect(info.defaultHex).toBe(EDGE_COLOR[info.type])
-      }
+    for (const info of edgeTypes()) {
+      expect(info.label.length).toBeGreaterThan(0)
+      expect(info.defaultHex).toBe(EDGE_COLOR[info.type])
     }
   })
 })

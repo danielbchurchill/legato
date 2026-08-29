@@ -254,7 +254,7 @@ The cover in the card is square whatever the node's own shape, following the pan
 
 **Selecting flies the camera.** Clicking a node zooms until nodes render `SELECT_NODE_PX` (130) across — stated as a size rather than a camera ratio, because the size is what the design cares about. Everything else that navigates to a node — search results, fact links, the hygiene worklist — lands at the same zoom, so arriving from the canvas and arriving from a search leave the graph in the same place. The camera aims the *card* at the middle of the canvas the panels leave free, not the node at the middle of the window: the card reaches ~511px to its node's right, and centring the node put that entire column under the right-hand panel every single time.
 
-Because the working zoom is now much deeper than the 0.7 to 1 it used to be, switching granularity frames the new graph rather than carrying the ratio across. Carrying it dropped the camera onto 11% of a bbox it had never seen, which is empty canvas more often than not.
+Because the working zoom is now much deeper than the 0.7 to 1 it used to be, the initial camera fit deliberately doesn't carry a ratio across from anywhere — carrying one dropped the camera onto 11% of a bbox it had never seen, which is empty canvas more often than not.
 
 Three ways out of a selection, and none of them move the camera: click empty canvas, press Escape, or click the selected node again. The camera stays where it was asked to go.
 
@@ -262,9 +262,9 @@ Three ways out of a selection, and none of them move the camera: click empty can
 
 Edge color encodes **relationship type**.
 
-Session 4 split the graph into three granularities (artists/albums/tracks), each its own view with its own edge types — and none of those three views ever render together. That relaxes the constraint the original three-color palette had to satisfy: colors only need to be mutually distinguishable *within one graph*, not across all ten types at once. So the table below is grouped by which graph a type actually appears in, not listed as one flat wheel.
+Session 4 split the graph into three granularities (artists/albums/tracks), each its own view with its own edge types, none of which ever rendered together — the constraint the original three-color palette had to satisfy was only "mutually distinguishable within one graph." 2026-08-29 replaced those three tab-switched views with one combined graph, live-physics-laid-out (see Legato.md), which is what the table below now describes: every one of these 7 types can render together, at once, and the ≥44° clearance they were already spaced at (below) is exactly what makes that safe.
 
-**Tracks graph — 7 types, all mutually distinguishable:**
+**7 types, all mutually distinguishable, all in the one graph:**
 
 | Token | Value | HSL | Relationship |
 |---|---|---|---|
@@ -276,32 +276,23 @@ Session 4 split the graph into three granularities (artists/albums/tracks), each
 | `--color-edge-produced-by` | `#EA9066` | 19° 76% 66% | Recording → credit (producer) |
 | `--color-edge-engineered-by` | `#DBEA66` | 67° 76% 66% | Recording → credit (engineer) |
 
-**Albums graph — 2 types** (`entities/collaboration.ts`'s derived relations, never rendered alongside the tracks graph's palette above):
+Two real edge types exist in the data but aren't in this palette yet — `performed_credit` and `mixed_by`, added after this table's last pass — and render at a flat fallback grey until a color pass adds them properly (nine hues won't fit the ≥44° clearance rule below without reworking the other seven's spacing too; a real design pass, not a drive-by addition).
 
-| Token | Value | HSL | Relationship |
-|---|---|---|---|
-| `--color-edge-same-artist` | `#7166EA` | 245° 76% 66% | Release ↔ release, shared primary artist |
-| `--color-edge-same-label` | `#EA667C` | 350° 76% 66% | Release ↔ release, shared dominant label |
-
-**Artists graph — 1 type:**
-
-| Token | Value | HSL | Relationship |
-|---|---|---|---|
-| `--color-edge-collaborated-with` | `#EA8766` | 15° 76% 66% | Artist ↔ artist, shared a recording |
+`entities/collaboration.ts`'s three derived relations — `same_artist`, `same_label`, `collaborated_with` — are deliberately **not** drawn on the canvas at all any more, combined graph or not: they existed only to make the old albums/artists tab-views (which no longer exist) look connected, and an artist's whole catalogue pairwise-connected by `same_artist` was a dense, unreadable mesh even back when it had only the 2-type albums palette to contend with. The edges themselves still exist in the database — `similarity/similarity.ts`, `facts.ts`, and `articles/recompute.ts` all still depend on them — they just never reach `routes/nodes.ts`'s `/edges` response, so they were never a color-palette concern to begin with.
 
 Edges are 1px (Figma: 0.5px — same sub-pixel reasoning as hairlines).
 
-**One family, every hue.** Identical saturation and lightness (76%/66%) at every hue, no exceptions. The mockup drew its green at 50%/33%, which read as much heavier and darker than its two siblings rather than as a peer; it was normalized to 76%/66% to complete the original set (decided 2026-08-14). It does not get a fourth kind of color — no darker tone for "weaker", no grey for "structural". If edges ever need to express strength as well as type, that is opacity or width, not a second color dimension.
+**One family, every hue.** Identical saturation and lightness (76%/66%) at every hue, no exceptions. The mockup drew its green at 50%/33%, which read as much heavier and darker than its two siblings rather than as a peer; it was normalized to 76%/66% to complete the original set (decided 2026-08-14). It does not get a fourth kind of color — no darker tone for "weaker", no grey for "structural" (the two undrawn-palette types above use grey as a plain fallback, not a deliberate fourth category — the moment they get real hues, that grey goes away). If edges ever need to express strength as well as type, that is opacity or width, not a second color dimension.
 
-The original three types' hues were spaced ~80° apart (283°/203°/115°) — that spacing doesn't scale to ten types without either colliding or leaving no headroom for an eleventh. Session 4's seven new hues are chosen with ≥44° clearance from every *co-rendering* neighbor (the tracks graph's 7 types, spaced ~44-80° apart around the full circle) — colors that never appear in the same view (a tracks-graph hue and an albums-graph hue, say) aren't spaced against each other at all, since there's nothing to confuse them with. The original three anchors' exact hex values are untouched — they were measured against the Figma render and are correct; only the *methodology* for adding more is revised here, exactly as invited by this section's own note that the assignment was "provisional... revisit when edge types widen."
+The original three types' hues were spaced ~80° apart (283°/203°/115°) — that spacing doesn't scale to ten types without either colliding or leaving no headroom for an eleventh. Session 4's seven new hues are chosen with ≥44° clearance from every *co-rendering* neighbor — spaced ~44-80° apart around the full circle, which is exactly what makes all 7 safe to render together in the combined graph. The original three anchors' exact hex values are untouched — they were measured against the Figma render and are correct; only the *methodology* for adding more is revised here, exactly as invited by this section's own note that the assignment was "provisional... revisit when edge types widen."
 
-The type-to-color assignment within the tracks graph is still provisional in the same sense the original three were — no meaningful-order convention (e.g., "hard metadata warmest, personal edges coolest") has been decided, just clearance-based spacing. Revisit if that becomes worth doing deliberately.
+The type-to-color assignment is still provisional in the same sense the original three were — no meaningful-order convention (e.g., "hard metadata warmest, personal edges coolest") has been decided, just clearance-based spacing. Revisit if that becomes worth doing deliberately.
 
 ### v2: user-colorable types
 
-Decided 2026-08-27: every hex in the tables above becomes a **user-editable default**, not a fixed value. The taxonomy itself doesn't change — still the same 10 types, still grouped by which graph they render in, still nothing beyond hue distinguishes one from another. What changes is that a user can override any type's hue for themselves, strongest reason being accessibility: the fixed palette optimizes hue-spacing for typical vision, and someone with a color vision deficiency has no way today to pick hues that actually work for them.
+Decided 2026-08-27: every hex in the table above becomes a **user-editable default**, not a fixed value. The taxonomy itself doesn't change — still nothing beyond hue distinguishes one type from another. What changes is that a user can override any type's hue for themselves, strongest reason being accessibility: the fixed palette optimizes hue-spacing for typical vision, and someone with a color vision deficiency has no way today to pick hues that actually work for them.
 
-The v2 mockup's "links > colours" legend shows 4 swatches (collab/year/style/note) — those are placeholder labels from a WIP mockup, not the real list. The real picker needs to show whichever types are actually active for the current graph (7 for tracks, 2 for albums, 1 for artists), not a fixed 4.
+The v2 mockup's "links > colours" legend shows 4 swatches (collab/year/style/note) — those are placeholder labels from a WIP mockup, not the real list. The real picker shows all 7 curated types at once (see "Edge palette" above) — one combined graph since 2026-08-29, not a fixed 4 or a per-granularity subset.
 
 **The picker must stay constrained, not a free color wheel.** An unconstrained picker lets a user pick near-identical hues for two types that then render indistinguishably in the same graph, which defeats the entire point of the spacing work above. Offer a curated set of pre-spaced hues at the same 76%/66% saturation/lightness the fixed palette already uses — real choice, including room to pick a CVD-safe subset, without the ability to break the distinguishability guarantee. Exact picker mechanics (how many hue options, whether the app warns on a too-close pick) are an implementation decision for whoever builds this, not fixed here.
 
@@ -348,14 +339,15 @@ Both variants share the toggle pill's rounding language (`rounded-full`, no new 
 
 ### v2: settings primitives
 
-Four new controls, all first appearing in the Music Map settings panel, all needing to be built — none of them exist in `src/ui/` today. All four share one geometry: an indicator (dot, knob, or swatch), `--spacing-xs` (5px) below it, a `--text-sm` (12px) Rubik label in `--color-control`, the whole group centered in its column. Same rounding language as the buttons above — `rounded-full` for anything circular, no dedicated radius token.
+New controls first appearing in the Music Map settings panel — none of them existed in `src/ui/` before v2. They share one geometry: an indicator (knob or swatch), `--spacing-xs` (5px) below it, a `--text-sm` (12px) Rubik label in `--color-control`, the whole group centered in its column. Same rounding language as the buttons above — `rounded-full` for anything circular, no dedicated radius token.
 
 | Control | Geometry | Notes |
 |---|---|---|
 | **Toggle** | 20 × 10px pill track, 10px circular knob, both `--color-control` | Knob sits left (off) or right (on); track border and knob fill are the same resting color, so state reads from knob position, not from a color change |
 | **Slider** | 3px pill track spanning the available width, 10px circular thumb, both `--color-control`; numeric readout (`1.00`) in `--text-sm` Rubik `--color-control` to the right | The readout is a live control value, not library data — see "The one rule (v2)" above for why it's Rubik, not mono |
-| **Radio dot** | 10px circle, `--color-control`, label below at `--spacing-xs` | Used for the "default view" granularity preference — separate from the artists/releases/tracks toggle pill, which stays the *active* view, not the *default* one |
-| **Color swatch** | 15px square, no radius — confirmed via Figma dev-mode, not rounded despite first impression from the screenshot | The per-type edge-color picker — see "Edge palette" → "v2: user-colorable types". Shows whichever types are active for the current graph, not a fixed 4 |
+| **Color swatch** | 15px square, no radius — confirmed via Figma dev-mode, not rounded despite first impression from the screenshot | The per-type edge-color picker — see "Edge palette" → "v2: user-colorable types". Shows all 7 curated types at once, not a fixed 4 |
+
+A **radio dot** primitive (10px circle, `--color-control`) existed briefly for the "default view" granularity preference — retired 2026-08-29 along with the three tab-switched granularities themselves (`src/shell/GraphToggle.tsx`, `src/ui/RadioGroup.tsx`) once there was only one combined graph and nothing left to prefer a default view of.
 
 None of these have a defined hover/active/focus treatment yet — the mockup is static, same caveat Motion already states for the rest of the app. Don't invent one speculatively; add it here once a real interaction needs it.
 

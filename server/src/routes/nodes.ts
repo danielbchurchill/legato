@@ -5,38 +5,48 @@ import { getDescription } from "../enrich/descriptions.js";
 import { generateFacts } from "../facts.js";
 import { nodeSummary } from "../summary.js";
 
-const GRANULARITIES = ["artists", "albums", "tracks"] as const;
-type Granularity = (typeof GRANULARITIES)[number];
+// The one combined graph is always 'tracks' now (2026-08-29 — see
+// Legato.md) — 'granularity' persists only because `positions` still keys
+// on it (migration 0015) and a PATCH /nodes/:id/position body still names
+// it, not because more than one value is ever actually queried.
+const GRANULARITY = "tracks";
 
-function parseGranularity(value: string | undefined): Granularity {
-  return (GRANULARITIES as readonly string[]).includes(value ?? "") ? (value as Granularity) : "tracks";
-}
-
-// Which edge types belong to each granularity's graph. 'tracks' is every
-// edge — the full mixed graph, unchanged from before granularities
-// existed. 'albums'/'artists' are the collaboration-graph edges
-// entities/collaboration.ts derives; returning every edge for those would
-// mostly return edges between nodes that aren't even in that granularity's
-// node set (a recording -> artist edge has no home in the albums graph).
-const EDGE_TYPES_BY_GRANULARITY: Record<Granularity, string[] | null> = {
-  tracks: null,
-  albums: ["same_artist", "same_label"],
-  artists: ["collaborated_with"],
-};
+// Every *real* relationship edge — performed_by, appears_on, and the rest —
+// but NOT the derived same_artist/same_label/collaborated_with types
+// entities/collaboration.ts computes. Those still exist in the DB (real
+// features depend on them: similarity/similarity.ts, facts.ts, and
+// articles/recompute.ts), they just never belonged to a *drawn* graph edge:
+// an artist's whole catalogue pairwise-connected by same_artist rendered as
+// a dense, unreadable mesh even in the old albums-only view (see G-6 in
+// git history) — the combined graph already has every real edge type to
+// draw, and doesn't need a synthetic one for "these belong together" on
+// top of that (physics + the real hierarchy edges already cluster an
+// artist's tracks near that artist node on their own).
+const EDGE_TYPES = [
+  "performed_by",
+  "appears_on",
+  "released_in",
+  "featured_artist",
+  "released_on",
+  "produced_by",
+  "engineered_by",
+  "performed_credit",
+  "mixed_by",
+];
 
 export function nodesRoutes(db: Database.Database) {
   return async function routes(app: FastifyInstance) {
-    app.get<{ Querystring: { limit?: string; granularity?: string } }>("/nodes", async (request) => {
+    app.get<{ Querystring: { limit?: string } }>("/nodes", async (request) => {
       const limit = Math.min(Number(request.query.limit ?? 5000), 20000);
-      const granularity = parseGranularity(request.query.granularity);
       // A position row is the actual "has something to display" signal —
       // orphaned provisional nodes (collapsed away, no file references
       // them — see match/collapse.ts) never get one, so they never show up
-      // here. Joining on a specific granularity is also what scopes the
-      // node *set* itself: 'albums'/'artists' positions (layout/seed.ts)
-      // are only ever written for release/artist entities, so this one
-      // join does double duty as both "has a position" and "belongs to
-      // this graph" without a separate node-type filter.
+      // here. Joining on granularity='tracks' is also what scopes the node
+      // *set* itself: layout/seed.ts's recomputeTracksLayout is the only
+      // thing that writes positions now, for every recording/release/artist
+      // together, so this one join does double duty as both "has a
+      // position" and "belongs to the graph" without a separate node-type
+      // filter.
       // subtitle is the second line of the canvas hover plate, so it has to
       // arrive with the graph rather than be fetched per hover — a plate
       // that appears 90ms after the pointer lands cannot also wait on a
@@ -65,7 +75,7 @@ export function nodesRoutes(db: Database.Database) {
            ORDER BY n.id
            LIMIT ?`,
         )
-        .all(granularity, limit) as { id: number }[];
+        .all(GRANULARITY, limit) as { id: number }[];
 
       // cover_hash, not a has_cover flag: the canvas renders art through the
       // content-addressed /covers/:hash route (routes/cover.ts), so what it
@@ -85,9 +95,8 @@ export function nodesRoutes(db: Database.Database) {
       return rows.map((row) => ({ ...row, cover_hash: resolveCoverForNode(db, row.id)?.hash ?? null }));
     });
 
-    app.get<{ Params: { id: string }; Querystring: { granularity?: string } }>("/nodes/:id", async (request, reply) => {
+    app.get<{ Params: { id: string } }>("/nodes/:id", async (request, reply) => {
       const id = request.params.id;
-      const granularity = parseGranularity(request.query.granularity);
       const node = db.prepare("SELECT * FROM nodes WHERE id = ?").get(id);
       if (!node) {
         reply.code(404);
@@ -97,7 +106,7 @@ export function nodesRoutes(db: Database.Database) {
       const files = db.prepare("SELECT * FROM files WHERE recording_node_id = ? ORDER BY id").all(id);
       const position = db
         .prepare("SELECT seed_x, seed_y, user_x, user_y FROM positions WHERE node_id = ? AND granularity = ?")
-        .get(id, granularity);
+        .get(id, GRANULARITY);
 
       // Both directions resolved with the *other* node's title/type inlined
       // — the client renders "Performed by The Beatles" (outgoing, from a
@@ -162,17 +171,13 @@ export function nodesRoutes(db: Database.Database) {
 
     // Writes user_x/user_y only — seed_x/seed_y are derived and only ever
     // touched by layout/seed.ts's recompute. A user's drag never gets
-    // auto-moved back, per Legato's canvas design. granularity is required
-    // in the body (not inferred): the same node can hold an independent
-    // drag position in up to three graphs (migration 0015), and only the
-    // caller — mid-drag, in one specific graph — knows which one changed.
-    app.patch<{ Params: { id: string }; Body: { x: number; y: number; granularity?: string } }>(
+    // auto-moved back, per Legato's canvas design.
+    app.patch<{ Params: { id: string }; Body: { x: number; y: number } }>(
       "/nodes/:id/position",
       async (request, reply) => {
-        const granularity = parseGranularity(request.body.granularity);
         const result = db
           .prepare("UPDATE positions SET user_x = ?, user_y = ? WHERE node_id = ? AND granularity = ?")
-          .run(request.body.x, request.body.y, request.params.id, granularity);
+          .run(request.body.x, request.body.y, request.params.id, GRANULARITY);
         if (result.changes === 0) {
           reply.code(404);
           return { error: "not found" };
@@ -202,20 +207,14 @@ export function nodesRoutes(db: Database.Database) {
         .all(request.params.id);
     });
 
-    app.get<{ Querystring: { granularity?: string } }>("/edges", async (request) => {
-      const granularity = parseGranularity(request.query.granularity);
-      const types = EDGE_TYPES_BY_GRANULARITY[granularity];
-
-      if (!types) {
-        return db.prepare("SELECT id, from_node, to_node, type, source, label, note FROM edges").all();
-      }
+    app.get("/edges", async () => {
       return db
         .prepare(
-          `SELECT id, from_node, to_node, type, source, label, note FROM edges WHERE type IN (${types
-            .map(() => "?")
-            .join(",")})`,
+          `SELECT id, from_node, to_node, type, source, label, note FROM edges WHERE type IN (${EDGE_TYPES.map(
+            () => "?",
+          ).join(",")})`,
         )
-        .all(...types);
+        .all(...EDGE_TYPES);
     });
   };
 }

@@ -9,8 +9,6 @@ import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
 import { usePlayback } from './playback/usePlayback'
 import HygieneView from './hygiene/HygieneView'
 import { AppShell } from './shell/AppShell'
-import { GraphToggle } from './shell/GraphToggle'
-import { GRANULARITIES, SHOW_IMAGES_SETTING_KEY, type Granularity } from './shell/granularity'
 import { TransportDock } from './shell/TransportDock'
 import { CollectionPanel, type CollectionPanelHandle } from './panels/CollectionPanel'
 import { MusicMapSettings } from './panels/MusicMapSettings'
@@ -193,7 +191,6 @@ function MainApp() {
   const [hygieneOpen, setHygieneOpen] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [granularity, setGranularity] = useState<Granularity>('albums')
   // The rail's own selection doubles as the left shell's expand/collapse
   // state — "exactly one active at a time, or none when collapsed" is
   // literally what DESIGN.md's shell section specifies, so there is no
@@ -203,7 +200,7 @@ function MainApp() {
   // shared *concept* of one. Both default open, matching today's baseline.
   const [activeRailDestination, setActiveRailDestination] = useState<RailDestination | null>('search')
   const [rightPanelExpanded, setRightPanelExpanded] = useState(true)
-  const { settings, loaded: settingsLoaded, updateSettings } = useSettings()
+  const { settings, updateSettings } = useSettings()
   const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
   const playback = usePlayback(replaygainMode)
   const canvasRef = useRef<CanvasHandle>(null)
@@ -223,22 +220,6 @@ function MainApp() {
     else delete document.documentElement.dataset.reducedMotion
   }, [reducedMotionForced])
 
-  // Music Map settings' "music map > default view" (src/panels/MusicMapSettings.tsx)
-  // — applied once, on the first settings load, so it seeds the initial
-  // granularity without fighting a manual switch made afterward via
-  // GraphToggle. Settings load asynchronously (useSettings starts at {}
-  // before its fetch resolves), so this can't just be granularity's own
-  // useState initializer.
-  const appliedDefaultGranularityRef = useRef(false)
-  useEffect(() => {
-    if (!settingsLoaded || appliedDefaultGranularityRef.current) return
-    appliedDefaultGranularityRef.current = true
-    const preferred = settings.defaultGranularity
-    if (preferred && (GRANULARITIES as readonly string[]).includes(preferred)) {
-      setGranularity(preferred as Granularity)
-    }
-  }, [settingsLoaded, settings.defaultGranularity])
-
   // Music Map settings' "nodes > size" / "links > thickness" / "links >
   // colours" — read live by Canvas.tsx's reducers, so a change made while
   // looking at the canvas shows up immediately. edgeColorOverrides is
@@ -247,8 +228,19 @@ function MainApp() {
   // every identity change.
   const nodeSizeMultiplier = Number(settings.nodeSizeMultiplier ?? '1')
   const edgeThicknessMultiplier = Number(settings.edgeThicknessMultiplier ?? '1')
-  const showCoverArt = settings[SHOW_IMAGES_SETTING_KEY[granularity]] !== 'false'
+  const showArtistArt = settings.showImagesArtists !== 'false'
+  const showReleaseArt = settings.showImagesAlbums !== 'false'
+  const showTrackArt = settings.showImagesTracks !== 'false'
   const edgeColorOverrides = useMemo(() => resolveEdgeColorOverrides(settings), [settings])
+
+  // Music Map settings' "nodes > lock" and "forces" + "links > distance" —
+  // real live physics inputs since 2026-08-29 (see Legato.md), read the same
+  // live way as the multipliers above.
+  const nodesLocked = settings.nodePositionsLocked === 'true'
+  const forceCenterStrength = Number(settings.forceCenterStrength ?? '0.03')
+  const forceRepelStrength = Number(settings.forceRepelStrength ?? '150')
+  const forceLinkStrength = Number(settings.forceLinkStrength ?? '0.15')
+  const linkDistance = Number(settings.linkDistance ?? '80')
 
   // Applies a saved device preference on launch (Rust's own device_name
   // starts at None every fresh process) and again on any change made from
@@ -283,11 +275,11 @@ function MainApp() {
   }, [inspectorOpen, hygieneOpen, settingsOpen])
 
   // Core shortcuts (documented in the Settings "shortcuts" section, so none
-  // of this is hidden): Space toggles playback, "/" focuses search, 1/2/3
-  // switch granularity. Suppressed while any modal is open — they'd either
-  // do nothing useful behind it or double up with the modal's own controls
-  // — and while focus is on an element that already has its own meaning for
-  // these keys (typing, or a focused control's native Space-to-activate).
+  // of this is hidden): Space toggles playback, "/" focuses search.
+  // Suppressed while any modal is open — they'd either do nothing useful
+  // behind it or double up with the modal's own controls — and while focus
+  // is on an element that already has its own meaning for these keys
+  // (typing, or a focused control's native Space-to-activate).
   useEffect(() => {
     function isTypingTarget(el: Element | null): boolean {
       if (!el) return false
@@ -309,11 +301,6 @@ function MainApp() {
       if (e.key === '/') {
         e.preventDefault()
         collectionPanelRef.current?.focusSearch()
-        return
-      }
-      const granularityIndex = ['1', '2', '3'].indexOf(e.key)
-      if (granularityIndex !== -1) {
-        setGranularity(GRANULARITIES[granularityIndex])
       }
     }
     window.addEventListener('keydown', handleShortcut)
@@ -338,7 +325,6 @@ function MainApp() {
     <AppShell>
       <Canvas
         ref={canvasRef}
-        granularity={granularity}
         selectedNodeId={selectedNodeId}
         onSelectNode={(id) => {
           setSelectedNodeId(id)
@@ -349,13 +335,18 @@ function MainApp() {
         onOpenInspector={() => setInspectorOpen(true)}
         dimOnHoverEnabled={dimOnHoverEnabled}
         reducedMotionForced={reducedMotionForced}
-        showCoverArt={showCoverArt}
+        showArtistArt={showArtistArt}
+        showReleaseArt={showReleaseArt}
+        showTrackArt={showTrackArt}
         nodeSizeMultiplier={nodeSizeMultiplier}
         edgeThicknessMultiplier={edgeThicknessMultiplier}
         edgeColorOverrides={edgeColorOverrides}
+        nodesLocked={nodesLocked}
+        forceCenterStrength={forceCenterStrength}
+        forceRepelStrength={forceRepelStrength}
+        forceLinkStrength={forceLinkStrength}
+        linkDistance={linkDistance}
       />
-
-      <GraphToggle value={granularity} onChange={setGranularity} />
 
       <LeftPanelHeader
         expanded={activeRailDestination != null}
@@ -365,9 +356,7 @@ function MainApp() {
       {activeRailDestination && (
         <InspectorPanel
           active={activeRailDestination}
-          graphContent={
-            <MusicMapSettings settings={settings} updateSettings={updateSettings} granularity={granularity} />
-          }
+          graphContent={<MusicMapSettings settings={settings} updateSettings={updateSettings} />}
         >
           <CollectionPanel
             ref={collectionPanelRef}

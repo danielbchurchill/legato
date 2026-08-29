@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
-import type { Granularity } from '../shell/granularity'
 import { SERVER_HOST } from '../config/serverHost'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
@@ -45,24 +44,20 @@ export type GraphEdge = {
   note: string | null
 }
 
-// Refetches whenever granularity changes — server/src/routes/nodes.ts
-// returns a completely different node/edge set per granularity (artists,
-// albums, or the full tracks graph), not a filter over one shared dataset.
-export function useGraphData(granularity: Granularity) {
+// One combined graph now (2026-08-29 — see Legato.md), so this has nothing
+// left to key a refetch on besides the coalesced WS events below.
+export function useGraphData() {
   const [nodes, setNodes] = useState<GraphNode[]>([])
   const [edges, setEdges] = useState<GraphEdge[]>([])
   const [loading, setLoading] = useState(true)
 
   const refetch = useCallback(async () => {
     setLoading(true)
-    const [nodesRes, edgesRes] = await Promise.all([
-      fetch(`${API}/nodes?granularity=${granularity}`),
-      fetch(`${API}/edges?granularity=${granularity}`),
-    ])
+    const [nodesRes, edgesRes] = await Promise.all([fetch(`${API}/nodes`), fetch(`${API}/edges`)])
     setNodes(await nodesRes.json())
     setEdges(await edgesRes.json())
     setLoading(false)
-  }, [granularity])
+  }, [])
 
   useEffect(() => {
     refetch()
@@ -92,14 +87,10 @@ export function useGraphData(granularity: Granularity) {
   return { nodes, edges, loading, refetch }
 }
 
-// granularity is required, not inferred — the same node can hold an
-// independent drag position in up to three graphs (positions.granularity,
-// migration 0015), and only the caller — mid-drag, in one specific graph —
-// knows which one changed.
-export async function patchNodePosition(nodeId: number, x: number, y: number, granularity: Granularity): Promise<void> {
+export async function patchNodePosition(nodeId: number, x: number, y: number): Promise<void> {
   await fetch(`${API}/nodes/${nodeId}/position`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ x, y, granularity }),
+    body: JSON.stringify({ x, y }),
   })
 }

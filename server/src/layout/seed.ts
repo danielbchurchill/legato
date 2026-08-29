@@ -1,6 +1,4 @@
 import type Database from "better-sqlite3";
-import { getAlbumLabelMap } from "../entities/collaboration.js";
-import { pickMode } from "../entities/mode.js";
 import { computeClusteredSeeds, type ClusterInput, type Seed } from "./cluster.js";
 
 export type { Seed };
@@ -24,9 +22,11 @@ function isPositionsLocked(db: Database.Database): boolean {
 
 // seed_version only bumps when the computed position actually differs — a
 // no-op recompute (nothing about the underlying data changed) must leave
-// the row byte-identical, not just numerically equal. granularity is part
-// of the conflict key (migration 0015): the same node can hold up to three
-// independent seed positions, one per graph it appears in.
+// the row byte-identical, not just numerically equal. granularity is
+// hardcoded to 'tracks' — the only value anything writes or reads any more
+// (positions.granularity's CHECK constraint, migration 0015, still allows
+// the two retired values; not worth a migration to narrow it just for
+// that).
 //
 // Locked (isPositionsLocked above): existing rows are left completely
 // untouched (DO NOTHING) rather than DO UPDATE — a node that already has a
@@ -35,17 +35,12 @@ function isPositionsLocked(db: Database.Database): boolean {
 // track added by a rescan while locked still gets a position and isn't
 // silently dropped from the graph (routes/nodes.ts serves the node list by
 // joining on this table).
-function upsertSeeds(
-  db: Database.Database,
-  granularity: "tracks" | "albums" | "artists",
-  seeds: Map<number, Seed>,
-  locked: boolean,
-): void {
+function upsertSeeds(db: Database.Database, seeds: Map<number, Seed>, locked: boolean): void {
   const upsert = db.prepare(
     locked
-      ? `INSERT INTO positions (node_id, granularity, seed_x, seed_y, seed_version) VALUES (?, ?, ?, ?, 1)
+      ? `INSERT INTO positions (node_id, granularity, seed_x, seed_y, seed_version) VALUES (?, 'tracks', ?, ?, 1)
          ON CONFLICT(node_id, granularity) DO NOTHING`
-      : `INSERT INTO positions (node_id, granularity, seed_x, seed_y, seed_version) VALUES (?, ?, ?, ?, 1)
+      : `INSERT INTO positions (node_id, granularity, seed_x, seed_y, seed_version) VALUES (?, 'tracks', ?, ?, 1)
          ON CONFLICT(node_id, granularity) DO UPDATE SET
            seed_version = CASE
              WHEN positions.seed_x = excluded.seed_x AND positions.seed_y = excluded.seed_y
@@ -54,21 +49,25 @@ function upsertSeeds(
            seed_x = excluded.seed_x, seed_y = excluded.seed_y`,
   );
   const applyAll = db.transaction(() => {
-    for (const [nodeId, seed] of seeds) upsert.run(nodeId, granularity, seed.x, seed.y);
+    for (const [nodeId, seed] of seeds) upsert.run(nodeId, seed.x, seed.y);
   });
   applyAll();
 }
 
-// Recording nodes only — the tracks graph used to also carry every
-// artist/release/label/credit/year node a recording connected to (a
-// centroid of its neighbors' positions), but that made the "tracks" tab
-// show the whole mixed library rather than just tracks. Positioned by
+// Recording, release, and artist nodes together — the one combined graph
+// (2026-08-29: replaced the three tab-switched granularities with live
+// client-side physics, see Legato.md). Recordings are positioned first by
 // deterministic cell assignment (primary artist, falling back to label,
 // falling back to unclustered) crossed with decade, then local force
-// relaxation within each cell — replacing the old plain (decade, year)
-// grid pack, which is what actually overplotted on the real library (see
-// Legato.md: same-artist albums landing at near-identical centroids with
-// overlapping covers).
+// relaxation within each cell — unchanged from the old tracks-only layout.
+// Releases and artists are then seeded at the centroid of their own
+// recordings' positions (below). These are deliberately just *reasonable
+// starting points* now, not the final layout: the client's live force
+// simulation (src/canvas/Canvas.tsx) relaxes everything from here, so a
+// rough centroid — or even several entities stacked on the same point,
+// falling back below — is enough to avoid a big-bang unfurl from pure
+// randomness on first paint, not something that has to be precise the way
+// a permanent static layout would.
 export function recomputeTracksLayout(db: Database.Database): void {
   const recordingRows = db
     .prepare(
@@ -94,106 +93,76 @@ export function recomputeTracksLayout(db: Database.Database): void {
   }));
   const seeds = computeClusteredSeeds(clusterInputs);
 
-  upsertSeeds(db, "tracks", seeds, isPositionsLocked(db));
+  const releaseSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM albums", "appears_on");
+  const artistSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM artists", "performed_by");
 
-  // Installs that ran a recompute before the satellite-node centroid
-  // seeding above was removed still have stale artist/release/label/year
-  // rows sitting under granularity = 'tracks' — upsertSeeds only ever
-  // inserts/updates the recording set above, it never deletes what it
-  // didn't write, so those rows would otherwise linger forever.
-  // Scoped to "a recording that still has a file", matching the source set
-  // the seeds are computed from above rather than merely the node type. A
-  // recording whose last file is gone — the library root removed, the file
-  // deleted off disk — is no longer in that set, so upsertSeeds stops
-  // writing it while its old row lives on, and routes/nodes.ts selects the
-  // canvas by position row.
+  const locked = isPositionsLocked(db);
+  upsertSeeds(db, seeds, locked);
+  upsertSeeds(db, releaseSeeds, locked);
+  upsertSeeds(db, artistSeeds, locked);
+
+  // Installs that ran a recompute before this combined layout existed still
+  // have stale rows lying around (the old recording-only tracks layout, or
+  // the old separate albums/artists granularities) — upsertSeeds only ever
+  // inserts/updates the sets handed to it above, it never deletes what it
+  // didn't write, so anything outside "a recording that still has a file,
+  // a release, or an artist" would otherwise linger forever.
   db.prepare(
     `DELETE FROM positions WHERE granularity = 'tracks'
        AND node_id NOT IN (
          SELECT n.id FROM nodes n
-          WHERE n.type = 'recording'
-            AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = n.id)
+          WHERE n.type = 'recording' AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = n.id)
+         UNION SELECT node_id FROM albums
+         UNION SELECT node_id FROM artists
        )`,
   ).run();
 }
 
-// Same sweep as the tracks one above, for the two entity graphs: upsertSeeds
-// only writes the set handed to it, so a node that has stopped being an
-// album or an artist keeps whatever position it last held, and the canvas
-// keys off position rows (routes/nodes.ts) rather than edges. Runs after
-// recomputeEntities has already pruned the entity tables themselves, which
-// is the order both callers use.
-function pruneStalePositions(db: Database.Database, granularity: "albums" | "artists"): void {
-  db.prepare(
-    `DELETE FROM positions WHERE granularity = ? AND node_id NOT IN (SELECT node_id FROM ${granularity})`,
-  ).run(granularity);
-}
+// A release/artist entity's initial seed in the combined graph: the
+// centroid of whichever of its own recordings already have a seed position
+// (a release via its recordings' appears_on edges, an artist via their
+// performed_by edges — recording is always the edge's from_node side for
+// both). An entity with no such recordings yet (freshly matched, nothing
+// scanned under it) falls back to the origin rather than being left out —
+// still gets *a* position so it isn't silently dropped from the graph
+// (routes/nodes.ts selects the canvas by position row), the same
+// "still gets a position, isn't silently dropped" reasoning upsertSeeds'
+// locked branch already applies one level down.
+function centroidSeeds(
+  db: Database.Database,
+  recordingSeeds: Map<number, Seed>,
+  entitySql: string,
+  edgeType: "appears_on" | "performed_by",
+): Map<number, Seed> {
+  const entityIds = (db.prepare(entitySql).all() as { node_id: number }[]).map((r) => r.node_id);
+  const edgeRows = db
+    .prepare("SELECT from_node AS recordingNodeId, to_node AS entityNodeId FROM edges WHERE type = ?")
+    .all(edgeType) as { recordingNodeId: number; entityNodeId: number }[];
 
-// Album entities only, connected to each other via same_artist/same_label
-// edges (entities/collaboration.ts) — a distinct graph, not the tracks
-// graph filtered down. Clustered by the same artist/label affinity as the
-// tracks graph, one level up: primary artist if known, else the release's
-// own dominant label; positioned chronologically by year_min.
-export function recomputeAlbumsLayout(db: Database.Database): void {
-  const albums = db
-    .prepare("SELECT node_id, primary_artist_node_id, year_min FROM albums")
-    .all() as { node_id: number; primary_artist_node_id: number | null; year_min: number | null }[];
-
-  const albumLabel = getAlbumLabelMap(db);
-
-  const clusterInputs: ClusterInput[] = albums.map((a) => ({
-    nodeId: a.node_id,
-    groupKey: a.primary_artist_node_id ?? albumLabel.get(a.node_id) ?? null,
-    decade: decadeOf(a.year_min),
-  }));
-
-  upsertSeeds(db, "albums", computeClusteredSeeds(clusterInputs), isPositionsLocked(db));
-  pruneStalePositions(db, "albums");
-}
-
-// Artist entities only, connected to each other via collaborated_with
-// edges. Neither "primary artist" nor "decade" apply to an artist itself,
-// so both axes are derived one level up from their own albums: clustered
-// by their most common label across every release they're the primary
-// artist on, positioned at the decade of their earliest release.
-export function recomputeArtistsLayout(db: Database.Database): void {
-  const artists = db.prepare("SELECT node_id FROM artists").all() as { node_id: number }[];
-  const albums = db
-    .prepare("SELECT node_id, primary_artist_node_id, year_min FROM albums WHERE primary_artist_node_id IS NOT NULL")
-    .all() as { node_id: number; primary_artist_node_id: number; year_min: number | null }[];
-
-  const albumLabel = getAlbumLabelMap(db);
-
-  const albumsByArtist = new Map<number, typeof albums>();
-  for (const album of albums) {
-    const list = albumsByArtist.get(album.primary_artist_node_id);
-    if (list) list.push(album);
-    else albumsByArtist.set(album.primary_artist_node_id, [album]);
+  const sums = new Map<number, { x: number; y: number; count: number }>();
+  for (const { recordingNodeId, entityNodeId } of edgeRows) {
+    const seed = recordingSeeds.get(recordingNodeId);
+    if (!seed) continue;
+    const acc = sums.get(entityNodeId);
+    if (acc) {
+      acc.x += seed.x;
+      acc.y += seed.y;
+      acc.count += 1;
+    } else {
+      sums.set(entityNodeId, { x: seed.x, y: seed.y, count: 1 });
+    }
   }
 
-  const clusterInputs: ClusterInput[] = artists.map((artist) => {
-    const own = albumsByArtist.get(artist.node_id) ?? [];
-
-    const labelCounts = new Map<number, number>();
-    for (const album of own) {
-      const labelId = albumLabel.get(album.node_id);
-      if (labelId != null) labelCounts.set(labelId, (labelCounts.get(labelId) ?? 0) + 1);
-    }
-
-    const years = own.map((a) => a.year_min).filter((y): y is number => y != null);
-    const earliestYear = years.length > 0 ? Math.min(...years) : null;
-
-    return { nodeId: artist.node_id, groupKey: pickMode(labelCounts), decade: decadeOf(earliestYear) };
-  });
-
-  upsertSeeds(db, "artists", computeClusteredSeeds(clusterInputs), isPositionsLocked(db));
-  pruneStalePositions(db, "artists");
+  const result = new Map<number, Seed>();
+  for (const entityNodeId of entityIds) {
+    const acc = sums.get(entityNodeId);
+    result.set(entityNodeId, acc ? { x: acc.x / acc.count, y: acc.y / acc.count } : { x: 0, y: 0 });
+  }
+  return result;
 }
 
-// user_x/user_y are never touched by any of these — only a PATCH
-// /nodes/:id/position request (scoped to one granularity) writes them.
+// user_x/user_y are never touched by this — only a PATCH /nodes/:id/position
+// request writes them.
 export function recomputeAllLayouts(db: Database.Database): void {
   recomputeTracksLayout(db);
-  recomputeAlbumsLayout(db);
-  recomputeArtistsLayout(db);
 }

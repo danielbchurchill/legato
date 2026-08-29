@@ -5,7 +5,7 @@ import { createNormalizationFunction } from 'sigma/utils'
 import { createNodeImageProgram } from '@sigma/node-image'
 import { patchNodePosition, useGraphData, type GraphEdge, type GraphNode } from './useGraphData'
 import { EDGE_COLOR } from './edgeTypes'
-import type { Granularity } from '../shell/granularity'
+import { createForceSimulation, type ForceSimulationHandle, type SimNodeInput } from './forceSimulation'
 import { useScanStatus } from '../hooks/useScanStatus'
 import { Button } from '../ui/Button'
 import { NodeCard, NODE_CARD_COVER_CENTER_X, NODE_CARD_WIDTH_PX } from './NodeCard'
@@ -412,20 +412,21 @@ function insetForShell(
  * texture per distinct cover, no matter how many nodes display it, so there
  * is nothing left for a level-of-detail gate to protect.
  *
- * `showCoverArt` is this granularity's Music Map settings "images" toggle
- * (src/panels/MusicMapSettings.tsx) — off falls back to the same colored-dot
- * treatment a node with no art at all already gets, one flag per
- * granularity so switching graphs doesn't need to re-derive anything. */
-function nodeAttributes(node: GraphNode, showCoverArt: boolean): Record<string, unknown> {
-  const x = node.user_x ?? node.seed_x
-  const y = node.user_y ?? node.seed_y
-
-  if (node.cover_hash && showCoverArt) {
+ * `showArt` is this node's Music Map settings "images" toggle
+ * (src/panels/MusicMapSettings.tsx, one flag per node type since 2026-08-29's
+ * combined graph) — off falls back to the same colored-dot treatment a node
+ * with no art at all already gets.
+ *
+ * Deliberately no `x`/`y` here — position is syncGraph's job below, and only
+ * for a node's *first* appearance. An existing node's position belongs to
+ * the live force simulation (src/canvas/forceSimulation.ts) from then on;
+ * folding x/y into this object would let every resync stomp the
+ * simulation's own live position back to stale server truth. */
+function nodeAttributes(node: GraphNode, showArt: boolean): Record<string, unknown> {
+  if (node.cover_hash && showArt) {
     const square = SQUARE_COVER_TYPES.has(node.type)
     return {
       label: node.title,
-      x,
-      y,
       size: ART_SIZE,
       type: square ? 'coverSquare' : 'cover',
       // `square` is carried as its own attribute rather than re-derived from
@@ -440,21 +441,30 @@ function nodeAttributes(node: GraphNode, showCoverArt: boolean): Record<string, 
 
   const size = NODE_SIZE[node.type] ?? 3
   const color = NODE_COLOR[node.type] ?? '#999'
-  return { label: node.title, x, y, size, color, type: 'circle', square: false, origSize: size }
+  return { label: node.title, size, color, type: 'circle', square: false, origSize: size }
+}
+
+// A node's starting position — server seed, or wherever the user last
+// dropped it (persisted user_x/user_y, which also seeds this node's
+// simulation pin — see Canvas.tsx's data-sync effect). Only ever consulted
+// for a node's *first* appearance in the graph; see nodeAttributes above.
+function initialPosition(node: GraphNode): { x: number; y: number } | null {
+  const x = node.user_x ?? node.seed_x
+  const y = node.user_y ?? node.seed_y
+  if (x == null || y == null) return null
+  return { x, y }
 }
 
 /* Updates the existing graphology instance in place to match the latest
  * fetched data — add/update/remove, never drop-and-rebuild — so the Sigma
  * renderer subscribed to this graph never needs to be torn down for a plain
  * data refresh. This is the actual fix for the bug that used to reset the
- * camera on every refetch: the renderer effect below now only depends on
- * `granularity`, not on `nodes`/`edges`. */
-function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], showCoverArt: boolean): void {
+ * camera on every refetch: the renderer effect below only runs once per
+ * mount, not on every `nodes`/`edges` change. */
+function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], showArt: (type: string) => boolean): void {
   const wantedNodes = new Map<string, GraphNode>()
   for (const node of nodes) {
-    const x = node.user_x ?? node.seed_x
-    const y = node.user_y ?? node.seed_y
-    if (x == null || y == null) continue // no position yet — nothing to plot
+    if (initialPosition(node) == null) continue // no position yet — nothing to plot
     wantedNodes.set(nodeKey(node.id), node)
   }
 
@@ -462,9 +472,13 @@ function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], showCov
     if (!wantedNodes.has(key)) graph.dropNode(key)
   })
   for (const [key, node] of wantedNodes) {
-    const attrs = nodeAttributes(node, showCoverArt)
-    if (graph.hasNode(key)) graph.mergeNodeAttributes(key, attrs)
-    else graph.addNode(key, attrs)
+    const attrs = nodeAttributes(node, showArt(node.type))
+    if (graph.hasNode(key)) {
+      graph.mergeNodeAttributes(key, attrs) // never x/y — see nodeAttributes above
+    } else {
+      const pos = initialPosition(node)!
+      graph.addNode(key, { ...attrs, x: pos.x, y: pos.y })
+    }
   }
 
   // Keyed by (from, to, type) rather than just (from, to) — two albums can
@@ -494,7 +508,6 @@ function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], showCov
 }
 
 type Props = {
-  granularity: Granularity
   selectedNodeId: number | null
   onSelectNode: (id: number | null) => void
   /** Opens the full node inspector for whatever is selected — the card is a
@@ -509,10 +522,11 @@ type Props = {
   /** Settings "reduced motion" toggle — force-on only, layered on top of the
    * OS's own prefers-reduced-motion rather than a way to override it off. */
   reducedMotionForced?: boolean
-  /** Music Map settings "nodes > images" for the *current* granularity —
-   * App.tsx resolves which of the three per-granularity settings applies,
-   * so this file doesn't need to know about the other two. */
-  showCoverArt: boolean
+  /** Music Map settings "nodes > images", one flag per node type in the
+   * combined graph (2026-08-29 — previously one flag per granularity tab). */
+  showArtistArt: boolean
+  showReleaseArt: boolean
+  showTrackArt: boolean
   /** Music Map settings "nodes > size" — multiplies every node's base size
    * (ART_SIZE or NODE_SIZE[type]) live, via nodeReducer. 1 is unchanged. */
   nodeSizeMultiplier: number
@@ -523,6 +537,16 @@ type Props = {
    * have a user override; unlisted types render at their EDGE_COLOR default.
    * See edgeBaseColor above. */
   edgeColorOverrides: Record<string, string>
+  /** Music Map settings "nodes > lock" — freezes the live force simulation
+   * (src/canvas/forceSimulation.ts) without disabling drag; see
+   * forceSimulation.ts's setLocked. */
+  nodesLocked: boolean
+  /** Music Map settings "forces" + "links > distance" — live inputs to the
+   * force simulation. See forceSimulation.ts's ForceParams. */
+  forceCenterStrength: number
+  forceRepelStrength: number
+  forceLinkStrength: number
+  linkDistance: number
 }
 
 export type CanvasHandle = {
@@ -530,30 +554,37 @@ export type CanvasHandle = {
    * fact links, and hygiene worklist items all resolve to this so "select a
    * node" always means "go look at it," matching the canvas-first navigation
    * Legato.md calls out as the actual point of a spatial layout. No-op for a
-   * node not in the currently active granularity's graph. */
+   * node not currently in the graph. */
   flyToNode: (nodeId: number) => void
 }
 
 export default forwardRef<CanvasHandle, Props>(function Canvas(
   {
-    granularity,
     selectedNodeId,
     onSelectNode,
     onOpenInspector,
     onStats,
     dimOnHoverEnabled = true,
     reducedMotionForced = false,
-    showCoverArt,
+    showArtistArt,
+    showReleaseArt,
+    showTrackArt,
     nodeSizeMultiplier,
     edgeThicknessMultiplier,
     edgeColorOverrides,
+    nodesLocked,
+    forceCenterStrength,
+    forceRepelStrength,
+    forceLinkStrength,
+    linkDistance,
   },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null)
   const graphRef = useRef<Graph | null>(null)
   const rendererRef = useRef<Sigma | null>(null)
-  const { nodes, edges, loading } = useGraphData(granularity)
+  const simulationRef = useRef<ForceSimulationHandle | null>(null)
+  const { nodes, edges, loading } = useGraphData()
   const scanStatus = useScanStatus()
 
   // Shared by the imperative handle and by clicking a node on the canvas —
@@ -605,14 +636,13 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const flyToRef = useRef(flyTo)
   // Read inside the renderer effect's click handler to decide whether a
   // click is a new selection or a toggle-off of the current one. A ref, not
-  // the prop, because that effect is deliberately keyed on [granularity]
-  // alone — depending on selectedNodeId would tear the renderer down and
-  // reset the camera on every click.
+  // the prop, because that effect deliberately runs once per mount —
+  // depending on selectedNodeId would tear the renderer down and reset the
+  // camera on every click.
   const selectedNodeIdRef = useRef(selectedNodeId)
-  // Read by the renderer effect's dim/fly logic below, which is keyed on
-  // [granularity] alone — same "ref, not the prop" reasoning as
-  // selectedNodeIdRef, so a Settings toggle change doesn't tear the
-  // renderer down.
+  // Read by the renderer effect's dim/fly logic below, which runs once per
+  // mount — same "ref, not the prop" reasoning as selectedNodeIdRef, so a
+  // Settings toggle change doesn't tear the renderer down.
   const dimOnHoverEnabledRef = useRef(dimOnHoverEnabled)
   const reducedMotionForcedRef = useRef(reducedMotionForced)
 
@@ -620,7 +650,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // onChange continuously, and re-running syncGraph's full node/edge diff on
   // every intermediate value would be real cost on a library-sized graph.
   // Refs instead of state: changing them must never re-run the renderer
-  // lifecycle effect below (keyed on [granularity] alone).
+  // lifecycle effect below (which now runs once per mount, not per prop
+  // change).
   const nodeSizeMultiplierRef = useRef(nodeSizeMultiplier)
   const edgeThicknessMultiplierRef = useRef(edgeThicknessMultiplier)
   const edgeColorOverridesRef = useRef(edgeColorOverrides)
@@ -631,6 +662,27 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     rendererRef.current?.refresh()
   }, [nodeSizeMultiplier, edgeThicknessMultiplier, edgeColorOverrides])
 
+  // Read by the drag handlers below, which are set up once inside the
+  // renderer-lifecycle effect — a ref, not the prop, for the same reason as
+  // dimOnHoverEnabledRef.
+  const nodesLockedRef = useRef(nodesLocked)
+  useEffect(() => {
+    nodesLockedRef.current = nodesLocked
+    simulationRef.current?.setLocked(nodesLocked)
+  }, [nodesLocked])
+
+  // Music Map settings "forces" + "links > distance" — pushed into the live
+  // simulation on every change, same "real settings, not a re-mount" shape
+  // as the multiplier effect above.
+  useEffect(() => {
+    simulationRef.current?.setParams({
+      centerStrength: forceCenterStrength,
+      repelStrength: forceRepelStrength,
+      linkStrength: forceLinkStrength,
+      linkDistance,
+    })
+  }, [forceCenterStrength, forceRepelStrength, forceLinkStrength, linkDistance])
+
   // Which node the hover plate is currently describing. Distinct from
   // sigma's own hover tracking below: that fires on every enterNode, this
   // only flips once the dwell has been held, so the plate and the dim
@@ -638,8 +690,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const [hoveredNodeId, setHoveredNodeId] = useState<number | null>(null)
 
   // The same instance rendererRef holds, exposed as state purely so the
-  // overlays below re-subscribe when a granularity switch kills one renderer
-  // and builds another — a ref's identity never changes, so an effect keyed
+  // overlays below re-subscribe once the renderer-lifecycle effect below has
+  // actually built one — a ref's identity never changes, so an effect keyed
   // on it would keep listening to a dead one.
   const [activeRenderer, setActiveRenderer] = useState<Sigma | null>(null)
 
@@ -652,26 +704,16 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     reducedMotionForcedRef.current = reducedMotionForced
   })
 
-  // Renderer lifecycle — created once per granularity (a genuinely different
-  // graph: different node set, different edges, different layout), NOT on
-  // every data refresh.
-  //
-  // The zoom ratio used to carry over from whichever graph was active
-  // before, so switching artists -> albums -> tracks didn't zoom back out to
-  // fit-all every time. That held while the working range was roughly 0.7
-  // to 1 — carrying the ratio kept you at a comparable scale, and pan has no
-  // shared meaning across two different node sets anyway. It stopped holding
-  // when selection began flying to FLY_TO_RATIO: carrying ~0.115 into a
-  // graph the selected node is not even in lands the camera on 11% of a
-  // bbox it has never seen, centred wherever that bbox's middle happens to
-  // fall, which is empty canvas far more often than not. Each graph now
-  // frames itself.
+  // Renderer lifecycle — created once per mount (2026-08-29: used to be
+  // once per granularity, back when switching artists/albums/tracks meant a
+  // genuinely different graph; there's one combined graph now, see
+  // Legato.md), NOT on every data refresh or settings change.
   useEffect(() => {
     if (!containerRef.current) return
 
     // multi: true — two nodes can hold more than one edge between them (a
-    // same_artist and a same_label relation between the same two albums,
-    // for real on the current library). See syncGraph's edge-keying comment.
+    // produced_by and an engineered_by credit to the same person, say). See
+    // syncGraph's edge-keying comment.
     const graph = new Graph({ multi: true })
     graphRef.current = graph
 
@@ -705,6 +747,47 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     rendererRef.current = renderer
     setActiveRenderer(renderer)
 
+    // Obsidian-style live physics (2026-08-29 — see Legato.md). The tick
+    // callback is the one place simulation state becomes graph state: copy
+    // every simulated node's current x/y into graphology, then ask sigma to
+    // repaint. Node identity is d3-force's own (forceSimulation.ts), so this
+    // stays correct across drags, resyncs, and lock/unlock without this
+    // effect ever re-running.
+    const sim = createForceSimulation(() => {
+      for (const [key, simNode] of sim.nodesByKey) {
+        if (!graph.hasNode(key)) continue
+        graph.setNodeAttribute(key, 'x', simNode.x)
+        graph.setNodeAttribute(key, 'y', simNode.y)
+      }
+      renderer.refresh()
+    })
+    simulationRef.current = sim
+    sim.setLocked(nodesLockedRef.current)
+    sim.setParams({
+      centerStrength: forceCenterStrength,
+      repelStrength: forceRepelStrength,
+      linkStrength: forceLinkStrength,
+      linkDistance,
+    })
+
+    // The data-sync effect below does an immediate bbox fit the moment data
+    // first arrives, framed to the server's static seed layout — but real
+    // physics visibly settles into a much more compact equilibrium than
+    // that seed spread (center gravity + repulsion, not a permanent grid),
+    // so that first fit is stale within seconds. This refits exactly once
+    // more, to wherever the graph actually lands, the first time the
+    // simulation genuinely settles (alpha decays below its threshold) —
+    // graph.order gates out the empty-simulation 'end' this fires
+    // immediately on creation, before any node has arrived. Never fires
+    // again after that: a later reheat (a drag, a slider, a resync) must
+    // not yank the camera out from under whatever the user is looking at.
+    let hasFitAfterSettle = false
+    sim.simulation.on('end.initialFit', () => {
+      if (hasFitAfterSettle || graph.order === 0) return
+      hasFitAfterSettle = true
+      const bbox = robustBBox(graph)
+      if (bbox) renderer.setCustomBBox(insetForShell(renderer, bbox))
+    })
 
     // Hover/neighbor highlighting — dims everything not connected to the
     // hovered node, via sigma's render-time reducers rather than mutating
@@ -821,6 +904,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // Standard sigma.js drag-node recipe: track the dragged node across
     // downNode -> mousemovebody -> mouseup, reposition it live, and PATCH
     // the server only once the drag actually ends — not on every frame.
+    // 2026-08-29: also feeds the live simulation now, see mousemovebody
+    // below — a drag no longer just repositions its own node, it reheats
+    // the whole graph so neighbors visibly react (repel + collide pushing
+    // out of the way), matching Obsidian's live-physics drag feel.
     let draggedNode: string | null = null
     let downAt: { x: number; y: number } | null = null
     // Whether the pointer has moved far enough since mousedown for this to be
@@ -881,20 +968,47 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         // Flagged only once this is a real drag, so an ordinary click never
         // routes the node through the hover canvas on its way to selecting.
         graph.setNodeAttribute(draggedNode, 'highlighted', true)
+        // Reheats the simulation for the drag's duration — held via
+        // alphaTarget rather than a one-shot alpha bump (forceSimulation.ts's
+        // reheat) so neighbors keep reacting continuously while the pointer
+        // moves, not just once at drag start. Skipped while locked: the
+        // simulation stays stopped, and this drag only ever moves its own
+        // node (the branch below).
+        if (!nodesLockedRef.current) sim.simulation.alphaTarget(0.3).restart()
       }
       const pos = renderer.viewportToGraph(e)
-      graph.setNodeAttribute(draggedNode, 'x', pos.x)
-      graph.setNodeAttribute(draggedNode, 'y', pos.y)
+      const simNode = sim.nodesByKey.get(draggedNode)
+      if (simNode) {
+        // Permanent pin, not released on mouseup below — "the user layer
+        // always wins" (see robustBBox's own comment above): once dragged, a
+        // node never rejoins free physics, matching what user_x/user_y
+        // already meant before live physics existed. A deliberate departure
+        // from literal Obsidian, where a released node drifts again.
+        simNode.fx = pos.x
+        simNode.fy = pos.y
+        simNode.x = pos.x
+        simNode.y = pos.y
+      }
+      if (nodesLockedRef.current) {
+        // Simulation is stopped, so nothing will tick this into the graph —
+        // reflect the move directly, the same way this handler always did
+        // before live physics existed.
+        graph.setNodeAttribute(draggedNode, 'x', pos.x)
+        graph.setNodeAttribute(draggedNode, 'y', pos.y)
+        renderer.refresh()
+      }
       e.preventSigmaDefault()
     })
 
     const handleMouseUp = () => {
       if (draggedNode && didDrag) {
         const id = Number(draggedNode)
-        const x = graph.getNodeAttribute(draggedNode, 'x') as number
-        const y = graph.getNodeAttribute(draggedNode, 'y') as number
+        const simNode = sim.nodesByKey.get(draggedNode)
+        const x = simNode ? (simNode.x as number) : (graph.getNodeAttribute(draggedNode, 'x') as number)
+        const y = simNode ? (simNode.y as number) : (graph.getNodeAttribute(draggedNode, 'y') as number)
         graph.removeNodeAttribute(draggedNode, 'highlighted')
-        void patchNodePosition(id, x, y, granularity)
+        if (!nodesLockedRef.current) sim.simulation.alphaTarget(0)
+        void patchNodePosition(id, x, y)
       }
       draggedNode = null
       downAt = null
@@ -912,14 +1026,19 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     return () => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
       cancelDimAnim?.()
+      sim.simulation.stop()
+      simulationRef.current = null
       renderer.kill()
       rendererRef.current = null
       graphRef.current = null
       setActiveRenderer(null)
     }
-    // Deliberately [granularity] only, not [nodes, edges] — see the comment
-    // above the effect. onSelectNode/onStats/nodes are read through refs.
-  }, [granularity])
+    // Deliberately [] — runs once per mount, not on data or settings
+    // changes. onSelectNode/onStats/nodes and every live setting are read
+    // through refs; force params/lock have their own sync effects above
+    // that push into simulationRef without re-running this one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Data sync — updates the existing graph in place whenever fetched data
   // changes, without touching the renderer (which would reset the camera).
@@ -929,24 +1048,47 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     if (!graph || !renderer || loading) return
 
     const hadNoNodes = graph.order === 0
-    syncGraph(graph, nodes, edges, showCoverArt)
+    const showArt = (type: string) =>
+      type === 'artist' ? showArtistArt : type === 'release' ? showReleaseArt : type === 'recording' ? showTrackArt : true
+    syncGraph(graph, nodes, edges, showArt)
     onStatsRef.current?.({ nodes: graph.order, edges: graph.size })
 
+    // Feeds the same post-sync graph state into the live simulation —
+    // existing nodes keep their live position (nodeAttributes never writes
+    // x/y for one, see its own comment), only a genuinely new node or a
+    // changed radius (an images toggle) causes forceSimulation.ts to reheat.
+    const nodeById = new Map(nodes.map((n) => [n.id, n]))
+    const simNodes: SimNodeInput[] = []
+    graph.forEachNode((key, attrs) => {
+      const node = nodeById.get(Number(key))
+      simNodes.push({
+        key,
+        x: attrs.x as number,
+        y: attrs.y as number,
+        radius: attrs.size as number,
+        fx: node?.user_x ?? null,
+        fy: node?.user_y ?? null,
+      })
+    })
+    const simLinks: { source: string; target: string }[] = []
+    graph.forEachEdge((_edgeKey, _attrs, source, target) => simLinks.push({ source, target }))
+    simulationRef.current?.sync(simNodes, simLinks)
+
     // Only fit the camera to the data on the graph's first population for
-    // this renderer (a fresh mount or a granularity switch) — a background
-    // refresh of the same graph must never move the viewport out from under
-    // whatever the user is currently looking at.
+    // this renderer (a fresh mount) — a background refresh of the same
+    // graph must never move the viewport out from under whatever the user
+    // is currently looking at.
     if (hadNoNodes) {
       const bbox = robustBBox(graph)
       if (bbox) {
         renderer.setCustomBBox(insetForShell(renderer, bbox))
       }
     }
-    // showCoverArt is a plain dependency, not a ref like the three settings
-    // above — toggling it is a discrete click, not a continuous drag, so
-    // re-running the full node diff once per toggle (rather than every
-    // frame) is the cheaper and simpler of the two options.
-  }, [nodes, edges, loading, showCoverArt])
+    // The three showArt flags are plain dependencies, not refs like the
+    // settings above — toggling one is a discrete click, not a continuous
+    // drag, so re-running the full node diff once per toggle (rather than
+    // every frame) is the cheaper and simpler of the two options.
+  }, [nodes, edges, loading, showArtistArt, showReleaseArt, showTrackArt])
 
   // One sentence, muted, centered, no illustration — DESIGN.md's empty-state
   // rule. Ordered error > scanning > plain-empty: a failed scan is the most

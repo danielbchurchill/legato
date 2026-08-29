@@ -1,16 +1,32 @@
-import type { Granularity } from '../shell/granularity'
-
 /* Client-side half of DESIGN.md's "Edge palette" -> "v2: user-colorable
- * types". Which types belong to which granularity's graph mirrors
- * server/src/routes/nodes.ts's EDGE_TYPES_BY_GRANULARITY — kept in sync by
- * hand, the same tradeoff EDGE_COLOR below already accepts against
- * tokens.css's --color-edge-* (sigma renders to WebGL and never sees CSS,
- * so Canvas.tsx needs these as concrete hex too — imported from here rather
- * than each file keeping its own copy). */
+ * types". EDGE_COLOR is kept in sync by hand against
+ * server/src/routes/nodes.ts's EDGE_TYPES (the same tradeoff this file
+ * already accepts against tokens.css's --color-edge-* — sigma renders to
+ * WebGL and never sees CSS, so Canvas.tsx needs these as concrete hex too,
+ * imported from here rather than each file keeping its own copy).
+ *
+ * 2026-08-29: the three granularities collapsed into one combined graph
+ * (Legato.md), so there is no more per-graph type list — every real
+ * relationship edge renders together now. same_artist/same_label/
+ * collaborated_with (entities/collaboration.ts's derived edges, once these
+ * granularities' own distinguishing feature) are deliberately NOT among
+ * them any more: they still exist in the DB and power real features
+ * (similarity, facts, generated articles), they just never belonged to a
+ * *drawn* graph edge — an artist's whole catalogue pairwise-connected by
+ * same_artist rendered as a dense, unreadable mesh even in the old
+ * albums-only view, and the combined graph already has the real hierarchy
+ * edges to cluster an artist's tracks near that artist node without one. */
 
 /* One family, identical saturation and lightness at every hue — see
- * DESIGN.md "Edge palette". Grouped by which graph a type actually renders
- * in (they never render together), not spaced as one flat 10-color wheel. */
+ * DESIGN.md "Edge palette". These 7 are DESIGN.md's original "tracks
+ * graph" set, spaced ≥44° apart specifically so they read as distinct
+ * co-rendering in one view — which is now just *the* view, not one of
+ * three. performed_credit/mixed_by are real edge types too (routes/nodes.ts
+ * EDGE_TYPES) but have no curated slot here yet — nine hues won't fit this
+ * set's ≥44°-clearance rule without reworking the other seven's spacing
+ * too (DESIGN.md's own "revisit when edge types widen" — a real design
+ * pass, not something to squeeze in here). They render via
+ * EDGE_COLOR_FALLBACK below, same as they already do in production today. */
 export const EDGE_COLOR: Record<string, string> = {
   performed_by: '#bf68eb',
   appears_on: '#68b6eb',
@@ -19,9 +35,6 @@ export const EDGE_COLOR: Record<string, string> = {
   released_on: '#ea66a6',
   produced_by: '#ea9066',
   engineered_by: '#dbea66',
-  same_artist: '#7166ea',
-  same_label: '#ea667c',
-  collaborated_with: '#ea8766',
 }
 
 export type EdgeTypeInfo = { type: string; label: string; defaultHex: string }
@@ -34,19 +47,13 @@ const LABELS: Record<string, string> = {
   released_on: 'released on',
   produced_by: 'produced by',
   engineered_by: 'engineered by',
-  same_artist: 'same artist',
-  same_label: 'same label',
-  collaborated_with: 'collaborated',
 }
 
-const TYPES_BY_GRANULARITY: Record<Granularity, string[]> = {
-  tracks: ['performed_by', 'appears_on', 'released_in', 'featured_artist', 'released_on', 'produced_by', 'engineered_by'],
-  albums: ['same_artist', 'same_label'],
-  artists: ['collaborated_with'],
-}
-
-export function edgeTypesForGranularity(granularity: Granularity): EdgeTypeInfo[] {
-  return TYPES_BY_GRANULARITY[granularity].map((type) => ({
+/* The color picker only offers types with a real curated default above —
+ * performed_credit/mixed_by still draw on canvas (via EDGE_COLOR_FALLBACK),
+ * they just have nothing to seed a picker swatch from yet. */
+export function edgeTypes(): EdgeTypeInfo[] {
+  return Object.keys(EDGE_COLOR).map((type) => ({
     type,
     label: LABELS[type],
     defaultHex: EDGE_COLOR[type],
@@ -60,10 +67,7 @@ export function edgeColorSettingKey(type: string): string {
 }
 
 /** All `edgeColor:*` overrides in the settings store, keyed back down to a
- * plain type -> hex map — what Canvas.tsx's edgeReducer needs live. Reads
- * every type at once rather than one key per granularity, since edge types
- * never collide across granularities (see TYPES_BY_GRANULARITY above), so
- * there's nothing to scope this to the active graph. */
+ * plain type -> hex map — what Canvas.tsx's edgeReducer needs live. */
 export function resolveEdgeColorOverrides(settings: Record<string, string>): Record<string, string> {
   const overrides: Record<string, string> = {}
   for (const [key, value] of Object.entries(settings)) {
