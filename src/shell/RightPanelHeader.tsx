@@ -1,14 +1,18 @@
 import { Icon } from '../ui/Icon'
 import { Tooltip } from '../ui/Tooltip'
 import { Surface } from './Surface'
-import { WindowControls } from './WindowControls'
 
 /* v2's right header: docked to the top-right corner, matching the
  * now-playing panel's width below it, unaffected by that panel's own
  * collapse state (DESIGN.md "Panel collapsed (v2)") the same way
  * LeftPanelHeader is. The avatar chip is a static settings-access affordance
  * for a single-user desktop app — there is no real account state to wire it
- * to, so it stays a plain "DC" chip. */
+ * to, so it stays a plain "DC" chip.
+ *
+ * The window now runs with native OS decorations (tauri.conf.json's
+ * `decorations: true`) instead of the frameless custom minimize/maximize/
+ * close cluster this header used to render (WindowControls.tsx, since
+ * removed) — each platform's own titlebar and chrome apply instead. */
 
 type RightPanelHeaderProps = {
   expanded: boolean
@@ -39,14 +43,11 @@ export function RightPanelHeader({ expanded, onCollapse }: RightPanelHeaderProps
           </Tooltip>
         )}
       </div>
-      <div className="flex shrink-0 items-center gap-[14px]">
-        <div
-          aria-hidden
-          className="grid size-[29.5px] shrink-0 place-items-center rounded-full bg-[var(--color-control)] font-[family-name:var(--font-ui)] text-[length:var(--text-sm)] text-[var(--color-ink)]"
-        >
-          DC
-        </div>
-        <WindowControls />
+      <div
+        aria-hidden
+        className="grid size-[29.5px] shrink-0 place-items-center rounded-full bg-[var(--color-control)] font-[family-name:var(--font-ui)] text-[length:var(--text-sm)] text-[var(--color-ink)]"
+      >
+        DC
       </div>
     </Surface>
   )

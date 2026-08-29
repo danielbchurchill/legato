@@ -1,4 +1,3 @@
-import arrowMinimize from '../assets/icons/arrow-minimize.svg?raw'
 import cancel from '../assets/icons/cancel.svg?raw'
 import chevronDown from '../assets/icons/chevron-down.svg?raw'
 import database from '../assets/icons/database.svg?raw'
@@ -11,7 +10,6 @@ import pencil from '../assets/icons/pencil.svg?raw'
 import play from '../assets/icons/play.svg?raw'
 import search from '../assets/icons/search.svg?raw'
 import sliders from '../assets/icons/sliders.svg?raw'
-import spacebar from '../assets/icons/spacebar.svg?raw'
 import tag from '../assets/icons/tag.svg?raw'
 import volume from '../assets/icons/volume.svg?raw'
 
@@ -23,9 +21,13 @@ import volume from '../assets/icons/volume.svg?raw'
  * destination. A separate `settings` gear glyph briefly existed alongside it
  * for CollectionPanel's own settings-gear button (opening the old
  * SettingsView modal) — removed once that modal's content moved behind the
- * rail destination instead, its one call site going with it. */
+ * rail destination instead, its one call site going with it.
+ *
+ * `arrow-minimize` and `spacebar` (the minimize/maximize glyphs) went the
+ * same way once the window went back to native OS decorations
+ * (tauri.conf.json's `decorations: true`) and WindowControls.tsx, their one
+ * caller, was removed. */
 const GLYPHS = {
-  'arrow-minimize': arrowMinimize,
   cancel,
   'chevron-down': chevronDown,
   database,
@@ -38,7 +40,6 @@ const GLYPHS = {
   play,
   search,
   sliders,
-  spacebar,
   tag,
   volume,
 } as const

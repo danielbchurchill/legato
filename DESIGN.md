@@ -208,7 +208,7 @@ A few things the brief flagged as open, resolved here:
 
 - **Hairline color.** The raw Figma export draws the rail/header borders as 0.5px solid `--color-control` (grey), not the app's `--color-hairline` (white at 30% alpha) every other glass edge uses. Normalized to `--color-hairline`: v2 has no exported render to sample against yet for this specific value (same caveat this file already states for every v2 token), so there's no evidence the grey is deliberate rather than Figma's default stroke color on a frame nobody restyled — the same class of noise "why it is not 0.25px" already documents for the sub-pixel width. A second, solid-grey hairline language for one region of the app would fragment "hairlines are 1px with alpha" (Working rules #2) for a distinction with no stated reason.
 - **Header wordmark size.** 32px, not the existing 40px `--text-wordmark`. Treated as real, not mockup noise: the new headers are built to a tight 10px padding, not the old titlebar's fixed 61px, and 32px is what that tighter frame is actually proportioned for. Kept as its own token, `--text-wordmark-header` — `--text-wordmark` stays 40px for LibrarySetup.tsx's splash screen, an unrelated context this decision doesn't touch.
-- **Window controls.** The Figma mockup has no native window chrome to measure at all — it's a web design file, and this is a frameless Tauri window that still needs real minimize/maximize/close buttons somewhere. They moved into RightPanelHeader (`src/shell/WindowControls.tsx`, factored out of the old Titlebar), which already owns the window's top-right corner — the OS-conventional home for that cluster. Not a measured value, just the least-surprising place to put it.
+- **Window controls — superseded.** The Figma mockup has no native window chrome to measure at all — it's a web design file. This originally meant keeping the frameless window and moving its custom minimize/maximize/close cluster into RightPanelHeader (`src/shell/WindowControls.tsx`, factored out of the old Titlebar). Reversed since: the window now runs with native OS decorations (`decorations: true`) instead, so RightPanelHeader owns only the collapse toggle and the avatar chip — see "Window controls" under Iconography.
 - **One collapse state or two?** Two, independent: the rail's own selection (`RailDestination | null`) doubles as the left side's expand/collapse state, and the right panel has its own boolean. The Figma frames never show a mixed state, but they also describe genuinely separate triggers per side (a rail icon click for the left, each side's own header icon to collapse) — nothing suggested they were meant to move together, and forcing them into one shared flag would have made up a coupling the mockup never asked for.
 - **The right panel's missing way back.** Worth flagging plainly: as specified, the right side's collapse has no expand affordance at all once collapsed — the Figma frames only show a collapse icon that disappears, same as the left, but the left's escape hatch is "click any rail icon," and the right side has no equivalent in the mockup. Shipping a state with no way out of it isn't acceptable regardless of what the frames show, so clicking the collapsed content itself (the cover/track block) re-expands the panel. This is this codebase's own addition, not a measured or confirmed Figma behavior.
 - **Persistence.** Component state (`MainApp` in `App.tsx`), not written to the settings store — resets to both-expanded on every relaunch. This is closer to "which tab is open" than a durable preference, and nothing in the brief asked for it to survive a restart; revisit if that turns out wrong.
@@ -308,19 +308,11 @@ Every glyph is 24 × 24, `fill="none"`, `stroke="currentColor"`, `stroke-width="
 
 Never hand-draw an icon or inline a `<path>`. If a needed glyph is missing, pull it from proicons; if proicons does not have it, that is a design decision, not an implementation one.
 
-Icons in use: `search`, `cancel`, `arrow-minimize`, `spacebar`, `chevron-down`, `pencil`, `info`, `pause`, `play`, `volume`, `map`, `database`, `heart`, `tag`, `sliders`, `panel-left-collapse` (the last six vendored for v2's rail and panel-collapse icon — see "The shell (v2)").
+Icons in use: `search`, `cancel`, `chevron-down`, `pencil`, `info`, `pause`, `play`, `volume`, `map`, `database`, `heart`, `tag`, `sliders`, `panel-left-collapse` (the last five vendored for v2's rail and panel-collapse icon — see "The shell (v2)").
 
 ### Window controls
 
-The frameless titlebar's three controls, left to right:
-
-| Glyph | Action |
-|---|---|
-| `spacebar` | Minimize |
-| `arrow-minimize` | Maximize / restore toggle |
-| `cancel` | Close |
-
-The wordmark is centered in the titlebar and the whole bar outside the controls is the drag region.
+There are none of the app's own anymore. The window runs with native OS decorations (`tauri.conf.json`'s `decorations: true`) — minimize, maximize/restore, and close are whatever the host platform draws for any other window, in its own conventional position (right on Windows/Linux, left on macOS). This reverses an earlier v2 decision: a frameless window with a custom three-glyph cluster (`spacebar`/`arrow-minimize`/`cancel`) factored into `RightPanelHeader` as `WindowControls.tsx` — removed along with that file once the app went back to native chrome, since a custom cluster answering to nothing the Figma mockup specified was more surface than the plain OS default earned.
 
 ---
 

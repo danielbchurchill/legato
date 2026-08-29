@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react'
-import { ResizeHandles } from './ResizeHandles'
 
 /* The frame: a single stage that everything else floats on.
  *
@@ -12,13 +11,17 @@ import { ResizeHandles } from './ResizeHandles'
  * RightPanelHeader are two separate glass regions, each scoped to its own
  * side column, so the canvas between them now runs all the way to the
  * window's top edge with nothing reserved above it. See DESIGN.md's shell
- * section. */
+ * section.
+ *
+ * The window runs with native OS decorations again (tauri.conf.json's
+ * `decorations: true`), so the WM's own resize borders are back too —
+ * ResizeHandles.tsx, the invisible edge-drag strips that stood in for them
+ * while the window was frameless, is gone with it. */
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="fixed inset-0 overflow-hidden bg-[var(--color-canvas)]">
       <main className="relative h-full w-full">{children}</main>
-      <ResizeHandles />
     </div>
   )
 }
