@@ -1,5 +1,6 @@
 import { Icon } from '../ui/Icon'
 import { Tooltip } from '../ui/Tooltip'
+import { TooltipGroup } from '../ui/TooltipGroup'
 import { Surface } from './Surface'
 import { RAIL_ITEMS, type RailDestination } from './rail'
 
@@ -22,24 +23,31 @@ const GEOMETRY =
   'absolute top-[var(--header-height)] bottom-0 left-0 z-10 flex w-[var(--rail-width)] flex-col items-center gap-[var(--spacing-lg)] pt-[10px]'
 
 export function InspectorRail({ active, onSelect }: InspectorRailProps) {
-  const icons = RAIL_ITEMS.map((item) => {
-    const isActive = item.id === active
-    return (
-      <Tooltip key={item.id} label={item.label}>
-        <button
-          type="button"
-          onClick={() => onSelect(item.id)}
-          aria-label={item.label}
-          aria-pressed={isActive}
-          className={`transition-colors duration-[var(--motion-fast)] ${
-            isActive ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'
-          }`}
-        >
-          <Icon name={item.icon} size={24} />
-        </button>
-      </Tooltip>
-    )
-  })
+  // TooltipGroup: the six icons are the one real row of adjacent tooltip
+  // triggers in the app today — wrapping them lets a sweep across the rail
+  // read as one continuous tooltip instead of six independent 400ms dwells.
+  const icons = (
+    <TooltipGroup>
+      {RAIL_ITEMS.map((item) => {
+        const isActive = item.id === active
+        return (
+          <Tooltip key={item.id} label={item.label}>
+            <button
+              type="button"
+              onClick={() => onSelect(item.id)}
+              aria-label={item.label}
+              aria-pressed={isActive}
+              className={`transition-colors duration-[var(--motion-fast)] ${
+                isActive ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'
+              }`}
+            >
+              <Icon name={item.icon} size={24} />
+            </button>
+          </Tooltip>
+        )
+      })}
+    </TooltipGroup>
+  )
 
   if (active != null) {
     return (
