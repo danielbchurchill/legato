@@ -10,7 +10,6 @@ import pause from '../assets/icons/pause.svg?raw'
 import pencil from '../assets/icons/pencil.svg?raw'
 import play from '../assets/icons/play.svg?raw'
 import search from '../assets/icons/search.svg?raw'
-import settings from '../assets/icons/settings.svg?raw'
 import sliders from '../assets/icons/sliders.svg?raw'
 import spacebar from '../assets/icons/spacebar.svg?raw'
 import tag from '../assets/icons/tag.svg?raw'
@@ -20,10 +19,11 @@ import volume from '../assets/icons/volume.svg?raw'
  * SVG rather than redrawn. Every glyph is a 24x24 currentColor stroke at 1.5
  * with round caps, so they inherit text color and size from their box.
  *
- * `settings` (gear) and `sliders` are two different glyphs, not a naming
- * accident — v2's left icon rail uses the sliders glyph for its "Legato
- * Settings" destination, added alongside the existing gear rather than
- * replacing it since the gear's other call sites weren't audited. */
+ * `sliders` is v2's left icon rail glyph for its "Legato Settings"
+ * destination. A separate `settings` gear glyph briefly existed alongside it
+ * for CollectionPanel's own settings-gear button (opening the old
+ * SettingsView modal) — removed once that modal's content moved behind the
+ * rail destination instead, its one call site going with it. */
 const GLYPHS = {
   'arrow-minimize': arrowMinimize,
   cancel,
@@ -37,7 +37,6 @@ const GLYPHS = {
   pencil,
   play,
   search,
-  settings,
   sliders,
   spacebar,
   tag,

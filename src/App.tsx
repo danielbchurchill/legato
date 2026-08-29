@@ -12,10 +12,10 @@ import { AppShell } from './shell/AppShell'
 import { TransportDock } from './shell/TransportDock'
 import { CollectionPanel, type CollectionPanelHandle } from './panels/CollectionPanel'
 import { MusicMapSettings } from './panels/MusicMapSettings'
+import { LegatoSettings } from './panels/LegatoSettings'
 import { SERVER_HOST } from './config/serverHost'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
-import { SettingsView } from './settings/SettingsView'
 import { useSettings } from './hooks/useSettings'
 import type { ReplayGainMode } from './playback/usePlayback'
 import { LeftPanelHeader } from './shell/LeftPanelHeader'
@@ -190,7 +190,6 @@ function MainApp() {
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
   const [hygieneOpen, setHygieneOpen] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
   // The rail's own selection doubles as the left shell's expand/collapse
   // state — "exactly one active at a time, or none when collapsed" is
   // literally what DESIGN.md's shell section specifies, so there is no
@@ -267,12 +266,12 @@ function MainApp() {
   // modal being shut so one press never does both.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key !== 'Escape' || inspectorOpen || hygieneOpen || settingsOpen) return
+      if (e.key !== 'Escape' || inspectorOpen || hygieneOpen) return
       setSelectedNodeId(null)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [inspectorOpen, hygieneOpen, settingsOpen])
+  }, [inspectorOpen, hygieneOpen])
 
   // Core shortcuts (documented in the Settings "shortcuts" section, so none
   // of this is hidden): Space toggles playback, "/" focuses search.
@@ -288,7 +287,7 @@ function MainApp() {
     }
 
     function handleShortcut(e: KeyboardEvent) {
-      if (inspectorOpen || hygieneOpen || settingsOpen) return
+      if (inspectorOpen || hygieneOpen) return
       if (isTypingTarget(document.activeElement)) return
 
       if (e.code === 'Space') {
@@ -305,7 +304,7 @@ function MainApp() {
     }
     window.addEventListener('keydown', handleShortcut)
     return () => window.removeEventListener('keydown', handleShortcut)
-  }, [inspectorOpen, hygieneOpen, settingsOpen, playback])
+  }, [inspectorOpen, hygieneOpen, playback])
 
   useEffect(() => {
     fetch(`http://${SERVER_HOST}:8899/api/v1/library-roots`)
@@ -357,13 +356,15 @@ function MainApp() {
         <InspectorPanel
           active={activeRailDestination}
           graphContent={<MusicMapSettings settings={settings} updateSettings={updateSettings} />}
+          settingsContent={
+            <LegatoSettings settings={settings} updateSettings={updateSettings} onSetAudioDevice={playback.setAudioDevice} />
+          }
         >
           <CollectionPanel
             ref={collectionPanelRef}
             anchorNodeId={anchorNodeId}
             onSelectNode={selectAndFly}
             onOpenMaintenance={() => setHygieneOpen(true)}
-            onOpenSettings={() => setSettingsOpen(true)}
           />
         </InspectorPanel>
       )}
@@ -423,15 +424,6 @@ function MainApp() {
             setHygieneOpen(false)
           }}
           onClose={() => setHygieneOpen(false)}
-        />
-      )}
-
-      {settingsOpen && (
-        <SettingsView
-          settings={settings}
-          updateSettings={updateSettings}
-          onSetAudioDevice={playback.setAudioDevice}
-          onClose={() => setSettingsOpen(false)}
         />
       )}
     </AppShell>

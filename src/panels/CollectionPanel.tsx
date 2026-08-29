@@ -404,7 +404,6 @@ type CollectionPanelProps = {
   anchorNodeId: number | null
   onSelectNode: (id: number) => void
   onOpenMaintenance: () => void
-  onOpenSettings: () => void
 }
 
 export type CollectionPanelHandle = {
@@ -413,7 +412,7 @@ export type CollectionPanelHandle = {
 }
 
 export const CollectionPanel = forwardRef<CollectionPanelHandle, CollectionPanelProps>(function CollectionPanel(
-  { anchorNodeId, onSelectNode, onOpenMaintenance, onOpenSettings },
+  { anchorNodeId, onSelectNode, onOpenMaintenance },
   ref,
 ) {
   const searchRef = useRef<SearchFieldHandle>(null)
@@ -421,27 +420,14 @@ export const CollectionPanel = forwardRef<CollectionPanelHandle, CollectionPanel
 
   return (
     <div className="flex flex-col">
-      {/* P-9: the gear used to sit inside the search row, shifting the
-       * field off the centred 257px the mockup draws. Its own row now. */}
-      <div className="flex justify-end">
-        <Tooltip label="Open settings">
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            aria-label="Open settings"
-            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-          >
-            <Icon name="settings" size={24} />
-          </button>
-        </Tooltip>
-      </div>
-      {/* v2: the search field now runs the full width of the Inspector
-       * Panel's content column rather than a fixed 257px centred block —
-       * that width was tuned for the old 360px panel, and the v2 panel is
-       * narrower (300px) besides. */}
-      <div className="mt-[8px]">
-        <SearchField ref={searchRef} onSelectNode={onSelectNode} />
-      </div>
+      {/* v2: the search field runs the full width of the Inspector Panel's
+       * content column rather than a fixed 257px centred block — that width
+       * was tuned for the old 360px panel, and the v2 panel is narrower
+       * (300px) besides. The settings gear that used to sit in its own row
+       * above (P-9) is gone — settings live behind the rail's own `sliders`
+       * "Legato Settings" destination now, so this panel needs no entry
+       * point of its own. */}
+      <SearchField ref={searchRef} onSelectNode={onSelectNode} />
       <SimilaritySection anchorNodeId={anchorNodeId} onSelectNode={onSelectNode} />
       <OverviewBlock />
       <MaintenancePreview onSelectNode={onSelectNode} onOpenMaintenance={onOpenMaintenance} />

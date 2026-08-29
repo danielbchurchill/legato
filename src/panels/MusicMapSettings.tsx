@@ -1,9 +1,10 @@
-import { type ReactNode, useState } from 'react'
+import { useState } from 'react'
 import { Toggle } from '../ui/Toggle'
 import { Slider } from '../ui/Slider'
 import { ColorSwatch } from '../ui/ColorSwatch'
 import { CURATED_EDGE_HUES, edgeColorSettingKey, edgeTypes, isHueTooClose, type EdgeTypeInfo } from '../canvas/edgeTypes'
 import type { Settings } from '../hooks/useSettings'
+import { GroupHeader, SettingsRow } from './SettingsPrimitives'
 
 /* The Music Map settings panel — DESIGN.md's "v2: settings primitives" and
  * "Edge palette" -> "v2: user-colorable types". Mounted by App.tsx into
@@ -33,32 +34,6 @@ const NODE_TYPE_IMAGE_TOGGLES: { key: string; label: string }[] = [
   { key: 'showImagesAlbums', label: 'releases' },
   { key: 'showImagesTracks', label: 'tracks' },
 ]
-
-function GroupHeader({ title }: { title: string }) {
-  return <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{title}</p>
-}
-
-function SettingsRow({
-  label,
-  align = 'center',
-  children,
-}: {
-  label: string
-  /** 'start' for a row whose control can wrap to more than one line (the
-   * color swatches below) — 'center' would otherwise vertically center the
-   * label against the whole wrapped block instead of its first line. */
-  align?: 'center' | 'start'
-  children: ReactNode
-}) {
-  return (
-    <div className={`flex gap-[var(--spacing-sm)] ${align === 'center' ? 'items-center' : 'items-start'}`}>
-      <span className="w-[68px] shrink-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-        {label}
-      </span>
-      <div className="min-w-0 flex-1">{children}</div>
-    </div>
-  )
-}
 
 function LabeledToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
