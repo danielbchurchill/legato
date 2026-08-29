@@ -4,26 +4,35 @@ import type { RailDestination } from './rail'
 
 /* v2's Inspector Panel — the 300px column next to the rail. 'search' (the
  * adapted CollectionPanel, passed in as `children`), 'graph' (Music Map
- * settings, `graphContent`) and 'settings' (Legato settings,
- * `settingsContent`) have real content; the other three destinations have no
- * defined content in the Figma file at all yet, so they get the app's
- * standard empty-state treatment (DESIGN.md "Empty and error states") naming
- * what's coming instead. */
+ * settings, `graphContent`), 'settings' (Legato settings, `settingsContent`),
+ * 'tags' (Tag Manager, `tagsContent`), 'database' (Database Inspector,
+ * `databaseContent`) and 'favourites' (Favourites, `favouritesContent`) all
+ * have real content now — every rail destination is filled in, so
+ * PLACEHOLDER_LABEL is kept only for whichever one falls through with no
+ * content prop supplied (shouldn't happen once App.tsx wires all six, but
+ * costs nothing to leave as a fallback). */
 
-const PLACEHOLDER_LABEL: Partial<Record<RailDestination, string>> = {
-  database: 'database inspector — coming soon',
-  favourites: 'favourites — coming soon',
-  tags: 'tag manager — coming soon',
-}
+const PLACEHOLDER_LABEL: Partial<Record<RailDestination, string>> = {}
 
 type InspectorPanelProps = {
   active: RailDestination
   children?: ReactNode
   graphContent?: ReactNode
   settingsContent?: ReactNode
+  tagsContent?: ReactNode
+  databaseContent?: ReactNode
+  favouritesContent?: ReactNode
 }
 
-export function InspectorPanel({ active, children, graphContent, settingsContent }: InspectorPanelProps) {
+export function InspectorPanel({
+  active,
+  children,
+  graphContent,
+  settingsContent,
+  tagsContent,
+  databaseContent,
+  favouritesContent,
+}: InspectorPanelProps) {
   const content =
     active === 'search'
       ? children
@@ -31,7 +40,13 @@ export function InspectorPanel({ active, children, graphContent, settingsContent
         ? graphContent
         : active === 'settings' && settingsContent != null
           ? settingsContent
-          : undefined
+          : active === 'tags' && tagsContent != null
+            ? tagsContent
+            : active === 'database' && databaseContent != null
+              ? databaseContent
+              : active === 'favourites' && favouritesContent != null
+                ? favouritesContent
+                : undefined
 
   return (
     <Surface

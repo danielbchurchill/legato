@@ -13,6 +13,9 @@ import { TransportDock } from './shell/TransportDock'
 import { CollectionPanel, type CollectionPanelHandle } from './panels/CollectionPanel'
 import { MusicMapSettings } from './panels/MusicMapSettings'
 import { LegatoSettings } from './panels/LegatoSettings'
+import { DatabaseInspector } from './panels/DatabaseInspector'
+import { TagManager } from './panels/TagManager'
+import { Favourites } from './panels/Favourites'
 import { SERVER_HOST } from './config/serverHost'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
@@ -373,6 +376,9 @@ function MainApp() {
           settingsContent={
             <LegatoSettings settings={settings} updateSettings={updateSettings} onSetAudioDevice={playback.setAudioDevice} />
           }
+          tagsContent={<TagManager onSelectNode={selectAndFly} />}
+          databaseContent={<DatabaseInspector />}
+          favouritesContent={<Favourites onSelectNode={selectAndFly} />}
         >
           <CollectionPanel
             ref={collectionPanelRef}

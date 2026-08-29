@@ -12,6 +12,7 @@ import { libraryRootsRoutes } from "./routes/library-roots.js";
 import { scanRoutes } from "./routes/scan.js";
 import { nodesRoutes } from "./routes/nodes.js";
 import { mergeOverridesRoutes } from "./routes/merge-overrides.js";
+import { favouritesRoutes } from "./routes/favourites.js";
 import { layoutRoutes } from "./routes/layout.js";
 import { edgesRoutes } from "./routes/edges.js";
 import { searchRoutes } from "./routes/search.js";
@@ -24,9 +25,11 @@ import { tagWritesRoutes } from "./routes/tag-writes.js";
 import { coverRoutes } from "./routes/cover.js";
 import { playsRoutes } from "./routes/plays.js";
 import { statsRoutes } from "./routes/stats.js";
+import { dbInspectorRoutes } from "./routes/db-inspector.js";
 import { similarityRoutes } from "./routes/similarity.js";
 import { waveformRoutes } from "./routes/waveform.js";
 import { lyricsRoutes } from "./routes/lyrics.js";
+import { tagManagerRoutes } from "./routes/tag-manager.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { runDueJobs } from "./enrich/worker.js";
 
@@ -71,6 +74,7 @@ await app.register(libraryRootsRoutes(db), { prefix: "/api/v1" });
 await app.register(scanRoutes(db), { prefix: "/api/v1" });
 await app.register(nodesRoutes(db), { prefix: "/api/v1" });
 await app.register(mergeOverridesRoutes(db), { prefix: "/api/v1" });
+await app.register(favouritesRoutes(db), { prefix: "/api/v1" });
 await app.register(layoutRoutes(db), { prefix: "/api/v1" });
 await app.register(edgesRoutes(db), { prefix: "/api/v1" });
 await app.register(searchRoutes(db), { prefix: "/api/v1" });
@@ -83,9 +87,11 @@ await app.register(tagWritesRoutes(db), { prefix: "/api/v1" });
 await app.register(coverRoutes(db), { prefix: "/api/v1" });
 await app.register(playsRoutes(db), { prefix: "/api/v1" });
 await app.register(statsRoutes(db), { prefix: "/api/v1" });
+await app.register(dbInspectorRoutes(db), { prefix: "/api/v1" });
 await app.register(similarityRoutes(db), { prefix: "/api/v1" });
 await app.register(waveformRoutes(db), { prefix: "/api/v1" });
 await app.register(lyricsRoutes(db), { prefix: "/api/v1" });
+await app.register(tagManagerRoutes(db), { prefix: "/api/v1" });
 
 // Resume watching every already-configured root across restarts — a root
 // added in a previous session shouldn't need a manual re-scan to notice
