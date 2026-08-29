@@ -12,11 +12,7 @@ export function NowPlayingCollapsed({ nodeId }: { nodeId: number | null }) {
   const { node } = useNodeDetail(nodeId)
 
   if (nodeId == null || !node) {
-    return (
-      <p className="pt-[40px] text-center text-[length:var(--text-base)] text-[var(--color-muted)]">
-        nothing playing
-      </p>
-    )
+    return null
   }
 
   const artist = node.edges.find((e) => e.direction === 'out' && e.type === 'performed_by')

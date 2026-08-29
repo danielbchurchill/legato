@@ -156,7 +156,9 @@ A second, tighter scale for control chrome — the Music Map settings panel, and
 | `--spacing-sm` | `10px` |
 | `--spacing-lg` | `20px` |
 
-The pattern that shows up everywhere in the settings panel: a control's own dot or swatch, `--spacing-xs` below it, then its label — the same 5px gap under a toggle knob, a radio dot, and a color swatch alike. `--spacing-sm` is the pitch between one setting row and the next; `--spacing-lg` separates one settings group (`nodes`, `links`, `forces`) from the next.
+The pattern that shows up everywhere in the settings panel: a control's own dot or swatch, `--spacing-xs` below it, then its label — the same 5px gap under a toggle knob, a radio dot, and a color swatch alike. `--spacing-sm` is the pitch between one setting row and the next, and also between one settings group and the next.
+
+One settings group (`nodes`, `links`, `forces`, and Legato Settings' own groups alike) is closed off by a `--color-divider` rule under its last row, `pb-[15px]` below that row — confirmed against the Music Map settings Figma frame (node 58:2), which draws every group this way, last one included, rather than leaving the boundary to the gap alone. `GroupHeader` plus this divider is `SettingsGroup` (`src/panels/SettingsPrimitives.tsx`).
 
 Daniel's stated goal is tighter spacing across the app as a whole, not just in new control chrome — but retrofitting the panel rhythm above (33px rows, 24px padding) to run tighter is a separate, deliberate pass with a much wider blast radius, since every shipped panel depends on those exact numbers today. Not done here; this section is scoped to control-density UI only until that pass happens on purpose.
 

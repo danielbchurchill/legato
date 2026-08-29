@@ -4,7 +4,7 @@ import { Slider } from '../ui/Slider'
 import { ColorSwatch } from '../ui/ColorSwatch'
 import { CURATED_EDGE_HUES, edgeColorSettingKey, edgeTypes, isHueTooClose, type EdgeTypeInfo } from '../canvas/edgeTypes'
 import type { Settings } from '../hooks/useSettings'
-import { GroupHeader, SettingsRow } from './SettingsPrimitives'
+import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 
 /* The Music Map settings panel — DESIGN.md's "v2: settings primitives" and
  * "Edge palette" -> "v2: user-colorable types". Mounted by App.tsx into
@@ -112,9 +112,8 @@ export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsP
   const forceLink = parseMultiplier(settings.forceLinkStrength, 0.15)
 
   return (
-    <div className="flex flex-col gap-[var(--spacing-lg)] pb-[var(--spacing-lg)]">
-      <div className="flex flex-col gap-[var(--spacing-sm)]">
-        <GroupHeader title="nodes" />
+    <div className="flex flex-col gap-[var(--spacing-sm)]">
+      <SettingsGroup title="nodes">
         <SettingsRow label="lock">
           <Toggle
             checked={nodesLocked}
@@ -141,10 +140,9 @@ export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsP
             ))}
           </div>
         </SettingsRow>
-      </div>
+      </SettingsGroup>
 
-      <div className="flex flex-col gap-[var(--spacing-sm)]">
-        <GroupHeader title="links" />
+      <SettingsGroup title="links">
         <SettingsRow label="colours">
           <EdgeColorPicker settings={settings} updateSettings={updateSettings} />
         </SettingsRow>
@@ -165,10 +163,9 @@ export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsP
             label="edge thickness"
           />
         </SettingsRow>
-      </div>
+      </SettingsGroup>
 
-      <div className="flex flex-col gap-[var(--spacing-sm)]">
-        <GroupHeader title="forces" />
+      <SettingsGroup title="forces">
         <SettingsRow label="center">
           <Slider
             value={forceCenter}
@@ -193,7 +190,7 @@ export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsP
             label="link force"
           />
         </SettingsRow>
-      </div>
+      </SettingsGroup>
     </div>
   )
 }

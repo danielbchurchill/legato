@@ -14,6 +14,20 @@ export function GroupHeader({ title, action }: { title: string; action?: ReactNo
   )
 }
 
+/* A settings group's title plus the rest of its rows, closed off by the
+ * divider Figma draws at the bottom of every group ("nodes", "links",
+ * "forces", and Legato Settings' own groups alike) to separate it from the
+ * next — confirmed against the Music Map settings frame, node 58:2, where
+ * each group is one bordered/pb-[15px] block, not a bare header. */
+export function SettingsGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-[var(--spacing-sm)] border-b border-[var(--color-divider)] pb-[15px]">
+      <GroupHeader title={title} action={action} />
+      {children}
+    </div>
+  )
+}
+
 export function SettingsRow({
   label,
   align = 'center',

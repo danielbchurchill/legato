@@ -20,8 +20,15 @@ export function Toggle({ checked, onChange, disabled, label, className = '' }: T
       aria-label={label}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative h-[10px] w-[20px] shrink-0 rounded-full border border-[var(--color-control)] disabled:pointer-events-none disabled:opacity-40 ${className}`}
+      className={`relative h-[10px] w-[20px] shrink-0 disabled:pointer-events-none disabled:opacity-40 ${className}`}
     >
+      {/* Track is a sibling of the knob, not its bordered parent — nesting the
+       * knob inside a bordered button ate 1px of the button's own border-box
+       * into the knob's coordinate space each axis, so the knob overflowed the
+       * track by 1px (visible in the rendered app, absent from the Figma
+       * source, which draws them exactly this way: two siblings sharing one
+       * unbordered 20x10 frame). */}
+      <span className="absolute inset-0 rounded-full border border-[var(--color-control)]" />
       <span
         className={`absolute top-0 size-[10px] rounded-full bg-[var(--color-control)] transition-[left] duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
           checked ? 'left-[10px]' : 'left-0'

@@ -8,7 +8,7 @@ import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
 import type { ReplayGainMode } from '../playback/usePlayback'
 import { SERVER_HOST } from '../config/serverHost'
-import { GroupHeader, SettingsRow } from './SettingsPrimitives'
+import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -165,9 +165,8 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
   const reducedMotionForced = settings.reducedMotionForced === 'true'
 
   return (
-    <div className="flex flex-col gap-[var(--spacing-lg)] pb-[var(--spacing-lg)]">
-      <div className="flex flex-col gap-[var(--spacing-sm)]">
-        <GroupHeader title="library" action={<Button onClick={() => void addFolder()}>+ add folder</Button>} />
+    <div className="flex flex-col gap-[var(--spacing-sm)]">
+      <SettingsGroup title="library" action={<Button onClick={() => void addFolder()}>+ add folder</Button>}>
         {roots === null ? (
           <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">loading…</p>
         ) : roots.length === 0 ? (
@@ -243,10 +242,9 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
         {/* DESIGN.md's error-state rule is deliberately quiet — Rubik muted,
          * one sentence — not a red/alert color the tokens don't define. */}
         {error && <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{error}</p>}
-      </div>
+      </SettingsGroup>
 
-      <div className="flex flex-col gap-[var(--spacing-sm)]">
-        <GroupHeader title="enrichment" />
+      <SettingsGroup title="enrichment">
         <SettingsRow label="lookup">
           <Toggle
             checked={enrichmentEnabled}
@@ -254,10 +252,9 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
             label="look up MusicBrainz metadata and cover art automatically"
           />
         </SettingsRow>
-      </div>
+      </SettingsGroup>
 
-      <div className="flex flex-col gap-[var(--spacing-sm)]">
-        <GroupHeader title="playback" />
+      <SettingsGroup title="playback">
         <SettingsRow label="gain">
           <SegmentedControl
             options={REPLAYGAIN_OPTIONS}
@@ -283,10 +280,9 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
             ))}
           </select>
         </SettingsRow>
-      </div>
+      </SettingsGroup>
 
-      <div className="flex flex-col gap-[var(--spacing-sm)]">
-        <GroupHeader title="canvas" />
+      <SettingsGroup title="canvas">
         <SettingsRow label="hover">
           <Toggle
             checked={hoverDimEnabled}
@@ -301,14 +297,13 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
             label="reduce motion, regardless of system setting"
           />
         </SettingsRow>
-      </div>
+      </SettingsGroup>
 
-      <div className="flex flex-col gap-[var(--spacing-sm)]">
-        <GroupHeader title="shortcuts" />
+      <SettingsGroup title="shortcuts">
         <ShortcutRow action="play / pause" keys="space" />
         <ShortcutRow action="focus search" keys="/" />
         <ShortcutRow action="deselect / close" keys="esc" />
-      </div>
+      </SettingsGroup>
     </div>
   )
 }
