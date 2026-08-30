@@ -33,3 +33,25 @@ export const PORT = Number(process.env.LEGATO_PORT ?? 8899);
 // itself not being on PATH. Real secrets go in server/.env.local per
 // CLAUDE.md, never committed — there is no .env.local in this repo yet.
 export const ACOUSTID_API_KEY = process.env.ACOUSTID_API_KEY;
+
+// Rough OAuth account provisioning (see server/src/routes/auth.ts) — the
+// first secret-consuming feature in this repo that isn't a keyless
+// enrichment lookup. Same convention as ACOUSTID_API_KEY above: every var
+// here defaults to undefined, and auth.ts treats an unconfigured provider
+// as "quietly inactive" (its two routes 503 with a clear message) rather
+// than crashing the server. Register real OAuth apps at Google Cloud
+// Console -> APIs & Services -> Credentials, and GitHub -> Settings ->
+// Developer settings -> OAuth Apps — see server/.env.local.example for the
+// exact callback URLs to register.
+export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+export const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
+export const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
+
+// The public base URL this server is reachable at, used to build the
+// redirect_uri both providers send the browser back to after login (e.g.
+// http://127.0.0.1:8899). Without it there's no way to construct a
+// redirect_uri that will actually match what's registered with the
+// provider, so it gates both providers exactly like a missing client
+// id/secret does.
+export const AUTH_CALLBACK_BASE_URL = process.env.AUTH_CALLBACK_BASE_URL;

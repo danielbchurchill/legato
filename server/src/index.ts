@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
+import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
@@ -30,6 +31,7 @@ import { similarityRoutes } from "./routes/similarity.js";
 import { waveformRoutes } from "./routes/waveform.js";
 import { lyricsRoutes } from "./routes/lyrics.js";
 import { tagManagerRoutes } from "./routes/tag-manager.js";
+import { authRoutes } from "./routes/auth.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { runDueJobs } from "./enrich/worker.js";
 
@@ -56,7 +58,17 @@ const app = Fastify({ logger: true });
 // "TypeError: Failed to fetch" from the browser (the server-side route
 // itself was always fine — curl bypasses preflight entirely, which is
 // exactly why this needs testing in an actual browser, not just curl).
-await app.register(cors, { origin: true, methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] });
+// credentials: true (paired with reflecting the request's own Origin,
+// which `origin: true` already does — the two must go together, since
+// Access-Control-Allow-Origin: * is invalid alongside credentialed
+// requests) so the frontend's fetches can carry the auth/auth.ts session
+// cookie cross-origin, e.g. Vite's dev origin talking to this server's own.
+await app.register(cors, {
+  origin: true,
+  credentials: true,
+  methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+});
+await app.register(cookie);
 await app.register(websocket);
 
 // Manual cover-art uploads arrive as raw image bytes. Fastify only knows how
@@ -92,6 +104,7 @@ await app.register(similarityRoutes(db), { prefix: "/api/v1" });
 await app.register(waveformRoutes(db), { prefix: "/api/v1" });
 await app.register(lyricsRoutes(db), { prefix: "/api/v1" });
 await app.register(tagManagerRoutes(db), { prefix: "/api/v1" });
+await app.register(authRoutes(db), { prefix: "/api/v1" });
 
 // Resume watching every already-configured root across restarts — a root
 // added in a previous session shouldn't need a manual re-scan to notice
