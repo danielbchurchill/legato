@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { SERVER_HOST } from '../config/serverHost'
+import { IS_TAURI } from '../config/runtime'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -105,12 +106,17 @@ function reportPlay(entry: PlayInProgress): void {
   }).catch(() => undefined)
 }
 
-// Desktop-only: talks to the Rust playback engine (src-tauri/src/playback.rs)
-// via Tauri IPC, never the server directly for audio — decode + gapless
-// scheduling + device output all live in Rust, per Legato's platform split.
-// invoke()/listen() are no-ops outside an actual Tauri window (a plain
-// browser tab has no IPC bridge), so every call here is defensively
-// wrapped rather than assumed to succeed.
+// In Tauri, talks to the Rust playback engine (src-tauri/src/playback.rs) via
+// IPC, never the server directly for audio — decode + gapless scheduling +
+// device output all live in Rust, per Legato's platform split. Outside Tauri
+// (IS_TAURI false — a plain browser tab, e.g. the web preview from `npm run
+// dev:remote`), invoke()/listen() have no IPC bridge to talk to and would
+// reject, so this branches to a plain HTML5 <audio> element pointed at the
+// server's GET /api/v1/files/:id/stream transcode route instead — not
+// gapless, but that's exactly the "no native decode option" case the stream
+// route was built for (see CLAUDE.md's Development Conventions). Both paths
+// present the same play/pause/seek/skip/queue interface below so the rest of
+// the app doesn't care which backend is live underneath.
 export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
   const [status, setStatus] = useState<PlaybackStatus>({
     playing: false,
@@ -135,12 +141,95 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
   const queueContext = useRef<QueueEntry[]>([])
   const currentPlay = useRef<PlayInProgress | null>(null)
 
+  // Web-fallback-only: the single <audio> element standing in for Rust's
+  // queue, and which slot of queueContext it's currently playing. Lazy
+  // singleton construction during render (not an effect) is the standard
+  // pattern for a one-time DOM object a ref should own for the component's
+  // whole lifetime — see React's docs on creating objects lazily.
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  if (!IS_TAURI && audioRef.current === null) audioRef.current = new Audio()
+  const webQueueIndex = useRef(0)
+
   const finalizeCurrentPlay = useCallback(() => {
     if (currentPlay.current) reportPlay(currentPlay.current)
     currentPlay.current = null
   }, [])
 
+  // Advances the web-fallback player to queueContext[index] — walking off
+  // the end mirrors the Tauri path's playback://track-changed(null) case,
+  // clearing now-playing state instead of looping or erroring.
+  const startWebTrack = useCallback(
+    (index: number) => {
+      const audio = audioRef.current
+      if (!audio) return
+      const entry = queueContext.current[index]
+      if (!entry) {
+        finalizeCurrentPlay()
+        audio.pause()
+        webQueueIndex.current = index
+        setCurrentTitle(null)
+        setUpNext([])
+        setStatus((s) => ({ ...s, playing: false, currentRecordingNodeId: null, currentFileId: null, currentDurationMs: null }))
+        return
+      }
+      const info = trackInfo.current.get(entry.recordingNodeId)
+      if (!info) {
+        startWebTrack(index + 1)
+        return
+      }
+
+      finalizeCurrentPlay()
+      webQueueIndex.current = index
+      currentPlay.current = {
+        recordingNodeId: entry.recordingNodeId,
+        fileId: info.fileId,
+        startedAt: new Date().toISOString(),
+        lastPositionMs: 0,
+      }
+      audio.src = `${API}/files/${info.fileId}/stream`
+      // A missing/unreadable source file or a format ffmpeg can't
+      // transcode surfaces here as a rejected play() (confirmed live:
+      // NotSupportedError against a file the server's own ffmpeg spawn
+      // failed to open) — reflect that honestly rather than leaving an
+      // unhandled rejection and a UI that still claims "playing".
+      audio.play().catch(() => setStatus((s) => ({ ...s, playing: false })))
+      setCurrentTitle(entry.title)
+      setUpNext(queueContext.current.slice(index + 1))
+      setStatus((s) => ({
+        ...s,
+        playing: true,
+        currentRecordingNodeId: entry.recordingNodeId,
+        currentFileId: info.fileId,
+        currentDurationMs: info.durationMs,
+      }))
+    },
+    [finalizeCurrentPlay],
+  )
+
+  // Web-fallback event wiring — <audio>'s own timeupdate/ended replace the
+  // playback://position and playback://track-changed events Rust emits.
   useEffect(() => {
+    if (IS_TAURI) return
+    const audio = audioRef.current
+    if (!audio) return
+
+    const onTimeUpdate = () => {
+      const positionMs = audio.currentTime * 1000
+      setStatus((s) => ({ ...s, positionMs }))
+      if (currentPlay.current) currentPlay.current.lastPositionMs = positionMs
+    }
+    const onEnded = () => startWebTrack(webQueueIndex.current + 1)
+
+    audio.addEventListener('timeupdate', onTimeUpdate)
+    audio.addEventListener('ended', onEnded)
+    return () => {
+      audio.removeEventListener('timeupdate', onTimeUpdate)
+      audio.removeEventListener('ended', onEnded)
+    }
+  }, [startWebTrack])
+
+  useEffect(() => {
+    if (!IS_TAURI) return
     invoke<{ volume: number }>('queue_status')
       .then((s) => setStatus((prev) => ({ ...prev, volume: s.volume })))
       .catch(() => undefined)
@@ -203,6 +292,11 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
       const resolvedIds = new Set(tracks.map((t) => t.recordingNodeId))
       queueContext.current = context.filter((c) => resolvedIds.has(c.recordingNodeId))
 
+      if (!IS_TAURI) {
+        startWebTrack(0)
+        return
+      }
+
       finalizeCurrentPlay()
       await invoke('queue_stop')
       for (const t of tracks) {
@@ -223,22 +317,38 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
       setUpNext(queueContext.current.slice(1))
       setStatus((s) => ({ ...s, playing: true, currentRecordingNodeId: recordingNodeId }))
     },
-    [finalizeCurrentPlay, replaygainMode],
+    [finalizeCurrentPlay, replaygainMode, startWebTrack],
   )
 
   const pause = useCallback(async () => {
-    await invoke('queue_pause')
+    if (IS_TAURI) await invoke('queue_pause')
+    else audioRef.current?.pause()
     setStatus((s) => ({ ...s, playing: false }))
   }, [])
 
   const resume = useCallback(async () => {
-    await invoke('queue_play')
-    setStatus((s) => ({ ...s, playing: true }))
+    if (IS_TAURI) {
+      await invoke('queue_play')
+      setStatus((s) => ({ ...s, playing: true }))
+      return
+    }
+    try {
+      await audioRef.current?.play()
+      setStatus((s) => ({ ...s, playing: true }))
+    } catch {
+      setStatus((s) => ({ ...s, playing: false }))
+    }
   }, [])
 
   const stop = useCallback(async () => {
     finalizeCurrentPlay()
-    await invoke('queue_stop')
+    if (IS_TAURI) {
+      await invoke('queue_stop')
+    } else if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.removeAttribute('src')
+      audioRef.current.load()
+    }
     queueContext.current = []
     setUpNext([])
     setStatus({
@@ -253,24 +363,36 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
   }, [finalizeCurrentPlay, status.volume])
 
   const skip = useCallback(async () => {
-    await invoke('queue_skip')
-  }, [])
+    if (IS_TAURI) await invoke('queue_skip')
+    else startWebTrack(webQueueIndex.current + 1)
+  }, [startWebTrack])
 
   const seek = useCallback(async (positionMs: number) => {
-    await invoke('queue_seek', { positionMs })
+    if (IS_TAURI) {
+      await invoke('queue_seek', { positionMs })
+    } else if (audioRef.current) {
+      // The transcode stream has no Range support (server/src/routes/files.ts
+      // spawns ffmpeg fresh per request, no seek param) — this only actually
+      // lands within whatever the browser has already buffered.
+      audioRef.current.currentTime = positionMs / 1000
+    }
     setStatus((s) => ({ ...s, positionMs }))
   }, [])
 
   const setVolume = useCallback(async (value: number) => {
     const clamped = Math.min(1, Math.max(0, value))
-    await invoke('queue_set_volume', { value: clamped })
+    if (IS_TAURI) await invoke('queue_set_volume', { value: clamped })
+    else if (audioRef.current) audioRef.current.volume = clamped
     setStatus((s) => ({ ...s, volume: clamped }))
   }, [])
 
   // null means "system default" — tearing the session down here (mirrored
   // on the Rust side) is deliberate: rodio can't swap a Sink's output
   // stream live, so the new device only takes effect on the next play.
+  // No web-mode equivalent — device enumeration is native-only (see
+  // LegatoSettings.tsx, which doesn't offer this control outside Tauri).
   const setAudioDevice = useCallback(async (name: string | null) => {
+    if (!IS_TAURI) return
     await invoke('queue_set_device', { name })
   }, [])
 
