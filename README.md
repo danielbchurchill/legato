@@ -25,7 +25,7 @@ This alone is enough. It spawns the embedded server itself — no second termina
 
 ## Running just the web UI, locally
 
-If you don't need the native shell (Rust playback, native menus) and just want the React app in a browser on the same machine:
+If you don't need the native shell (native menus, gapless Rust playback) and just want the React app in a browser on the same machine — playback still works, via the server's transcode-stream route rather than the Rust engine:
 
 ```bash
 npm run dev:full
@@ -59,7 +59,7 @@ From there you have two options:
 - **Just open it.** Tailscale already gives your Mac a direct route to that address — paste the printed URL straight into a normal browser tab on the Mac. No agent, no relay, nothing Orca-specific required. This is the plain "preview it myself" path.
 - **Have an agent drive it.** From within an Orca session, `orca tab create --url http://100.x.x.x:5173/` opens that URL in a real Chromium tab in your live Orca session, which an agent can then screenshot/click/inspect via `orca screenshot` / `orca snapshot` / `orca click` / `orca eval` — no relaying back to this machine needed. Useful for UI iteration with an agent in the loop; not needed just to look at the page yourself.
 
-Note: `orca computer *` (native window control) is macOS-only and cannot see or drive the actual Tauri window running on this machine's display. The remote path above covers the web UI — for native-only behavior (real window chrome, native menus, actual audio playback), you need to be at this machine directly.
+Note: `orca computer *` (native window control) is macOS-only and cannot see or drive the actual Tauri window running on this machine's display. The remote path above covers the web UI, including playback — outside Tauri, the app plays back through a plain `<audio>` element against the server's transcode-to-FLAC stream route instead of calling into the Rust engine, so it's real audio, just not gapless, and there's no native device picker (Settings says so plainly rather than showing a control that can't work). Native-only behavior that has no web equivalent at all — real window chrome, native menus — still needs you at this machine directly.
 
 ## Troubleshooting
 
