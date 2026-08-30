@@ -159,8 +159,11 @@
    * their bottom edges (and the rail/panels docked below them) line up.
    * Fixed like the old titlebar's 61px was — headers hold fixed-size
    * content (a 32px wordmark, 24px icons, a 29.5px avatar), not anything
-   * that scales with the window. */
-  --header-height: 52px;
+   * that scales with the window. 50px, not 52 — confirmed against the
+   * "Header" frame's own dev-mode CSS (a 50px-tall parent, h-full content,
+   * p-[10px] on each side) on all three v2 frames; the app ran 2px taller
+   * than the mockup here until this correction. */
+  --header-height: 50px;
 
   /* Panels are 360 wide with 24px of side padding, giving 312 of content.
    * The mockup drifts between 20 and 26; 24 is the value that reconciles it.
