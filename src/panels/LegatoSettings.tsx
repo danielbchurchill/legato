@@ -8,6 +8,7 @@ import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
 import type { ReplayGainMode } from '../playback/usePlayback'
 import { SERVER_HOST } from '../config/serverHost'
+import { IS_TAURI } from '../config/runtime'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
@@ -105,9 +106,13 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
 
   useEffect(() => {
     loadRoots()
-    invoke<string[]>('list_audio_devices')
-      .then(setDevices)
-      .catch(() => setDevices([]))
+    if (IS_TAURI) {
+      invoke<string[]>('list_audio_devices')
+        .then(setDevices)
+        .catch(() => setDevices([]))
+    } else {
+      setDevices([])
+    }
   }, [])
 
   useWsEvent(['scan:progress'], (payload) => {
@@ -125,6 +130,7 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
   })
 
   const addFolder = async () => {
+    if (!IS_TAURI) return
     setError(null)
     const selected = await open({ directory: true, multiple: false })
     if (!selected || Array.isArray(selected)) return
@@ -166,7 +172,19 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
 
   return (
     <div className="flex flex-col gap-[var(--spacing-sm)]">
-      <SettingsGroup title="library" action={<Button onClick={() => void addFolder()}>+ add folder</Button>}>
+      <SettingsGroup
+        title="library"
+        action={
+          <Button onClick={() => void addFolder()} disabled={!IS_TAURI}>
+            + add folder
+          </Button>
+        }
+      >
+        {!IS_TAURI && (
+          <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+            Adding a library folder needs the desktop app — this preview reads whatever's already configured.
+          </p>
+        )}
         {roots === null ? (
           <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">loading…</p>
         ) : roots.length === 0 ? (
@@ -263,22 +281,28 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
           />
         </SettingsRow>
         <SettingsRow label="device">
-          <select
-            value={audioDevice}
-            onChange={(e) => {
-              const name = e.target.value || null
-              void updateSettings({ audioDevice: name ?? '' })
-              void onSetAudioDevice(name)
-            }}
-            className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-sm)] text-[var(--color-ink)] outline-none [&>option]:bg-[var(--color-canvas)]"
-          >
-            <option value="">system default</option>
-            {(devices ?? []).map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
+          {IS_TAURI ? (
+            <select
+              value={audioDevice}
+              onChange={(e) => {
+                const name = e.target.value || null
+                void updateSettings({ audioDevice: name ?? '' })
+                void onSetAudioDevice(name)
+              }}
+              className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-sm)] text-[var(--color-ink)] outline-none [&>option]:bg-[var(--color-canvas)]"
+            >
+              <option value="">system default</option>
+              {(devices ?? []).map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+              Audio device selection is only available in the desktop app.
+            </p>
+          )}
         </SettingsRow>
       </SettingsGroup>
 
