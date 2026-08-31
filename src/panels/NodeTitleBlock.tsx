@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Icon } from '../ui/Icon'
 import { Tooltip } from '../ui/Tooltip'
 import { SERVER_HOST } from '../config/serverHost'
+import { AddToPlaylistButton } from './AddToPlaylistButton'
 import type { NodeDetail } from './useNodeDetail'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
@@ -39,9 +40,11 @@ export function NodeTitleBlock({ node }: { node: NodeDetail }) {
   return (
     <div className="mt-[12px] flex flex-col items-center gap-[2px] text-center">
       <div className="flex w-full items-center justify-center gap-[8px]">
-        {/* Balances the heart button on the other side so the title stays
-         * visually centred rather than skewing toward the empty edge. */}
-        <span aria-hidden className="w-[24px] shrink-0" />
+        {/* Balances the button(s) on the other side so the title stays
+         * visually centred rather than skewing toward the empty edge — a
+         * recording node gets a second (add-to-playlist) button next to the
+         * heart, so its spacer is wider than every other node type's. */}
+        <span aria-hidden className={`shrink-0 ${node.type === 'recording' ? 'w-[56px]' : 'w-[24px]'}`} />
         <p className="min-w-0 flex-1 truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
           {node.title}
         </p>
@@ -57,6 +60,7 @@ export function NodeTitleBlock({ node }: { node: NodeDetail }) {
             <Icon name="heart" size={24} />
           </button>
         </Tooltip>
+        {node.type === 'recording' && <AddToPlaylistButton nodeId={node.id} />}
       </div>
       {node.type === 'recording' ? (
         <>

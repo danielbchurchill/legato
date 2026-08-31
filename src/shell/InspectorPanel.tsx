@@ -6,11 +6,12 @@ import type { RailDestination } from './rail'
  * adapted CollectionPanel, passed in as `children`), 'graph' (Music Map
  * settings, `graphContent`), 'settings' (Legato settings, `settingsContent`),
  * 'tags' (Tag Manager, `tagsContent`), 'database' (Database Inspector,
- * `databaseContent`) and 'favourites' (Favourites, `favouritesContent`) all
- * have real content now — every rail destination is filled in, so
- * PLACEHOLDER_LABEL is kept only for whichever one falls through with no
- * content prop supplied (shouldn't happen once App.tsx wires all six, but
- * costs nothing to leave as a fallback). */
+ * `databaseContent`), 'favourites' (Favourites, `favouritesContent`) and
+ * 'playlists' (Playlists, `playlistsContent`) all have real content now —
+ * every rail destination is filled in, so PLACEHOLDER_LABEL is kept only for
+ * whichever one falls through with no content prop supplied (shouldn't
+ * happen once App.tsx wires all seven, but costs nothing to leave as a
+ * fallback). */
 
 const PLACEHOLDER_LABEL: Partial<Record<RailDestination, string>> = {}
 
@@ -22,6 +23,7 @@ type InspectorPanelProps = {
   tagsContent?: ReactNode
   databaseContent?: ReactNode
   favouritesContent?: ReactNode
+  playlistsContent?: ReactNode
 }
 
 export function InspectorPanel({
@@ -32,6 +34,7 @@ export function InspectorPanel({
   tagsContent,
   databaseContent,
   favouritesContent,
+  playlistsContent,
 }: InspectorPanelProps) {
   const content =
     active === 'search'
@@ -46,7 +49,9 @@ export function InspectorPanel({
               ? databaseContent
               : active === 'favourites' && favouritesContent != null
                 ? favouritesContent
-                : undefined
+                : active === 'playlists' && playlistsContent != null
+                  ? playlistsContent
+                  : undefined
 
   return (
     <Surface

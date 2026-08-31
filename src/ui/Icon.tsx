@@ -1,10 +1,13 @@
+import add from '../assets/icons/add.svg?raw'
 import arrowSwap from '../assets/icons/arrow-swap.svg?raw'
 import cancel from '../assets/icons/cancel.svg?raw'
 import chevronDown from '../assets/icons/chevron-down.svg?raw'
+import chevronUp from '../assets/icons/chevron-up.svg?raw'
 import database from '../assets/icons/database.svg?raw'
 import fastForward from '../assets/icons/fast-forward.svg?raw'
 import heart from '../assets/icons/heart.svg?raw'
 import info from '../assets/icons/info.svg?raw'
+import list from '../assets/icons/list.svg?raw'
 import map from '../assets/icons/map.svg?raw'
 import panelLeftCollapse from '../assets/icons/panel-left-collapse.svg?raw'
 import pause from '../assets/icons/pause.svg?raw'
@@ -31,6 +34,12 @@ import volume from '../assets/icons/volume.svg?raw'
  * (tauri.conf.json's `decorations: true`) and WindowControls.tsx, their one
  * caller, was removed.
  *
+ * `list` is the playlists rail destination's glyph (proicons "Bullet List").
+ * `chevron-up` pairs with the existing `chevron-down` for the up-next/
+ * playlist-track reorder buttons — real vendored SVGs rather than one glyph
+ * CSS-rotated, matching how every other pair here (play/pause) gets its own
+ * file. `add` (a plain plus) is the "add to playlist" affordance.
+ *
  * `fast-forward`/`reverse` are proicons' actual double-chevron transport
  * glyphs (⏩/⏪) — used for TransportDock's next/previous track buttons.
  * proicons has no shuffle/random glyph anywhere in its set (checked the full
@@ -38,13 +47,16 @@ import volume from '../assets/icons/volume.svg?raw'
  * glyph — stands in for the shuffle toggle until a purpose-built one turns
  * up. Flagged, not a clean match. */
 const GLYPHS = {
+  add,
   'arrow-swap': arrowSwap,
   cancel,
   'chevron-down': chevronDown,
+  'chevron-up': chevronUp,
   database,
   'fast-forward': fastForward,
   heart,
   info,
+  list,
   map,
   'panel-left-collapse': panelLeftCollapse,
   pause,

@@ -4,6 +4,9 @@ import { Icon } from '../ui/Icon'
 import { CoverArt } from '../ui/CoverArt'
 import { Tooltip } from '../ui/Tooltip'
 import { SERVER_HOST } from '../config/serverHost'
+import { PlayNodeButton } from './PlayNodeButton'
+import { AddToPlaylistButton } from './AddToPlaylistButton'
+import type { usePlayback } from '../playback/usePlayback'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -24,14 +27,18 @@ const TYPE_LABEL: Record<string, string> = {
   artist: 'artist',
 }
 
+type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum'>
+
 function FavouriteRow({
   item,
   onSelectNode,
   onRemove,
+  playback,
 }: {
   item: FavouriteItem
   onSelectNode: (id: number) => void
   onRemove: (id: number) => void
+  playback: Playback
 }) {
   return (
     <div className="flex items-center gap-[12px] border-b border-[var(--color-divider)] py-[10px] last:border-b-0">
@@ -50,6 +57,8 @@ function FavouriteRow({
           {TYPE_LABEL[item.type] ?? item.type}
         </span>
       </div>
+      <PlayNodeButton id={item.id} type={item.type} title={item.title} playback={playback} />
+      {item.type === 'recording' && <AddToPlaylistButton nodeId={item.id} />}
       <Tooltip label="Remove from favourites">
         <button
           type="button"
@@ -64,7 +73,7 @@ function FavouriteRow({
   )
 }
 
-export function Favourites({ onSelectNode }: { onSelectNode: (id: number) => void }) {
+export function Favourites({ onSelectNode, playback }: { onSelectNode: (id: number) => void; playback: Playback }) {
   const [items, setItems] = useState<FavouriteItem[] | null>(null)
 
   const load = useCallback(() => {
@@ -100,7 +109,7 @@ export function Favourites({ onSelectNode }: { onSelectNode: (id: number) => voi
   return (
     <div>
       {items.map((item) => (
-        <FavouriteRow key={item.id} item={item} onSelectNode={onSelectNode} onRemove={remove} />
+        <FavouriteRow key={item.id} item={item} onSelectNode={onSelectNode} onRemove={remove} playback={playback} />
       ))}
     </div>
   )

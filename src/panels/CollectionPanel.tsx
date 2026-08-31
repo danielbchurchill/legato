@@ -7,6 +7,9 @@ import { Popover } from '../ui/Popover'
 import { useWsEvent } from '../hooks/useWs'
 import { formatBytes, formatDurationHours } from './format'
 import { SERVER_HOST } from '../config/serverHost'
+import { PlayNodeButton } from './PlayNodeButton'
+import { AddToPlaylistButton } from './AddToPlaylistButton'
+import type { usePlayback } from '../playback/usePlayback'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -30,10 +33,10 @@ export type SearchFieldHandle = {
   focus: () => void
 }
 
-const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) => void }>(function SearchField(
-  { onSelectNode },
-  ref,
-) {
+type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum'>
+
+const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) => void; playback: Playback }>(
+  function SearchField({ onSelectNode, playback }, ref) {
   const inputRef = useRef<HTMLInputElement>(null)
   useImperativeHandle(ref, () => ({ focus: () => inputRef.current?.focus() }), [])
 
@@ -171,19 +174,27 @@ const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) =
             <ul id="search-results" role="listbox" className="flex flex-col">
               {results.map((result, i) => (
                 <li key={result.id} id={`search-result-${i}`} role="option" aria-selected={i === highlighted}>
-                  <button
-                    type="button"
-                    onClick={() => choose(result)}
+                  {/* Not a single <button> any more (a button can't contain
+                   * a button) — the row is the hover/highlight surface, the
+                   * title is its own button for select-and-navigate, and
+                   * play/add-to-playlist are siblings alongside it. */}
+                  <div
                     onPointerEnter={() => setHighlighted(i)}
-                    className={`grid w-full grid-cols-[1fr_auto] items-center gap-[10px] rounded-[calc(var(--radius-surface)/2)] px-[8px] py-[6px] text-left transition-colors duration-150 ${
+                    className={`grid w-full grid-cols-[1fr_auto_auto_auto] items-center gap-[10px] rounded-[calc(var(--radius-surface)/2)] px-[8px] py-[6px] transition-colors duration-150 ${
                       i === highlighted ? 'bg-white/8' : ''
                     }`}
                   >
-                    <span className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+                    <button
+                      type="button"
+                      onClick={() => choose(result)}
+                      className="min-w-0 truncate text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]"
+                    >
                       {result.title}
-                    </span>
+                    </button>
                     <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">{result.type}</span>
-                  </button>
+                    <PlayNodeButton id={result.id} type={result.type} title={result.title} playback={playback} size={18} />
+                    {result.type === 'recording' && <AddToPlaylistButton nodeId={result.id} size={18} />}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -404,6 +415,7 @@ type CollectionPanelProps = {
   anchorNodeId: number | null
   onSelectNode: (id: number) => void
   onOpenMaintenance: () => void
+  playback: Playback
 }
 
 export type CollectionPanelHandle = {
@@ -412,7 +424,7 @@ export type CollectionPanelHandle = {
 }
 
 export const CollectionPanel = forwardRef<CollectionPanelHandle, CollectionPanelProps>(function CollectionPanel(
-  { anchorNodeId, onSelectNode, onOpenMaintenance },
+  { anchorNodeId, onSelectNode, onOpenMaintenance, playback },
   ref,
 ) {
   const searchRef = useRef<SearchFieldHandle>(null)
@@ -427,7 +439,7 @@ export const CollectionPanel = forwardRef<CollectionPanelHandle, CollectionPanel
        * above (P-9) is gone — settings live behind the rail's own `sliders`
        * "Legato Settings" destination now, so this panel needs no entry
        * point of its own. */}
-      <SearchField ref={searchRef} onSelectNode={onSelectNode} />
+      <SearchField ref={searchRef} onSelectNode={onSelectNode} playback={playback} />
       <SimilaritySection anchorNodeId={anchorNodeId} onSelectNode={onSelectNode} />
       <OverviewBlock />
       <MaintenancePreview onSelectNode={onSelectNode} onOpenMaintenance={onOpenMaintenance} />

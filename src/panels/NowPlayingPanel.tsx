@@ -1,9 +1,12 @@
+import { useEffect, useRef } from 'react'
 import { CoverArt } from '../ui/CoverArt'
 import { SectionHeader } from '../ui/DataRow'
+import { Icon } from '../ui/Icon'
+import { Tooltip } from '../ui/Tooltip'
 import { AboutDisclosure, ConnectionsDisclosure, LyricsDisclosure, NotesDisclosure, TrackMetadataDisclosure } from './NowPlayingSections'
 import { NodeTitleBlock } from './NodeTitleBlock'
 import { useNodeDetail } from './useNodeDetail'
-import type { QueueEntry } from '../playback/usePlayback'
+import type { QueueEntry, usePlayback } from '../playback/usePlayback'
 
 /* The right-hand panel, and it only ever means one thing now: what is
  * playing.
@@ -28,16 +31,52 @@ import type { QueueEntry } from '../playback/usePlayback'
  * P-5 still holds where it was actually about playback: isPlaying is an
  * attribute of the node being shown, not a fork into a separate component. */
 
+type QueuePlayback = Pick<ReturnType<typeof usePlayback>, 'removeFromQueue' | 'reorderQueue' | 'next'>
+
 type NowPlayingPanelProps = {
   nodeId: number | null
   isPlaying: boolean
   upNext: QueueEntry[]
   onSelectNode: (id: number) => void
   onPlay: (nodeId: number, title: string) => void
+  queuePlayback: QueuePlayback
 }
 
-export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPlay }: NowPlayingPanelProps) {
+/* usePlayback.ts's removeFromQueue/reorderQueue both take an index into the
+ * *whole* internal play sequence (must be > its own private currentIndex),
+ * but the hook exposes no queue-position number of its own — only `upNext`,
+ * the tail already sliced from it. This tracks that offset locally by
+ * watching `nodeId` transitions: landing on what was `upNext[0]` a moment
+ * ago is a natural forward step (+1); landing on anything else is a fresh
+ * queue starting over (playNode/playAlbum/playPlaylist/playTracks all reset
+ * the hook's own currentIndex to 0), so this resets to match. Holds up for
+ * every advance this panel can cause (the jump-to-row workaround below,
+ * repeated next() calls) and for auto-advance at a track's end; it does not
+ * (and cannot, without the hook exposing its own position) account for a
+ * previous() call from elsewhere. A `currentIndex`/`queuePosition` export —
+ * or upNext-relative remove/reorder variants — would let this whole effect
+ * go away; flagged in the PR rather than touched here, since usePlayback.ts
+ * is out of scope for this change. */
+function useQueuePosition(nodeId: number | null, upNext: QueueEntry[]): number {
+  const positionRef = useRef(0)
+  const prevNodeIdRef = useRef<number | null>(null)
+  const prevUpNextRef = useRef<QueueEntry[]>([])
+
+  useEffect(() => {
+    if (nodeId !== prevNodeIdRef.current) {
+      const advanced = prevUpNextRef.current[0]?.recordingNodeId === nodeId
+      positionRef.current = advanced ? positionRef.current + 1 : 0
+      prevNodeIdRef.current = nodeId
+    }
+    prevUpNextRef.current = upNext
+  }, [nodeId, upNext])
+
+  return positionRef.current
+}
+
+export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPlay, queuePlayback }: NowPlayingPanelProps) {
   const { node, reload } = useNodeDetail(nodeId)
+  const queuePosition = useQueuePosition(nodeId, upNext)
 
   if (nodeId == null || !node) {
     return (
@@ -47,39 +86,83 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPla
     )
   }
 
+  const absoluteIndex = (upNextIndex: number) => queuePosition + 1 + upNextIndex
+
+  // No direct "jump to index N" export — see the module comment above.
+  // Repeated next() calls need no absolute index at all, unlike
+  // removeFromQueue/reorderQueue below, which is what makes this the safe
+  // choice here even though it walks the queue one track at a time.
+  const jumpTo = async (upNextIndex: number) => {
+    for (let i = 0; i <= upNextIndex; i++) await queuePlayback.next()
+  }
+
   return (
     <div className="flex flex-col">
       <CoverArt nodeId={node.id} size="full" alt={`Cover art for ${node.title}`} className="aspect-square w-full" />
 
       <NodeTitleBlock node={node} />
 
-      {/* P-7: always present and expanded when non-empty, not hidden behind
-       * a chevron. The one piece of this panel that is genuinely about
-       * playback rather than about the node. Kept exactly where it sat
-       * before the disclosure restructure — least disruptive to the new
-       * stack below it — since nothing in v2's Detail Panel frames shows
-       * "up next" at all. Real, working functionality (P-7), so this is
-       * carried forward rather than cut, but its existence and position
-       * here are this session's judgment call, not a confirmed part of the
-       * v2 design; flagging for Daniel to confirm. */}
-      {upNext.length > 0 && (
-        <div className="mt-[15px]">
-          <SectionHeader title="up next" />
+      {/* P-7: always present, not hidden behind a chevron. The one piece of
+       * this panel that is genuinely about playback rather than about the
+       * node. Kept exactly where it sat before the disclosure restructure —
+       * least disruptive to the new stack below it — since nothing in v2's
+       * Detail Panel frames shows "up next" at all. Real, working queue
+       * management (reorder/remove/jump), not just a read-only list, so
+       * this is carried forward rather than cut, but its existence and
+       * position here are this session's judgment call, not a confirmed
+       * part of the v2 design; flagging for Daniel to confirm. */}
+      <div className="mt-[15px]">
+        <SectionHeader title="up next" />
+        {upNext.length === 0 ? (
+          <p className="pt-[8px] text-center text-[length:var(--text-base)] text-[var(--color-muted)]">Queue is empty</p>
+        ) : (
           <ul className="mt-[8px] flex flex-col">
-            {upNext.map((entry) => (
-              <li key={entry.recordingNodeId}>
+            {upNext.map((entry, i) => (
+              <li key={`${entry.recordingNodeId}-${i}`} className="flex items-center gap-[4px] py-[2px]">
                 <button
                   type="button"
-                  onClick={() => onSelectNode(entry.recordingNodeId)}
-                  className="w-full truncate py-[4px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                  onClick={() => void jumpTo(i)}
+                  className="min-w-0 flex-1 truncate text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
                 >
                   {entry.title}
                 </button>
+                <Tooltip label="Move up">
+                  <button
+                    type="button"
+                    onClick={() => void queuePlayback.reorderQueue(absoluteIndex(i), absoluteIndex(i - 1))}
+                    disabled={i === 0}
+                    aria-label="Move up"
+                    className="shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-30"
+                  >
+                    <Icon name="chevron-up" size={16} />
+                  </button>
+                </Tooltip>
+                <Tooltip label="Move down">
+                  <button
+                    type="button"
+                    onClick={() => void queuePlayback.reorderQueue(absoluteIndex(i), absoluteIndex(i + 1))}
+                    disabled={i === upNext.length - 1}
+                    aria-label="Move down"
+                    className="shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-30"
+                  >
+                    <Icon name="chevron-down" size={16} />
+                  </button>
+                </Tooltip>
+                <Tooltip label="Remove from queue">
+                  <button
+                    type="button"
+                    onClick={() => void queuePlayback.removeFromQueue(absoluteIndex(i))}
+                    aria-label="Remove from queue"
+                    className="shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                  >
+                    <Icon name="cancel" size={16} />
+                  </button>
+                </Tooltip>
               </li>
             ))}
           </ul>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* v2's five stacked sections. Order and open-by-default follow the
        * brief exactly for the four named ones (metadata open, the rest

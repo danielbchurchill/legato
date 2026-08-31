@@ -11,6 +11,7 @@ import { Button } from '../ui/Button'
 import { NodeCard, NODE_CARD_COVER_CENTER_X, NODE_CARD_WIDTH_PX } from './NodeCard'
 import { NodeHoverPlate } from './NodeHoverPlate'
 import { SERVER_HOST } from '../config/serverHost'
+import type { usePlayback } from '../playback/usePlayback'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -514,6 +515,9 @@ type Props = {
    * summary, and everything deeper (facts, edges, lyrics, tag write-back)
    * lives behind this. */
   onOpenInspector: () => void
+  /** Threaded straight through to NodeCard's own play button — the
+   * selection card is the one canvas surface that needs it. */
+  playback: Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum'>
   onStats?: (stats: { nodes: number; edges: number }) => void
   /** Settings "hover-dim" toggle. Gates only the neighbor-dim effect —
    * NodeHoverPlate still shows regardless, since naming the node under the
@@ -563,6 +567,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     selectedNodeId,
     onSelectNode,
     onOpenInspector,
+    playback,
     onStats,
     dimOnHoverEnabled = true,
     reducedMotionForced = false,
@@ -1136,6 +1141,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
               title={selectedNode.title}
               subtitle={selectedNode.subtitle}
               onOpenInspector={onOpenInspector}
+              playback={playback}
             />
           </div>
         )}

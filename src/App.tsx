@@ -16,6 +16,7 @@ import { LegatoSettings } from './panels/LegatoSettings'
 import { DatabaseInspector } from './panels/DatabaseInspector'
 import { TagManager } from './panels/TagManager'
 import { Favourites } from './panels/Favourites'
+import { Playlists } from './panels/Playlists'
 import { SERVER_HOST } from './config/serverHost'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
@@ -342,6 +343,7 @@ function MainApp() {
           if (id == null) setInspectorOpen(false)
         }}
         onOpenInspector={() => setInspectorOpen(true)}
+        playback={playback}
         dimOnHoverEnabled={dimOnHoverEnabled}
         reducedMotionForced={reducedMotionForced}
         showArtistArt={showArtistArt}
@@ -378,13 +380,15 @@ function MainApp() {
           }
           tagsContent={<TagManager onSelectNode={selectAndFly} />}
           databaseContent={<DatabaseInspector />}
-          favouritesContent={<Favourites onSelectNode={selectAndFly} />}
+          favouritesContent={<Favourites onSelectNode={selectAndFly} playback={playback} />}
+          playlistsContent={<Playlists playback={playback} />}
         >
           <CollectionPanel
             ref={collectionPanelRef}
             anchorNodeId={anchorNodeId}
             onSelectNode={selectAndFly}
             onOpenMaintenance={() => setHygieneOpen(true)}
+            playback={playback}
           />
         </InspectorPanel>
       )}
@@ -414,6 +418,7 @@ function MainApp() {
           upNext={playback.upNext}
           onSelectNode={selectAndFly}
           onPlay={playback.playNode}
+          queuePlayback={playback}
         />
       </RightPanel>
 

@@ -4,10 +4,12 @@ import { Surface } from '../shell/Surface'
 import { CoverArt } from '../ui/CoverArt'
 import { DataRow, SectionHeader } from '../ui/DataRow'
 import { Icon } from '../ui/Icon'
+import { Tooltip } from '../ui/Tooltip'
 import { useMountFade } from '../ui/useMountFade'
 import { formatDuration, formatLongDuration, NO_VALUE } from '../ui/format'
 import { useNodeAnchor, type NodeAnchor } from './useNodeAnchor'
 import { SERVER_HOST } from '../config/serverHost'
+import type { usePlayback } from '../playback/usePlayback'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -119,6 +121,8 @@ function summaryRows(summary: NodeSummary): { label: string; value: string }[] {
   }
 }
 
+type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum'>
+
 type NodeCardProps = {
   renderer: Sigma | null
   nodeId: number
@@ -127,9 +131,10 @@ type NodeCardProps = {
   title: string
   subtitle: string | null
   onOpenInspector: () => void
+  playback: Playback
 }
 
-export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onOpenInspector }: NodeCardProps) {
+export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onOpenInspector, playback }: NodeCardProps) {
   const ref = useNodeAnchor(renderer, nodeKey, place)
   const shown = useMountFade()
   const [summary, setSummary] = useState<NodeSummary | null>(null)
@@ -207,14 +212,28 @@ export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onO
               <SectionHeader
                 title="metadata"
                 action={
-                  <button
-                    type="button"
-                    onClick={onOpenInspector}
-                    aria-label="Edit metadata"
-                    className="pointer-events-auto text-[var(--color-muted)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:text-[var(--color-muted-hi)]"
-                  >
-                    <Icon name="pencil" size={24} />
-                  </button>
+                  <div className="pointer-events-auto flex items-center gap-[12px]">
+                    {(type === 'recording' || type === 'release') && (
+                      <Tooltip label="Play">
+                        <button
+                          type="button"
+                          onClick={() => (type === 'release' ? playback.playAlbum(nodeId) : playback.playNode(nodeId, title))}
+                          aria-label="Play"
+                          className="text-[var(--color-muted)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:text-[var(--color-muted-hi)]"
+                        >
+                          <Icon name="play" size={24} />
+                        </button>
+                      </Tooltip>
+                    )}
+                    <button
+                      type="button"
+                      onClick={onOpenInspector}
+                      aria-label="Edit metadata"
+                      className="text-[var(--color-muted)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:text-[var(--color-muted-hi)]"
+                    >
+                      <Icon name="pencil" size={24} />
+                    </button>
+                  </div>
                 }
               />
               <div className="mt-[8px]">
