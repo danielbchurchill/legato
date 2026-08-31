@@ -113,13 +113,28 @@ function WaveformScrubber({
 type TransportDockProps = {
   status: PlaybackStatus
   hasTrack: boolean
+  shuffled: boolean
   onPause: () => void
   onResume: () => void
   onSeek: (ms: number) => void
   onSetVolume: (value: number) => void
+  onNext: () => void
+  onPrevious: () => void
+  onToggleShuffle: () => void
 }
 
-export function TransportDock({ status, hasTrack, onPause, onResume, onSeek, onSetVolume }: TransportDockProps) {
+export function TransportDock({
+  status,
+  hasTrack,
+  shuffled,
+  onPause,
+  onResume,
+  onSeek,
+  onSetVolume,
+  onNext,
+  onPrevious,
+  onToggleShuffle,
+}: TransportDockProps) {
   return (
     <Surface
       edges="top-dock"
@@ -128,15 +143,55 @@ export function TransportDock({ status, hasTrack, onPause, onResume, onSeek, onS
     >
       <div className="flex h-full flex-col justify-center gap-[14px] px-[26px]">
         <div className="flex items-center justify-between">
-          <button
-            type="button"
-            disabled={!hasTrack}
-            onClick={status.playing ? onPause : onResume}
-            aria-label={status.playing ? 'Pause' : 'Play'}
-            className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"
-          >
-            <Icon name={status.playing ? 'pause' : 'play'} size={24} />
-          </button>
+          <div className="flex items-center gap-[14px]">
+            {/* No established toggle language for this glass/signal-color
+             * context (Toggle.tsx's knob-and-track is built for the denser
+             * settings-panel register, not this dock) — shuffle reads its
+             * on/off state the same way the app already marks active vs.
+             * inactive elsewhere: signal when on, muted when off. */}
+            <button
+              type="button"
+              disabled={!hasTrack}
+              onClick={onToggleShuffle}
+              aria-label="Shuffle"
+              aria-pressed={shuffled}
+              className={`transition-opacity duration-150 hover:opacity-80 disabled:opacity-30 ${
+                shuffled ? 'text-[var(--color-signal)]' : 'text-[var(--color-muted)]'
+              }`}
+            >
+              <Icon name="arrow-swap" size={24} />
+            </button>
+
+            <button
+              type="button"
+              disabled={!hasTrack}
+              onClick={onPrevious}
+              aria-label="Previous track"
+              className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"
+            >
+              <Icon name="reverse" size={24} />
+            </button>
+
+            <button
+              type="button"
+              disabled={!hasTrack}
+              onClick={status.playing ? onPause : onResume}
+              aria-label={status.playing ? 'Pause' : 'Play'}
+              className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"
+            >
+              <Icon name={status.playing ? 'pause' : 'play'} size={24} />
+            </button>
+
+            <button
+              type="button"
+              disabled={!hasTrack}
+              onClick={onNext}
+              aria-label="Next track"
+              className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"
+            >
+              <Icon name="fast-forward" size={24} />
+            </button>
+          </div>
 
           <span className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
             {formatTime(status.positionMs)}

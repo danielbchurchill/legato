@@ -420,10 +420,14 @@ function MainApp() {
       <TransportDock
         status={playback.status}
         hasTrack={playback.currentTitle != null}
+        shuffled={playback.shuffled}
         onPause={playback.pause}
         onResume={playback.resume}
         onSeek={playback.seek}
         onSetVolume={playback.setVolume}
+        onNext={playback.next}
+        onPrevious={playback.previous}
+        onToggleShuffle={playback.toggleShuffle}
       />
 
       {inspectorOpen && selectedNodeId != null && (

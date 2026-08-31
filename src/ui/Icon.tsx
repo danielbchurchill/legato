@@ -1,6 +1,8 @@
+import arrowSwap from '../assets/icons/arrow-swap.svg?raw'
 import cancel from '../assets/icons/cancel.svg?raw'
 import chevronDown from '../assets/icons/chevron-down.svg?raw'
 import database from '../assets/icons/database.svg?raw'
+import fastForward from '../assets/icons/fast-forward.svg?raw'
 import heart from '../assets/icons/heart.svg?raw'
 import info from '../assets/icons/info.svg?raw'
 import map from '../assets/icons/map.svg?raw'
@@ -8,6 +10,7 @@ import panelLeftCollapse from '../assets/icons/panel-left-collapse.svg?raw'
 import pause from '../assets/icons/pause.svg?raw'
 import pencil from '../assets/icons/pencil.svg?raw'
 import play from '../assets/icons/play.svg?raw'
+import reverse from '../assets/icons/reverse.svg?raw'
 import search from '../assets/icons/search.svg?raw'
 import sliders from '../assets/icons/sliders.svg?raw'
 import tag from '../assets/icons/tag.svg?raw'
@@ -26,11 +29,20 @@ import volume from '../assets/icons/volume.svg?raw'
  * `arrow-minimize` and `spacebar` (the minimize/maximize glyphs) went the
  * same way once the window went back to native OS decorations
  * (tauri.conf.json's `decorations: true`) and WindowControls.tsx, their one
- * caller, was removed. */
+ * caller, was removed.
+ *
+ * `fast-forward`/`reverse` are proicons' actual double-chevron transport
+ * glyphs (⏩/⏪) — used for TransportDock's next/previous track buttons.
+ * proicons has no shuffle/random glyph anywhere in its set (checked the full
+ * 544-icon list); `arrow-swap` — its closest available crossing-arrows
+ * glyph — stands in for the shuffle toggle until a purpose-built one turns
+ * up. Flagged, not a clean match. */
 const GLYPHS = {
+  'arrow-swap': arrowSwap,
   cancel,
   'chevron-down': chevronDown,
   database,
+  'fast-forward': fastForward,
   heart,
   info,
   map,
@@ -38,6 +50,7 @@ const GLYPHS = {
   pause,
   pencil,
   play,
+  reverse,
   search,
   sliders,
   tag,
