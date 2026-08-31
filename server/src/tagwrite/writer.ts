@@ -2,12 +2,9 @@ import { randomUUID } from "node:crypto";
 import { copyFile, open, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { File as TagLibFile } from "node-taglib-sharp";
-import type { FlacTag } from "node-taglib-sharp";
-import { assertFlac, writeFields, type TagFields } from "./fields.js";
+import { detectFormat, getWriteMarker, setWriteMarker, writeFields, type TagFields } from "./fields.js";
 
 export type WriteResult = { writeId: string; writtenMtime: string };
-
-const WRITE_MARKER_FIELD = "LEGATO_WRITE_ID";
 
 // Never touches the original file until the very last step. The whole
 // point of temp -> fsync -> rename is that a crash at any point before the
@@ -51,12 +48,12 @@ async function atomicWrite(filePath: string, mutate: (file: TagLibFile) => void)
 }
 
 export async function applyTagWrite(filePath: string, changes: TagFields): Promise<WriteResult> {
-  assertFlac(filePath);
+  const format = detectFormat(filePath);
   const writeId = randomUUID();
 
   const writtenMtime = await atomicWrite(filePath, (file) => {
-    writeFields(file.tag, changes);
-    (file.tag as unknown as FlacTag).xiphComment.setFieldAsStrings(WRITE_MARKER_FIELD, writeId);
+    writeFields(file.tag, changes, format);
+    setWriteMarker(file.tag, format, writeId);
   });
 
   return { writeId, writtenMtime };
@@ -66,12 +63,12 @@ export async function revertTagWrite(
   filePath: string,
   oldValues: TagFields,
 ): Promise<WriteResult> {
-  assertFlac(filePath);
+  const format = detectFormat(filePath);
   const writeId = randomUUID();
 
   const writtenMtime = await atomicWrite(filePath, (file) => {
-    writeFields(file.tag, oldValues);
-    (file.tag as unknown as FlacTag).xiphComment.setFieldAsStrings(WRITE_MARKER_FIELD, writeId);
+    writeFields(file.tag, oldValues, format);
+    setWriteMarker(file.tag, format, writeId);
   });
 
   return { writeId, writtenMtime };
@@ -81,9 +78,10 @@ export async function revertTagWrite(
 // guard to tell "this change event is our own write settling" apart from
 // "someone/something else touched this file."
 export function readWriteMarker(filePath: string): string | null {
+  const format = detectFormat(filePath);
   const file = TagLibFile.createFromPath(filePath);
   try {
-    return (file.tag as unknown as FlacTag).xiphComment.getFieldFirstValue(WRITE_MARKER_FIELD) || null;
+    return getWriteMarker(file.tag, format);
   } finally {
     file.dispose();
   }
