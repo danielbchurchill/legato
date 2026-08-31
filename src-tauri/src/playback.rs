@@ -58,6 +58,20 @@ struct Session {
   queue: VecDeque<QueueTrack>,
 }
 
+// cpal's CoreAudio backend (macOS only) stores its device property-change
+// listener as a bare `Box<dyn FnMut()>` with no `+ Send` bound, so
+// `cpal::Stream` — and therefore `_stream` above — fails Rust's automatic
+// Send inference on macOS specifically (ALSA and WASAPI have no such
+// field, which is why this only surfaces there). The callback itself
+// captures nothing thread-affine — it's cpal's own hot-plug/config-change
+// bookkeeping, not the realtime audio render path, which CoreAudio always
+// runs on its own OS-managed thread regardless of which thread opened the
+// stream — and every access to a Session already goes through
+// PlaybackState's Mutex, so it's never touched from two threads at once.
+// This is a known gap in cpal's own type (RustAudio/cpal upstream), not a
+// Legato bug; asserting Send here is the standard workaround.
+unsafe impl Send for Session {}
+
 pub struct PlaybackState {
   session: Arc<Mutex<Option<Session>>>,
   // Lives outside Session (and outside the Mutex<Option<_>> that gets
