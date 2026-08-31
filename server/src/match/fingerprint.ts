@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { FPCALC_PATH } from "../mediaBinaries.js";
 
 let fpcalcMissingWarned = false;
 
@@ -13,7 +14,7 @@ let fpcalcMissingWarned = false;
 // the server down.
 export async function computeFingerprint(filePath: string): Promise<string | null> {
   return new Promise((resolve) => {
-    const proc = spawn("fpcalc", ["-plain", filePath]);
+    const proc = spawn(FPCALC_PATH, ["-plain", filePath]);
     let stdout = "";
     let settled = false;
 

@@ -7,6 +7,7 @@ import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 import { openDb } from "./db.js";
 import { PORT, DATA_DIR } from "./config.js";
+import { FFMPEG_PATH, FPCALC_PATH } from "./mediaBinaries.js";
 import { healthRoutes } from "./routes/health.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { libraryRootsRoutes } from "./routes/library-roots.js";
@@ -51,6 +52,11 @@ const app = Fastify({ logger: true });
   };
   app.log.info(`database: ${dbPath} (${fileCount} files)`);
 }
+
+// Same one-line-diagnosis reasoning as the database log above: if a
+// packaged build silently falls back to PATH resolution instead of the
+// bundled binaries it should be finding, this is where that shows up.
+app.log.info(`ffmpeg: ${FFMPEG_PATH}, fpcalc: ${FPCALC_PATH}`);
 
 // @fastify/cors's actual default methods list is just GET,HEAD,POST — PUT/
 // PATCH/DELETE are silently preflight-rejected by the browser otherwise.

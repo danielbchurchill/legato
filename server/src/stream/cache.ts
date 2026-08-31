@@ -5,6 +5,7 @@ import { access, mkdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { DATA_DIR } from "../config.js";
+import { FFMPEG_PATH } from "../mediaBinaries.js";
 
 // Content-addressed by file_hash, same sharding as cover/store.ts and
 // waveform/store.ts. This is what makes /files/:id/stream Range-capable:
@@ -35,7 +36,7 @@ export async function isCached(fileHash: string): Promise<boolean> {
 // the whole transcode in memory first (cover art's resize() can afford to
 // buffer — a JPEG is tens of KB; a full-track FLAC transcode is tens of MB).
 function transcodeToFile(sourcePath: string, targetTemp: string): Promise<void> {
-  const ffmpeg = spawn("ffmpeg", [
+  const ffmpeg = spawn(FFMPEG_PATH, [
     "-hide_banner",
     "-loglevel",
     "error",
