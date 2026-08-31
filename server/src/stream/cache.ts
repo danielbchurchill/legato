@@ -16,7 +16,7 @@ import { DATA_DIR } from "../config.js";
 // all, not just for seeking. Transcoding once to a real file on disk first
 // makes both possible, and turns every replay of a track into a cache hit
 // instead of a fresh ffmpeg spawn.
-const CACHE_DIR = path.join(DATA_DIR, "streams");
+export const CACHE_DIR = path.join(DATA_DIR, "streams");
 
 export function cachePath(fileHash: string): string {
   return path.join(CACHE_DIR, fileHash.slice(0, 2), `${fileHash}.flac`);

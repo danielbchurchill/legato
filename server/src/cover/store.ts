@@ -27,7 +27,7 @@ export type CoverSize = "thumb" | "full";
 // view), that is a third size here, not a change to this policy.
 const SIZES: Record<CoverSize, number> = { thumb: 256, full: 512 };
 
-const CACHE_DIR = path.join(DATA_DIR, "covers");
+export const CACHE_DIR = path.join(DATA_DIR, "covers");
 
 export function hashBytes(bytes: Buffer): string {
   return createHash("sha1").update(bytes).digest("hex");
@@ -42,8 +42,10 @@ export function hashBytes(bytes: Buffer): string {
 // cover serving its old 128px file forever, since isCached() tests existence
 // and a cover that never changes is never re-encoded. Naming the directory
 // after what is actually in it makes a ladder change self-invalidating —
-// the new size is simply a cache miss — and pruneStaleSizes() below sweeps
-// what the old ladder left behind.
+// the new size is simply a cache miss — and evict.ts's sweepCoverCache()
+// finds what the old ladder left behind (any numeric-named directory here
+// counts, not just the two sizes above) since it walks the whole tree
+// rather than trusting SIZES to enumerate what's on disk.
 export function cachePath(hash: string, size: CoverSize): string {
   return path.join(CACHE_DIR, String(SIZES[size]), hash.slice(0, 2), `${hash}.jpg`);
 }
@@ -220,14 +222,13 @@ async function deriveSize(hash: string, size: CoverSize): Promise<Buffer | null>
   return derived;
 }
 
-// Known gap: nothing evicts the cache. Replacing or deleting a manual override
-// leaves its blob on disk with no cover_art row pointing at it, and a
-// superseded size ladder leaves its whole directory behind (still useful, as
-// deriveSize's source, but permanently). Harmless (a few tens of KB per
-// orphan) and bounded by how often art is overridden by hand, but it is a real
-// leak. The cover_art_hash index exists so a sweep can find live hashes
-// cheaply; write that alongside the Cover Art Archive fetcher, which will be
-// the first thing to churn cached art in volume.
+// Replacing or deleting a manual override leaves its blob on disk with no
+// cover_art row pointing at it, and a superseded size ladder leaves its
+// whole directory behind (still useful, as deriveSize's source, until it
+// is). Harmless per-orphan (a few tens of KB) but unbounded over time —
+// evict.ts's sweepCoverCache() is the manual sweep for it (`npm run
+// sweep:caches`), using this table's cover_art_hash index to find live
+// hashes cheaply. Not run automatically; a human runs it.
 export async function readCover(hash: string, size: CoverSize): Promise<Buffer | null> {
   try {
     return await readFile(cachePath(hash, size));
