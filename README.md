@@ -2,10 +2,11 @@
 
 A local-first music library manager: scans a real music collection, matches and collapses duplicate/variant tracks (MBID → AcoustID → fuzzy), lays the result out as an explorable node graph, enriches it from MusicBrainz/Cover Art Archive/LRCLIB/Deezer/Wikipedia, and plays it back gapless on the desktop.
 
-Two parts:
+Three parts:
 
 - **Root** — the Tauri + React desktop app (Vite, TypeScript, Tailwind v4).
 - **`server/`** — a standalone Fastify service owning the file scan, SQLite DB, matching, enrichment, hygiene worklist, and tag write-back. Tauri spawns it as a child process; it can also run on its own.
+- **`relay/`** — a separate, early-stage service prototyping remote access (letting a phone reach your home server when you're off the LAN). Not wired into the desktop app yet — see [Remote access](#remote-access-relay-prototype) below.
 
 For architecture, conventions, and day-to-day workflow, see [CLAUDE.md](CLAUDE.md). For the visual language, see [DESIGN.md](DESIGN.md). This file is just: how do I get it running.
 
@@ -61,6 +62,23 @@ From there you have two options:
 
 Note: `orca computer *` (native window control) is macOS-only and cannot see or drive the actual Tauri window running on this machine's display. The remote path above covers the web UI, including playback — outside Tauri, the app plays back through a plain `<audio>` element against the server's transcode-to-FLAC stream route instead of calling into the Rust engine, so it's real audio, just not gapless, and there's no native device picker (Settings says so plainly rather than showing a control that can't work). Native-only behavior that has no web equivalent at all — real window chrome, native menus — still needs you at this machine directly.
 
+## Remote access (relay prototype)
+
+The app is local-first and stays that way — your library never leaves your machine. `relay/` is an early prototype of the piece that will eventually let your *phone* reach your home server from off your home network, without you managing Tailscale or port-forwarding yourself. It's not wired into the desktop app yet, and there's no real account system — this is the tunnel mechanism only, proven with real tests.
+
+What it does: a home server opens one persistent WebSocket to the relay (`GET /tunnel`, authenticated with a shared secret); a client's HTTP requests to `ALL /relay/*` get forwarded down that tunnel and streamed back, multiplexed by request so several requests can be in flight over one connection at once. It never stores anything but that connection — no audio, no library data.
+
+To run it locally:
+
+```bash
+cd relay
+npm install
+npm test          # 7 real tests — actual WebSocket connections, no mocking
+RELAY_SHARED_SECRET=dev npm start
+```
+
+**Explicitly not there yet:** real multi-account relay auth (today's shared secret is a stand-in), any pairing UX in the app itself, and any actual deployment. This is groundwork for the eventual paid remote-access tier, not something you can point your phone at today — for that, see the Tailscale-based remote preview above, which already works.
+
 ## Troubleshooting
 
 **Preview loads blank, or API calls fail, or you're seeing stale data.** Check whether a dev server is already running — either from an earlier session you forgot about, or from a *different* worktree of this repo:
@@ -100,3 +118,9 @@ npm --prefix server test    # vitest, server-side (scan/match/layout/facts/enric
 npm run build       # tsc -b && vite build — web assets only
 npx tauri build      # full native desktop build
 ```
+
+## Platform support
+
+Primary development happens on Linux, but `.github/workflows/build.yml` builds and tests this app for real on **macOS, Windows, and Linux** on every push — not just claimed, actually run: [latest results](https://github.com/danielbchurchill/legato/actions/workflows/build.yml). A green run produces real unsigned installers you can download from that run's Artifacts: `.dmg`/`.app` (macOS), `.msi`/`.exe` via NSIS (Windows), `.AppImage`/`.deb`/`.rpm` (Linux).
+
+**What that CI run does and doesn't prove.** It proves the Rust shell and frontend genuinely compile and pass `server`'s test suite on all three platforms — real, not assumed (it already caught and fixed one macOS-only bug this way, a `cpal`/CoreAudio thread-safety issue invisible on Linux and Windows). It does **not** yet prove the packaged app *runs* correctly end-to-end for someone who just installs it: the embedded server still launches via `tsx` (a TypeScript interpreter), which means it currently assumes Node.js is installed on whatever machine runs it. That's fine for development; it's not yet true "install and go" for macOS/Windows users. No code signing or notarization either — Gatekeeper/SmartScreen will warn on an unsigned build, expected for now.
