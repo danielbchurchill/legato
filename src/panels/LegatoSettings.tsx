@@ -84,6 +84,99 @@ function ShortcutRow({ action, keys }: { action: string; keys: string }) {
   )
 }
 
+type AccountUser = {
+  id: number
+  provider: 'google' | 'github'
+  email: string | null
+  displayName: string | null
+  avatarUrl: string | null
+}
+type MeResponse = { user: AccountUser | null; configured: { google: boolean; github: boolean } }
+
+// Rough OAuth account provisioning (server/src/routes/auth.ts) — this is
+// provisioning plumbing, not a login wall: every other panel in the app
+// works identically whether or not anyone has ever signed in here.
+// "Sign in with..." opens the provider flow in its own window rather than
+// navigating this one away, since there's no fixed frontend origin the
+// server's callback page could redirect back into (Vite dev port, a Tauri
+// bundle, a future remote client). Refreshing on window focus is how this
+// panel notices a sign-in completed in that other window.
+function AccountGroup() {
+  const [me, setMe] = useState<MeResponse | null>(null)
+
+  const loadMe = () => {
+    fetch(`${API}/auth/me`, { credentials: 'include' })
+      .then((r) => r.json())
+      .then(setMe)
+      .catch(() => setMe({ user: null, configured: { google: false, github: false } }))
+  }
+
+  useEffect(() => {
+    loadMe()
+    window.addEventListener('focus', loadMe)
+    return () => window.removeEventListener('focus', loadMe)
+  }, [])
+
+  const signOut = async () => {
+    await fetch(`${API}/auth/logout`, { method: 'POST', credentials: 'include' })
+    loadMe()
+  }
+
+  if (me === null) {
+    return (
+      <SettingsGroup title="account">
+        <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">loading…</p>
+      </SettingsGroup>
+    )
+  }
+
+  if (me.user) {
+    const { user } = me
+    return (
+      <SettingsGroup title="account">
+        <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
+          <div className="flex min-w-0 items-center gap-[var(--spacing-sm)]">
+            {user.avatarUrl && <img src={user.avatarUrl} alt="" className="h-[24px] w-[24px] shrink-0 rounded-full" />}
+            <div className="min-w-0">
+              <p className="truncate text-[length:var(--text-sm)] text-[var(--color-ink)]">
+                {user.displayName ?? user.email ?? 'signed in'}
+              </p>
+              <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                signed in with {user.provider}
+              </p>
+            </div>
+          </div>
+          <Button onClick={() => void signOut()}>sign out</Button>
+        </div>
+      </SettingsGroup>
+    )
+  }
+
+  if (!me.configured.google && !me.configured.github) {
+    return (
+      <SettingsGroup title="account">
+        <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+          OAuth isn't configured on this server.
+        </p>
+      </SettingsGroup>
+    )
+  }
+
+  return (
+    <SettingsGroup title="account">
+      <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">not signed in</p>
+      <div className="flex items-center gap-[var(--spacing-sm)]">
+        {me.configured.google && (
+          <Button onClick={() => window.open(`${API}/auth/google`, '_blank')}>sign in with google</Button>
+        )}
+        {me.configured.github && (
+          <Button onClick={() => window.open(`${API}/auth/github`, '_blank')}>sign in with github</Button>
+        )}
+      </div>
+    </SettingsGroup>
+  )
+}
+
 type LegatoSettingsProps = {
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>
@@ -304,6 +397,8 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
         <ShortcutRow action="focus search" keys="/" />
         <ShortcutRow action="deselect / close" keys="esc" />
       </SettingsGroup>
+
+      <AccountGroup />
     </div>
   )
 }
