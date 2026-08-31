@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { parseFile } from "music-metadata";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { computeDiff } from "./diff.js";
 import { applyTagWrite, readWriteMarker, revertTagWrite } from "./writer.js";
@@ -9,13 +10,13 @@ import { applyTagWrite, readWriteMarker, revertTagWrite } from "./writer.js";
 let dir: string;
 let filePath: string;
 
-// A real, valid FLAC file (not a hand-built header like the scanner
-// tests use for WAV) — FLAC's metadata-block structure is what this
-// module actually exercises, so the fixture has to be real. ffmpeg is
-// already a hard dependency of the server itself (the streaming pipeline).
+// Mirrors writer.spec.ts's FLAC fixture, aimed at MP3/ID3v2 instead — a
+// real ffmpeg-authored file, not a hand-built header, since ID3v2's frame
+// structure (and whether ffmpeg also tacks on an ID3v1 trailer) is exactly
+// what this module has to cope with.
 beforeEach(() => {
-  dir = mkdtempSync(path.join(tmpdir(), "legato-tagwrite-test-"));
-  filePath = path.join(dir, "test.flac");
+  dir = mkdtempSync(path.join(tmpdir(), "legato-tagwrite-mp3-test-"));
+  filePath = path.join(dir, "test.mp3");
   execFileSync(
     "ffmpeg",
     [
@@ -43,7 +44,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe("computeDiff", () => {
+describe("computeDiff (MP3)", () => {
   it("returns an empty diff when nothing changed — the mandatory no-op check", () => {
     expect(computeDiff(filePath, { title: "Original Title" })).toEqual([]);
   });
@@ -57,15 +58,9 @@ describe("computeDiff", () => {
     const diff = computeDiff(filePath, { title: "Original Title", artist: "Fixed Artist", year: 2000 });
     expect(diff).toEqual([{ field: "artist", oldValue: "Original Artist", newValue: "Fixed Artist" }]);
   });
-
-  it("rejects an unsupported format rather than silently doing nothing", () => {
-    // .wav, not .mp3 — MP3 is a supported format now (see writer.mp3.spec.ts),
-    // so this needs a genuinely unsupported extension to still prove the point.
-    expect(() => computeDiff("/fake/path.wav", { title: "x" })).toThrow(/FLAC/);
-  });
 });
 
-describe("applyTagWrite", () => {
+describe("applyTagWrite (MP3)", () => {
   it("writes the new value and stamps a write marker", async () => {
     const { writeId, writtenMtime } = await applyTagWrite(filePath, { title: "Fixed Title" });
 
@@ -74,30 +69,14 @@ describe("applyTagWrite", () => {
     expect(writtenMtime).toBeTruthy();
   });
 
-  it("patches the tag block rather than rewriting the whole file — Picard's bar, not Musicat's", async () => {
-    // Musicat rewrote the entire file per tag edit (150%+ of library size
-    // for one correction); Picard's reference in-place patching landed at
-    // ~21%. A single short field change with padding available should
-    // change file size by a few KB at most, nowhere near the audio
-    // stream's size.
-    const originalSize = statSync(filePath).size;
-    await applyTagWrite(filePath, { title: "Fixed Title" });
-    const newSize = statSync(filePath).size;
-    expect(Math.abs(newSize - originalSize)).toBeLessThan(4096);
-  });
-
   it("never leaves a temp file behind, across repeated writes", async () => {
     await applyTagWrite(filePath, { title: "A" });
     await applyTagWrite(filePath, { title: "B" });
-    expect(readdirSync(dir)).toEqual(["test.flac"]);
-  });
-
-  it("rejects an unsupported format without touching anything", async () => {
-    await expect(applyTagWrite("/fake/path.wav", { title: "x" })).rejects.toThrow(/FLAC/);
+    expect(readdirSync(dir)).toEqual(["test.mp3"]);
   });
 });
 
-describe("widened field vocabulary", () => {
+describe("widened field vocabulary (MP3)", () => {
   it("round-trips discNo/genre/bpm/label/releaseType — each field readable back by name", async () => {
     await applyTagWrite(filePath, {
       discNo: 2,
@@ -118,25 +97,27 @@ describe("widened field vocabulary", () => {
     ).toEqual([]);
   });
 
-  it("writes bpm/label/releaseType to the exact Vorbis fields music-metadata reads back, not TagLib#'s defaults", async () => {
+  // The actual point of this test: verified against music-metadata (this
+  // app's own tag reader), not just against TagLib# reading back its own
+  // write. FLAC needed the raw Vorbis field for these three (see
+  // writer.spec.ts) because TagLib#'s named properties default to a
+  // *different* field than music-metadata reads. ID3v2 turned out not to
+  // have that problem: TagLib#'s beatsPerMinute/publisher/
+  // musicBrainzReleaseType write TBPM/TPUB/TXXX:"MusicBrainz Album Type" —
+  // exactly what music-metadata's ID3v24TagMapper maps to bpm/label/
+  // releasetype — so fields.ts uses those named properties directly for
+  // MP3, unlike FLAC.
+  it("writes bpm/label/releaseType to the exact ID3v2 frames music-metadata reads back", async () => {
     await applyTagWrite(filePath, { bpm: 120, label: "Apple Records", releaseType: "album" });
 
-    const raw = execFileSync("ffprobe", ["-v", "quiet", "-show_entries", "format_tags", "-of", "json", filePath], {
-      encoding: "utf8",
-    });
-    const tags = (JSON.parse(raw).format.tags ?? {}) as Record<string, string>;
-    const lower = Object.fromEntries(Object.entries(tags).map(([k, v]) => [k.toLowerCase(), v]));
-
-    expect(lower.bpm).toBe("120");
-    expect(lower.tempo).toBeUndefined();
-    expect(lower.label).toBe("Apple Records");
-    expect(lower.organization).toBeUndefined();
-    expect(lower.releasetype).toBe("album");
-    expect(lower.musicbrainz_albumtype).toBeUndefined();
+    const { common } = await parseFile(filePath, { duration: true });
+    expect(common.bpm).toBe(120);
+    expect(common.label).toEqual(["Apple Records"]);
+    expect(common.releasetype).toEqual(["album"]);
   });
 });
 
-describe("revertTagWrite", () => {
+describe("revertTagWrite (MP3)", () => {
   it("restores the original value, via the same atomic path (a fresh write, not magic undo)", async () => {
     const firstWrite = await applyTagWrite(filePath, { title: "Fixed Title" });
     const reverted = await revertTagWrite(filePath, { title: "Original Title" });

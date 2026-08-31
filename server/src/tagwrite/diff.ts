@@ -1,5 +1,5 @@
 import { File as TagLibFile } from "node-taglib-sharp";
-import { assertFlac, readFields, type TagFields } from "./fields.js";
+import { detectFormat, readFields, type TagFields } from "./fields.js";
 
 export type FieldDiff = {
   field: keyof TagFields;
@@ -14,11 +14,11 @@ export type FieldDiff = {
 // a diff with nothing in it, matching Picard's ~21%-of-library bar rather
 // than writing (and touching mtimes) for files that are already correct.
 export function computeDiff(filePath: string, changes: TagFields): FieldDiff[] {
-  assertFlac(filePath);
+  const format = detectFormat(filePath);
 
   const file = TagLibFile.createFromPath(filePath);
   try {
-    const current = readFields(file.tag);
+    const current = readFields(file.tag, format);
     const diffs: FieldDiff[] = [];
 
     for (const key of Object.keys(changes) as (keyof TagFields)[]) {
