@@ -10,7 +10,8 @@
     "backfill:covers": "tsx src/cover/backfill-cli.ts",
     "backfill:tags": "tsx src/scan/backfill-tags-cli.ts",
     "backfill:edges": "tsx src/match/backfill-edges-cli.ts",
-    "backfill:waveforms": "tsx src/waveform/backfill-cli.ts"
+    "backfill:waveforms": "tsx src/waveform/backfill-cli.ts",
+    "sweep:caches": "tsx src/maintenance/sweep-caches-cli.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
