@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { useWsEvent } from './hooks/useWs'
 import { Button } from './ui/Button'
 import { SERVER_HOST } from './config/serverHost'
+import { IS_TAURI } from './config/runtime'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -51,6 +52,7 @@ export default function LibrarySetup({ onLibraryReady }: { onLibraryReady: () =>
   })
 
   const chooseFolder = async () => {
+    if (!IS_TAURI) return
     setError(null)
     const selected = await open({ directory: true, multiple: false })
     if (!selected || Array.isArray(selected)) return
@@ -105,9 +107,11 @@ export default function LibrarySetup({ onLibraryReady }: { onLibraryReady: () =>
       ) : (
         <>
           <p className="max-w-[420px] text-[length:var(--text-base)] text-[var(--color-muted)]">
-            No music library configured yet. Choose a folder to scan.
+            {IS_TAURI
+              ? 'No music library configured yet. Choose a folder to scan.'
+              : 'No music library configured yet. Adding one needs the desktop app — open Legato there first, then come back to preview it.'}
           </p>
-          <Button onClick={() => void chooseFolder()}>choose music folder</Button>
+          {IS_TAURI && <Button onClick={() => void chooseFolder()}>choose music folder</Button>}
           {error && <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{error}</p>}
         </>
       )}
