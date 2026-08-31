@@ -38,6 +38,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": ["binaries/"],
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }

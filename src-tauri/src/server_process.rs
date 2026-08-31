@@ -8,6 +8,18 @@ pub struct ServerProcess(pub Mutex<Option<Child>>);
 
 const SERVER_PORT: u16 = 8899;
 
+// Matches the directory layout scripts/fetch-media-binaries.mjs writes
+// (src-tauri/binaries/<target-triple>/) and the Rust target triples Tauri
+// itself already uses for `externalBin`-style resources, so this needs no
+// runtime platform detection — the triple is fixed at compile time for
+// whichever binary is actually being built.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const TARGET_TRIPLE: &str = "aarch64-apple-darwin";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const TARGET_TRIPLE: &str = "x86_64-apple-darwin";
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+const TARGET_TRIPLE: &str = "x86_64-pc-windows-msvc";
+
 fn server_dir() -> PathBuf {
   // Dev-time only: resolved relative to this crate's manifest dir, which is
   // stable regardless of the process's runtime CWD. This spawns the
@@ -15,6 +27,29 @@ fn server_dir() -> PathBuf {
   // single-file binary — bundling a real Tauri sidecar/externalBin for
   // distribution is M10's job (see the MVP roadmap's packaging spike note).
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../server")
+}
+
+// Resolves a bundled ffmpeg/fpcalc binary from Tauri's packaged resources
+// dir (populated by scripts/fetch-media-binaries.mjs into
+// src-tauri/binaries/<target-triple>/, wired in via tauri.conf.json's
+// bundle.resources). Returns None whenever that binary isn't actually
+// there — a plain `npx tauri dev` run against a checkout where nobody has
+// run the fetch script, or a platform it hasn't been fetched for yet — so
+// server/src/mediaBinaries.ts's own LEGATO_FFMPEG_PATH/LEGATO_FPCALC_PATH
+// fallback to bare PATH resolution keeps working exactly as it does today.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn resolve_media_binary(app: &AppHandle, name: &str) -> Option<PathBuf> {
+  let resource_dir = app.path().resource_dir().ok()?;
+  let binary_name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+  let path = resource_dir.join("binaries").join(TARGET_TRIPLE).join(binary_name);
+  path.exists().then_some(path)
+}
+
+// Linux keeps relying on system ffmpeg/fpcalc on PATH — deliberately out of
+// scope here, per CLAUDE.md.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn resolve_media_binary(_app: &AppHandle, _name: &str) -> Option<PathBuf> {
+  None
 }
 
 pub fn spawn(app: &AppHandle) -> Result<Child, String> {
@@ -34,6 +69,15 @@ pub fn spawn(app: &AppHandle) -> Result<Child, String> {
     .current_dir(server_dir())
     .env("LEGATO_DATA_DIR", &data_dir)
     .env("LEGATO_PORT", SERVER_PORT.to_string());
+
+  if let Some(ffmpeg_path) = resolve_media_binary(app, "ffmpeg") {
+    log::info!("[server] using bundled ffmpeg: {ffmpeg_path:?}");
+    cmd.env("LEGATO_FFMPEG_PATH", ffmpeg_path);
+  }
+  if let Some(fpcalc_path) = resolve_media_binary(app, "fpcalc") {
+    log::info!("[server] using bundled fpcalc: {fpcalc_path:?}");
+    cmd.env("LEGATO_FPCALC_PATH", fpcalc_path);
+  }
 
   // `npm run start` forks through a shell into tsx into a second node
   // process (npm -> sh -> tsx -> node) — killing just the direct Child

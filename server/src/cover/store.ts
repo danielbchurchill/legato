@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DATA_DIR } from "../config.js";
+import { FFMPEG_PATH } from "../mediaBinaries.js";
 
 export type CoverSize = "thumb" | "full";
 
@@ -71,7 +72,7 @@ export async function isCached(hash: string, size: CoverSize): Promise<boolean> 
 // survives intact.
 function resize(input: Buffer, maxEdge: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn("ffmpeg", [
+    const ffmpeg = spawn(FFMPEG_PATH, [
       "-hide_banner",
       "-loglevel",
       "error",

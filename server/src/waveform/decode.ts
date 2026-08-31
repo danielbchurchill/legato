@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { FFMPEG_PATH } from "../mediaBinaries.js";
 
 // Sample rate for the *decode*, not the original file — a peak envelope
 // only needs enough resolution to find the loudest sample in each bucket,
@@ -19,7 +20,7 @@ const DEFAULT_BUCKET_COUNT = 2000;
 // the transport dock needs.
 export function decodePcm(filePath: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn("ffmpeg", [
+    const ffmpeg = spawn(FFMPEG_PATH, [
       "-hide_banner",
       "-loglevel",
       "error",

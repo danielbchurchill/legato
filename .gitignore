@@ -13,6 +13,10 @@ dist-ssr
 *.local
 *.tsbuildinfo
 
+# Fetched by scripts/fetch-media-binaries.mjs — real ffmpeg/fpcalc binaries
+# for bundling, never committed.
+src-tauri/binaries/
+
 .claude/
 
 # Editor directories and files
