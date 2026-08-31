@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { Button } from '../ui/Button'
 import { SERVER_HOST } from '../config/serverHost'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
@@ -80,9 +79,18 @@ export function TagManager({ onSelectNode }: { onSelectNode: (id: number) => voi
           {rows.map((row) => (
             <div key={row.id} className="flex flex-col gap-[6px] border-b border-[var(--color-divider)] py-[15px] last:border-b-0">
               <div className="flex items-baseline justify-between gap-[12px]">
-                <Button className="font-[family-name:var(--font-mono)]" onClick={() => onSelectNode(row.id)}>
+                {/* Plain hover-color-shift button, not the shared `Button`'s
+                 * underlined `link` variant — matching every other "click a
+                 * title to fly to this node" affordance in the app
+                 * (Favourites' own row, the maintenance preview, similarity
+                 * thumbnails, search results), none of which underline. */}
+                <button
+                  type="button"
+                  onClick={() => onSelectNode(row.id)}
+                  className="min-w-0 flex-1 truncate text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                >
                   {row.title}
-                </Button>
+                </button>
                 <span className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">
                   {MISSING_TAG[field]}
                 </span>
