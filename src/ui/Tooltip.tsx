@@ -1,4 +1,5 @@
 import { useLayoutEffect, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useMountFade } from './useMountFade'
 import { useTooltipGroup } from './TooltipGroup'
 
@@ -15,9 +16,20 @@ import { useTooltipGroup } from './TooltipGroup'
  * accessible name; this is a purely visual affordance layered on top.
  *
  * Two refinements on top of that base behavior:
- *  - Viewport-edge collision avoidance: the box is measured against the
- *    trigger's own position after it mounts and shifted horizontally to
- *    stay clear of the window edge (see the useLayoutEffect below).
+ *  - Portaled + viewport-fixed collision avoidance: the box renders through
+ *    a portal into document.body rather than as a normal DOM child of the
+ *    trigger, so it never inherits a stacking context from an ancestor
+ *    (InspectorRail and InspectorPanel are both z-10 positioned siblings —
+ *    without the portal, the box's own z-30 only wins comparisons *inside*
+ *    InspectorRail's local stacking context, never against InspectorPanel's
+ *    z-10 at the parent level). Positioned via getBoundingClientRect() in
+ *    fixed viewport coordinates and clamped against both the horizontal and
+ *    vertical viewport edges (see the useLayoutEffect below) — the rail's
+ *    icons run down the full window height, so a bottom icon's tooltip needs
+ *    the same edge protection top-to-bottom that a wide header row already
+ *    needed left-to-right. Re-measured on scroll/resize so a tooltip open in
+ *    a scrollable panel (Playlists, Favourites, NowPlayingPanel, ...) stays
+ *    glued to its trigger rather than a stale fixed position.
  *  - "Hot" group dwell-skip: wrapping a row of triggers in TooltipGroup
  *    (TooltipGroup.tsx) lets a sibling's tooltip appear immediately if the
  *    previous one in the group was dismissed within the dwell window,
@@ -25,6 +37,7 @@ import { useTooltipGroup } from './TooltipGroup'
 
 const DWELL_MS = 400
 const EDGE_MARGIN = 8
+const GAP_PX = 6
 
 type TooltipProps = {
   label: string
@@ -40,7 +53,7 @@ export function Tooltip({ label, children, monospace = false }: TooltipProps) {
   const dwellRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wrapRef = useRef<HTMLSpanElement>(null)
   const boxRef = useRef<HTMLSpanElement>(null)
-  const [shiftPx, setShiftPx] = useState(0)
+  const [coords, setCoords] = useState({ top: 0, left: 0 })
   const group = useTooltipGroup()
 
   const clearDwell = () => {
@@ -71,28 +84,42 @@ export function Tooltip({ label, children, monospace = false }: TooltipProps) {
   useEffect(() => clearDwell, [])
 
   // Collision avoidance: derived fresh from the trigger's rect and the box's
-  // own width every time, never from the previously-applied shift — feeding
-  // an already-shifted rect back in would drift the box further off its
-  // true centered position on every re-measure. useLayoutEffect (not
-  // useEffect) so the corrected position lands before the browser paints;
-  // the box starts centered via the left-1/2/-translate-x-1/2 classes below
-  // and this only overrides that once a correction is actually needed.
+  // own size every time, in fixed viewport coordinates — the box is portaled
+  // to document.body, so there is no ancestor offset to account for, just
+  // the trigger's own position and the window's edges. useLayoutEffect (not
+  // useEffect) so the position lands before the browser paints. Re-measured
+  // on scroll/resize while mounted so a tooltip open inside a scrollable
+  // panel tracks its trigger instead of drifting once the panel scrolls.
   useLayoutEffect(() => {
     if (!mounted) return
     const wrap = wrapRef.current
     const box = boxRef.current
     if (wrap == null || box == null) return
 
-    const wrapRect = wrap.getBoundingClientRect()
-    const boxWidth = box.getBoundingClientRect().width
-    const wrapCenterX = wrapRect.left + wrapRect.width / 2
+    const measure = () => {
+      const wrapRect = wrap.getBoundingClientRect()
+      const boxRect = box.getBoundingClientRect()
 
-    const naturalLeft = wrapCenterX - boxWidth / 2
-    const minLeft = EDGE_MARGIN
-    const maxLeft = window.innerWidth - EDGE_MARGIN - boxWidth
-    const clampedLeft = Math.min(Math.max(naturalLeft, minLeft), maxLeft)
+      const naturalLeft = wrapRect.left + wrapRect.width / 2 - boxRect.width / 2
+      const minLeft = EDGE_MARGIN
+      const maxLeft = window.innerWidth - EDGE_MARGIN - boxRect.width
+      const left = Math.min(Math.max(naturalLeft, minLeft), maxLeft)
 
-    setShiftPx(clampedLeft - naturalLeft)
+      const naturalTop = wrapRect.bottom + GAP_PX
+      const minTop = EDGE_MARGIN
+      const maxTop = window.innerHeight - EDGE_MARGIN - boxRect.height
+      const top = Math.min(Math.max(naturalTop, minTop), maxTop)
+
+      setCoords({ top, left })
+    }
+
+    measure()
+    window.addEventListener('scroll', measure, true)
+    window.addEventListener('resize', measure)
+    return () => {
+      window.removeEventListener('scroll', measure, true)
+      window.removeEventListener('resize', measure)
+    }
   }, [mounted, label])
 
   return (
@@ -105,16 +132,18 @@ export function Tooltip({ label, children, monospace = false }: TooltipProps) {
       onBlur={hide}
     >
       {children}
-      {mounted && (
-        <span
-          ref={boxRef}
-          role="tooltip"
-          className={`pointer-events-none absolute top-full left-1/2 z-30 mt-[6px] -translate-x-1/2 rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] px-[10px] py-[4px] text-[length:var(--text-base)] whitespace-nowrap text-[var(--color-ink)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-opacity duration-[var(--motion-fast)] ease-[var(--ease-out)] ${monospace ? 'font-[family-name:var(--font-mono)]' : ''}`}
-          style={{ opacity: shown ? 1 : 0, transform: `translateX(calc(-50% + ${shiftPx}px))` }}
-        >
-          {label}
-        </span>
-      )}
+      {mounted &&
+        createPortal(
+          <span
+            ref={boxRef}
+            role="tooltip"
+            className={`pointer-events-none fixed z-30 rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] px-[10px] py-[4px] text-[length:var(--text-base)] whitespace-nowrap text-[var(--color-ink)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-opacity duration-[var(--motion-fast)] ease-[var(--ease-out)] ${monospace ? 'font-[family-name:var(--font-mono)]' : ''}`}
+            style={{ opacity: shown ? 1 : 0, top: `${coords.top}px`, left: `${coords.left}px` }}
+          >
+            {label}
+          </span>,
+          document.body,
+        )}
     </span>
   )
 }
