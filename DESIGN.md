@@ -330,6 +330,8 @@ Never hand-draw an icon or inline a `<path>`. If a needed glyph is missing, pull
 
 Icons in use: `search`, `cancel`, `chevron-down`, `pencil`, `info`, `pause`, `play`, `volume`, `map`, `database`, `heart`, `tag`, `sliders`, `panel-left-collapse` (the last five vendored for v2's rail and panel-collapse icon — see "The shell (v2)").
 
+**On/off state has no filled-glyph convention to reach for.** proicons ships no filled or solid variant for any of its 544 icons, `heart` included — checked directly, not assumed. So the favourites heart's "on" state (`NodeTitleBlock.tsx`, `Favourites.tsx`'s row) isn't a second vendored glyph; `Icon.tsx`'s `filled` prop swaps the same path's `fill="none"` for `fill="currentColor"` at render time. This is the one exception to "every glyph is stroke-only" above, and it's a render-time transform of the existing vendored path, not a hand-drawn one — the thing this section actually rules out.
+
 ### Window controls
 
 There are none of the app's own anymore. The window runs with native OS decorations (`tauri.conf.json`'s `decorations: true`) — minimize, maximize/restore, and close are whatever the host platform draws for any other window, in its own conventional position (right on Windows/Linux, left on macOS). This reverses an earlier v2 decision: a frameless window with a custom three-glyph cluster (`spacebar`/`arrow-minimize`/`cancel`) factored into `RightPanelHeader` as `WindowControls.tsx` — removed along with that file once the app went back to native chrome, since a custom cluster answering to nothing the Figma mockup specified was more surface than the plain OS default earned.

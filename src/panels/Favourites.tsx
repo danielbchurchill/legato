@@ -66,7 +66,7 @@ function FavouriteRow({
           aria-label="Remove from favourites"
           className="shrink-0 text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
         >
-          <Icon name="heart" size={24} />
+          <Icon name="heart" size={24} filled />
         </button>
       </Tooltip>
     </div>

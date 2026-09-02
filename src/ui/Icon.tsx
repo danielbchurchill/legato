@@ -81,9 +81,17 @@ type IconProps = {
   className?: string
   /** Omit for icons that sit inside an already-labelled control. */
   title?: string
+  /** Renders the glyph as a solid `currentColor` fill instead of an outline
+   * stroke — the "on" state for a toggle like the favourites heart.
+   * proicons has no filled counterpart for any glyph in its 544-icon set
+   * (checked, same as the arrow-swap note above), so this swaps the vendored
+   * path's own `fill="none"` at render time rather than hand-drawing a
+   * second one, which DESIGN.md's Iconography section rules out. */
+  filled?: boolean
 }
 
-export function Icon({ name, size = 24, className, title }: IconProps) {
+export function Icon({ name, size = 24, className, title, filled }: IconProps) {
+  const markup = filled ? GLYPHS[name].replaceAll('fill="none"', 'fill="currentColor"') : GLYPHS[name]
   return (
     <span
       className={className}
@@ -99,7 +107,7 @@ export function Icon({ name, size = 24, className, title }: IconProps) {
       }}
       // The markup is a build-time constant from our own assets directory,
       // never user input.
-      dangerouslySetInnerHTML={{ __html: GLYPHS[name] }}
+      dangerouslySetInnerHTML={{ __html: markup }}
     />
   )
 }

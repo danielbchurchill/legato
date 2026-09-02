@@ -57,7 +57,7 @@ export function NodeTitleBlock({ node }: { node: NodeDetail }) {
               isFavourite ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'
             }`}
           >
-            <Icon name="heart" size={24} />
+            <Icon name="heart" size={24} filled={isFavourite} />
           </button>
         </Tooltip>
         {node.type === 'recording' && <AddToPlaylistButton nodeId={node.id} />}
