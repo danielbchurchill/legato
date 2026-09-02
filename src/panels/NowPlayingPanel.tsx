@@ -37,6 +37,14 @@ type NowPlayingPanelProps = {
   nodeId: number | null
   isPlaying: boolean
   upNext: QueueEntry[]
+  // Mirrors usePlayback's queueBusy — true while a next/previous/shuffle/
+  // reorder/remove/add call is in flight anywhere (they all serialize
+  // behind one shared lock, see usePlayback.ts). jumpTo below fires a
+  // sequential run of next() calls with no guard of its own otherwise,
+  // so a second click here before the first jumpTo finishes would just
+  // queue more next() calls behind it and overshoot past the intended
+  // row — same "no busy-state guard on async work" bug TransportDock had.
+  queueBusy: boolean
   onSelectNode: (id: number) => void
   onPlay: (nodeId: number, title: string) => void
   queuePlayback: QueuePlayback
@@ -74,7 +82,7 @@ function useQueuePosition(nodeId: number | null, upNext: QueueEntry[]): number {
   return positionRef.current
 }
 
-export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPlay, queuePlayback }: NowPlayingPanelProps) {
+export function NowPlayingPanel({ nodeId, isPlaying, upNext, queueBusy, onSelectNode, onPlay, queuePlayback }: NowPlayingPanelProps) {
   const { node, reload } = useNodeDetail(nodeId)
   const queuePosition = useQueuePosition(nodeId, upNext)
 
@@ -122,7 +130,8 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPla
                 <button
                   type="button"
                   onClick={() => void jumpTo(i)}
-                  className="min-w-0 flex-1 truncate text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                  disabled={queueBusy}
+                  className="min-w-0 flex-1 truncate text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-50"
                 >
                   {entry.title}
                 </button>
@@ -130,7 +139,7 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPla
                   <button
                     type="button"
                     onClick={() => void queuePlayback.reorderQueue(absoluteIndex(i), absoluteIndex(i - 1))}
-                    disabled={i === 0}
+                    disabled={i === 0 || queueBusy}
                     aria-label="Move up"
                     className="shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-30"
                   >
@@ -141,7 +150,7 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPla
                   <button
                     type="button"
                     onClick={() => void queuePlayback.reorderQueue(absoluteIndex(i), absoluteIndex(i + 1))}
-                    disabled={i === upNext.length - 1}
+                    disabled={i === upNext.length - 1 || queueBusy}
                     aria-label="Move down"
                     className="shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-30"
                   >
@@ -152,8 +161,9 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, onSelectNode, onPla
                   <button
                     type="button"
                     onClick={() => void queuePlayback.removeFromQueue(absoluteIndex(i))}
+                    disabled={queueBusy}
                     aria-label="Remove from queue"
-                    className="shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                    className="shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-30"
                   >
                     <Icon name="cancel" size={16} />
                   </button>

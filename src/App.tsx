@@ -416,6 +416,7 @@ function MainApp() {
           nodeId={playback.status.currentRecordingNodeId ?? null}
           isPlaying={playback.status.currentRecordingNodeId != null}
           upNext={playback.upNext}
+          queueBusy={playback.queueBusy}
           onSelectNode={selectAndFly}
           onPlay={playback.playNode}
           queuePlayback={playback}
@@ -426,6 +427,7 @@ function MainApp() {
         status={playback.status}
         hasTrack={playback.currentTitle != null}
         shuffled={playback.shuffled}
+        queueBusy={playback.queueBusy}
         onPause={playback.pause}
         onResume={playback.resume}
         onSeek={playback.seek}

@@ -206,6 +206,46 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
   const originalOrder = useRef<QueueEntry[]>([])
   const currentPlay = useRef<PlayInProgress | null>(null)
 
+  // Serializes every queue-mutating operation (next/previous/toggleShuffle/
+  // reorderQueue/removeFromQueue/addToQueue/playNext) so a click fired
+  // while a previous one is still in flight runs strictly after it instead
+  // of interleaving with it. Each of those reads currentIndex.current/
+  // playSequence.current, then runs a chain of sequential `await
+  // invoke(...)` Tauri calls (queue_stop, a loop of queue_enqueue,
+  // queue_play) before writing its own update back to those refs — without
+  // this, a second call's queue_stop can land mid-rebuild of the first
+  // call's sequence (Rust's ensure_session spins up a fresh, empty session
+  // on the next queue_enqueue after a queue_stop), producing a queue built
+  // from an interleaved mix of both calls' tracks, or a queue_skip that
+  // silently no-ops against a torn-down session. Both reproduce exactly:
+  // "needs two or three clicks before anything visibly happens" and
+  // "rapid clicking skips more tracks than intended."
+  //
+  // Queued rather than dropped — a second legitimate click (skip twice in
+  // a row) should still happen, just strictly after the first completes,
+  // not get silently swallowed.
+  const operationChain = useRef<Promise<void>>(Promise.resolve())
+  const pendingOperations = useRef(0)
+  const [queueBusy, setQueueBusy] = useState(false)
+
+  const serialized = useCallback(<T,>(fn: () => Promise<T>): Promise<T> => {
+    pendingOperations.current += 1
+    if (pendingOperations.current === 1) setQueueBusy(true)
+
+    const run = operationChain.current.then(fn, fn)
+    // Normalized to always resolve, even when `fn` throws — one failed
+    // operation must not wedge every operation queued behind it.
+    operationChain.current = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    run.finally(() => {
+      pendingOperations.current -= 1
+      if (pendingOperations.current === 0) setQueueBusy(false)
+    })
+    return run
+  }, [])
+
   // Web-fallback-only: the single <audio> element standing in for Rust's
   // queue. Lazy singleton construction during render (not an effect) is the
   // standard pattern for a one-time DOM object a ref should own for the
@@ -530,34 +570,38 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     setUpNext(playSequence.current.slice(currentIndex.current + 1))
   }, [ensureResolved, replaygainMode])
 
-  const toggleShuffle = useCallback(async () => {
-    if (currentIndex.current === -1) return
-    const tail = playSequence.current.slice(currentIndex.current + 1)
+  const toggleShuffle = useCallback(
+    () =>
+      serialized(async () => {
+        if (currentIndex.current === -1) return
+        const tail = playSequence.current.slice(currentIndex.current + 1)
 
-    let newTail: QueueEntry[]
-    if (!shuffled) {
-      originalOrder.current = tail.slice()
-      newTail = shuffleInPlace(tail.slice())
-    } else {
-      // Restore true original order for whatever's still in the tail;
-      // anything added while shuffled (not part of the captured order)
-      // keeps its place at the end rather than being dropped.
-      const tailIds = new Set(tail.map((e) => e.recordingNodeId))
-      const restored = originalOrder.current.filter((e) => tailIds.has(e.recordingNodeId))
-      const restoredIds = new Set(restored.map((e) => e.recordingNodeId))
-      newTail = [...restored, ...tail.filter((e) => !restoredIds.has(e.recordingNodeId))]
-      originalOrder.current = []
-    }
+        let newTail: QueueEntry[]
+        if (!shuffled) {
+          originalOrder.current = tail.slice()
+          newTail = shuffleInPlace(tail.slice())
+        } else {
+          // Restore true original order for whatever's still in the tail;
+          // anything added while shuffled (not part of the captured order)
+          // keeps its place at the end rather than being dropped.
+          const tailIds = new Set(tail.map((e) => e.recordingNodeId))
+          const restored = originalOrder.current.filter((e) => tailIds.has(e.recordingNodeId))
+          const restoredIds = new Set(restored.map((e) => e.recordingNodeId))
+          newTail = [...restored, ...tail.filter((e) => !restoredIds.has(e.recordingNodeId))]
+          originalOrder.current = []
+        }
 
-    playSequence.current = [...playSequence.current.slice(0, currentIndex.current + 1), ...newTail]
-    setShuffled(!shuffled)
+        playSequence.current = [...playSequence.current.slice(0, currentIndex.current + 1), ...newTail]
+        setShuffled(!shuffled)
 
-    if (!IS_TAURI) {
-      setUpNext(newTail)
-      return
-    }
-    await rebuildTauriQueueInPlace()
-  }, [shuffled, rebuildTauriQueueInPlace])
+        if (!IS_TAURI) {
+          setUpNext(newTail)
+          return
+        }
+        await rebuildTauriQueueInPlace()
+      }),
+    [shuffled, rebuildTauriQueueInPlace, serialized],
+  )
 
   const playPlaylist = useCallback(
     async (playlistId: number, shuffled?: boolean) => {
@@ -623,141 +667,153 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     setCurrentTitle(null)
   }, [finalizeCurrentPlay, status.volume])
 
-  const next = useCallback(async () => {
-    if (IS_TAURI) await invoke('queue_skip')
-    else startWebTrack(currentIndex.current + 1)
-  }, [startWebTrack])
+  const next = useCallback(
+    () =>
+      serialized(async () => {
+        if (IS_TAURI) await invoke('queue_skip')
+        else startWebTrack(currentIndex.current + 1)
+      }),
+    [serialized, startWebTrack],
+  )
 
-  const previous = useCallback(async () => {
-    if (currentIndex.current <= 0) return
-    const targetIndex = currentIndex.current - 1
+  const previous = useCallback(
+    () =>
+      serialized(async () => {
+        if (currentIndex.current <= 0) return
+        const targetIndex = currentIndex.current - 1
 
-    if (!IS_TAURI) {
-      startWebTrack(targetIndex)
-      return
-    }
+        if (!IS_TAURI) {
+          startWebTrack(targetIndex)
+          return
+        }
 
-    const entries = playSequence.current.slice(targetIndex)
-    await ensureResolved(entries)
-    const resolved = entries.filter((e) => trackInfo.current.has(e.recordingNodeId))
-    if (resolved.length === 0) return
+        const entries = playSequence.current.slice(targetIndex)
+        await ensureResolved(entries)
+        const resolved = entries.filter((e) => trackInfo.current.has(e.recordingNodeId))
+        if (resolved.length === 0) return
 
-    finalizeCurrentPlay()
-    await invoke('queue_stop')
-    for (const entry of resolved) {
-      const info = trackInfo.current.get(entry.recordingNodeId)!
-      await invoke('queue_enqueue', {
-        track: {
-          file_path: info.filePath,
-          recording_node_id: entry.recordingNodeId,
-          replaygain_track_gain: gainForMode(info, replaygainMode),
-        },
-      })
-    }
-    await invoke('queue_play')
+        finalizeCurrentPlay()
+        await invoke('queue_stop')
+        for (const entry of resolved) {
+          const info = trackInfo.current.get(entry.recordingNodeId)!
+          await invoke('queue_enqueue', {
+            track: {
+              file_path: info.filePath,
+              recording_node_id: entry.recordingNodeId,
+              replaygain_track_gain: gainForMode(info, replaygainMode),
+            },
+          })
+        }
+        await invoke('queue_play')
 
-    currentIndex.current = targetIndex
-    const startEntry = resolved[0]
-    const startInfo = trackInfo.current.get(startEntry.recordingNodeId)!
-    setCurrentTitle(startEntry.title)
-    setUpNext(playSequence.current.slice(targetIndex + 1))
-    setStatus((s) => ({
-      ...s,
-      playing: true,
-      currentRecordingNodeId: startEntry.recordingNodeId,
-      currentFileId: startInfo.fileId,
-      currentDurationMs: startInfo.durationMs,
-    }))
-  }, [ensureResolved, finalizeCurrentPlay, replaygainMode, startWebTrack])
+        currentIndex.current = targetIndex
+        const startEntry = resolved[0]
+        const startInfo = trackInfo.current.get(startEntry.recordingNodeId)!
+        setCurrentTitle(startEntry.title)
+        setUpNext(playSequence.current.slice(targetIndex + 1))
+        setStatus((s) => ({
+          ...s,
+          playing: true,
+          currentRecordingNodeId: startEntry.recordingNodeId,
+          currentFileId: startInfo.fileId,
+          currentDurationMs: startInfo.durationMs,
+        }))
+      }),
+    [ensureResolved, finalizeCurrentPlay, replaygainMode, startWebTrack, serialized],
+  )
 
   const reorderQueue = useCallback(
-    async (fromIndex: number, toIndex: number) => {
-      if (fromIndex <= currentIndex.current || toIndex <= currentIndex.current) return
-      if (fromIndex < 0 || fromIndex >= playSequence.current.length) return
-      if (toIndex < 0 || toIndex >= playSequence.current.length) return
-      if (fromIndex === toIndex) return
+    (fromIndex: number, toIndex: number) =>
+      serialized(async () => {
+        if (fromIndex <= currentIndex.current || toIndex <= currentIndex.current) return
+        if (fromIndex < 0 || fromIndex >= playSequence.current.length) return
+        if (toIndex < 0 || toIndex >= playSequence.current.length) return
+        if (fromIndex === toIndex) return
 
-      const reordered = playSequence.current.slice()
-      const [moved] = reordered.splice(fromIndex, 1)
-      reordered.splice(toIndex, 0, moved)
-      playSequence.current = reordered
+        const reordered = playSequence.current.slice()
+        const [moved] = reordered.splice(fromIndex, 1)
+        reordered.splice(toIndex, 0, moved)
+        playSequence.current = reordered
 
-      if (!IS_TAURI) {
-        setUpNext(playSequence.current.slice(currentIndex.current + 1))
-        return
-      }
-      await rebuildTauriQueueInPlace()
-    },
-    [rebuildTauriQueueInPlace],
+        if (!IS_TAURI) {
+          setUpNext(playSequence.current.slice(currentIndex.current + 1))
+          return
+        }
+        await rebuildTauriQueueInPlace()
+      }),
+    [rebuildTauriQueueInPlace, serialized],
   )
 
   const removeFromQueue = useCallback(
-    async (index: number) => {
-      if (index <= currentIndex.current) return
-      if (index < 0 || index >= playSequence.current.length) return
+    (index: number) =>
+      serialized(async () => {
+        if (index <= currentIndex.current) return
+        if (index < 0 || index >= playSequence.current.length) return
 
-      playSequence.current = playSequence.current.filter((_, i) => i !== index)
+        playSequence.current = playSequence.current.filter((_, i) => i !== index)
 
-      if (!IS_TAURI) {
-        setUpNext(playSequence.current.slice(currentIndex.current + 1))
-        return
-      }
-      await rebuildTauriQueueInPlace()
-    },
-    [rebuildTauriQueueInPlace],
+        if (!IS_TAURI) {
+          setUpNext(playSequence.current.slice(currentIndex.current + 1))
+          return
+        }
+        await rebuildTauriQueueInPlace()
+      }),
+    [rebuildTauriQueueInPlace, serialized],
   )
 
   const addToQueue = useCallback(
-    async (recordingNodeId: number) => {
-      if (currentIndex.current === -1) {
-        await playTracks([recordingNodeId], 0, await fetchNodeTitle(recordingNodeId))
-        return
-      }
+    (recordingNodeId: number) =>
+      serialized(async () => {
+        if (currentIndex.current === -1) {
+          await playTracks([recordingNodeId], 0, await fetchNodeTitle(recordingNodeId))
+          return
+        }
 
-      const tracks = await resolveTracks([recordingNodeId])
-      if (tracks.length === 0) return
-      cacheTracks(tracks)
-      const title = titleCache.current.get(recordingNodeId) ?? (await fetchNodeTitle(recordingNodeId))
-      titleCache.current.set(recordingNodeId, title)
+        const tracks = await resolveTracks([recordingNodeId])
+        if (tracks.length === 0) return
+        cacheTracks(tracks)
+        const title = titleCache.current.get(recordingNodeId) ?? (await fetchNodeTitle(recordingNodeId))
+        titleCache.current.set(recordingNodeId, title)
 
-      playSequence.current = [...playSequence.current, { recordingNodeId, title, durationMs: tracks[0].durationMs }]
+        playSequence.current = [...playSequence.current, { recordingNodeId, title, durationMs: tracks[0].durationMs }]
 
-      if (!IS_TAURI) {
-        setUpNext(playSequence.current.slice(currentIndex.current + 1))
-        return
-      }
-      await rebuildTauriQueueInPlace()
-    },
-    [playTracks, rebuildTauriQueueInPlace, cacheTracks],
+        if (!IS_TAURI) {
+          setUpNext(playSequence.current.slice(currentIndex.current + 1))
+          return
+        }
+        await rebuildTauriQueueInPlace()
+      }),
+    [playTracks, rebuildTauriQueueInPlace, cacheTracks, serialized],
   )
 
   const playNext = useCallback(
-    async (recordingNodeId: number) => {
-      if (currentIndex.current === -1) {
-        await playTracks([recordingNodeId], 0, await fetchNodeTitle(recordingNodeId))
-        return
-      }
+    (recordingNodeId: number) =>
+      serialized(async () => {
+        if (currentIndex.current === -1) {
+          await playTracks([recordingNodeId], 0, await fetchNodeTitle(recordingNodeId))
+          return
+        }
 
-      const tracks = await resolveTracks([recordingNodeId])
-      if (tracks.length === 0) return
-      cacheTracks(tracks)
-      const title = titleCache.current.get(recordingNodeId) ?? (await fetchNodeTitle(recordingNodeId))
-      titleCache.current.set(recordingNodeId, title)
+        const tracks = await resolveTracks([recordingNodeId])
+        if (tracks.length === 0) return
+        cacheTracks(tracks)
+        const title = titleCache.current.get(recordingNodeId) ?? (await fetchNodeTitle(recordingNodeId))
+        titleCache.current.set(recordingNodeId, title)
 
-      const entry: QueueEntry = { recordingNodeId, title, durationMs: tracks[0].durationMs }
-      playSequence.current = [
-        ...playSequence.current.slice(0, currentIndex.current + 1),
-        entry,
-        ...playSequence.current.slice(currentIndex.current + 1),
-      ]
+        const entry: QueueEntry = { recordingNodeId, title, durationMs: tracks[0].durationMs }
+        playSequence.current = [
+          ...playSequence.current.slice(0, currentIndex.current + 1),
+          entry,
+          ...playSequence.current.slice(currentIndex.current + 1),
+        ]
 
-      if (!IS_TAURI) {
-        setUpNext(playSequence.current.slice(currentIndex.current + 1))
-        return
-      }
-      await rebuildTauriQueueInPlace()
-    },
-    [playTracks, rebuildTauriQueueInPlace, cacheTracks],
+        if (!IS_TAURI) {
+          setUpNext(playSequence.current.slice(currentIndex.current + 1))
+          return
+        }
+        await rebuildTauriQueueInPlace()
+      }),
+    [playTracks, rebuildTauriQueueInPlace, cacheTracks, serialized],
   )
 
   const seek = useCallback(async (positionMs: number) => {
@@ -794,6 +850,12 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     currentTitle,
     upNext,
     shuffled,
+    // True whenever a next/previous/toggleShuffle/reorderQueue/
+    // removeFromQueue/addToQueue/playNext call is running or queued behind
+    // one that is — see the `serialized` lock above. Drive button-disabled
+    // states off this rather than tracking per-call pending state locally,
+    // since any of these operations blocks all the others.
+    queueBusy,
     playNode,
     playTracks,
     playAlbum,

@@ -114,6 +114,13 @@ type TransportDockProps = {
   status: PlaybackStatus
   hasTrack: boolean
   shuffled: boolean
+  // True while a previous/next/shuffle click (or a reorder/remove/add
+  // elsewhere, e.g. NowPlayingPanel's up-next list) is still resolving —
+  // usePlayback.ts serializes all of them behind one shared lock, so a
+  // click on any of these while another is in flight gets queued rather
+  // than lost. Disabling here just makes that visible instead of leaving
+  // the dock looking inert for however long the in-flight one takes.
+  queueBusy: boolean
   onPause: () => void
   onResume: () => void
   onSeek: (ms: number) => void
@@ -127,6 +134,7 @@ export function TransportDock({
   status,
   hasTrack,
   shuffled,
+  queueBusy,
   onPause,
   onResume,
   onSeek,
@@ -151,7 +159,7 @@ export function TransportDock({
              * inactive elsewhere: signal when on, muted when off. */}
             <button
               type="button"
-              disabled={!hasTrack}
+              disabled={!hasTrack || queueBusy}
               onClick={onToggleShuffle}
               aria-label="Shuffle"
               aria-pressed={shuffled}
@@ -164,7 +172,7 @@ export function TransportDock({
 
             <button
               type="button"
-              disabled={!hasTrack}
+              disabled={!hasTrack || queueBusy}
               onClick={onPrevious}
               aria-label="Previous track"
               className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"
@@ -184,7 +192,7 @@ export function TransportDock({
 
             <button
               type="button"
-              disabled={!hasTrack}
+              disabled={!hasTrack || queueBusy}
               onClick={onNext}
               aria-label="Next track"
               className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"
