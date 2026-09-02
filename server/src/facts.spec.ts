@@ -75,6 +75,19 @@ describe("generateFacts", () => {
     expect(albumFacts).toContainEqual({ text: "Same label as Let It Be", targetNodeId: albumB, groupType: "same_label" });
   });
 
+  it("excludes an affinity-only collaborated_with edge (same label/era/credit, no shared recording)", () => {
+    const artistA = makeNode("artist", "The Beatles");
+    const artistB = makeNode("artist", "Never Actually Met");
+    // entities/collaboration.ts marks a G-7 affinity tie via the edge's own
+    // label column (same_label/same_era/same_credit) — a real collaborated_with
+    // edge from a shared recording leaves it null.
+    db.prepare(
+      "INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, 'collaborated_with', 'local', ?)",
+    ).run(artistA, artistB, "same_era");
+
+    expect(generateFacts(db, artistA)).toEqual([]);
+  });
+
   it("includes musicbrainz-sourced edges too — M-8's credit relations, not just local tags", () => {
     const recording = makeNode("recording", "Come Together");
     const producer = makeNode("credit", "George Martin");

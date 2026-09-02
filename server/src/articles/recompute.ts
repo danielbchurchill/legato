@@ -59,11 +59,17 @@ function artistArticle(db: Database.Database, nodeId: number): string | null {
     | { track_count: number; album_count: number }
     | undefined;
 
+  // label IS NULL restricts this to real ties (entities/collaboration.ts's
+  // computeArtistCollaborations — actually shared a recording), excluding
+  // the G-7 affinity edges (same label/era/producer) that share the same
+  // collaborated_with type for graph-clustering purposes but never mean
+  // these two artists actually worked together — "Has collaborated with"
+  // would otherwise be a false claim about artists with no real tie.
   const collaborators = db
     .prepare(
       `SELECT n.id, n.title FROM edges e
        JOIN nodes n ON n.id = (CASE WHEN e.from_node = ? THEN e.to_node ELSE e.from_node END)
-       WHERE e.type = 'collaborated_with' AND (e.from_node = ? OR e.to_node = ?)`,
+       WHERE e.type = 'collaborated_with' AND e.label IS NULL AND (e.from_node = ? OR e.to_node = ?)`,
     )
     .all(nodeId, nodeId, nodeId) as NodeRef[];
 

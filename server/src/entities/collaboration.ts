@@ -1,7 +1,19 @@
 import type Database from "better-sqlite3";
 import { pickMode } from "./mode.js";
 
-export type CollaborationEdge = { fromNode: number; toNode: number; type: "collaborated_with" | "same_artist" | "same_label" };
+// affinityReason is null for a real tie (shared recording) and a specific
+// reason for the three G-7 signals below — the article/facts prose reads
+// this to tell "actually worked together" apart from "merely adjacent"
+// before claiming a collaboration (articles/recompute.ts, facts.ts). Every
+// other consumer (similarity's connected components, layout/seed's
+// clustering) still just filters on type and doesn't care.
+export type AffinityReason = "same_label" | "same_era" | "same_credit";
+export type CollaborationEdge = {
+  fromNode: number;
+  toNode: number;
+  type: "collaborated_with" | "same_artist" | "same_label";
+  affinityReason?: AffinityReason;
+};
 
 // Unordered pairs, stored as one edge per pair (lower node id first) rather
 // than two directed edges — "A collaborated with B" has no natural
@@ -10,7 +22,11 @@ export type CollaborationEdge = { fromNode: number; toNode: number; type: "colla
 // every group: two artists who share more than one recording (or two
 // albums that share both an artist and a label) still produce one edge,
 // not one per group they co-occur in.
-function pairEdges(groups: Iterable<number[]>, type: CollaborationEdge["type"]): CollaborationEdge[] {
+function pairEdges(
+  groups: Iterable<number[]>,
+  type: CollaborationEdge["type"],
+  affinityReason?: AffinityReason,
+): CollaborationEdge[] {
   const seen = new Set<string>();
   const result: CollaborationEdge[] = [];
   for (const members of groups) {
@@ -20,7 +36,7 @@ function pairEdges(groups: Iterable<number[]>, type: CollaborationEdge["type"]):
         const key = `${sorted[i]}:${sorted[j]}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        result.push({ fromNode: sorted[i], toNode: sorted[j], type });
+        result.push({ fromNode: sorted[i], toNode: sorted[j], type, affinityReason });
       }
     }
   }
@@ -96,7 +112,11 @@ export function computeArtistAffinities(
     else byCredit.set(credit.creditNodeId, [...artists]);
   }
 
-  return pairEdges([...byLabel.values(), ...byEra.values(), ...byCredit.values()], "collaborated_with");
+  return [
+    ...pairEdges(byLabel.values(), "collaborated_with", "same_label"),
+    ...pairEdges(byEra.values(), "collaborated_with", "same_era"),
+    ...pairEdges(byCredit.values(), "collaborated_with", "same_credit"),
+  ];
 }
 
 export type AlbumForRelations = { nodeId: number; primaryArtistNodeId: number | null };
@@ -174,7 +194,12 @@ export function getAlbumLabelMap(db: Database.Database): Map<number, number | nu
 // Global dedup across every source that can produce a collaborated_with
 // edge (direct performer co-occurrence, shared label, shared era, shared
 // credit) — pairEdges only dedupes within its own call, and these come
-// from three separate calls now.
+// from three separate calls now. The key deliberately excludes
+// affinityReason and is first-wins: computeArtistCollaborations' real,
+// no-reason ties are concatenated first in recomputeCollaborationEdges, so
+// a pair tied by both an actual shared recording and, say, a shared label
+// keeps its real (affinityReason: undefined) edge rather than being
+// downgraded to an affinity-only one.
 function dedupeEdges(edges: CollaborationEdge[]): CollaborationEdge[] {
   const seen = new Set<string>();
   const result: CollaborationEdge[] = [];
@@ -217,8 +242,12 @@ export function recomputeCollaborationEdges(db: Database.Database): void {
 
   const applyAll = db.transaction(() => {
     db.prepare("DELETE FROM edges WHERE type IN ('collaborated_with', 'same_artist', 'same_label')").run();
-    const insert = db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, ?, 'local')");
-    for (const e of edges) insert.run(e.fromNode, e.toNode, e.type);
+    // affinityReason rides in the edges table's existing label column —
+    // null for a real collaborated_with tie, the reason string for an
+    // affinity-only one. articles/recompute.ts and facts.ts both filter on
+    // it before claiming two artists "collaborated".
+    const insert = db.prepare("INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, ?, 'local', ?)");
+    for (const e of edges) insert.run(e.fromNode, e.toNode, e.type, e.affinityReason ?? null);
   });
   applyAll();
 }

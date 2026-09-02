@@ -49,9 +49,18 @@ export function generateFacts(db: Database.Database, nodeId: number): Fact[] {
   // written to the graph and never surfaced anywhere.
   const outgoing = db
     .prepare(
+      // collaborated_with's own label column doubles as its G-7 affinity
+      // marker (entities/collaboration.ts) — same_label/same_era/
+      // same_credit for a graph-clustering-only tie, null for one where
+      // these two artists actually shared a recording. Excluding the
+      // labeled rows here keeps "Collaborated with X" from being asserted
+      // about artists who merely share a decade or a producer, while every
+      // other edge type still reads e.label for its own purpose
+      // (performed_credit's instrument/vocal part, just below).
       `SELECT e.type, e.label, e.to_node AS target_id, n.title, n.type AS target_type
        FROM edges e JOIN nodes n ON n.id = e.to_node
        WHERE e.from_node = ? AND e.source IN ('local', 'musicbrainz')
+         AND (e.type != 'collaborated_with' OR e.label IS NULL)
        ORDER BY e.type`,
     )
     .all(nodeId) as { type: string; label: string | null; target_id: number; title: string; target_type: string }[];

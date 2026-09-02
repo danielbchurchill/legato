@@ -79,7 +79,7 @@ describe("computeArtistAffinities — G-7's wider artist-graph signals", () => {
       [11, 900],
     ]);
     const edges = computeArtistAffinities(albums, albumLabel, new Map(), [], []);
-    expect(edges).toEqual([{ fromNode: 500, toNode: 600, type: "collaborated_with" }]);
+    expect(edges).toEqual([{ fromNode: 500, toNode: 600, type: "collaborated_with", affinityReason: "same_label" }]);
   });
 
   it("connects two artists whose albums land in the same era (decade), even on different labels", () => {
@@ -92,7 +92,7 @@ describe("computeArtistAffinities — G-7's wider artist-graph signals", () => {
       [11, 1960],
     ]);
     const edges = computeArtistAffinities(albums, new Map(), albumEraDecade, [], []);
-    expect(edges).toEqual([{ fromNode: 500, toNode: 600, type: "collaborated_with" }]);
+    expect(edges).toEqual([{ fromNode: 500, toNode: 600, type: "collaborated_with", affinityReason: "same_era" }]);
   });
 
   it("does not connect artists whose albums land in different decades", () => {
@@ -117,7 +117,7 @@ describe("computeArtistAffinities — G-7's wider artist-graph signals", () => {
       { recordingNodeId: 2, creditNodeId: 999 },
     ];
     const edges = computeArtistAffinities([], new Map(), new Map(), performerEdges, creditEdges);
-    expect(edges).toEqual([{ fromNode: 500, toNode: 600, type: "collaborated_with" }]);
+    expect(edges).toEqual([{ fromNode: 500, toNode: 600, type: "collaborated_with", affinityReason: "same_credit" }]);
   });
 
   it("ignores a credit on a recording with no performer edge to join against", () => {
@@ -284,6 +284,64 @@ describe("recomputeCollaborationEdges", () => {
       .prepare("SELECT COUNT(*) AS n FROM edges WHERE type = 'collaborated_with' AND from_node = ? AND to_node = ?")
       .get(artistA, artistB) as { n: number };
     expect(count.n).toBe(1);
+  });
+
+  it("persists affinityReason as the edge's label column, real ties as null", () => {
+    const db = openDb(":memory:");
+    const artistA = makeNode(db, "artist", "Artist A");
+    const artistB = makeNode(db, "artist", "Artist B");
+    const artistC = makeNode(db, "artist", "Artist C");
+    const recording = makeNode(db, "recording", "Duet");
+    const releaseA = makeNode(db, "release", "Solo Album A");
+    const releaseC = makeNode(db, "release", "Solo Album C");
+    const label = makeNode(db, "label", "Shared Label");
+
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+      recording,
+      artistA,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'featured_artist', 'local')").run(
+      recording,
+      artistB,
+    );
+    db.prepare("INSERT INTO albums (node_id, primary_artist_node_id, track_count) VALUES (?, ?, 1)").run(
+      releaseA,
+      artistA,
+    );
+    db.prepare("INSERT INTO albums (node_id, primary_artist_node_id, track_count) VALUES (?, ?, 1)").run(
+      releaseC,
+      artistC,
+    );
+    const soloA = makeNode(db, "recording", "Solo A Track");
+    const soloC = makeNode(db, "recording", "Solo C Track");
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+      soloA,
+      releaseA,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+      soloC,
+      releaseC,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'released_on', 'local')").run(
+      soloA,
+      label,
+    );
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'released_on', 'local')").run(
+      soloC,
+      label,
+    );
+
+    recomputeCollaborationEdges(db);
+
+    const real = db
+      .prepare("SELECT label FROM edges WHERE type = 'collaborated_with' AND from_node = ? AND to_node = ?")
+      .get(artistA, artistB) as { label: string | null };
+    expect(real.label).toBeNull();
+
+    const affinityOnly = db
+      .prepare("SELECT label FROM edges WHERE type = 'collaborated_with' AND from_node = ? AND to_node = ?")
+      .get(artistA, artistC) as { label: string | null };
+    expect(affinityOnly.label).toBe("same_label");
   });
 
   it("never touches deriveLocalEdges's own source='local' rows for recording nodes", () => {

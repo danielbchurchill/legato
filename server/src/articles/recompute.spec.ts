@@ -10,8 +10,13 @@ function makeNode(db: Database.Database, type: string, title: string): number {
   return row.id;
 }
 
-function edge(db: Database.Database, from: number, to: number, type: string): void {
-  db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, ?, 'local')").run(from, to, type);
+function edge(db: Database.Database, from: number, to: number, type: string, label: string | null = null): void {
+  db.prepare("INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, ?, 'local', ?)").run(
+    from,
+    to,
+    type,
+    label,
+  );
 }
 
 function articleFor(db: Database.Database, nodeId: number): string | undefined {
@@ -81,6 +86,28 @@ describe("recomputeArticles", () => {
     db.prepare("DELETE FROM edges WHERE from_node = ?").run(recording);
     recomputeArticles(db);
     expect(articleFor(db, recording)).toBeUndefined();
+  });
+
+  it("claims a collaboration only for a real, unlabeled collaborated_with tie", () => {
+    const db = openDb(":memory:");
+    const artist = makeNode(db, "artist", "The Beatles");
+    const trackCount = makeNode(db, "recording", "Come Together");
+    edge(db, trackCount, artist, "performed_by");
+
+    const realCollaborator = makeNode(db, "artist", "Billy Preston");
+    edge(db, artist, realCollaborator, "collaborated_with");
+
+    // G-7 affinity tie (entities/collaboration.ts) — same label/era/credit,
+    // never a shared recording. Its label column carries the reason, and
+    // that's exactly what should keep it out of "Has collaborated with".
+    const affinityOnly = makeNode(db, "artist", "Never Actually Met");
+    edge(db, artist, affinityOnly, "collaborated_with", "same_era");
+
+    recomputeArticles(db);
+
+    const body = articleFor(db, artist);
+    expect(body).toContain(`Has collaborated with [Billy Preston](node:${realCollaborator})`);
+    expect(body).not.toContain("Never Actually Met");
   });
 
   it("is idempotent — recomputing twice with no data change leaves one row", () => {
