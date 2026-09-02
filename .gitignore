@@ -14,8 +14,16 @@ dist-ssr
 *.tsbuildinfo
 
 # Fetched by scripts/fetch-media-binaries.mjs — real ffmpeg/fpcalc binaries
-# for bundling, never committed.
-src-tauri/binaries/
+# for bundling, never committed. The directory itself has to survive a fresh
+# checkout though: tauri.conf.json's bundle.resources references it, and
+# tauri_build::build() (src-tauri/build.rs) resolves that path unconditionally
+# at build time — even for `cargo clippy`/`cargo build`, not just a real
+# `tauri build` bundle — so a genuinely missing directory fails the build
+# outright ("resource path `binaries` doesn't exist"), confirmed on every
+# platform in CI. .gitkeep tracks the empty directory without tracking its
+# real (gitignored) contents.
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
 
 .claude/
 
