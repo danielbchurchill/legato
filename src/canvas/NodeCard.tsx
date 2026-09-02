@@ -4,6 +4,7 @@ import { Surface } from '../shell/Surface'
 import { CoverArt } from '../ui/CoverArt'
 import { DataRow, SectionHeader } from '../ui/DataRow'
 import { Icon } from '../ui/Icon'
+import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
 import { useMountFade } from '../ui/useMountFade'
 import { formatDuration, formatLongDuration, NO_VALUE } from '../ui/format'
@@ -243,15 +244,17 @@ export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onO
           <p className="truncate text-[length:var(--text-base)] leading-[19px] text-[var(--color-muted)]">
             selected {KIND_NOUN[type] ?? type}
           </p>
-          <p className="mt-[17px] truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[19px] text-[var(--color-ink)]">
-            {title}
-          </p>
+          <ScrollingText
+            text={title}
+            className="mt-[17px] font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[19px] text-[var(--color-ink)]"
+          />
           {/* Artist nodes have no second line. The cover sets the card's
             * height, so its absence shortens the column, not the card. */}
           {subtitle && (
-            <p className="mt-[11px] truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[19px] text-[var(--color-ink)]">
-              {subtitle}
-            </p>
+            <ScrollingText
+              text={subtitle}
+              className="mt-[11px] font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[19px] text-[var(--color-ink)]"
+            />
           )}
 
           {rows.length > 0 && (

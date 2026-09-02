@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../ui/Icon'
+import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
 import { SERVER_HOST } from '../config/serverHost'
 import { AddToPlaylistButton } from './AddToPlaylistButton'
@@ -45,9 +46,10 @@ export function NodeTitleBlock({ node }: { node: NodeDetail }) {
          * recording node gets a second (add-to-playlist) button next to the
          * heart, so its spacer is wider than every other node type's. */}
         <span aria-hidden className={`shrink-0 ${node.type === 'recording' ? 'w-[56px]' : 'w-[24px]'}`} />
-        <p className="min-w-0 flex-1 truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
-          {node.title}
-        </p>
+        <ScrollingText
+          text={node.title}
+          className="min-w-0 flex-1 font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]"
+        />
         <Tooltip label={favouriteLabel}>
           <button
             type="button"
@@ -65,14 +67,16 @@ export function NodeTitleBlock({ node }: { node: NodeDetail }) {
       {node.type === 'recording' ? (
         <>
           {album && (
-            <p className="w-full truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
-              {album.other_title}
-            </p>
+            <ScrollingText
+              text={album.other_title}
+              className="w-full font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]"
+            />
           )}
           {artist && (
-            <p className="w-full truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
-              {artist.other_title}
-            </p>
+            <ScrollingText
+              text={artist.other_title}
+              className="w-full font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]"
+            />
           )}
         </>
       ) : (

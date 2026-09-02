@@ -411,6 +411,14 @@ A blanket `*{transition:none}` reset is the wrong reflex — it strips the feedb
 
 This is the same attention curve as "Acknowledge under 100ms, finish under 400ms" above, applied to work whose true length isn't known in advance.
 
+### A second bounded exception: revealing overflow
+
+Same principle, a different kind of "not decoration." A marquee that scrolls a truncated title through on a loop (`src/ui/ScrollingText.tsx`) is the only way the rest of a cut-off track/album/artist name is ever seen — it isn't a mood, it's the content. It stays bounded the same three ways "Nothing animates on a loop" exists to guard against in the first place:
+
+- **Static until proven otherwise.** Content that fits its container renders exactly like `truncate` always has — no measurement artifact, no tell that a marquee mechanism even exists underneath. Motion only appears where there is something a static ellipsis is actually hiding, and it holds still for a beat before it starts, so a glance still reads as static first.
+- **One field, not a wall of them.** Applied to a genuinely single, prominent field — the currently selected or playing node's title/album/artist (`NodeTitleBlock.tsx`, the canvas's own selected-node card in `NodeCard.tsx`) — never to a list of rows. "Motion is pre-attentive, so spend it once per interaction" above is exactly why queue rows, playlist rows, and search results keep the plain `truncate` they already had: marqueeing every row in a list at once is the wall-of-motion this rule protects against, just multiplied instead of stacked into one thing.
+- **Reduced motion means the exception doesn't apply.** `usePrefersReducedMotion()` (`src/ui/usePrefersReducedMotion.ts` — the same hook `Disclosure.tsx` already uses) forces the plain static ellipsis, same as every other truncated field in the app.
+
 ---
 
 ## Empty and error states
