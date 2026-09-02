@@ -64,9 +64,56 @@ const SELECT_NODE_PX = 130
 
 /* Sanity bounds, not measured values: the camera has no zoom limits (see
  * Canvas.tsx), so an unclamped scale could shrink the card to nothing or
- * blow it up past readability at the extremes of a scroll-wheel zoom. */
+ * blow it up past readability at the extremes of a scroll-wheel zoom.
+ *
+ * MAX_CARD_SCALE was 2.5 — confirmed live that a realistic scroll-wheel
+ * session hits it after only five or six notches,
+ * well inside the camera's actually-reachable range: the card would freeze
+ * solid while everything around it, edges and neighboring nodes included,
+ * kept visibly growing, reading as "stopped getting bigger" rather than as
+ * an intentional ceiling. radiusPx has no cap of its own (sigma's node
+ * rendering never stops growing), so *some* limit still has to exist here —
+ * a DOM element can't scale forever — but it needs enough headroom that a
+ * normal zoom-in session runs out of interest in the graph around it before
+ * it ever reaches this number. */
 const MIN_CARD_SCALE = 0.4
-const MAX_CARD_SCALE = 2.5
+const MAX_CARD_SCALE = 6
+
+/* The card is real DOM with pointer-events: auto (its buttons need clicks),
+ * sitting on top of sigma's canvas in a sibling layer — so a wheel event
+ * over the card never reaches sigma's own listener at all; DOM events don't
+ * cross from one sibling subtree to another. Confirmed live: scrolling with
+ * the cursor left where it was right after the click that opened the card —
+ * the single most natural way to zoom in on what you just selected — did
+ * nothing whatsoever, not even a muted response.
+ *
+ * sigma.getContainer() is *not* the fix — it's the outer element passed to
+ * the Sigma constructor, but MouseCaptor is wired to its own transparent
+ * `sigma-mouse` canvas layered on top of the rendered ones
+ * (mouseCaptor = new MouseCaptor(this.elements.mouse, this) in sigma's own
+ * source), so a wheel dispatched at the outer container never reaches it
+ * either — confirmed live the same way, by checking whether the listener's
+ * own preventDefault ran. getMouseCaptor().container is that actual canvas,
+ * public and typed despite the name. Its handler reads position via
+ * getMouseCoords(e, this.container) — the event's clientX/Y against that
+ * container's own bounding rect, not e.target — and has no isTrusted check,
+ * so re-dispatching a synthetic wheel event there reproduces a real
+ * over-canvas scroll exactly, coordinates included. */
+function forwardWheelToCanvas(renderer: Sigma | null, e: React.WheelEvent<HTMLDivElement>): void {
+  if (!renderer) return
+  e.preventDefault()
+  renderer.getMouseCaptor().container.dispatchEvent(
+    new WheelEvent('wheel', {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+      deltaMode: e.deltaMode,
+      bubbles: true,
+      cancelable: true,
+    }),
+  )
+}
 
 function place(element: HTMLDivElement, { x, y, radiusPx }: NodeAnchor): void {
   // The card's geometry is measured at SELECT_NODE_PX/2 radius (DESIGN.md's
@@ -160,7 +207,7 @@ export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onO
   const rows = summary ? summaryRows(summary) : []
 
   return (
-    <div ref={ref} className="absolute top-0 left-0">
+    <div ref={ref} className="absolute top-0 left-0" onWheel={(e) => forwardWheelToCanvas(renderer, e)}>
       <Surface
         className="relative flex transition-opacity duration-[var(--motion-base)] ease-[var(--ease-out)]"
         style={{
