@@ -110,6 +110,49 @@ export function recomputeSimilarityFeatures(db: Database.Database): void {
       for (const vector of vectors) for (let i = 0; i < dims; i++) centroid[i] += vector[i] / vectors.length;
       upsert.run(releaseId, JSON.stringify(centroid));
     }
+
+    // "Every vector is rebuilt together from current data on every pass"
+    // (this function's own doc comment above) was only true for nodes that
+    // survived into this pass's `recordingRows` — a recording whose last
+    // file was removed (a rescan, a hygiene resolution replacing it with a
+    // new node id) drops out of that query, but its old row here was never
+    // deleted, so it kept whatever vector_json a *previous* pass gave it.
+    // Once the library's vocabulary (buildFeatureSpace's genre/artist/label
+    // sets) grows on a later pass, that orphaned vector is shorter than
+    // every current one — confirmed live: 25 file-less recordings stuck at
+    // a 26-dim vector against 31 dims for everything else, so any
+    // similarity query whose candidate pool happened to include one of them
+    // threw out of cosineSimilarity's length check, and with no error
+    // boundary anywhere in the app that took the whole page down.
+    //
+    // Re-derived in SQL rather than collected into a JS Set and passed as a
+    // NOT IN (...) list (whose parameter count would scale with library
+    // size) or stamped via updated_at (datetime('now') is only
+    // second-precision — two passes in the same second, exactly what a fast
+    // rescan or a test does, would collide and leave the orphan behind).
+    // These conditions mirror recordingRows' own JOIN and the
+    // vectorsByRecording.has() guard above exactly, so "wanted" here always
+    // means what this pass actually wrote.
+    db.prepare(
+      `DELETE FROM node_similarity_features WHERE node_id IN (
+         SELECT nsf.node_id FROM node_similarity_features nsf
+         JOIN nodes n ON n.id = nsf.node_id
+         WHERE n.type = 'recording'
+           AND NOT EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = nsf.node_id)
+       )`,
+    ).run();
+    db.prepare(
+      `DELETE FROM node_similarity_features WHERE node_id IN (
+         SELECT nsf.node_id FROM node_similarity_features nsf
+         JOIN nodes n ON n.id = nsf.node_id
+         WHERE n.type = 'release'
+           AND NOT EXISTS (
+             SELECT 1 FROM edges e
+             JOIN files f ON f.recording_node_id = e.from_node
+             WHERE e.type = 'appears_on' AND e.to_node = nsf.node_id
+           )
+       )`,
+    ).run();
   });
   applyAll();
 }

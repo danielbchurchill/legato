@@ -311,13 +311,21 @@ function SimilaritySection({ anchorNodeId, onSelectNode }: { anchorNodeId: numbe
     // image loads, which read as artwork flashing/failing to load even
     // after the stale-overwrite case itself was fixed.
     const controller = new AbortController()
+    // A 4xx/5xx still resolves with a JSON body (Fastify's own error shape,
+    // `{statusCode, error, message}` — not an array), and .json() parses it
+    // without complaint either way. Without the r.ok check and the isArray
+    // guard, a failed request handed SimilarityStrip that object directly;
+    // items.length was undefined (not 0), so it fell through to
+    // items.map — a real crash, confirmed live against a 500 from
+    // /nodes/:id/similar, and with no error boundary anywhere above this it
+    // took the whole app down to a blank screen over one optional strip.
     fetch(`${API}/nodes/${anchorNodeId}/similar`, { signal: controller.signal })
-      .then((r) => r.json())
-      .then(setSimilar)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setSimilar(Array.isArray(data) ? data : []))
       .catch((err) => err.name !== 'AbortError' && setSimilar([]))
     fetch(`${API}/nodes/${anchorNodeId}/dissimilar`, { signal: controller.signal })
-      .then((r) => r.json())
-      .then(setDissimilar)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setDissimilar(Array.isArray(data) ? data : []))
       .catch((err) => err.name !== 'AbortError' && setDissimilar([]))
     return () => controller.abort()
   }, [anchorNodeId])

@@ -190,4 +190,40 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
     expect(similar.map((r) => r.nodeId)).not.toContain(sameRelease);
     expect(similar.map((r) => r.nodeId)).toContain(otherRelease);
   });
+
+  // Reproduces the #22 grey-screen bug: a recording whose file row
+  // disappears (a rescan, a hygiene resolution) drops out of
+  // recomputeSimilarityFeatures' `recordingRows` query, so its old
+  // node_similarity_features row was never touched again. Once a later
+  // recompute widens the library's vocabulary (a new artist/genre), that
+  // orphaned vector is a different length than every fresh one, and any
+  // candidate pool that included it threw out of cosineSimilarity's length
+  // check — a 500 the client had no boundary to catch, taking the whole
+  // app down over one optional similarity strip.
+  it("prunes a recording's vector once its file is gone, so a later vocabulary change can't leave a stale-length vector behind", () => {
+    const db = openDb(":memory:");
+    const beatles = makeNode(db, "artist", "The Beatles");
+    const orphan = makeRecording(db, "Ghost Track", { artist: beatles, year: 1969, genre: ["rock"] });
+    recomputeSimilarityFeatures(db);
+
+    // The file backing this recording disappears without the node itself
+    // being deleted — matches how the real orphaned rows were found (files
+    // with recording_node_id pointing at recordings with zero rows left).
+    db.prepare("DELETE FROM files WHERE recording_node_id = ?").run(orphan);
+
+    // A new artist and genre widen buildFeatureSpace's one-hot vocabulary,
+    // so a vector built in this pass is a different length than the
+    // orphan's, which was built before either existed.
+    const dylan = makeNode(db, "artist", "Bob Dylan");
+    const anchor = makeRecording(db, "Come Together", { artist: beatles, year: 1969, genre: ["rock"] });
+    const other = makeRecording(db, "Like a Rolling Stone", { artist: dylan, year: 1965, genre: ["folk"] });
+    recomputeSimilarityFeatures(db);
+
+    const orphanRow = db.prepare("SELECT 1 FROM node_similarity_features WHERE node_id = ?").get(orphan);
+    expect(orphanRow).toBeUndefined();
+
+    expect(() => findMostSimilar(db, anchor, 5)).not.toThrow();
+    expect(() => findMostDissimilar(db, anchor, 5)).not.toThrow();
+    expect(findMostSimilar(db, anchor, 5).map((r) => r.nodeId)).toContain(other);
+  });
 });
