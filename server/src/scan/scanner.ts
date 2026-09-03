@@ -213,24 +213,40 @@ export type ScanProgress = {
   filesUpdated: number;
 };
 
+export type ScanMode = "full" | "incremental";
+
 // Split in two so an HTTP caller can get a job id back immediately instead
 // of blocking the request for however long the whole walk takes:
 // createScanJob() is a single fast synchronous insert, executeScan() is the
 // long-running part a route handler fires-and-forgets while the client
 // polls GET /api/v1/scan-jobs/:id for status.
-export function createScanJob(db: Database.Database, libraryRootId: number): number {
+export function createScanJob(
+  db: Database.Database,
+  libraryRootId: number,
+  mode: ScanMode = "full",
+): number {
   const job = db
-    .prepare("INSERT INTO scan_jobs (library_root_id, status) VALUES (?, 'running') RETURNING id")
-    .get(libraryRootId) as { id: number };
+    .prepare("INSERT INTO scan_jobs (library_root_id, status, mode) VALUES (?, 'running', ?) RETURNING id")
+    .get(libraryRootId, mode) as { id: number };
   return job.id;
 }
 
+// Issue #28: on a large library, a 'full' rescan pays a stat() + two tiny
+// queries for every file already known to the DB just to confirm nothing
+// changed (see scanFile's unchanged-mtime/size short-circuit). 'incremental'
+// skips that entirely — it diffs the walk against files.file_path for this
+// root using nothing but a Set (no per-known-file I/O) and only calls
+// scanFile on paths the DB has never seen. It deliberately never touches an
+// already-known row: no missing-file sweep either, since that writes
+// missing_since onto rows this mode is promising not to touch. A file that
+// moved, was edited, or vanished is still 'full' rescan's job.
 export async function executeScan(
   db: Database.Database,
   jobId: number,
   libraryRootId: number,
   rootPath: string,
   onProgress?: (progress: ScanProgress) => void,
+  mode: ScanMode = "full",
 ): Promise<void> {
   let filesScanned = 0;
   let filesAdded = 0;
@@ -238,10 +254,22 @@ export async function executeScan(
 
   try {
     const paths = await walkLibraryRoot(rootPath);
-    const seen = new Set(paths);
-    const filesTotal = paths.length;
 
-    for (const filePath of paths) {
+    let pathsToScan = paths;
+    if (mode === "incremental") {
+      const known = new Set(
+        (
+          db.prepare("SELECT file_path FROM files WHERE library_root_id = ?").all(libraryRootId) as {
+            file_path: string;
+          }[]
+        ).map((row) => row.file_path),
+      );
+      pathsToScan = paths.filter((filePath) => !known.has(filePath));
+    }
+
+    const filesTotal = pathsToScan.length;
+
+    for (const filePath of pathsToScan) {
       const outcome = await scanFile(db, libraryRootId, filePath);
       filesScanned++;
       if (outcome === "added") filesAdded++;
@@ -249,21 +277,29 @@ export async function executeScan(
       onProgress?.({ jobId, libraryRootId, filesScanned, filesTotal, filesAdded, filesUpdated });
     }
 
-    const existingPaths = db
-      .prepare("SELECT file_path FROM files WHERE library_root_id = ? AND missing_since IS NULL")
-      .all(libraryRootId) as { file_path: string }[];
     let filesMissing = 0;
-    for (const { file_path } of existingPaths) {
-      if (!seen.has(file_path)) {
-        markMissing(db, file_path);
-        filesMissing++;
+    if (mode === "full") {
+      const seen = new Set(paths);
+      const existingPaths = db
+        .prepare("SELECT file_path FROM files WHERE library_root_id = ? AND missing_since IS NULL")
+        .all(libraryRootId) as { file_path: string }[];
+      for (const { file_path } of existingPaths) {
+        if (!seen.has(file_path)) {
+          markMissing(db, file_path);
+          filesMissing++;
+        }
       }
     }
 
     // B-1: everything derived from what scan found, recomputed
     // unconditionally for every file currently in the library — not just
     // the ones this run changed. Idempotent (see seed.ts's seed_version
-    // guard, deriveLocalEdges' delete-then-reinsert) on a no-op re-scan.
+    // guard, deriveLocalEdges' delete-then-reinsert) on a no-op re-scan, and
+    // still needed after an incremental scan: newly-added files still have
+    // to get positions, entity aggregation, and similarity edges to show up
+    // in the graph at all. This reads the files table as a whole rather
+    // than re-checking any individual file, so it doesn't break the mode's
+    // promise not to touch already-known rows.
     recompute(db);
 
     db.prepare(
@@ -287,7 +323,21 @@ export async function runFullScan(
   rootPath: string,
   onProgress?: (progress: ScanProgress) => void,
 ): Promise<number> {
-  const jobId = createScanJob(db, libraryRootId);
-  await executeScan(db, jobId, libraryRootId, rootPath, onProgress);
+  const jobId = createScanJob(db, libraryRootId, "full");
+  await executeScan(db, jobId, libraryRootId, rootPath, onProgress, "full");
+  return jobId;
+}
+
+// Same shape as runFullScan, for callers (tests, and POST /scan's
+// mode: "incremental") that want to await a whole incremental run rather
+// than poll a job id.
+export async function runIncrementalScan(
+  db: Database.Database,
+  libraryRootId: number,
+  rootPath: string,
+  onProgress?: (progress: ScanProgress) => void,
+): Promise<number> {
+  const jobId = createScanJob(db, libraryRootId, "incremental");
+  await executeScan(db, jobId, libraryRootId, rootPath, onProgress, "incremental");
   return jobId;
 }

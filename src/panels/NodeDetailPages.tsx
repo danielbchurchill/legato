@@ -3,7 +3,7 @@ import { SectionHeader } from '../ui/DataRow'
 import { ArticleBody } from '../ui/ArticleBody'
 import { Tooltip } from '../ui/Tooltip'
 import { Icon } from '../ui/Icon'
-import { FactGroupsList, IncomingRecordingsList, PersonalEdgesSection } from './ConnectionsContent'
+import { FactGroupsList, IncomingRecordingsList, PersonalEdgesSection, ReleasesList } from './ConnectionsContent'
 import { LyricsContent } from './LyricsContent'
 import { MbidBlock, MetadataActions, MetadataRows, InstancesList, PendingWriteReview } from './MetadataFields'
 import { useLyrics } from './useLyrics'
@@ -120,6 +120,8 @@ export function NodeDetailPages({ node, reload, isPlaying, onSelectNode, onPlay 
               <PendingWriteReview editingState={editingState} />
 
               <FactGroupsList facts={node.facts} onSelectNode={onSelectNode} />
+
+              <ReleasesList node={node} onSelectNode={onSelectNode} />
 
               <IncomingRecordingsList node={node} onSelectNode={onSelectNode} />
 

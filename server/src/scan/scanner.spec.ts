@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { openDb } from "../db.js";
-import { markMissing, runFullScan, scanFile } from "./scanner.js";
+import { markMissing, runFullScan, runIncrementalScan, scanFile } from "./scanner.js";
 
 // A minimal-but-valid 44-byte-header WAV (silence) — enough for
 // music-metadata to report format/duration without needing a real codec or
@@ -27,6 +27,20 @@ function writeSilentWav(filePath: string, seconds = 1, sampleRate = 8000) {
   buffer.write("data", 36);
   buffer.writeUInt32LE(dataSize, 40);
   writeFileSync(filePath, buffer);
+}
+
+// walkLibraryRoot (fast-glob under `absolute: true`) always normalizes
+// returned paths to forward slashes, even on Windows — fast-glob's own
+// entry transformer calls unixify() unconditionally, not just when
+// running on a POSIX host. A row that entered the DB through a full or
+// incremental scan is keyed on that forward-slash form, so a lookup built
+// from a plain path.join (native separators — backslashes on Windows) has
+// to be normalized the same way before it'll match. Only needed for rows
+// that went through a scan; scanFile() called directly with a path.join
+// string (elsewhere in this file) stores that exact string, so no
+// mismatch there.
+function toScannedPath(p: string): string {
+  return p.replace(/\\/g, "/");
 }
 
 let db: Database.Database;
@@ -174,5 +188,90 @@ describe("runFullScan", () => {
 
     const after = db.prepare("SELECT last_seen_at FROM files").get() as { last_seen_at: string };
     expect(after.last_seen_at >= before.last_seen_at).toBe(true);
+  });
+});
+
+describe("runIncrementalScan", () => {
+  it("only picks up files new to the DB, leaving known files completely untouched", async () => {
+    const aPath = path.join(dir, "a.wav");
+    writeSilentWav(aPath, 1);
+    await runFullScan(db, libraryRootId, dir);
+    const before = db.prepare("SELECT last_seen_at, duration_ms FROM files WHERE file_path = ?").get(
+      toScannedPath(aPath),
+    ) as { last_seen_at: string; duration_ms: number };
+
+    await new Promise((resolve) => setTimeout(resolve, 1100)); // ensure a distinguishable timestamp
+    writeSilentWav(aPath, 2); // changed on disk — incremental mode must never notice
+    writeSilentWav(path.join(dir, "b.wav"), 1); // genuinely new
+
+    const jobId = await runIncrementalScan(db, libraryRootId, dir);
+    const job = db.prepare("SELECT * FROM scan_jobs WHERE id = ?").get(jobId) as {
+      status: string;
+      mode: string;
+      files_scanned: number;
+      files_added: number;
+      files_updated: number;
+      files_missing: number;
+    };
+    expect(job.status).toBe("done");
+    expect(job.mode).toBe("incremental");
+    expect(job.files_scanned).toBe(1); // only b.wav — a.wav was never re-stat'd
+    expect(job.files_added).toBe(1);
+    expect(job.files_updated).toBe(0);
+    expect(job.files_missing).toBe(0);
+
+    const after = db.prepare("SELECT last_seen_at, duration_ms FROM files WHERE file_path = ?").get(
+      toScannedPath(aPath),
+    ) as { last_seen_at: string; duration_ms: number };
+    expect(after.last_seen_at).toBe(before.last_seen_at);
+    expect(after.duration_ms).toBe(before.duration_ms); // still the original 1s value, not re-parsed
+
+    const totalRows = db.prepare("SELECT COUNT(*) AS n FROM files").get() as { n: number };
+    expect(totalRows.n).toBe(2);
+  });
+
+  it("does not mark a vanished file missing — that stays full scan's job", async () => {
+    const aPath = path.join(dir, "a.wav");
+    writeSilentWav(aPath);
+    await runFullScan(db, libraryRootId, dir);
+
+    rmSync(aPath);
+    writeSilentWav(path.join(dir, "b.wav"));
+    const jobId = await runIncrementalScan(db, libraryRootId, dir);
+    const job = db.prepare("SELECT files_missing FROM scan_jobs WHERE id = ?").get(jobId) as {
+      files_missing: number;
+    };
+    expect(job.files_missing).toBe(0);
+
+    const file = db.prepare("SELECT missing_since FROM files WHERE file_path = ?").get(
+      toScannedPath(aPath),
+    ) as { missing_since: string | null };
+    expect(file.missing_since).toBeNull();
+  });
+
+  it("a no-op incremental scan (nothing new) adds nothing", async () => {
+    writeSilentWav(path.join(dir, "a.wav"));
+    await runFullScan(db, libraryRootId, dir);
+
+    const jobId = await runIncrementalScan(db, libraryRootId, dir);
+    const job = db.prepare("SELECT files_scanned, files_added FROM scan_jobs WHERE id = ?").get(jobId) as {
+      files_scanned: number;
+      files_added: number;
+    };
+    expect(job.files_scanned).toBe(0);
+    expect(job.files_added).toBe(0);
+  });
+
+  it("still recomputes derived data so newly-added files join the graph", async () => {
+    writeSilentWav(path.join(dir, "a.wav"));
+    await runIncrementalScan(db, libraryRootId, dir);
+
+    const file = db.prepare("SELECT recording_node_id FROM files WHERE file_path = ?").get(
+      toScannedPath(path.join(dir, "a.wav")),
+    ) as { recording_node_id: number };
+    const position = db
+      .prepare("SELECT node_id FROM positions WHERE node_id = ? AND granularity = 'tracks'")
+      .get(file.recording_node_id);
+    expect(position).toBeTruthy();
   });
 });

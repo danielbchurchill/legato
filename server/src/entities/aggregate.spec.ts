@@ -4,6 +4,7 @@ import { openDb } from "../db.js";
 import {
   computeAlbumAggregates,
   computeArtistAggregates,
+  listArtistReleases,
   recomputeEntities,
   type EdgeRef,
 } from "./aggregate.js";
@@ -269,5 +270,103 @@ describe("recomputeEntities", () => {
       | undefined;
     expect(row).toBeDefined();
     expect(row?.track_count).toBe(1);
+  });
+});
+
+describe("listArtistReleases", () => {
+  let db: Database.Database;
+
+  function makeNode(type: string, title: string): number {
+    const row = db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as {
+      id: number;
+    };
+    return row.id;
+  }
+
+  function credit(recordingNode: number, artistNode: number, type = "performed_by"): void {
+    db.prepare(`INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, ?, 'local')`).run(
+      recordingNode,
+      artistNode,
+      type,
+    );
+  }
+
+  function appearsOn(recordingNode: number, releaseNode: number): void {
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+      recordingNode,
+      releaseNode,
+    );
+  }
+
+  it("returns an artist's real releases, oldest first, with track count and year span", () => {
+    db = openDb(":memory:");
+    const artist = makeNode("artist", "Bob Dylan");
+
+    const laterRelease = makeNode("release", "Blood on the Tracks");
+    const laterRecording = makeNode("recording", "Tangled Up in Blue");
+    db.prepare("INSERT INTO recordings (node_id, canonical_duration_ms) VALUES (?, ?)").run(laterRecording, 320000);
+    appearsOn(laterRecording, laterRelease);
+    credit(laterRecording, artist);
+    const laterYear = makeNode("year", "1975");
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'released_in', 'local')").run(
+      laterRecording,
+      laterYear,
+    );
+
+    const earlierRelease = makeNode("release", "Highway 61 Revisited");
+    const earlierRecording = makeNode("recording", "Like a Rolling Stone");
+    db.prepare("INSERT INTO recordings (node_id, canonical_duration_ms) VALUES (?, ?)").run(
+      earlierRecording,
+      370000,
+    );
+    appearsOn(earlierRecording, earlierRelease);
+    credit(earlierRecording, artist);
+    const earlierYear = makeNode("year", "1965");
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'released_in', 'local')").run(
+      earlierRecording,
+      earlierYear,
+    );
+
+    recomputeEntities(db);
+
+    const releases = listArtistReleases(db, artist);
+    expect(releases.map((r) => r.title)).toEqual(["Highway 61 Revisited", "Blood on the Tracks"]);
+    expect(releases[0]).toEqual({
+      id: earlierRelease,
+      title: "Highway 61 Revisited",
+      trackCount: 1,
+      totalDurationMs: 370000,
+      yearMin: 1965,
+      yearMax: 1965,
+    });
+  });
+
+  it("excludes a release this artist only features on, never leads", () => {
+    db = openDb(":memory:");
+    const primary = makeNode("artist", "The Beatles");
+    const featured = makeNode("artist", "Billy Preston");
+    const release = makeNode("release", "Let It Be");
+    const recording = makeNode("recording", "Get Back");
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+    appearsOn(recording, release);
+    credit(recording, primary);
+    credit(recording, featured, "featured_artist");
+
+    recomputeEntities(db);
+
+    expect(listArtistReleases(db, primary).map((r) => r.title)).toEqual(["Let It Be"]);
+    expect(listArtistReleases(db, featured)).toEqual([]);
+  });
+
+  it("returns an empty array for an artist whose recordings never appeared on a release", () => {
+    db = openDb(":memory:");
+    const artist = makeNode("artist", "A Loose Single");
+    const recording = makeNode("recording", "One-Off");
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+    credit(recording, artist);
+
+    recomputeEntities(db);
+
+    expect(listArtistReleases(db, artist)).toEqual([]);
   });
 });

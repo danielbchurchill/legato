@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Icon } from '../ui/Icon'
 import { SectionHeader } from '../ui/DataRow'
 import { Button } from '../ui/Button'
+import { formatLongDuration } from '../ui/format'
 import { API, type Edge, type Fact, type NodeDetail, type SearchResult } from './useNodeDetail'
 
 /* Everything relationship-shaped about a node: generated facts, incoming
@@ -128,6 +129,38 @@ export function FactGroupsList({ facts, onSelectNode }: { facts: Fact[]; onSelec
         </li>
       ))}
     </ul>
+  )
+}
+
+// Issue #33: an artist's discography as its own section — real release
+// entities (server/src/entities/aggregate.ts's albums table), not the
+// flattened recording-by-recording list IncomingRecordingsList shows below
+// it. Empty on every node but an artist, so this renders nothing there.
+export function ReleasesList({ node, onSelectNode }: { node: NodeDetail; onSelectNode: (id: number) => void }) {
+  if (node.releases.length === 0) return null
+  return (
+    <>
+      <SectionHeader title="releases" />
+      <ul className="mt-[8px] flex max-h-[240px] flex-col gap-[2px] overflow-y-auto">
+        {node.releases.map((release) => (
+          <li key={release.id} className="flex items-baseline justify-between gap-[8px]">
+            <button
+              type="button"
+              onClick={() => onSelectNode(release.id)}
+              className={`truncate py-[2px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] ${linkClass}`}
+            >
+              {release.title}
+            </button>
+            <span className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">
+              {release.yearMin != null &&
+                (release.yearMin === release.yearMax ? release.yearMin : `${release.yearMin}–${release.yearMax}`)}
+              {release.yearMin != null && ' · '}
+              {release.trackCount} track{release.trackCount === 1 ? '' : 's'} · {formatLongDuration(release.totalDurationMs)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </>
   )
 }
 
@@ -341,6 +374,7 @@ export function ConnectionsBody({
   return (
     <>
       <FactGroupsList facts={node.facts} onSelectNode={onSelectNode} />
+      <ReleasesList node={node} onSelectNode={onSelectNode} />
       <IncomingRecordingsList node={node} onSelectNode={onSelectNode} />
       <PersonalEdgesSection node={node} reload={reload} onSelectNode={onSelectNode} />
     </>

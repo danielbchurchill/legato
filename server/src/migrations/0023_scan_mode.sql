@@ -1,0 +1,14 @@
+-- Issue #28: rescanning a library has always meant walking every file and
+-- re-stat'ing every row already in the DB, even when nothing on disk
+-- changed since the last scan. That's cheap per file (one stat, two tiny
+-- queries — see scanFile's unchanged-mtime/size short-circuit) but it's
+-- still O(library size) I/O and a last_seen_at write on every row, every
+-- time, just to notice that almost nothing changed.
+--
+-- 'incremental' is the new mode: diff the on-disk walk against files.file_path
+-- for the root and only run scanFile on paths the DB has never seen, with no
+-- per-known-file stat call and no missing-file sweep (see scanner.ts's
+-- executeScan). 'full' keeps today's behavior byte-for-byte and stays the
+-- default — an explicit choice, not a fallback, since only the caller knows
+-- whether a rename/delete needs picking up.
+ALTER TABLE scan_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'full' CHECK (mode IN ('full', 'incremental'));

@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import { resolveCoverForNode } from "../cover/extract.js";
 import { getDescription } from "../enrich/descriptions.js";
+import { listArtistReleases } from "../entities/aggregate.js";
 import { generateFacts } from "../facts.js";
 import { nodeSummary } from "../summary.js";
 
@@ -146,6 +147,15 @@ export function nodesRoutes(db: Database.Database) {
       // place every node detail already flows through.
       const isFavourite = db.prepare("SELECT 1 FROM favourites WHERE node_id = ?").get(id) != null;
 
+      // Issue #33: an artist's releases (albums/EPs), separate from the flat
+      // incoming-recordings list `edges` already carries — real release
+      // entities via entities/aggregate.ts's albums table, not every track
+      // by this artist grouped by title on the client. Always an array
+      // (empty for every non-artist node type) so the client never has to
+      // special-case its absence.
+      const releases =
+        (node as { type: string }).type === "artist" ? listArtistReleases(db, Number(id)) : [];
+
       return {
         ...node,
         recording,
@@ -155,6 +165,7 @@ export function nodesRoutes(db: Database.Database) {
         facts: generateFacts(db, Number(id)),
         article: article ?? null,
         playCount,
+        releases,
         // Prose from outside this library (enrich/wikipedia.ts), kept
         // separate from `article` — that one is generated from the
         // collection itself and rewritten on every scan. Null covers both

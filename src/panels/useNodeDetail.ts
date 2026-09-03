@@ -55,6 +55,19 @@ export type NodeDetail = {
   /** Presence in the favourites table (migration 0020) — the manual
    * bookmark toggle NodeTitleBlock.tsx renders as a heart. */
   is_favourite: boolean
+  /** This artist's discography — empty for every non-artist node. */
+  releases: Release[]
+}
+/** A real release entity (server/src/entities/aggregate.ts's albums table),
+ * scoped to releases this artist is the primary credit on — populated only
+ * on artist nodes, always an empty array otherwise. */
+export type Release = {
+  id: number
+  title: string
+  trackCount: number
+  totalDurationMs: number
+  yearMin: number | null
+  yearMax: number | null
 }
 export type FieldDiff = { field: string; oldValue: string | number; newValue: string | number }
 export type TagWriteRow = { id: number; status: string; diff_json: string }

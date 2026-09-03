@@ -121,6 +121,33 @@ export function computeArtistAggregates(appearsOn: EdgeRef[], performerEdges: Ed
   }));
 }
 
+export type ArtistRelease = {
+  id: number;
+  title: string;
+  trackCount: number;
+  totalDurationMs: number;
+  yearMin: number | null;
+  yearMax: number | null;
+};
+
+// Issue #33: an artist's discography, read straight from the albums table
+// this file recomputes wholesale after every scan — the real release
+// entities primary_artist_node_id already ties to this artist, not a
+// client-side regrouping of the flattened recording list GET /nodes/:id
+// also returns. Ordered oldest-first (undated releases last) since a
+// discography reads chronologically by default.
+export function listArtistReleases(db: Database.Database, artistNodeId: number): ArtistRelease[] {
+  return db
+    .prepare(
+      `SELECT n.id AS id, n.title AS title, al.track_count AS trackCount,
+              al.total_duration_ms AS totalDurationMs, al.year_min AS yearMin, al.year_max AS yearMax
+       FROM albums al JOIN nodes n ON n.id = al.node_id
+       WHERE al.primary_artist_node_id = ?
+       ORDER BY al.year_min IS NULL, al.year_min, n.title`,
+    )
+    .all(artistNodeId) as ArtistRelease[];
+}
+
 // Recomputed wholesale after every scan (called from scan/scanner.ts
 // alongside recomputeAllLayouts) rather than maintained incrementally —
 // cheap at real-library scale and avoids keeping running aggregates in
