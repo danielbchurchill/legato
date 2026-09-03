@@ -1,11 +1,9 @@
 import { buildApp } from "./app.js";
-import { PORT, SHARED_SECRET } from "./config.js";
+import { PORT } from "./config.js";
+import { openDb } from "./db.js";
 
-if (!SHARED_SECRET) {
-  console.warn("RELAY_SHARED_SECRET is not set — no home server will be able to authenticate a tunnel.");
-}
-
-const app = buildApp({ sharedSecret: SHARED_SECRET, logger: true });
+const db = openDb();
+const app = buildApp({ db, logger: true });
 
 app.listen({ port: PORT, host: "0.0.0.0" }).catch((err: unknown) => {
   app.log.error(err);

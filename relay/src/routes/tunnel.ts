@@ -1,25 +1,24 @@
-import { timingSafeEqual } from "node:crypto";
+import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
+import { getRelayUserIdByCredential } from "../pairing.js";
 import { parseFrame } from "../protocol.js";
 import type { TunnelRegistry } from "../tunnel-registry.js";
 
 const AUTH_TIMEOUT_MS = 5000;
 
-function safeEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
-}
-
 // The home server's side of the tunnel: one persistent inbound WebSocket
-// per home server, gated by a shared secret (real per-account auth is the
-// deliberately deferred follow-up — see Legato.md's "Relay architecture").
-export function tunnelRoutes(registry: TunnelRegistry, sharedSecret: string) {
+// per home server, authenticated against a per-account tunnel credential
+// (minted via POST /pair/exchange — see pairing.ts and migrations/
+// 0002_tunnel_credentials.sql) rather than this prototype's original
+// single global RELAY_SHARED_SECRET. Multiple home servers, each owned
+// by a different relay account, can be authenticated and connected at
+// once — see tunnel-registry.ts, now a map keyed by relay_user_id.
+export function tunnelRoutes(registry: TunnelRegistry, db: Database.Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/tunnel", { websocket: true }, (socket: WebSocket) => {
       let authenticated = false;
+      let relayUserId: number | undefined;
 
       // A socket that connects but never sends an auth frame (dead client,
       // firewall half-open, etc.) would otherwise sit forever without ever
@@ -34,15 +33,16 @@ export function tunnelRoutes(registry: TunnelRegistry, sharedSecret: string) {
 
         if (!authenticated) {
           clearTimeout(authTimeout);
-          const providedSecret = frame.type === "auth" ? frame.secret : undefined;
-          const ok = sharedSecret.length > 0 && providedSecret !== undefined && safeEqual(providedSecret, sharedSecret);
-          if (ok) {
+          const credential = frame.type === "auth" ? frame.secret : undefined;
+          const ownerId = credential ? getRelayUserIdByCredential(db, credential) : null;
+          if (ownerId !== null) {
             authenticated = true;
-            registry.setTunnel(socket);
+            relayUserId = ownerId;
+            registry.setTunnel(ownerId, socket);
             socket.send(JSON.stringify({ type: "auth-ok" }));
           } else {
-            socket.send(JSON.stringify({ type: "auth-error", message: "missing or invalid shared secret" }));
-            socket.close(4001, "missing or invalid shared secret");
+            socket.send(JSON.stringify({ type: "auth-error", message: "missing or invalid tunnel credential" }));
+            socket.close(4001, "missing or invalid tunnel credential");
           }
           return;
         }
@@ -52,7 +52,7 @@ export function tunnelRoutes(registry: TunnelRegistry, sharedSecret: string) {
 
       socket.on("close", () => {
         clearTimeout(authTimeout);
-        registry.clearTunnel(socket);
+        if (relayUserId !== undefined) registry.clearTunnel(relayUserId, socket);
       });
     });
   };
