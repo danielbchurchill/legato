@@ -1,0 +1,46 @@
+# Fly.io app config for relay/ — a WebSocket reverse-tunnel relay that home
+# servers hold long-lived connections through. `legato-relay` may already be
+# taken; if so, change `app` here to match whatever name you actually create
+# (see DEPLOY.md step 1).
+app = "legato-relay"
+primary_region = "iad"
+
+[build]
+
+[env]
+  RELAY_PORT = "8901"
+  # Convention matches server/'s LEGATO_DATA_DIR (see repo CLAUDE.md) — the
+  # relay-accounts workstream's db.ts should read this same var when it adds
+  # its SQLite database, rather than hardcoding a path.
+  RELAY_DATA_DIR = "/data"
+
+# Persistent storage for RELAY_DATA_DIR — currently unused by the app itself,
+# reserved for the SQLite database the relay-accounts workstream is adding.
+[[mounts]]
+  source = "relay_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8901
+  force_https = true
+  processes = ["app"]
+
+  # This relay holds long-lived WebSocket tunnels from home servers — a
+  # scaled-to-zero or auto-stopped machine silently drops every one of them.
+  # Unlike a typical stateless web app, at least one machine must always be
+  # running.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
