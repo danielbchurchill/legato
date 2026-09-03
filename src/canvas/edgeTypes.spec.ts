@@ -42,9 +42,24 @@ describe('resolveEdgeColorOverrides', () => {
 
 describe('CURATED_EDGE_HUES', () => {
   it('are evenly spaced and share one saturation/lightness family', () => {
-    expect(CURATED_EDGE_HUES).toHaveLength(8)
+    expect(CURATED_EDGE_HUES).toHaveLength(16)
     const hexes = new Set(CURATED_EDGE_HUES.map((h) => h.hex))
-    expect(hexes.size).toBe(8) // every curated hue renders to a distinct hex
+    expect(hexes.size).toBe(16) // every curated hue renders to a distinct hex
+  })
+
+  it('leaves every real edge type at least one non-disabled choice', () => {
+    // Regression check for the bug this replaced: released_in,
+    // featured_artist, and produced_by each had zero pickable swatches
+    // against the old 8-anchor/30°-clearance picker, because the 7 fixed
+    // defaults' real (uneven) spacing happened to blank out every anchor
+    // for those three types specifically.
+    for (const info of edgeTypes()) {
+      const otherHexes = edgeTypes()
+        .filter((t) => t.type !== info.type)
+        .map((t) => t.defaultHex)
+      const available = CURATED_EDGE_HUES.filter(({ hex }) => !isHueTooClose(hex, otherHexes))
+      expect(available.length).toBeGreaterThan(0)
+    }
   })
 })
 

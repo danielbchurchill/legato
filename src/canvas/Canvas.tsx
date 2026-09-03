@@ -424,6 +424,12 @@ function insetForShell(
  * folding x/y into this object would let every resync stomp the
  * simulation's own live position back to stale server truth. */
 function nodeAttributes(node: GraphNode, showArt: boolean): Record<string, unknown> {
+  // Carried as its own attribute rather than re-derived from sigma's own
+  // display `type` ('cover'/'coverSquare'/'circle') — nodeReducer needs the
+  // *domain* type (src/canvas/nodeTypes.ts) to look up this node's own
+  // per-type size multiplier (Music Map settings "nodes > size", #29), and
+  // display type alone can't answer that (a colored-dot fallback is 'circle'
+  // whatever its domain type is).
   if (node.cover_hash && showArt) {
     const square = SQUARE_COVER_TYPES.has(node.type)
     return {
@@ -437,12 +443,13 @@ function nodeAttributes(node: GraphNode, showArt: boolean): Record<string, unkno
       image: `${API}/covers/${node.cover_hash}?size=thumb`,
       color: '#ffffff',
       origSize: ART_SIZE,
+      nodeType: node.type,
     }
   }
 
   const size = NODE_SIZE[node.type] ?? 3
   const color = NODE_COLOR[node.type] ?? '#999'
-  return { label: node.title, size, color, type: 'circle', square: false, origSize: size }
+  return { label: node.title, size, color, type: 'circle', square: false, origSize: size, nodeType: node.type }
 }
 
 // A node's starting position — server seed, or wherever the user last
@@ -462,10 +469,24 @@ function initialPosition(node: GraphNode): { x: number; y: number } | null {
  * data refresh. This is the actual fix for the bug that used to reset the
  * camera on every refetch: the renderer effect below only runs once per
  * mount, not on every `nodes`/`edges` change. */
-function syncGraph(graph: Graph, nodes: GraphNode[], edges: GraphEdge[], showArt: (type: string) => boolean): void {
+function syncGraph(
+  graph: Graph,
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  showArt: (type: string) => boolean,
+  showCreditNodes: boolean,
+): void {
   const wantedNodes = new Map<string, GraphNode>()
   for (const node of nodes) {
     if (initialPosition(node) == null) continue // no position yet — nothing to plot
+    // Music Map settings "nodes > producers" (#24) — 'credit' nodes
+    // (producer/engineer credits) are seeded and served like any other type
+    // now, but are new to an already-tuned graph, so they're opt-in rather
+    // than appearing unannounced the moment this ships. Excluding them here
+    // (rather than server-side) also drops their produced_by/engineered_by
+    // edges for free, below: an edge is only kept when both its endpoints
+    // are in this graph.
+    if (node.type === 'credit' && !showCreditNodes) continue
     wantedNodes.set(nodeKey(node.id), node)
   }
 
@@ -531,9 +552,16 @@ type Props = {
   showArtistArt: boolean
   showReleaseArt: boolean
   showTrackArt: boolean
-  /** Music Map settings "nodes > size" — multiplies every node's base size
+  /** Music Map settings "nodes > producers" (#24) — whether 'credit' nodes
+   * (producer/engineer credits) are included in the graph at all. Unlike
+   * the art toggles above, this gates node *existence*, not just how a node
+   * renders — handled in syncGraph rather than a reducer. */
+  showCreditNodes: boolean
+  /** Music Map settings "nodes > size" (#29) — one multiplier per node type
+   * (src/canvas/nodeTypes.ts), keyed by the domain type nodeAttributes
+   * stashes on each node as `nodeType`. Multiplies that node's base size
    * (ART_SIZE or NODE_SIZE[type]) live, via nodeReducer. 1 is unchanged. */
-  nodeSizeMultiplier: number
+  nodeSizeMultipliers: Record<string, number>
   /** Music Map settings "links > thickness" — multiplies EDGE_WIDTH_AT_RATIO_1
    * live, via edgeReducer. 1 is unchanged. */
   edgeThicknessMultiplier: number
@@ -574,7 +602,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     showArtistArt,
     showReleaseArt,
     showTrackArt,
-    nodeSizeMultiplier,
+    showCreditNodes,
+    nodeSizeMultipliers,
     edgeThicknessMultiplier,
     edgeColorOverrides,
     nodesLocked,
@@ -657,15 +686,15 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // Refs instead of state: changing them must never re-run the renderer
   // lifecycle effect below (which now runs once per mount, not per prop
   // change).
-  const nodeSizeMultiplierRef = useRef(nodeSizeMultiplier)
+  const nodeSizeMultipliersRef = useRef(nodeSizeMultipliers)
   const edgeThicknessMultiplierRef = useRef(edgeThicknessMultiplier)
   const edgeColorOverridesRef = useRef(edgeColorOverrides)
   useEffect(() => {
-    nodeSizeMultiplierRef.current = nodeSizeMultiplier
+    nodeSizeMultipliersRef.current = nodeSizeMultipliers
     edgeThicknessMultiplierRef.current = edgeThicknessMultiplier
     edgeColorOverridesRef.current = edgeColorOverrides
     rendererRef.current?.refresh()
-  }, [nodeSizeMultiplier, edgeThicknessMultiplier, edgeColorOverrides])
+  }, [nodeSizeMultipliers, edgeThicknessMultiplier, edgeColorOverrides])
 
   // Read by the drag handlers below, which are set up once inside the
   // renderer-lifecycle effect — a ref, not the prop, for the same reason as
@@ -831,8 +860,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       // Music Map settings "nodes > size" — applied before anything below,
       // to every node regardless of dim/hover state: a persistent size
       // preference isn't a per-frame state signal, so it doesn't run into
-      // the art-preservation rule just below.
-      const multiplier = nodeSizeMultiplierRef.current
+      // the art-preservation rule just below. One multiplier per node's own
+      // domain type (nodeAttributes' `nodeType`), #29 — a type with no
+      // override of its own reads 1 (unchanged) via
+      // resolveNodeSizeMultipliers' fallback.
+      const multiplier = nodeSizeMultipliersRef.current[data.nodeType as string] ?? 1
       const scaled = multiplier === 1 ? data : { ...data, size: (data.size as number) * multiplier }
       if (dimProgress <= 0 || node === hoveredNode || hoveredNeighbors?.has(node)) return scaled
       // Art-bound nodes are never recolored or reshaped to indicate state
@@ -1055,7 +1087,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     const hadNoNodes = graph.order === 0
     const showArt = (type: string) =>
       type === 'artist' ? showArtistArt : type === 'release' ? showReleaseArt : type === 'recording' ? showTrackArt : true
-    syncGraph(graph, nodes, edges, showArt)
+    syncGraph(graph, nodes, edges, showArt, showCreditNodes)
     onStatsRef.current?.({ nodes: graph.order, edges: graph.size })
 
     // Feeds the same post-sync graph state into the live simulation —
@@ -1089,11 +1121,12 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         renderer.setCustomBBox(insetForShell(renderer, bbox))
       }
     }
-    // The three showArt flags are plain dependencies, not refs like the
-    // settings above — toggling one is a discrete click, not a continuous
-    // drag, so re-running the full node diff once per toggle (rather than
-    // every frame) is the cheaper and simpler of the two options.
-  }, [nodes, edges, loading, showArtistArt, showReleaseArt, showTrackArt])
+    // The showArt flags and showCreditNodes are plain dependencies, not refs
+    // like the settings above — toggling one is a discrete click, not a
+    // continuous drag, so re-running the full node diff once per toggle
+    // (rather than every frame) is the cheaper and simpler of the two
+    // options.
+  }, [nodes, edges, loading, showArtistArt, showReleaseArt, showTrackArt, showCreditNodes])
 
   // One sentence, muted, centered, no illustration — DESIGN.md's empty-state
   // rule. Ordered error > scanning > plain-empty: a failed scan is the most

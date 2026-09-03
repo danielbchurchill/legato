@@ -3,6 +3,7 @@ import { Toggle } from '../ui/Toggle'
 import { Slider } from '../ui/Slider'
 import { ColorSwatch } from '../ui/ColorSwatch'
 import { CURATED_EDGE_HUES, edgeColorSettingKey, edgeTypes, isHueTooClose, type EdgeTypeInfo } from '../canvas/edgeTypes'
+import { NODE_TYPES, nodeSizeSettingKey } from '../canvas/nodeTypes'
 import type { Settings } from '../hooks/useSettings'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 
@@ -18,7 +19,21 @@ import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
  * Legato.md for the change. Same session removed the granularity tabs
  * (artists/albums/tracks are now one combined graph, not three switchable
  * ones), so this file also lost its "music map > default view" section and
- * the "images" row's per-tab meaning became per-node-type instead. */
+ * the "images" row's per-tab meaning became per-node-type instead.
+ *
+ * #26/#29/#24: "nodes > size" was one global nodeSizeMultiplier slider
+ * controlling every type at once — replaced with one slider per real node
+ * type (src/canvas/nodeTypes.ts, the same canonical-list pattern edgeTypes.ts
+ * already established for edge colors), each its own nodeSize:<type>
+ * setting. "links > colours" and the new "nodes > size" both wrap onto more
+ * than one line now, hence `align="start"` on their SettingsRow — see
+ * SettingsPrimitives.tsx's own comment on why that matters; "colours" was
+ * missing it outright (the actual misalignment #26 reported) alongside a
+ * real logic bug in edgeTypes.ts's hue-clearance picker (see that file).
+ * "nodes > producers" is new: #24 added seeding for 'credit' nodes
+ * (producer/engineer credits — server/src/match/edges.ts,
+ * server/src/enrich/credits.ts) to the combined graph, gated behind this
+ * toggle since they're a new addition to an already-tuned graph. */
 
 function parseMultiplier(value: string | undefined, fallback: number): number {
   const n = Number(value)
@@ -104,7 +119,7 @@ type MusicMapSettingsProps = {
 
 export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsProps) {
   const nodesLocked = settings.nodePositionsLocked === 'true'
-  const nodeSize = parseMultiplier(settings.nodeSizeMultiplier, 1)
+  const showCreditNodes = settings.showCreditNodes === 'true'
   const edgeThickness = parseMultiplier(settings.edgeThicknessMultiplier, 1)
   const linkDistance = parseMultiplier(settings.linkDistance, 80)
   const forceCenter = parseMultiplier(settings.forceCenterStrength, 0.03)
@@ -121,12 +136,28 @@ export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsP
             label="lock node positions"
           />
         </SettingsRow>
-        <SettingsRow label="size">
-          <Slider
-            value={nodeSize}
-            onChange={(v) => void updateSettings({ nodeSizeMultiplier: v.toFixed(2) })}
-            label="node size"
+        <SettingsRow label="producers">
+          <Toggle
+            checked={showCreditNodes}
+            onChange={(v) => void updateSettings({ showCreditNodes: v ? 'true' : 'false' })}
+            label="show producer nodes"
           />
+        </SettingsRow>
+        <SettingsRow label="size" align="start">
+          <div className="flex flex-col gap-[var(--spacing-xs)]">
+            {NODE_TYPES.map(({ type, label }) => (
+              <div key={type} className="flex items-center gap-[var(--spacing-sm)]">
+                <span className="w-[60px] shrink-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                  {label}
+                </span>
+                <Slider
+                  value={parseMultiplier(settings[nodeSizeSettingKey(type)], 1)}
+                  onChange={(v) => void updateSettings({ [nodeSizeSettingKey(type)]: v.toFixed(2) })}
+                  label={`${label} node size`}
+                />
+              </div>
+            ))}
+          </div>
         </SettingsRow>
         <SettingsRow label="images">
           <div className="flex items-center gap-[var(--spacing-lg)]">
@@ -143,7 +174,7 @@ export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsP
       </SettingsGroup>
 
       <SettingsGroup title="links">
-        <SettingsRow label="colours">
+        <SettingsRow label="colours" align="start">
           <EdgeColorPicker settings={settings} updateSettings={updateSettings} />
         </SettingsRow>
         <SettingsRow label="distance">

@@ -79,14 +79,22 @@ export function resolveEdgeColorOverrides(settings: Record<string, string>): Rec
 /* The curated hue set the per-type color picker offers, in place of a free
  * wheel — DESIGN.md is explicit that an unconstrained picker would let a
  * user pick two types into near-identical hues, defeating the whole point
- * of the spacing work the fixed palette already did. Eight hues, evenly
- * spaced at 45°, is the largest evenly-spaced set where any two DISTINCT
- * choices are still guaranteed at least 45° apart — close to the ~44°
- * clearance the fixed palette's own 7-type tracks graph was designed
- * against (see DESIGN.md "Edge palette"). Same 76%/66% saturation/lightness
- * as every fixed hue, so a custom pick reads as a peer, not a different
- * kind of color. */
-const CURATED_HUE_COUNT = 8
+ * of the spacing work the fixed palette already did.
+ *
+ * The 7 fixed defaults already sit at real-world gaps of 44-84° around the
+ * circle (see DESIGN.md "Edge palette"), not evenly spaced — so a picker
+ * built on a coarse 8-anchor/45°-pitch grid with a 30° exclusion radius
+ * around every *other* type's current hue left three of the seven types
+ * (released_in, featured_artist, produced_by) with zero non-disabled
+ * swatches: every anchor happened to land inside some other type's
+ * exclusion band. Confirmed against the real EDGE_COLOR defaults, not a
+ * hypothetical — the picker was unusable for those types, not just tight.
+ * 16 anchors at 22.5° pitch with a tighter 20° exclusion radius leaves
+ * every type at least 6 of 16 real, non-disabled choices (same check,
+ * scripted against EDGE_COLOR). Still a curated grid, still guards against
+ * an indistinguishable pick — just fine-grained enough that the existing
+ * defaults' uneven spacing can't blank out a type's entire picker. */
+const CURATED_HUE_COUNT = 16
 const CURATED_SATURATION = 0.76
 const CURATED_LIGHTNESS = 0.66
 
@@ -124,7 +132,7 @@ function hexToHue(hex: string): number {
   return h < 0 ? h + 360 : h
 }
 
-const MIN_HUE_CLEARANCE_DEG = 30
+const MIN_HUE_CLEARANCE_DEG = 20
 
 function circularHueDistance(a: number, b: number): number {
   const diff = Math.abs(a - b) % 360

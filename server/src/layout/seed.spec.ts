@@ -138,6 +138,60 @@ describe("recomputeTracksLayout", () => {
   });
 });
 
+describe("credit node seeding (#24)", () => {
+  it("seeds a credit node at the centroid of the recordings that credit it as producer or engineer", () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO library_roots (path) VALUES ('/fake')").run();
+    const artist = makeNode(db, "artist", "The Beatles");
+    const producer = makeNode(db, "credit", "George Martin");
+    const libraryRootId = db.prepare("SELECT id FROM library_roots LIMIT 1").get() as { id: number };
+    const r1 = makeNode(db, "recording", "Come Together");
+    const r2 = makeNode(db, "recording", "Something");
+    for (const r of [r1, r2]) {
+      db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(r);
+      db.prepare(
+        "INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size) VALUES (?, ?, ?, datetime('now'), 0)",
+      ).run(r, libraryRootId.id, `/fake/${r}.flac`);
+      insertEdge(db, r, artist, "performed_by");
+    }
+    insertEdge(db, r1, producer, "produced_by");
+    insertEdge(db, r2, producer, "engineered_by");
+
+    recomputeTracksLayout(db);
+
+    const [p1, p2, producerPos] = [pos(db, r1)!, pos(db, r2)!, pos(db, producer)!];
+    expect(producerPos.seed_x).toBeCloseTo((p1.seed_x + p2.seed_x) / 2);
+    expect(producerPos.seed_y).toBeCloseTo((p1.seed_y + p2.seed_y) / 2);
+  });
+
+  it("does not position a credit node with no produced_by or engineered_by edge", () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO library_roots (path) VALUES ('/fake')").run();
+    const mixer = makeNode(db, "credit", "Someone Who Only Mixed");
+    const { recording } = buildLibrary(db);
+    insertEdge(db, recording, mixer, "mixed_by");
+
+    recomputeTracksLayout(db);
+
+    expect(pos(db, mixer)).toBeUndefined();
+  });
+
+  it("drops a credit node's position once its last produced_by/engineered_by edge is gone", () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO library_roots (path) VALUES ('/fake')").run();
+    const producer = makeNode(db, "credit", "George Martin");
+    const { recording } = buildLibrary(db);
+    insertEdge(db, recording, producer, "produced_by");
+    recomputeTracksLayout(db);
+    expect(pos(db, producer)).toBeDefined();
+
+    db.prepare("DELETE FROM edges WHERE to_node = ? AND type = 'produced_by'").run(producer);
+    recomputeTracksLayout(db);
+
+    expect(pos(db, producer)).toBeUndefined();
+  });
+});
+
 describe("nodePositionsLocked setting", () => {
   it("leaves an existing seed position untouched on recompute while locked", () => {
     const db = openDb(":memory:");

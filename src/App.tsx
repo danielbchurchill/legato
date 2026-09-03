@@ -6,6 +6,7 @@ import LibrarySetup, { Centered } from './LibrarySetup'
 import { useServerReady } from './hooks/useServerReady'
 import Canvas, { type CanvasHandle } from './canvas/Canvas'
 import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
+import { resolveNodeSizeMultipliers } from './canvas/nodeTypes'
 import { usePlayback } from './playback/usePlayback'
 import HygieneView from './hygiene/HygieneView'
 import { AppShell } from './shell/AppShell'
@@ -232,16 +233,20 @@ function MainApp() {
 
   // Music Map settings' "nodes > size" / "links > thickness" / "links >
   // colours" — read live by Canvas.tsx's reducers, so a change made while
-  // looking at the canvas shows up immediately. edgeColorOverrides is
-  // memoized so its identity is stable across renders that don't touch any
-  // edgeColor:* key — Canvas re-reads it (and calls renderer.refresh()) on
-  // every identity change.
-  const nodeSizeMultiplier = Number(settings.nodeSizeMultiplier ?? '1')
+  // looking at the canvas shows up immediately. edgeColorOverrides and
+  // nodeSizeMultipliers are both memoized so their identity is stable
+  // across renders that don't touch any edgeColor:*/nodeSize:* key — Canvas
+  // re-reads them (and calls renderer.refresh()) on every identity change.
   const edgeThicknessMultiplier = Number(settings.edgeThicknessMultiplier ?? '1')
   const showArtistArt = settings.showImagesArtists !== 'false'
   const showReleaseArt = settings.showImagesAlbums !== 'false'
   const showTrackArt = settings.showImagesTracks !== 'false'
+  // Music Map settings' "nodes > producers" (#24) — 'credit' nodes
+  // (producer/engineer credits) are opt-in, off by default, since they're
+  // new to an already-tuned graph. See Canvas.tsx's syncGraph.
+  const showCreditNodes = settings.showCreditNodes === 'true'
   const edgeColorOverrides = useMemo(() => resolveEdgeColorOverrides(settings), [settings])
+  const nodeSizeMultipliers = useMemo(() => resolveNodeSizeMultipliers(settings), [settings])
 
   // Music Map settings' "nodes > lock" and "forces" + "links > distance" —
   // real live physics inputs since 2026-08-29 (see Legato.md), read the same
@@ -349,7 +354,8 @@ function MainApp() {
         showArtistArt={showArtistArt}
         showReleaseArt={showReleaseArt}
         showTrackArt={showTrackArt}
-        nodeSizeMultiplier={nodeSizeMultiplier}
+        showCreditNodes={showCreditNodes}
+        nodeSizeMultipliers={nodeSizeMultipliers}
         edgeThicknessMultiplier={edgeThicknessMultiplier}
         edgeColorOverrides={edgeColorOverrides}
         nodesLocked={nodesLocked}

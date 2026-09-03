@@ -68,6 +68,13 @@ function upsertSeeds(db: Database.Database, seeds: Map<number, Seed>, locked: bo
 // falling back below — is enough to avoid a big-bang unfurl from pure
 // randomness on first paint, not something that has to be precise the way
 // a permanent static layout would.
+//
+// #24: credit nodes (producers/engineers) join release/artist as a third
+// centroid-seeded entity type below. Before this, 'credit' nodes existed in
+// the DB (match/edges.ts and enrich/credits.ts both write them) but never
+// got a position row at all, so routes/nodes.ts's `/nodes` — which serves
+// the graph by joining on this table — never returned them: the data was
+// real, the graph just had nowhere to put it.
 export function recomputeTracksLayout(db: Database.Database): void {
   const recordingRows = db
     .prepare(
@@ -93,20 +100,45 @@ export function recomputeTracksLayout(db: Database.Database): void {
   }));
   const seeds = computeClusteredSeeds(clusterInputs);
 
-  const releaseSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM albums", "appears_on");
-  const artistSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM artists", "performed_by");
+  const releaseSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM albums", ["appears_on"]);
+  const artistSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM artists", ["performed_by"]);
+  // #24: 'credit' nodes (producer/engineer people — server/src/match/edges.ts's
+  // local-tag credits and server/src/enrich/credits.ts's MusicBrainz-relation
+  // credits both write these) get seeded the same way, scoped to nodes
+  // actually credited as a producer or engineer on some recording. Other
+  // credit roles (mixer, mastering engineer, arranger, ...) also land on
+  // 'credit' nodes via the same findOrCreateCreditNode, but are deliberately
+  // left unpositioned here — #24 is scoped to producer/engineer nodes, not a
+  // general "every kind of session credit" graph. The entitySql is derived
+  // from the edges themselves, not a `SELECT id FROM nodes WHERE type =
+  // 'credit'` universe (unlike releaseSeeds/artistSeeds above, which do have
+  // a dedicated table naming every such entity) — there's no "credit"-scoped
+  // catalogue table to enumerate against, and scoping to the edges directly
+  // means a credit node with only e.g. a mixed_by edge never round-trips
+  // through an upsert-then-immediately-deleted cycle below.
+  const creditSeeds = centroidSeeds(
+    db,
+    seeds,
+    "SELECT DISTINCT to_node AS node_id FROM edges WHERE type IN ('produced_by', 'engineered_by')",
+    ["produced_by", "engineered_by"],
+  );
 
   const locked = isPositionsLocked(db);
   upsertSeeds(db, seeds, locked);
   upsertSeeds(db, releaseSeeds, locked);
   upsertSeeds(db, artistSeeds, locked);
+  upsertSeeds(db, creditSeeds, locked);
 
   // Installs that ran a recompute before this combined layout existed still
   // have stale rows lying around (the old recording-only tracks layout, or
   // the old separate albums/artists granularities) — upsertSeeds only ever
   // inserts/updates the sets handed to it above, it never deletes what it
   // didn't write, so anything outside "a recording that still has a file,
-  // a release, or an artist" would otherwise linger forever.
+  // a release, an artist, or a produced_by/engineered_by credit" would
+  // otherwise linger forever — the last of those is also what retires a
+  // credit node's position again once its last qualifying edge is gone
+  // (a corrected tag, a re-match), the same way a deleted release/artist
+  // entity already falls out of the first two UNION arms.
   db.prepare(
     `DELETE FROM positions WHERE granularity = 'tracks'
        AND node_id NOT IN (
@@ -114,30 +146,39 @@ export function recomputeTracksLayout(db: Database.Database): void {
           WHERE n.type = 'recording' AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = n.id)
          UNION SELECT node_id FROM albums
          UNION SELECT node_id FROM artists
+         UNION SELECT DISTINCT to_node FROM edges WHERE type IN ('produced_by', 'engineered_by')
        )`,
   ).run();
 }
 
-// A release/artist entity's initial seed in the combined graph: the
-// centroid of whichever of its own recordings already have a seed position
-// (a release via its recordings' appears_on edges, an artist via their
-// performed_by edges — recording is always the edge's from_node side for
-// both). An entity with no such recordings yet (freshly matched, nothing
-// scanned under it) falls back to the origin rather than being left out —
-// still gets *a* position so it isn't silently dropped from the graph
-// (routes/nodes.ts selects the canvas by position row), the same
-// "still gets a position, isn't silently dropped" reasoning upsertSeeds'
-// locked branch already applies one level down.
+// An entity's initial seed in the combined graph: the centroid of whichever
+// of its own recordings already have a seed position (a release via its
+// recordings' appears_on edges, an artist via their performed_by edges, a
+// credit node via the recordings that credit it produced_by/engineered_by —
+// recording is always the edge's from_node side in every case). An entity
+// with no such recordings yet (freshly matched, nothing scanned under it)
+// falls back to the origin rather than being left out — still gets *a*
+// position so it isn't silently dropped from the graph (routes/nodes.ts
+// selects the canvas by position row), the same "still gets a position,
+// isn't silently dropped" reasoning upsertSeeds' locked branch already
+// applies one level down.
+//
+// edgeTypes is plural (#24) — a credit node can be reached by either
+// produced_by or engineered_by, both counting toward the same centroid,
+// unlike release/artist which each have exactly one qualifying edge type.
 function centroidSeeds(
   db: Database.Database,
   recordingSeeds: Map<number, Seed>,
   entitySql: string,
-  edgeType: "appears_on" | "performed_by",
+  edgeTypes: string[],
 ): Map<number, Seed> {
   const entityIds = (db.prepare(entitySql).all() as { node_id: number }[]).map((r) => r.node_id);
   const edgeRows = db
-    .prepare("SELECT from_node AS recordingNodeId, to_node AS entityNodeId FROM edges WHERE type = ?")
-    .all(edgeType) as { recordingNodeId: number; entityNodeId: number }[];
+    .prepare(
+      `SELECT from_node AS recordingNodeId, to_node AS entityNodeId FROM edges
+        WHERE type IN (${edgeTypes.map(() => "?").join(",")})`,
+    )
+    .all(...edgeTypes) as { recordingNodeId: number; entityNodeId: number }[];
 
   const sums = new Map<number, { x: number; y: number; count: number }>();
   for (const { recordingNodeId, entityNodeId } of edgeRows) {
