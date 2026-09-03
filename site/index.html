@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Legato — your music library, as a graph</title>
+  <meta name="description" content="Legato is a local-first music player that treats your library as a graph, not a list. Every recording, artist, and album gets its own wiki-style article. Free and local forever — pay only for remote access." />
+
+  <meta property="og:title" content="Legato — your music library, as a graph" />
+  <meta property="og:description" content="Every recording, artist, and album gets its own wiki-style article, dense with links to everything else you own. Browse by association, not by search." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://legato.fm" />
+  <meta property="og:image" content="/images/article-view.webp" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="128x128" href="/favicon-128.png" />
+
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="row">
+      <a class="wordmark" href="#top">legato</a>
+      <nav class="nav-links">
+        <a href="#graph">Graph</a>
+        <a href="#articles">Articles</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#status">Status</a>
+      </nav>
+      <a class="btn btn-pill" href="#waitlist">Join the waitlist</a>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero" id="hero">
+      <div class="hero-bg" aria-hidden="true"></div>
+      <div class="hero-content glass">
+        <p class="eyebrow">pre-release</p>
+        <h1>
+          Every music app treats your library as a list.
+          <span class="accent">Legato treats it as a graph.</span>
+        </h1>
+        <p class="lede">
+          A local-first player where every recording, artist, album, and label gets its own
+          wiki-style article — dense with links to everything else in your collection.
+          Read about a track and it teaches you something: the engineer also worked on three
+          other records you own, or two artists you never connected share a producer.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-pill" href="#waitlist">Join the waitlist</a>
+          <a class="btn btn-link" href="#graph">See the graph ↓</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="feature-block" id="graph">
+      <div class="feature-text">
+        <p class="eyebrow">the canvas</p>
+        <h2>Browse by association, not by search</h2>
+        <p>
+          There's no folder tree and no flat list of ten thousand tracks. The canvas is a live,
+          force-directed graph of your library — recordings, artists, releases, labels,
+          producers — laid out by how they actually connect to each other. Pan into a cluster
+          and you're not scrolling a list, you're walking through the shape of your own taste.
+        </p>
+      </div>
+      <figure class="feature-figure">
+        <img src="/images/graph-overview.webp" alt="Legato's canvas view showing a real scanned library rendered as a node graph, with the collection panel open on the left." loading="lazy" width="1600" height="1000" />
+        <figcaption>A real scan, live in the app — 19 artists, 37 albums, 465 tracks.</figcaption>
+      </figure>
+    </section>
+
+    <section class="feature-block reverse" id="articles">
+      <div class="feature-text">
+        <p class="eyebrow">the article</p>
+        <h2>Every record has something to teach you</h2>
+        <p>
+          Click a node and it opens like an encyclopedia entry, not a details pane. Releases,
+          recordings, credits — every fact links somewhere else in your collection, so reading
+          about a record is how you find the connections you didn't know were there.
+        </p>
+      </div>
+      <figure class="feature-figure">
+        <img src="/images/article-view.webp" alt="An artist's full article view in Legato, listing real releases and recordings pulled from a scanned library, each one a link." loading="lazy" width="1600" height="913" />
+        <figcaption>Real releases, real recordings, real links — pulled from an actual scanned library, not sample data.</figcaption>
+      </figure>
+    </section>
+
+    <section class="two-col" id="understanding">
+      <article class="glass card">
+        <img class="card-icon" src="/icons/map.svg" alt="" width="24" height="24" />
+        <h3>See the shape of your taste</h3>
+        <p>
+          Collection understanding: clusters, gaps, and the corners of your library that are
+          quietly over-represented. The graph makes the shape of what you own visible, not just
+          its size.
+        </p>
+      </article>
+      <article class="glass card">
+        <img class="card-icon" src="/icons/tag.svg" alt="" width="24" height="24" />
+        <h3>Fix your metadata in place</h3>
+        <p>
+          Library hygiene: Legato surfaces missing, inconsistent, or conflicting tags and lets
+          you fix them right there on the graph — no separate tagging app, no round trip through
+          a spreadsheet.
+        </p>
+      </article>
+    </section>
+
+    <section class="pricing" id="pricing">
+      <p class="eyebrow center">how it works</p>
+      <h2 class="center">Free and local, forever.<br />Pay only to leave your LAN.</h2>
+      <div class="pricing-grid">
+        <article class="glass card pricing-card">
+          <h3>Legato</h3>
+          <p class="price"><span class="mono">$0</span></p>
+          <ul>
+            <li>Runs entirely on your own machine</li>
+            <li>Your library never leaves your disk</li>
+            <li>Full graph, full playback, full hygiene tools</li>
+            <li>No account, no subscription</li>
+          </ul>
+        </article>
+        <article class="glass card pricing-card">
+          <h3>Relay</h3>
+          <p class="price"><span class="mono">paid</span> · coming later</p>
+          <ul>
+            <li>An always-on bridge from your phone to your own home library</li>
+            <li>Off-LAN access, Plex/Jellyfin-style</li>
+            <li>Never stores your audio — it relays, it doesn't host</li>
+            <li>The only thing Legato ever charges for</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="status" id="status">
+      <div class="glass status-panel">
+        <p class="eyebrow">status</p>
+        <h2>Legato isn't out yet.</h2>
+        <p>
+          The app is real and running against real libraries — every screenshot on this page is
+          a live scan, not a mockup. It isn't packaged for public download yet: we're finishing
+          the design pass and cross-platform builds before the first release. Join the waitlist
+          below to hear the moment that changes.
+        </p>
+      </div>
+    </section>
+
+    <section class="waitlist" id="waitlist">
+      <div class="glass waitlist-panel">
+        <p class="eyebrow">get notified</p>
+        <h2>Join the waitlist</h2>
+        <p>No newsletter, no spam — one email when Legato is ready to install.</p>
+        <form id="waitlist-form" class="waitlist-form">
+          <label class="sr-only" for="waitlist-email">Email address</label>
+          <input id="waitlist-email" name="email" type="email" placeholder="you@example.com" required autocomplete="email" />
+          <button type="submit" class="btn btn-pill">Notify me</button>
+        </form>
+        <p class="fine-print">
+          Opens your email client with a pre-filled message — legato.fm doesn't run a signup
+          server yet. See <a href="#" id="waitlist-note-link">why</a>.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span class="wordmark small">legato</span>
+    <span class="mono muted">legato.fm</span>
+  </footer>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
