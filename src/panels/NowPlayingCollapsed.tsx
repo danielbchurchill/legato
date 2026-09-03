@@ -1,4 +1,5 @@
 import { CoverArt } from '../ui/CoverArt'
+import { ScrollingText } from '../ui/ScrollingText'
 import { useNodeDetail } from './useNodeDetail'
 
 /* v2's collapsed right panel content — DESIGN.md "Panel collapsed (v2)":
@@ -27,12 +28,11 @@ export function NowPlayingCollapsed({ nodeId }: { nodeId: number | null }) {
       <CoverArt nodeId={node.id} size="full" alt={`Cover art for ${node.title}`} className="size-[194px] shrink-0" />
       <div className="mt-[12px] flex w-full flex-col items-center text-center">
         {lines.map((line, i) => (
-          <p
+          <ScrollingText
             key={i}
-            className="w-full truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]"
-          >
-            {line}
-          </p>
+            text={line}
+            className="w-full font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]"
+          />
         ))}
       </div>
     </div>

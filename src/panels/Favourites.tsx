@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
 import { Icon } from '../ui/Icon'
 import { CoverArt } from '../ui/CoverArt'
+import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
 import { SERVER_HOST } from '../config/serverHost'
 import { PlayNodeButton } from './PlayNodeButton'
@@ -41,34 +42,45 @@ function FavouriteRow({
   playback: Playback
 }) {
   return (
-    <div className="flex items-center gap-[12px] border-b border-[var(--color-divider)] py-[10px] last:border-b-0">
-      <div className="h-[75px] w-[75px] shrink-0">
-        <CoverArt nodeId={item.id} size="thumb" alt={item.title} className="aspect-square w-full" />
+    <div className="flex flex-col gap-[8px] border-b border-[var(--color-divider)] py-[10px] last:border-b-0">
+      <div className="flex items-center gap-[12px]">
+        <div className="h-[75px] w-[75px] shrink-0">
+          <CoverArt nodeId={item.id} size="thumb" alt={item.title} className="aspect-square w-full" />
+        </div>
+        <div className="min-w-0 flex-1">
+          {/* --text-sm here is a deliberate exception to DESIGN.md's "12px
+           * is control chrome only" rule — issue #34 asked for smaller row
+           * text specifically to leave more of the row for the title. */}
+          <button
+            type="button"
+            onClick={() => onSelectNode(item.id)}
+            className="block w-full text-left text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+          >
+            <ScrollingText text={item.title} className="font-[family-name:var(--font-mono)] text-[length:var(--text-sm)]" />
+          </button>
+          <span className="text-[length:var(--text-sm)] text-[var(--color-muted)]">
+            {TYPE_LABEL[item.type] ?? item.type}
+          </span>
+        </div>
       </div>
-      <div className="min-w-0 flex-1">
-        <button
-          type="button"
-          onClick={() => onSelectNode(item.id)}
-          className="block w-full truncate text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-        >
-          {item.title}
-        </button>
-        <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">
-          {TYPE_LABEL[item.type] ?? item.type}
-        </span>
+      {/* Actions on their own row, indented to align under the title column
+       * (75px cover + 12px gap) — moved off the title's row so the title
+       * gets the full row width instead of sharing it with up to three
+       * icon buttons. */}
+      <div className="flex items-center justify-end gap-[16px] pl-[87px]">
+        <PlayNodeButton id={item.id} type={item.type} title={item.title} playback={playback} />
+        {item.type === 'recording' && <AddToPlaylistButton nodeId={item.id} />}
+        <Tooltip label="Remove from favourites">
+          <button
+            type="button"
+            onClick={() => onRemove(item.id)}
+            aria-label="Remove from favourites"
+            className="shrink-0 text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+          >
+            <Icon name="heart" size={24} filled />
+          </button>
+        </Tooltip>
       </div>
-      <PlayNodeButton id={item.id} type={item.type} title={item.title} playback={playback} />
-      {item.type === 'recording' && <AddToPlaylistButton nodeId={item.id} />}
-      <Tooltip label="Remove from favourites">
-        <button
-          type="button"
-          onClick={() => onRemove(item.id)}
-          aria-label="Remove from favourites"
-          className="shrink-0 text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-        >
-          <Icon name="heart" size={24} filled />
-        </button>
-      </Tooltip>
     </div>
   )
 }

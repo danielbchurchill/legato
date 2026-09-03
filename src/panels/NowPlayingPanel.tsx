@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { CoverArt } from '../ui/CoverArt'
 import { SectionHeader } from '../ui/DataRow'
 import { Icon } from '../ui/Icon'
+import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
 import { AboutDisclosure, ConnectionsDisclosure, LyricsDisclosure, NotesDisclosure, TrackMetadataDisclosure } from './NowPlayingSections'
 import { NodeTitleBlock } from './NodeTitleBlock'
@@ -131,9 +132,9 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, queueBusy, onSelect
                   type="button"
                   onClick={() => void jumpTo(i)}
                   disabled={queueBusy}
-                  className="min-w-0 flex-1 truncate text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-50"
+                  className="min-w-0 flex-1 text-left text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-50"
                 >
-                  {entry.title}
+                  <ScrollingText text={entry.title} className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)]" />
                 </button>
                 <Tooltip label="Move up">
                   <button

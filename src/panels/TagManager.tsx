@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ScrollingText } from '../ui/ScrollingText'
 import { SERVER_HOST } from '../config/serverHost'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
@@ -86,9 +87,9 @@ export function TagManager({ onSelectNode }: { onSelectNode: (id: number) => voi
                 <button
                   type="button"
                   onClick={() => onSelectNode(row.id)}
-                  className="min-w-0 flex-1 truncate text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                  className="min-w-0 flex-1 text-left text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
                 >
-                  {row.title}
+                  <ScrollingText text={row.title} className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)]" />
                 </button>
                 <span className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">
                   {MISSING_TAG[field]}

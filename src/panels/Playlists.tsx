@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
 import { Icon } from '../ui/Icon'
 import { CoverArt } from '../ui/CoverArt'
+import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
 import { Button } from '../ui/Button'
 import { formatDuration } from '../ui/format'
@@ -137,10 +138,8 @@ function PlaylistRow({
 
   return (
     <div className="flex items-center gap-[12px] border-b border-[var(--color-divider)] py-[10px] last:border-b-0">
-      <button type="button" onClick={() => onOpen(playlist.id, playlist.name)} className="block min-w-0 flex-1 text-left">
-        <span className="block truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
-          {playlist.name}
-        </span>
+      <button type="button" onClick={() => onOpen(playlist.id, playlist.name)} className="block min-w-0 flex-1 text-left text-[var(--color-ink)]">
+        <ScrollingText text={playlist.name} className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)]" />
         <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">
           {playlist.track_count} track{playlist.track_count === 1 ? '' : 's'}
         </span>
@@ -242,9 +241,9 @@ function PlaylistTrackRow({
         <button
           type="button"
           onClick={onPlay}
-          className="block w-full truncate text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+          className="block w-full text-left text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
         >
-          {track.title}
+          <ScrollingText text={track.title} className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)]" />
         </button>
         <span className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
           {formatDuration(track.canonical_duration_ms)}
@@ -363,9 +362,10 @@ function PlaylistDetail({
         ← playlists
       </button>
 
-      <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
-        {playlistName}
-      </p>
+      <ScrollingText
+        text={playlistName}
+        className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]"
+      />
 
       <div className="mt-[8px] flex items-center gap-[16px]">
         <Button onClick={() => void playback.playPlaylist(playlistId)}>play</Button>

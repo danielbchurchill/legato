@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../ui/Icon'
+import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
 import { SERVER_HOST } from '../config/serverHost'
 
@@ -99,10 +100,10 @@ export function AddToPlaylistButton({ nodeId, size = 24 }: { nodeId: number; siz
                   <button
                     type="button"
                     onClick={() => void addTo(p.id)}
-                    className="block w-full truncate py-[4px] text-left text-[length:var(--text-base)] text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                    className="flex w-full items-baseline gap-[4px] py-[4px] text-left text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
                   >
-                    {p.name}
-                    {justAdded === p.id && <span className="text-[var(--color-muted)]"> — added</span>}
+                    <ScrollingText text={p.name} className="min-w-0 flex-1 text-[length:var(--text-base)]" />
+                    {justAdded === p.id && <span className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">added</span>}
                   </button>
                 </li>
               ))}

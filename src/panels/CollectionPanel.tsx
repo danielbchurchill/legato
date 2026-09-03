@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import { Icon } from '../ui/Icon'
 import { CoverArt } from '../ui/CoverArt'
 import { DataRow, SectionHeader } from '../ui/DataRow'
+import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
 import { Popover } from '../ui/Popover'
 import { useWsEvent } from '../hooks/useWs'
@@ -184,12 +185,8 @@ const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) =
                       i === highlighted ? 'bg-white/8' : ''
                     }`}
                   >
-                    <button
-                      type="button"
-                      onClick={() => choose(result)}
-                      className="min-w-0 truncate text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]"
-                    >
-                      {result.title}
+                    <button type="button" onClick={() => choose(result)} className="min-w-0 text-left text-[var(--color-ink)]">
+                      <ScrollingText text={result.title} className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)]" />
                     </button>
                     <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">{result.type}</span>
                     <PlayNodeButton id={result.id} type={result.type} title={result.title} playback={playback} size={18} />
@@ -402,12 +399,13 @@ function MaintenancePreview({
           onClick={() => onSelectNode(items[0].nodeId)}
           className="mt-[8px] block w-full text-left"
         >
-          <span className="block truncate text-[length:var(--text-base)] text-[var(--color-muted)]">
-            {TYPE_LABEL[items[0].type]} —{' '}
-            <span className="font-[family-name:var(--font-mono)] text-[var(--color-ink)]">
-              {items[0].nodeTitle}
-            </span>
-          </span>
+          <div className="flex items-baseline gap-[4px] text-[length:var(--text-base)] text-[var(--color-muted)]">
+            <span className="shrink-0">{TYPE_LABEL[items[0].type]} —</span>
+            <ScrollingText
+              text={items[0].nodeTitle}
+              className="min-w-0 flex-1 font-[family-name:var(--font-mono)] text-[var(--color-ink)]"
+            />
+          </div>
           {items.length > 1 && (
             <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">
               +{items.length - 1} other{items.length - 1 === 1 ? '' : 's'}

@@ -31,7 +31,23 @@ export function RightPanel({ expanded, collapsedNodeId, onExpand, children }: Ri
         type="button"
         onClick={onExpand}
         aria-label="Expand now playing"
-        className="absolute top-[var(--header-height)] right-0 bottom-0 z-10 w-[var(--panel-width-collapsed)] overflow-y-auto px-[var(--spacing-sm)] pt-[24px] text-left"
+        // grid, not the no-display-utility default: a native <button>'s
+        // content is vertically centered by the browser's own internal
+        // layout for the element regardless of what `display` an author
+        // sets (block, in this case, from being blockified by
+        // `position: absolute`) — confirmed by measuring this exact button
+        // in a real browser, not just reading the class list. `grid` is the
+        // one display value that opts back out of that built-in centering,
+        // so the cover + track block actually lands at pt-24 below the
+        // header instead of floating in the middle of the collapsed column.
+        // grid-cols-1 has to come with it: an implicit grid track sizes
+        // itself to its content's max-content width by default, which is
+        // exactly wide enough for NowPlayingCollapsed's un-hovered,
+        // nowrap'd title text to blow straight past this column's actual
+        // 194px and off the edge of the window — minmax(0,1fr) (what
+        // grid-cols-1 actually generates) is what makes the column cap at
+        // the available width the way a plain block child always would.
+        className="absolute top-[var(--header-height)] right-0 bottom-0 z-10 grid w-[var(--panel-width-collapsed)] grid-cols-1 items-start overflow-y-auto px-[var(--spacing-sm)] pt-[24px] text-left"
       >
         <NowPlayingCollapsed nodeId={collapsedNodeId} />
       </button>

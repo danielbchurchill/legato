@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../ui/Icon'
 import { SectionHeader } from '../ui/DataRow'
+import { ScrollingText } from '../ui/ScrollingText'
 import { Button } from '../ui/Button'
 import { formatLongDuration } from '../ui/format'
 import { API, type Edge, type Fact, type NodeDetail, type SearchResult } from './useNodeDetail'
@@ -64,8 +65,8 @@ function groupFacts(facts: Fact[]): { key: string; items: Fact[] }[] {
 function FactLine({ fact, onSelectNode }: { fact: Fact; onSelectNode: (id: number) => void }) {
   if (fact.targetNodeId != null) {
     return (
-      <button type="button" onClick={() => onSelectNode(fact.targetNodeId!)} className={`block w-full truncate text-left text-[length:var(--text-base)] ${linkClass}`}>
-        {fact.text}
+      <button type="button" onClick={() => onSelectNode(fact.targetNodeId!)} className="block w-full text-left">
+        <ScrollingText text={fact.text} className={`text-[length:var(--text-base)] ${linkClass}`} />
       </button>
     )
   }
@@ -176,12 +177,8 @@ export function IncomingRecordingsList({ node, onSelectNode }: { node: NodeDetai
       <ul className="mt-[8px] flex max-h-[240px] flex-col gap-[2px] overflow-y-auto">
         {incomingRecordings.map((e) => (
           <li key={e.id}>
-            <button
-              type="button"
-              onClick={() => onSelectNode(e.other_id)}
-              className={`block w-full truncate py-[2px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] ${linkClass}`}
-            >
-              {e.other_title}
+            <button type="button" onClick={() => onSelectNode(e.other_id)} className="block w-full py-[2px] text-left">
+              <ScrollingText text={e.other_title} className={`font-[family-name:var(--font-mono)] text-[length:var(--text-base)] ${linkClass}`} />
             </button>
           </li>
         ))}
@@ -329,16 +326,12 @@ export function PersonalEdgesSection({
         <ul className="mt-[8px] flex flex-col gap-[6px]">
           {manualEdges.map((e) => (
             <li key={e.id} className="flex items-start justify-between gap-[8px]">
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
                   {e.direction === 'out' ? e.label : `${e.label} ←`}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => onSelectNode(e.other_id)}
-                  className={`truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] ${linkClass}`}
-                >
-                  {e.other_title}
+                <button type="button" onClick={() => onSelectNode(e.other_id)} className="block w-full text-left">
+                  <ScrollingText text={e.other_title} className={`font-[family-name:var(--font-mono)] text-[length:var(--text-base)] ${linkClass}`} />
                 </button>
                 {e.note && <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{e.note}</p>}
               </div>

@@ -15,6 +15,21 @@ import type { RailDestination } from './rail'
 
 const PLACEHOLDER_LABEL: Partial<Record<RailDestination, string>> = {}
 
+// The panel title, in the same lowercase Rubik-muted voice as every
+// SectionHeader and RightPanel's own "now playing" — not RAIL_ITEMS' Title
+// Case tooltip labels, and not always the same string: 'graph' opens Music
+// Map settings, so it's titled to match what's actually on screen rather
+// than the rail's own (unrelated) "Graph Inspector" tooltip.
+const TITLES: Record<RailDestination, string> = {
+  search: 'search',
+  graph: 'music map',
+  database: 'database inspector',
+  favourites: 'favourites',
+  playlists: 'playlists',
+  tags: 'tag manager',
+  settings: 'settings',
+}
+
 type InspectorPanelProps = {
   active: RailDestination
   children?: ReactNode
@@ -58,7 +73,10 @@ export function InspectorPanel({
       edges="right"
       className="absolute top-[var(--header-height)] bottom-0 left-[var(--rail-width)] z-10 flex w-[var(--panel-width)] flex-col overflow-hidden"
     >
-      <div className="min-h-0 flex-1 overflow-y-auto px-[var(--spacing-panel)] pt-[21px] pb-[var(--spacing-panel)]">
+      <h2 className="shrink-0 pt-[21px] pb-[10px] text-center text-[length:var(--text-base)] font-normal text-[var(--color-muted)]">
+        {TITLES[active]}
+      </h2>
+      <div className="min-h-0 flex-1 overflow-y-auto px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
         {content ?? (
           <p className="pt-[40px] text-center text-[length:var(--text-base)] text-[var(--color-muted)]">
             {PLACEHOLDER_LABEL[active]}

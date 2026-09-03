@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { ScrollingText } from './ScrollingText'
 
 /* The core pattern of every panel: Rubik/muted names a thing, Sometype
  * Mono/ink is the thing. See DESIGN.md "The one rule" — a grey value or a mono
@@ -17,16 +18,33 @@ type DataRowProps = {
 }
 
 export function DataRow({ label, value, truncate = true }: DataRowProps) {
+  // Only a plain string/number value can be handed to ScrollingText, which
+  // measures and renders `text` itself — an in-progress edit's <input> (see
+  // MetadataFields.tsx) or any other element value keeps the plain span.
+  const scrollable = truncate && (typeof value === 'string' || typeof value === 'number')
   return (
-    <div className="grid h-[var(--spacing-row)] grid-cols-[57%_43%] items-center">
-      <span className="text-[length:var(--text-base)] text-[var(--color-muted)]">{label}</span>
-      <span
-        className={`font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] ${
-          truncate ? 'truncate' : ''
-        }`}
-      >
-        {value}
-      </span>
+    // min-h, not h: a label with no room to itself (e.g. "edges: featured_artist")
+    // wraps to two lines rather than overflowing its column, and a fixed row
+    // height combined with items-center meant the wrapped line spilled into
+    // the row below it with no line-height to separate the two. min-h lets
+    // the row grow for that case while staying exactly --spacing-row tall
+    // for the common single-line one.
+    <div className="grid min-h-[var(--spacing-row)] grid-cols-[57%_43%] items-center">
+      <span className="text-[length:var(--text-base)] leading-[24px] text-[var(--color-muted)]">{label}</span>
+      {scrollable ? (
+        <ScrollingText
+          text={String(value)}
+          className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]"
+        />
+      ) : (
+        <span
+          className={`font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)] ${
+            truncate ? 'truncate' : ''
+          }`}
+        >
+          {value}
+        </span>
+      )}
     </div>
   )
 }
