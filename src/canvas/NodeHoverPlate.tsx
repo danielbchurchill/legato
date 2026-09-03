@@ -1,10 +1,17 @@
 import type Sigma from 'sigma'
-import { Surface } from '../shell/Surface'
 import { useMountFade } from '../ui/useMountFade'
 import { useNodeAnchor, type NodeAnchor } from './useNodeAnchor'
 
-/* Figma frame 31:247 ("Hovered"). A glass plate naming the node under the
- * pointer, tucked under its bottom edge.
+/* Figma frame 31:247 ("Hovered"). A label naming the node under the pointer,
+ * tucked under its bottom edge.
+ *
+ * The frame draws this as a glass plate; #27 dropped the glass deliberately —
+ * against the canvas's own busy, colorful cover art, a translucent box around
+ * two lines of text read as visual clutter rather than as wayfinding, and
+ * plain text sitting a little closer to the node reads as a label for it
+ * instead of a small panel of its own. This is the one deviation from the
+ * frame in this file; everything else (dwell timing, the addition-not-
+ * substitution rule, the mono/ink type treatment) is unchanged.
  *
  * The frame draws the plate against a 255px cover. That cover is the node
  * itself, drawn for context — the plate is the only thing hover adds, which
@@ -30,7 +37,11 @@ const OVERLAP_RATIO = 0.09 // 23 / 255, so a small node isn't swallowed
 // floors the tuck so it stays legible at typical zoom, itself capped at the
 // node's own radius so it still can't swallow a genuinely tiny node.
 const OVERLAP_MIN_PX = 10
-const TEXT_INSET_PX = 15 // node's bottom edge to the *glass surface's* top edge
+// #27: node's bottom edge to the label's own top edge — was 15 (the frame's
+// figure for the *glass surface's* top edge); tightened now that there's no
+// glass box to give the gap visual weight of its own, so the same 15px read
+// as more distance than it did with a bordered plate to anchor it.
+const TEXT_INSET_PX = 6
 
 function place(element: HTMLDivElement, { x, y, radiusPx }: NodeAnchor): void {
   const overlap = Math.min(OVERLAP_PX, Math.max(Math.min(OVERLAP_MIN_PX, radiusPx), radiusPx * 2 * OVERLAP_RATIO))
@@ -60,14 +71,11 @@ export function NodeHoverPlate({ renderer, nodeKey, title, subtitle }: NodeHover
 
   return (
     <div ref={ref} className="pointer-events-none absolute top-0 left-0">
-      <Surface
-        // px/pb are from the frame. pt matches pb rather than the frame's own
-        // (unequal) figure — the frame's padding-top included the portion of
-        // the box meant to sit behind the node, but the wrapper's own
-        // padding-top (place(), above) already accounts for that separately;
-        // this is purely the surface's internal text inset, and it reads
-        // as lopsided if it doesn't match the bottom.
-        className="flex max-w-[280px] flex-col items-center gap-[9px] px-[15px] py-[17px] transition-opacity duration-[var(--motion-fast)] ease-[var(--ease-out)]"
+      {/* #27: no glass here — see the module comment. Just the two lines,
+       * centred under the node, close enough that they read as this node's
+       * own label rather than a panel floating near it. */}
+      <div
+        className="flex max-w-[280px] flex-col items-center gap-[9px] transition-opacity duration-[var(--motion-fast)] ease-[var(--ease-out)]"
         style={{ opacity: shown ? 1 : 0 }}
       >
         <p className="max-w-full truncate text-center font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[19px] text-[var(--color-ink)]">
@@ -80,7 +88,7 @@ export function NodeHoverPlate({ renderer, nodeKey, title, subtitle }: NodeHover
             {subtitle}
           </p>
         )}
-      </Surface>
+      </div>
     </div>
   )
 }

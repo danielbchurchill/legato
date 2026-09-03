@@ -64,12 +64,15 @@ export const NODE_CARD_COVER_CENTER_Y = PAD_TOP + COVER_PX / 2
 const SELECT_NODE_PX = 130
 
 /* Sanity bounds, not measured values: the camera has no zoom limits (see
- * Canvas.tsx), so an unclamped scale could shrink the card to nothing or
- * blow it up past readability at the extremes of a scroll-wheel zoom.
+ * Canvas.tsx), so an unclamped scale could shrink the cover to nothing or
+ * blow it up past what a DOM element can reasonably render at the extremes
+ * of a scroll-wheel zoom. Governs only the cover now — see place() below —
+ * so this no longer has to also keep text readable; that's a separate,
+ * fixed size regardless of scale.
  *
  * MAX_CARD_SCALE was 2.5 — confirmed live that a realistic scroll-wheel
  * session hits it after only five or six notches,
- * well inside the camera's actually-reachable range: the card would freeze
+ * well inside the camera's actually-reachable range: the cover would freeze
  * solid while everything around it, edges and neighboring nodes included,
  * kept visibly growing, reading as "stopped getting bigger" rather than as
  * an intentional ceiling. radiusPx has no cap of its own (sigma's node
@@ -116,17 +119,28 @@ function forwardWheelToCanvas(renderer: Sigma | null, e: React.WheelEvent<HTMLDi
   )
 }
 
+/* #20: scaling the *whole card* by the node's on-screen radius (the original
+ * shape of this function) dragged its text out of step with the rest of the
+ * app the moment the camera left exactly SELECT_NODE_PX — text rendered
+ * legibly only at that one zoom level, and shrank below the inspector
+ * panel's own --text-base the instant the user scrolled out even slightly,
+ * which read as "the card is too small" and pushed people to zoom in further
+ * just to read it. The glass panel and its text now stay a fixed, native
+ * pixel size at every zoom — DESIGN.md ties this card's column to the same
+ * panel rhythm (33px rows, 16px body text) the inspector panel uses, and a
+ * size that tracked the camera would drift off that rhythm. Only the cover
+ * art keeps growing/shrinking with the node (via --cover-scale below, read
+ * by the CoverArt element's own inline transform), which is what actually
+ * matters for "the card reads as the node opening" — the node's own artwork
+ * has to keep pace with it, not the metadata column next to it. */
 function place(element: HTMLDivElement, { x, y, radiusPx }: NodeAnchor): void {
-  // The card's geometry is measured at SELECT_NODE_PX/2 radius (DESIGN.md's
-  // fly-to zoom). Scrolling the camera in or out after selecting changes the
-  // node's own on-screen radius but used to leave the card's size fixed, so
-  // its 255px cover visibly stopped matching the node it was supposed to be
-  // opening. Scaling by the same ratio keeps the card locked to its node at
-  // any zoom, the same way NodeHoverPlate already does for its own geometry.
-  const scale = Math.min(MAX_CARD_SCALE, Math.max(MIN_CARD_SCALE, radiusPx / (SELECT_NODE_PX / 2)))
-  element.style.transformOrigin = `${NODE_CARD_COVER_CENTER_X}px ${NODE_CARD_COVER_CENTER_Y}px`
-  element.style.transform =
-    `translate(${x - NODE_CARD_COVER_CENTER_X}px, ${y - NODE_CARD_COVER_CENTER_Y}px) scale(${scale})`
+  element.style.transform = `translate(${x - NODE_CARD_COVER_CENTER_X}px, ${y - NODE_CARD_COVER_CENTER_Y}px)`
+
+  // Measured at SELECT_NODE_PX/2 radius (DESIGN.md's fly-to zoom), same as
+  // NodeHoverPlate's own geometry — 1 right after a fly-to, growing or
+  // shrinking from there as the user scrolls.
+  const coverScale = Math.min(MAX_CARD_SCALE, Math.max(MIN_CARD_SCALE, radiusPx / (SELECT_NODE_PX / 2)))
+  element.style.setProperty('--cover-scale', String(coverScale))
 }
 
 /** Mirrors NodeSummary in server/src/summary.ts. */
@@ -237,8 +251,11 @@ export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onO
           size="full"
           alt=""
           className="pointer-events-none relative shrink-0"
-          // Square, no radius: artwork is reproduced, not restyled.
-          style={{ width: COVER_PX, height: COVER_PX }}
+          // Square, no radius: artwork is reproduced, not restyled. Scaled
+          // around its own centre (the default transform-origin) by
+          // --cover-scale, set on the wrapper element in place() above — the
+          // node's own on-screen size is what this tracks, not the card.
+          style={{ width: COVER_PX, height: COVER_PX, transform: 'scale(var(--cover-scale, 1))' }}
         />
 
         <div className="pointer-events-none relative flex flex-col" style={{ width: COLUMN_PX }}>

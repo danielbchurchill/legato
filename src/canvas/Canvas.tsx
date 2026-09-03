@@ -729,6 +729,66 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // on it would keep listening to a dead one.
   const [activeRenderer, setActiveRenderer] = useState<Sigma | null>(null)
 
+  // #23: shift+drag rectangle multiselect. The ref is what the renderer
+  // effect's gesture handlers below actually read/write (mount-once effect,
+  // same "ref not prop" reasoning as everything else in this file) — the
+  // state exists purely to drive the outline overlay's re-subscription
+  // effect just below, mirroring activeRenderer's own reason for existing.
+  // Both are written together by setMultiSelected, defined inside the
+  // renderer-lifecycle effect.
+  const multiSelectedRef = useRef<string[]>([])
+  const [multiSelectedKeys, setMultiSelectedKeys] = useState<string[]>([])
+  const marqueeRef = useRef<HTMLDivElement>(null)
+  const multiSelectOutlineRef = useRef<HTMLDivElement>(null)
+
+  // Tracks the live screen-space bounding box of the current multiselect —
+  // the one visual sign a group of nodes is selected (DESIGN.md: a node's
+  // own rendering never changes to indicate state, so this is a surface next
+  // to the nodes, the same idea as the hover plate and selection card, just
+  // sized to a group instead of anchored to one node). Direct style writes
+  // on 'afterRender', not React state, for the same per-frame-cost reason
+  // useNodeAnchor already gives.
+  useEffect(() => {
+    const renderer = activeRenderer
+    const element = multiSelectOutlineRef.current
+    if (!renderer || !element || multiSelectedKeys.length < 2) {
+      if (element) element.style.visibility = 'hidden'
+      return
+    }
+
+    const PAD_PX = 12
+    const update = () => {
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      for (const key of multiSelectedKeys) {
+        const display = renderer.getNodeDisplayData(key)
+        if (!display) continue
+        const { x, y } = renderer.framedGraphToViewport(display)
+        const r = renderer.scaleSize(display.size)
+        minX = Math.min(minX, x - r)
+        maxX = Math.max(maxX, x + r)
+        minY = Math.min(minY, y - r)
+        maxY = Math.max(maxY, y + r)
+      }
+      if (!Number.isFinite(minX)) {
+        element.style.visibility = 'hidden'
+        return
+      }
+      element.style.visibility = ''
+      element.style.transform = `translate(${minX - PAD_PX}px, ${minY - PAD_PX}px)`
+      element.style.width = `${maxX - minX + PAD_PX * 2}px`
+      element.style.height = `${maxY - minY + PAD_PX * 2}px`
+    }
+
+    update()
+    renderer.on('afterRender', update)
+    return () => {
+      renderer.off('afterRender', update)
+    }
+  }, [activeRenderer, multiSelectedKeys])
+
   useEffect(() => {
     onSelectNodeRef.current = onSelectNode
     onStatsRef.current = onStats
@@ -867,33 +927,36 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       const multiplier = nodeSizeMultipliersRef.current[data.nodeType as string] ?? 1
       const scaled = multiplier === 1 ? data : { ...data, size: (data.size as number) * multiplier }
       if (dimProgress <= 0 || node === hoveredNode || hoveredNeighbors?.has(node)) return scaled
-      // Art-bound nodes are never recolored or reshaped to indicate state
-      // (DESIGN.md "Nodes": "do not brighten, scale, or recolor a cover").
-      // This used to force `type: 'circle'` and crossfade `color` from the
-      // node's inert white placeholder (nodeAttributes' `color: '#ffffff'`,
-      // never read by NodeImageProgram at rest) toward DIMMED_NODE_COLOR —
-      // which read as a bright white flash cutting to a flat dot, and lost
-      // the release/track shape distinction, on every node dimmed mid-hover.
-      // @sigma/node-image has no multiply-darken over an opaque texture
-      // (drawingMode "background" is a no-op once texel.a is 1; "color"
-      // replaces the image outright rather than darkening it), so there is
-      // no way to dim art itself without one of those two violations —
-      // zIndex alone still sends it behind the hovered node's neighborhood.
+      // #13: every de-emphasized node recedes, art-bound or not — this used
+      // to leave cover/coverSquare nodes untouched here (just a `zIndex: 0`
+      // that never took effect, since sigma's `zIndex` setting defaults off
+      // and this file never turns it on), so hovering read as "everything is
+      // highlighted" rather than as a dim: an artist or release node's
+      // brightness genuinely never changed.
+      //
+      // @sigma/node-image can neither multiply-darken an opaque texture
+      // (drawingMode "background" is a no-op once texel.a is 1) nor tint one
+      // without fully replacing it (drawingMode "color" discards the image
+      // outright) — there is no continuous crossfade available for a texture
+      // the way mixTowardDim gives every flat-colored node below. So an art
+      // node's dim is a hard cut straight to DIMMED_NODE_COLOR the instant
+      // dimProgress engages, not an interpolation from its own color — that
+      // attribute is only ever the inert `#ffffff` placeholder nodeAttributes
+      // sets and NodeImageProgram never reads at rest, so crossfading from it
+      // (the earlier attempt here) read as a bright white flash before
+      // settling dark, on top of losing the release/track shape distinction.
       if (data.type === 'cover' || data.type === 'coverSquare') {
-        return { ...scaled, zIndex: 0 }
+        return { ...scaled, type: 'circle', square: false, color: DIMMED_NODE_COLOR }
       }
-      // Every other type has no art to protect, so it's forced to 'circle'
-      // and its color crossfades toward the dim tone — sigma has no notion
-      // of fading an image out, so the art->circle branch above stays a
-      // hard cut instead; only this branch's own color crossfades. `square`
-      // is cleared alongside the type: nothing downstream should be told a
-      // node is still a square cover while it is being drawn as a plain dot.
+      // Every other type has no art to protect, so its color crossfades
+      // toward the dim tone continuously. `square` is cleared alongside
+      // `type`: nothing downstream should be told a node is still a square
+      // cover while it is being drawn as a plain dot.
       return {
         ...scaled,
         type: 'circle',
         square: false,
         color: mixTowardDim(scaled.color, DIMMED_NODE_COLOR, dimProgress),
-        zIndex: 0,
       }
     })
     renderer.setSetting('edgeReducer', (edge, data) => {
@@ -958,14 +1021,51 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // a click that registers as a drag now silently does nothing at all.
     let didDrag = false
 
+    // #23: set once downNode fires on a node that's already part of the
+    // current multiselect — every member's graph position at that moment, so
+    // mousemovebody below can move each one by the same delta the pointer
+    // travels rather than snapping every node in the group to the cursor
+    // (which is what the single-node branch does, and is fine for one node,
+    // but would collapse a group onto a single point).
+    let groupDragOrigins: Map<string, { x: number; y: number }> | null = null
+    let groupDragStartPointer: { x: number; y: number } | null = null
+
+    const setMultiSelected = (keys: string[]) => {
+      multiSelectedRef.current = keys
+      setMultiSelectedKeys(keys)
+    }
+
     renderer.on('downNode', (e) => {
       draggedNode = e.node
       didDrag = false
       downAt = { x: e.event.x, y: e.event.y }
+
+      const current = multiSelectedRef.current
+      if (current.length >= 2 && current.includes(e.node)) {
+        groupDragOrigins = new Map(
+          current.map((key) => [
+            key,
+            { x: graph.getNodeAttribute(key, 'x') as number, y: graph.getNodeAttribute(key, 'y') as number },
+          ]),
+        )
+      } else {
+        groupDragOrigins = null
+        // Starting an ordinary drag on a node outside the current selection
+        // drops it, the same way clicking outside a selection would in any
+        // other app — this node is what the gesture is about now.
+        if (current.length > 0) setMultiSelected([])
+      }
     })
 
     renderer.on('clickNode', (e) => {
       if (didDrag) return
+      // A real marquee drag that happened to release over a node — see
+      // marqueeActive below. Consumed here so the click that sigma still
+      // synthesizes for it (its own drag-distance tracking never saw the
+      // movement, since the marquee handler below claims every intervening
+      // mousemovebody with preventSigmaDefault) doesn't also select/fly.
+      if (marqueeActive) return
+      if (multiSelectedRef.current.length > 0) setMultiSelected([])
       const id = Number(e.node)
       // Clicking the selected node again clears it — one of the three ways
       // out of a selection, alongside clicking empty canvas and Escape
@@ -982,9 +1082,12 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     // Clicking the canvas itself is the deselect gesture. Nothing outside a
     // node has any other meaning here — panning is a drag, and sigma reports
-    // that separately.
+    // that separately (and a marquee drag is claimed before it ever reaches
+    // sigma's own drag tracking — see marqueeActive below).
     renderer.on('clickStage', () => {
+      if (marqueeActive) return
       if (selectedNodeIdRef.current != null) onSelectNodeRef.current(null)
+      if (multiSelectedRef.current.length > 0) setMultiSelected([])
     })
 
     // Sigma's captor answers a double-click by animating the camera to
@@ -997,41 +1100,140 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     const mouseCaptor = renderer.getMouseCaptor()
 
+    // Moves one node to a graph-space position, live — the shared tail end
+    // of both the single-node and group-drag branches below. Mirrors the
+    // pin/write-through split the single-node drag already used: a pinned
+    // sim node (unlocked) is picked up by the simulation's own tick callback
+    // (see createForceSimulation above, which copies sim positions into the
+    // graph and refreshes every tick while alphaTarget keeps it running), so
+    // only the locked case needs to write the graph directly here.
+    const moveNodeTo = (key: string, x: number, y: number) => {
+      const simNode = sim.nodesByKey.get(key)
+      if (simNode) {
+        simNode.fx = x
+        simNode.fy = y
+        simNode.x = x
+        simNode.y = y
+      }
+      if (nodesLockedRef.current) {
+        graph.setNodeAttribute(key, 'x', x)
+        graph.setNodeAttribute(key, 'y', y)
+      }
+    }
+
+    // #23: shift+drag rectangle multiselect. marqueeDownAt is set only when
+    // the press both starts on empty canvas (draggedNode is still null at
+    // that point — see handleMouseDown below) and has shift held, so an
+    // ordinary empty-canvas drag keeps panning exactly as before. marqueeActive
+    // flips true at the same DRAG_THRESHOLD_PX this file already uses to tell
+    // a click from a drag, and is deliberately left set after mouseup (reset
+    // instead at the top of the next handleMouseDown) — clickNode/clickStage
+    // above read it to swallow the click sigma still synthesizes for the
+    // gesture, the same role didDrag plays for an ordinary node drag.
+    let marqueeDownAt: { x: number; y: number } | null = null
+    let marqueeCurrentAt: { x: number; y: number } | null = null
+    let marqueeActive = false
+
+    const showMarqueeVisual = (a: { x: number; y: number }, b: { x: number; y: number }) => {
+      const el = marqueeRef.current
+      if (!el) return
+      const x0 = Math.min(a.x, b.x)
+      const x1 = Math.max(a.x, b.x)
+      const y0 = Math.min(a.y, b.y)
+      const y1 = Math.max(a.y, b.y)
+      el.style.visibility = ''
+      el.style.transform = `translate(${x0}px, ${y0}px)`
+      el.style.width = `${x1 - x0}px`
+      el.style.height = `${y1 - y0}px`
+    }
+    const hideMarqueeVisual = () => {
+      const el = marqueeRef.current
+      if (el) el.style.visibility = 'hidden'
+    }
+
+    // Every node whose current screen position falls inside the rectangle
+    // between marqueeDownAt and wherever the pointer ended up. A rectangle
+    // that catches fewer than two nodes clears the selection rather than
+    // keeping one — a single node has no "group" to drag together, and a
+    // plain click already covers selecting one node.
+    const finalizeMarqueeSelection = () => {
+      if (!marqueeDownAt || !marqueeCurrentAt) return
+      const x0 = Math.min(marqueeDownAt.x, marqueeCurrentAt.x)
+      const x1 = Math.max(marqueeDownAt.x, marqueeCurrentAt.x)
+      const y0 = Math.min(marqueeDownAt.y, marqueeCurrentAt.y)
+      const y1 = Math.max(marqueeDownAt.y, marqueeCurrentAt.y)
+      const inside: string[] = []
+      graph.forEachNode((key) => {
+        const display = renderer.getNodeDisplayData(key)
+        if (!display) return
+        const { x, y } = renderer.framedGraphToViewport(display)
+        if (x >= x0 && x <= x1 && y >= y0 && y <= y1) inside.push(key)
+      })
+      if (inside.length >= 2) {
+        // A multiselect and an open selection card are two different ways of
+        // looking at the graph; closing the card here keeps them from
+        // overlapping on screen.
+        if (selectedNodeIdRef.current != null) onSelectNodeRef.current(null)
+        setMultiSelected(inside)
+      } else {
+        setMultiSelected([])
+      }
+    }
+
     mouseCaptor.on('mousemovebody', (e) => {
+      if (marqueeDownAt && !draggedNode) {
+        if (!marqueeActive) {
+          if (Math.hypot(e.x - marqueeDownAt.x, e.y - marqueeDownAt.y) < DRAG_THRESHOLD_PX) return
+          marqueeActive = true
+        }
+        marqueeCurrentAt = { x: e.x, y: e.y }
+        showMarqueeVisual(marqueeDownAt, marqueeCurrentAt)
+        e.preventSigmaDefault()
+        return
+      }
+
       if (!draggedNode || !downAt) return
       if (!didDrag) {
         if (Math.hypot(e.x - downAt.x, e.y - downAt.y) < DRAG_THRESHOLD_PX) return
         didDrag = true
         // Flagged only once this is a real drag, so an ordinary click never
         // routes the node through the hover canvas on its way to selecting.
-        graph.setNodeAttribute(draggedNode, 'highlighted', true)
+        if (groupDragOrigins) {
+          for (const key of groupDragOrigins.keys()) graph.setNodeAttribute(key, 'highlighted', true)
+          groupDragStartPointer = renderer.viewportToGraph(e)
+        } else {
+          graph.setNodeAttribute(draggedNode, 'highlighted', true)
+        }
         // Reheats the simulation for the drag's duration — held via
         // alphaTarget rather than a one-shot alpha bump (forceSimulation.ts's
         // reheat) so neighbors keep reacting continuously while the pointer
         // moves, not just once at drag start. Skipped while locked: the
-        // simulation stays stopped, and this drag only ever moves its own
-        // node (the branch below).
+        // simulation stays stopped, and this drag only ever moves the
+        // dragged node(s) directly (the branch below).
         if (!nodesLockedRef.current) sim.simulation.alphaTarget(0.3).restart()
       }
-      const pos = renderer.viewportToGraph(e)
-      const simNode = sim.nodesByKey.get(draggedNode)
-      if (simNode) {
+
+      if (groupDragOrigins && groupDragStartPointer) {
+        // Every member moves by the same graph-space delta the pointer has
+        // travelled since the drag started — not "snap to cursor" (what the
+        // single-node branch below does), which would collapse the whole
+        // group onto one point.
+        const pos = renderer.viewportToGraph(e)
+        const dx = pos.x - groupDragStartPointer.x
+        const dy = pos.y - groupDragStartPointer.y
+        for (const [key, origin] of groupDragOrigins) moveNodeTo(key, origin.x + dx, origin.y + dy)
+      } else {
         // Permanent pin, not released on mouseup below — "the user layer
         // always wins" (see robustBBox's own comment above): once dragged, a
         // node never rejoins free physics, matching what user_x/user_y
         // already meant before live physics existed. A deliberate departure
         // from literal Obsidian, where a released node drifts again.
-        simNode.fx = pos.x
-        simNode.fy = pos.y
-        simNode.x = pos.x
-        simNode.y = pos.y
+        const pos = renderer.viewportToGraph(e)
+        moveNodeTo(draggedNode, pos.x, pos.y)
       }
       if (nodesLockedRef.current) {
         // Simulation is stopped, so nothing will tick this into the graph —
-        // reflect the move directly, the same way this handler always did
-        // before live physics existed.
-        graph.setNodeAttribute(draggedNode, 'x', pos.x)
-        graph.setNodeAttribute(draggedNode, 'y', pos.y)
+        // moveNodeTo already wrote the graph directly above; just repaint.
         renderer.refresh()
       }
       e.preventSigmaDefault()
@@ -1039,22 +1241,49 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     const handleMouseUp = () => {
       if (draggedNode && didDrag) {
-        const id = Number(draggedNode)
-        const simNode = sim.nodesByKey.get(draggedNode)
-        const x = simNode ? (simNode.x as number) : (graph.getNodeAttribute(draggedNode, 'x') as number)
-        const y = simNode ? (simNode.y as number) : (graph.getNodeAttribute(draggedNode, 'y') as number)
-        graph.removeNodeAttribute(draggedNode, 'highlighted')
+        if (groupDragOrigins) {
+          for (const key of groupDragOrigins.keys()) {
+            const id = Number(key)
+            const simNode = sim.nodesByKey.get(key)
+            const x = simNode ? (simNode.x as number) : (graph.getNodeAttribute(key, 'x') as number)
+            const y = simNode ? (simNode.y as number) : (graph.getNodeAttribute(key, 'y') as number)
+            graph.removeNodeAttribute(key, 'highlighted')
+            void patchNodePosition(id, x, y)
+          }
+        } else {
+          const id = Number(draggedNode)
+          const simNode = sim.nodesByKey.get(draggedNode)
+          const x = simNode ? (simNode.x as number) : (graph.getNodeAttribute(draggedNode, 'x') as number)
+          const y = simNode ? (simNode.y as number) : (graph.getNodeAttribute(draggedNode, 'y') as number)
+          graph.removeNodeAttribute(draggedNode, 'highlighted')
+          void patchNodePosition(id, x, y)
+        }
         if (!nodesLockedRef.current) sim.simulation.alphaTarget(0)
-        void patchNodePosition(id, x, y)
       }
       draggedNode = null
       downAt = null
+      groupDragOrigins = null
+      groupDragStartPointer = null
+
+      if (marqueeDownAt) {
+        if (marqueeActive) finalizeMarqueeSelection()
+        hideMarqueeVisual()
+        marqueeDownAt = null
+        marqueeCurrentAt = null
+      }
     }
 
     // Pins the projection while dragging so the graph does not reflow under
-    // the cursor.
-    const handleMouseDown = () => {
+    // the cursor. Also where a shift+drag starting on empty canvas commits to
+    // being a marquee-select instead of the default camera pan — draggedNode
+    // is reliably up to date here already: sigma's own picking (which sets it,
+    // via downNode above) runs synchronously inside the same native mousedown
+    // that triggers this handler, and is registered first.
+    const handleMouseDown = (e: { x: number; y: number; original: MouseEvent | TouchEvent }) => {
       if (!renderer.getCustomBBox()) renderer.setCustomBBox(renderer.getBBox())
+      marqueeActive = false
+      marqueeDownAt = draggedNode == null && e.original.shiftKey ? { x: e.x, y: e.y } : null
+      marqueeCurrentAt = marqueeDownAt
     }
 
     mouseCaptor.on('mouseup', handleMouseUp)
@@ -1154,6 +1383,24 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       <div ref={containerRef} className="absolute inset-0" />
 
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        {/* #23: the rectangle itself, live while shift-dragging on empty
+         * canvas — see the mousemovebody handler in the renderer effect
+         * above. Hidden by default; shown/sized via direct style writes,
+         * not React state, since it has to track every pointer move. */}
+        <div
+          ref={marqueeRef}
+          className="absolute top-0 left-0 rounded-[4px] border border-[var(--color-hairline)] bg-white/6"
+          style={{ visibility: 'hidden' }}
+        />
+        {/* The one visual sign a group of nodes is currently multiselected —
+         * see the outline-tracking effect above. Node rendering itself never
+         * changes (DESIGN.md "Nodes"): this is a surface next to the group,
+         * the same idea as the hover plate and selection card. */}
+        <div
+          ref={multiSelectOutlineRef}
+          className="absolute top-0 left-0 rounded-[12px] border border-[var(--color-hairline)]"
+          style={{ visibility: 'hidden' }}
+        />
         {hoveredNode && (
           <NodeHoverPlate
             key={hoveredNode.id}
