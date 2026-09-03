@@ -328,7 +328,7 @@ Every glyph is 24 × 24, `fill="none"`, `stroke="currentColor"`, `stroke-width="
 
 Never hand-draw an icon or inline a `<path>`. If a needed glyph is missing, pull it from proicons; if proicons does not have it, that is a design decision, not an implementation one.
 
-Icons in use: `search`, `cancel`, `chevron-down`, `pencil`, `info`, `pause`, `play`, `volume`, `map`, `database`, `heart`, `tag`, `sliders`, `panel-left-collapse` (the last five vendored for v2's rail and panel-collapse icon — see "The shell (v2)").
+Icons in use: `search`, `cancel`, `chevron-down`, `pencil`, `info`, `pause`, `play`, `volume`, `map`, `database`, `heart`, `tag`, `sliders`, `panel-left-collapse` (the last five vendored for v2's rail and panel-collapse icon — see "The shell (v2)"), `eye` (proicons' actual "Eye" glyph, vendored for the selected-node card's "open full details" button — see "Controls").
 
 **On/off state has no filled-glyph convention to reach for.** proicons ships no filled or solid variant for any of its 544 icons, `heart` included — checked directly, not assumed. So the favourites heart's "on" state (`NodeTitleBlock.tsx`, `Favourites.tsx`'s row) isn't a second vendored glyph; `Icon.tsx`'s `filled` prop swaps the same path's `fill="none"` for `fill="currentColor"` at render time. This is the one exception to "every glyph is stroke-only" above, and it's a render-time transform of the existing vendored path, not a hand-drawn one — the thing this section actually rules out.
 
@@ -340,14 +340,16 @@ There are none of the app's own anymore. The window runs with native OS decorati
 
 ## Controls
 
-Underline was the only button affordance in the app (C-3) — "retry", "rescan", "approve — write to file" and "cancel" all read as the same plain underlined text, so the one irreversible action in the product looked exactly like the one that isn't. Two shapes, `src/ui/Button.tsx`, split by consequence rather than prominence:
+Underline used to be the only button affordance in the app (C-3) — "retry", "rescan", "approve — write to file" and "cancel" all read as the same plain underlined text, so the one irreversible action in the product looked exactly like the one that isn't. Two shapes, `src/ui/Button.tsx`, split by consequence rather than prominence:
 
 | Variant | Looks like | Use |
 |---|---|---|
-| `link` | Ink text, underlined, hairline decoration | Anything reversible — navigation, retry, resubmit, undo itself. Most actions in the app genuinely are this, and it's the shape the app already had. |
+| `link` | Ink text, hover steps to `--color-muted-hi` — no underline | Anything reversible — navigation, retry, resubmit, undo itself. Most actions in the app genuinely are this. |
 | `destructive` | A bordered pill: hairline border, rounded-full, padded | The rare action with no undo — currently only "approve — write to file" and its twin in the maintenance view. |
 
-`destructive` is distinguished by shape, not color. The palette has no danger token, deliberately (`--color-*` in tokens.css is glass/ink/muted/edge-hue, full stop — inventing a red for one rare state would be the first exception), so weight carries what color can't: a bordered pill reads as a control to commit to, a plain underline reads as a link to follow.
+`destructive` is distinguished by shape, not color. The palette has no danger token, deliberately (`--color-*` in tokens.css is glass/ink/muted/edge-hue, full stop — inventing a red for one rare state would be the first exception), so weight carries what color can't: a bordered pill reads as a control to commit to, plain text reads as a link to follow.
+
+**`link`'s underline was removed app-wide 2026-09-02 (issue #30)** — it read badly wherever it appeared, and it was never load-bearing: the hover color-shift to `--color-muted-hi` was already the affordance doing the real work, the underline just rode along. Every "click a title to fly to this node" spot outside the shared component (Favourites' row, the collection panel's maintenance preview and similarity thumbnails, search results) had already converged on plain-text-plus-color-shift with no underline — TagManager's row title was brought in line with that convention first (see "v2: panels without a frame" below); `Button.tsx`'s `link` variant, `ArticleBody.tsx`'s inline article links, and `ConnectionsContent.tsx`'s recordings/personal-edges rows were the three remaining holdouts, fixed in the same pass. `destructive` is untouched — it was never underlined, and its bordered-pill shape is the whole point of that variant.
 
 Both variants share the toggle pill's rounding language (`rounded-full`, no new radius token) and MO-1's motion tokens (`--motion-fast`, `--ease-out`) rather than a literal duration.
 

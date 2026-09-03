@@ -39,8 +39,7 @@ const EDGE_VERB: Record<string, string> = {
   performed_credit: 'Performed by',
 }
 
-const linkClass =
-  'text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted-hi)]'
+const linkClass = 'text-[var(--color-ink)] hover:text-[var(--color-muted-hi)]'
 
 // P-6: an artist with fifteen albums used to produce fifteen near-identical
 // "Same artist as…" lines. Facts sharing a groupType collapse into one row;

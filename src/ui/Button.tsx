@@ -6,17 +6,23 @@ import type { ReactNode } from 'react'
  * DESIGN.md "Controls".
  *
  * The split is by consequence, not by prominence: `link` covers anything
- * reversible — navigation, retry, resubmit, undo itself — and stays the
- * underlined shape the app already had, since most actions here genuinely
- * are this. `destructive` is for the rare action with no undo. It's
- * distinguished by shape, not color: DESIGN.md's palette has no danger
- * token, deliberately (the same constraint NowPlayingPanel's error text
- * already respects), so a bordered pill carries the weight color can't. */
+ * reversible — navigation, retry, resubmit, undo itself — and `destructive`
+ * is for the rare action with no undo. It's distinguished by shape, not
+ * color: DESIGN.md's palette has no danger token, deliberately (the same
+ * constraint NowPlayingPanel's error text already respects), so a bordered
+ * pill carries the weight color can't.
+ *
+ * `link` no longer underlines (#30) — the underline read badly wherever it
+ * appeared, and every other "click this text" affordance in the app had
+ * already settled on a plain hover color-shift with no underline (see
+ * DESIGN.md "v2: panels without a frame"), so this brings the shared
+ * component in line with its own siblings rather than inventing a new
+ * treatment. The color shift already here is the real state feedback. */
 
 type ButtonVariant = 'link' | 'destructive'
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
-  link: 'text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted-hi)]',
+  link: 'text-[var(--color-ink)] hover:text-[var(--color-muted-hi)]',
   destructive: 'rounded-full border border-[var(--color-hairline)] px-[14px] py-[4px] text-[var(--color-ink)] hover:bg-white/8',
 }
 

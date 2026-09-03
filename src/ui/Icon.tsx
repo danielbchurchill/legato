@@ -4,6 +4,7 @@ import cancel from '../assets/icons/cancel.svg?raw'
 import chevronDown from '../assets/icons/chevron-down.svg?raw'
 import chevronUp from '../assets/icons/chevron-up.svg?raw'
 import database from '../assets/icons/database.svg?raw'
+import eye from '../assets/icons/eye.svg?raw'
 import fastForward from '../assets/icons/fast-forward.svg?raw'
 import heart from '../assets/icons/heart.svg?raw'
 import info from '../assets/icons/info.svg?raw'
@@ -45,7 +46,13 @@ import volume from '../assets/icons/volume.svg?raw'
  * proicons has no shuffle/random glyph anywhere in its set (checked the full
  * 544-icon list); `arrow-swap` — its closest available crossing-arrows
  * glyph — stands in for the shuffle toggle until a purpose-built one turns
- * up. Flagged, not a clean match. */
+ * up. Flagged, not a clean match.
+ *
+ * `eye` is proicons' actual "Eye" glyph — the selected-node card's "open
+ * full details" button (NodeCard.tsx) used `pencil` for this, which reads
+ * as edit rather than view; the click only opens the read-only Inspector
+ * Panel, never an edit form (that's MetadataFields.tsx's `onEdit`, a
+ * genuinely separate action that keeps `pencil`). */
 const GLYPHS = {
   add,
   'arrow-swap': arrowSwap,
@@ -53,6 +60,7 @@ const GLYPHS = {
   'chevron-down': chevronDown,
   'chevron-up': chevronUp,
   database,
+  eye,
   'fast-forward': fastForward,
   heart,
   info,

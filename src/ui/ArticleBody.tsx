@@ -27,7 +27,7 @@ export function ArticleBody({
         key={match.index}
         type="button"
         onClick={() => onSelectNode(Number(idStr))}
-        className="text-[var(--color-ink)] underline decoration-[var(--color-hairline)] underline-offset-2 hover:text-[var(--color-muted)]"
+        className="text-[var(--color-ink)] hover:text-[var(--color-muted)]"
       >
         {text}
       </button>,

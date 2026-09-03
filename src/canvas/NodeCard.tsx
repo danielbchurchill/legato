@@ -221,9 +221,10 @@ export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onO
         }}
       >
         {/* Stretched hit target: the whole card opens the inspector, but the
-         * pencil inside it needs to be its own button, and a button cannot
-         * contain a button. Everything above this is pointer-events-none so
-         * clicks fall through to it, except the pencil, which opts back in. */}
+         * eye button inside it needs to be its own button, and a button
+         * cannot contain a button. Everything above this is
+         * pointer-events-none so clicks fall through to it, except the eye
+         * button, which opts back in. */}
         <button
           type="button"
           onClick={onOpenInspector}
@@ -278,10 +279,10 @@ export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onO
                     <button
                       type="button"
                       onClick={onOpenInspector}
-                      aria-label="Edit metadata"
+                      aria-label="View details"
                       className="text-[var(--color-muted)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:text-[var(--color-muted-hi)]"
                     >
-                      <Icon name="pencil" size={24} />
+                      <Icon name="eye" size={24} />
                     </button>
                   </div>
                 }

@@ -79,11 +79,10 @@ export function TagManager({ onSelectNode }: { onSelectNode: (id: number) => voi
           {rows.map((row) => (
             <div key={row.id} className="flex flex-col gap-[6px] border-b border-[var(--color-divider)] py-[15px] last:border-b-0">
               <div className="flex items-baseline justify-between gap-[12px]">
-                {/* Plain hover-color-shift button, not the shared `Button`'s
-                 * underlined `link` variant — matching every other "click a
-                 * title to fly to this node" affordance in the app
+                {/* Plain hover-color-shift button, matching every other
+                 * "click a title to fly to this node" affordance in the app
                  * (Favourites' own row, the maintenance preview, similarity
-                 * thumbnails, search results), none of which underline. */}
+                 * thumbnails, search results) — none of which underline. */}
                 <button
                   type="button"
                   onClick={() => onSelectNode(row.id)}
