@@ -1,14 +1,40 @@
 name: build
 
-# M10 step one: prove the Tauri shell + embedded server actually build and
-# test clean on macOS and Windows, not just this Linux dev machine. See
-# CLAUDE.md's Development Conventions for what M10 covers and what's still
-# deliberately deferred (real sidecar packaging, ffmpeg/fpcalc bundling,
-# code signing — none of that is this workflow's job).
+# M10 step one: prove the Tauri shell actually builds and bundles clean on
+# macOS and Windows, not just this Linux dev machine. See CLAUDE.md's
+# Development Conventions for what M10 covers and what's still deliberately
+# deferred (real sidecar packaging, ffmpeg/fpcalc bundling, code signing —
+# none of that is this workflow's job).
+#
+# This is the expensive one — a real 3-platform compile + bundle via
+# tauri-action, and macOS/Windows runners bill against GitHub's included-
+# minutes quota at 10x/2x the Linux rate. It deliberately does NOT run on
+# every push/PR the way check.yml does: the `paths` filters below scope it
+# to commits that can actually change what gets compiled or bundled —
+# Rust source, the frontend src/ the webview bundles, or root deps. A
+# server/-only, relay/-only, or site/-only change (those have their own
+# coverage in check.yml, and none of them are compiled into this binary —
+# server/ is spawned as a sidecar at runtime, relay/ and site/ are separate
+# deployables) never triggers this. Force a full build regardless of what
+# changed via workflow_dispatch (Actions tab -> build -> Run workflow, or
+# `gh workflow run build.yml`).
 on:
   push:
+    branches: [main]
+    paths:
+      - 'src-tauri/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'src-tauri/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 permissions:
@@ -25,17 +51,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # .nvmrc is the single source of truth for the Node version — same
-      # pin applies to the root app and to server/, which has its own
-      # package.json/node_modules and is installed separately below.
       - name: install Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: '.nvmrc'
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            server/package-lock.json
+          cache-dependency-path: package-lock.json
 
       # Cargo.toml pins rust-version = "1.77.2" as an MSRV floor, not an
       # exact toolchain version — stable is well above it and is what's
@@ -53,9 +74,9 @@ jobs:
       # patchelf for AppImage) plus libasound2-dev, which isn't in Tauri's
       # docs but is required to link cpal/rodio (src-tauri/src/playback.rs)
       # — this dev machine already has it installed, a fresh runner doesn't.
-      # ffmpeg is here for the server test suite, not for the app bundle —
-      # see the note on that step below.
-      - name: install Linux build + test dependencies
+      # No ffmpeg here: that was only ever a server/ test-time dependency,
+      # and server/'s test suite runs in check.yml now, not this job.
+      - name: install Linux build dependencies
         if: matrix.platform == 'ubuntu-latest'
         run: |
           sudo apt-get update
@@ -70,35 +91,10 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libasound2-dev \
-            ffmpeg
-
-      # ffmpeg here is a CI test-time dependency only (server/src/waveform/
-      # decode.spec.ts shells out to a real ffmpeg to synthesize and decode
-      # a test tone) — not app-runtime bundling, which is explicitly a
-      # separate, parallel workstream (see PR description).
-      - name: install macOS test dependencies
-        if: matrix.platform == 'macos-latest'
-        run: brew install ffmpeg
-
-      - name: install Windows test dependencies
-        if: matrix.platform == 'windows-latest'
-        run: choco install ffmpeg -y
+            libasound2-dev
 
       - name: install root dependencies
         run: npm ci
-
-      - name: install server dependencies
-        run: npm --prefix server ci
-
-      # better-sqlite3 ships prebuilt native binaries for every platform/arch
-      # this matrix touches (darwin-arm64/x64, linux-x64, win32-x64) bundled
-      # directly inside its own npm tarball (see lib/binding.js's
-      # getPrebuildPath()) — there's no postinstall network fetch and no
-      # node-gyp compile happening here, `npm ci` above already resolved it.
-      # This step is what actually proves that's true rather than assuming it.
-      - name: run server test suite
-        run: npm --prefix server test
 
       - name: cargo clippy (src-tauri)
         run: cargo clippy --all-targets --all-features -- -D warnings

@@ -1,0 +1,72 @@
+name: check
+
+# The cheap, always-on safety net: pure Node/TypeScript checks across every
+# package in the repo (root app, server/, relay/, site/), Linux-only. No
+# Rust toolchain, no Tauri bundling — that's build.yml's job, and it's
+# expensive (macOS/Windows runners bill at 10x/2x the Linux rate against
+# GitHub's included-minutes quota), so it only runs when something that
+# actually affects the native build changed. This job runs on everything,
+# every time, because Linux minutes are cheap and this is real regression
+# coverage for the four packages that had zero CI coverage between them
+# before relay/ and site/ existed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            relay/package-lock.json
+            site/package-lock.json
+
+      # ffmpeg is a test-time dependency only — server/src/waveform/
+      # decode.spec.ts shells out to a real ffmpeg to synthesize and decode
+      # a test tone. Nothing else in this job needs system packages: no
+      # Tauri bundling happens here, so none of webkit2gtk/appindicator/
+      # rsvg/libasound2/etc are needed (see build.yml for those).
+      - name: install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: install root dependencies
+        run: npm ci
+
+      - name: lint
+        run: npm run lint
+
+      - name: build root app (tsc -b && vite build)
+        run: npm run build
+
+      - name: install server dependencies
+        run: npm --prefix server ci
+
+      - name: server test suite
+        run: npm --prefix server test
+
+      - name: install relay dependencies
+        run: npm --prefix relay ci
+
+      - name: relay test suite
+        run: npm --prefix relay test
+
+      - name: install site dependencies
+        run: npm --prefix site ci
+
+      - name: build site
+        run: npm --prefix site run build
