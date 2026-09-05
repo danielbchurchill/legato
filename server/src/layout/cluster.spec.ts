@@ -91,4 +91,41 @@ describe("computeClusteredSeeds", () => {
   it("handles an empty input without throwing", () => {
     expect(computeClusteredSeeds([]).size).toBe(0);
   });
+
+  describe("jitterSeed (#46 rebuild map)", () => {
+    const inputs: ClusterInput[] = [
+      { nodeId: 1, groupKey: 42, decade: 1970 },
+      { nodeId: 2, groupKey: 42, decade: 1970 },
+      { nodeId: 3, groupKey: 99, decade: 1980 },
+    ];
+
+    it("defaults to the exact same output as before this parameter existed", () => {
+      const withDefault = computeClusteredSeeds(inputs);
+      const explicitZero = computeClusteredSeeds(inputs, 0);
+      for (const nodeId of [1, 2, 3]) {
+        expect(explicitZero.get(nodeId)).toEqual(withDefault.get(nodeId));
+      }
+    });
+
+    it("produces a different within-cell jitter for a different seed", () => {
+      const a = computeClusteredSeeds(inputs, 1);
+      const b = computeClusteredSeeds(inputs, 2);
+      // At least one node actually moves — vanishingly unlikely to hold by
+      // chance if the seed were being ignored.
+      const moved = [1, 2, 3].some((id) => {
+        const pa = a.get(id)!;
+        const pb = b.get(id)!;
+        return pa.x !== pb.x || pa.y !== pb.y;
+      });
+      expect(moved).toBe(true);
+    });
+
+    it("still keeps different decades of the same artist apart regardless of jitter", () => {
+      const seeds = computeClusteredSeeds(inputs, 777);
+      // Same assertion as the decade-band test above, just re-run with a
+      // nonzero jitterSeed — which cell a node lands in is real data, not
+      // shuffled by the rebuild-only jitter.
+      expect(Math.round(seeds.get(3)!.x / 100)).not.toBe(Math.round(seeds.get(1)!.x / 100));
+    });
+  });
 });

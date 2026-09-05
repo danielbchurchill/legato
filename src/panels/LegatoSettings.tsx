@@ -190,6 +190,8 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
   const [error, setError] = useState<string | null>(null)
   const [scanning, setScanning] = useState<Record<number, ScanProgress>>({})
   const [devices, setDevices] = useState<string[] | null>(null)
+  const [confirmingRebuild, setConfirmingRebuild] = useState(false)
+  const [rebuilding, setRebuilding] = useState(false)
 
   const loadRoots = () => {
     fetch(`${API}/library-roots`)
@@ -252,6 +254,23 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ libraryRootId: id }),
     })
+  }
+
+  // #46 — regenerates the whole graph's layout (fresh seed jitter, every
+  // manually-placed node's pin cleared) without touching the library on
+  // disk. The server broadcasts "layout:rebuilt" when it's done, which is
+  // what actually moves the running canvas (App.tsx remounts it) — this
+  // just fires the request and clears the local "in progress" state once
+  // the response comes back, same division of labor rescanRoot above
+  // already has with scan:done.
+  const rebuildMap = async () => {
+    setConfirmingRebuild(false)
+    setRebuilding(true)
+    try {
+      await fetch(`${API}/layout/rebuild`, { method: 'POST' })
+    } finally {
+      setRebuilding(false)
+    }
   }
 
   // Key/semantics match server/src/enrich/queue.ts's isEnrichmentEnabled —
@@ -413,6 +432,32 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
             onChange={(v) => void updateSettings({ reducedMotionForced: v ? 'true' : 'false' })}
             label="reduce motion, regardless of system setting"
           />
+        </SettingsRow>
+        <SettingsRow label="layout" align="start">
+          {confirmingRebuild ? (
+            <div className="flex flex-col gap-[var(--spacing-xs)]">
+              <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                Rebuild the map? Every node gets freshly placed, including anywhere you've dragged one — that
+                placement is gone. Your library on disk is untouched.
+              </p>
+              <div className="flex items-center gap-[var(--spacing-sm)]">
+                <Button variant="destructive" onClick={() => void rebuildMap()}>
+                  rebuild
+                </Button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingRebuild(false)}
+                  className="text-[length:var(--text-sm)] text-[color:var(--color-control)] hover:text-[var(--color-muted-hi)]"
+                >
+                  cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <Button onClick={() => setConfirmingRebuild(true)} disabled={rebuilding}>
+              {rebuilding ? 'rebuilding…' : 'rebuild map'}
+            </Button>
+          )}
         </SettingsRow>
       </SettingsGroup>
 

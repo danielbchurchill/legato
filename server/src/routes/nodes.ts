@@ -189,7 +189,9 @@ export function nodesRoutes(db: Database.Database) {
 
     // Writes user_x/user_y only — seed_x/seed_y are derived and only ever
     // touched by layout/seed.ts's recompute. A user's drag never gets
-    // auto-moved back, per Legato's canvas design.
+    // auto-moved back by anything routine (routes/layout.ts's explicit
+    // "rebuild map" is the one deliberate, user-triggered exception —
+    // layout/seed.ts's rebuildLayout, #46).
     app.patch<{ Params: { id: string }; Body: { x: number; y: number } }>(
       "/nodes/:id/position",
       async (request, reply) => {

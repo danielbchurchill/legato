@@ -116,7 +116,15 @@ function unknownX(inputs: ClusterInput[]): number {
   return Math.min(...known) - UNKNOWN_DECADE_MARGIN;
 }
 
-export function computeClusteredSeeds(inputs: ClusterInput[]): Map<number, Seed> {
+// jitterSeed defaults to 0, which XORs away to nothing — every existing
+// caller (recomputeTracksLayout's normal post-scan path, every test in
+// cluster.spec.ts) gets byte-identical output to before this parameter
+// existed. A nonzero value (only ever passed by layout/seed.ts's
+// rebuildLayout, "Rebuild map" in the settings panel — #46) reshuffles every
+// node's within-cell jitter without touching which cell it lands in, so a
+// rebuild visibly redistributes the graph while decade/group clustering —
+// the part actually derived from real data — stays meaningful.
+export function computeClusteredSeeds(inputs: ClusterInput[], jitterSeed = 0): Map<number, Seed> {
   const result = new Map<number, Seed>();
   const unclusteredX = unknownX(inputs);
 
@@ -141,7 +149,7 @@ export function computeClusteredSeeds(inputs: ClusterInput[]): Map<number, Seed>
 
     const sorted = [...members].sort((a, b) => a.nodeId - b.nodeId);
     const positioned = sorted.map((m) => {
-      const rand = seededRandom(m.nodeId);
+      const rand = seededRandom(m.nodeId ^ jitterSeed);
       // Deterministic jitter within a small radius of the cell center —
       // relax() then pushes overlapping members apart from there.
       const angle = rand() * Math.PI * 2;

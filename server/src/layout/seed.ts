@@ -75,7 +75,20 @@ function upsertSeeds(db: Database.Database, seeds: Map<number, Seed>, locked: bo
 // got a position row at all, so routes/nodes.ts's `/nodes` — which serves
 // the graph by joining on this table — never returned them: the data was
 // real, the graph just had nowhere to put it.
-export function recomputeTracksLayout(db: Database.Database): void {
+export function recomputeTracksLayout(
+  db: Database.Database,
+  options?: {
+    // #46's "Rebuild map" (rebuildLayout below) is the only caller that ever
+    // passes either of these — the normal post-scan path (recomputeAllLayouts)
+    // takes neither default, matching this function's behavior before #46.
+    jitterSeed?: number;
+    // Rebuild is an explicit, one-shot "regenerate everything" action — it
+    // must actually regenerate even while the "nodes > lock" setting is on,
+    // unlike a routine rescan's recompute, which is exactly what that lock
+    // exists to protect against.
+    ignoreLock?: boolean;
+  },
+): void {
   const recordingRows = db
     .prepare(
       `SELECT n.id AS node_id,
@@ -98,7 +111,7 @@ export function recomputeTracksLayout(db: Database.Database): void {
     groupKey: r.artist_id ?? r.label_id,
     decade: decadeOf(r.year),
   }));
-  const seeds = computeClusteredSeeds(clusterInputs);
+  const seeds = computeClusteredSeeds(clusterInputs, options?.jitterSeed ?? 0);
 
   const releaseSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM albums", ["appears_on"]);
   const artistSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM artists", ["performed_by"]);
@@ -123,7 +136,7 @@ export function recomputeTracksLayout(db: Database.Database): void {
     ["produced_by", "engineered_by"],
   );
 
-  const locked = isPositionsLocked(db);
+  const locked = options?.ignoreLock ? false : isPositionsLocked(db);
   upsertSeeds(db, seeds, locked);
   upsertSeeds(db, releaseSeeds, locked);
   upsertSeeds(db, artistSeeds, locked);
@@ -203,7 +216,41 @@ function centroidSeeds(
 }
 
 // user_x/user_y are never touched by this — only a PATCH /nodes/:id/position
-// request writes them.
+// request (or rebuildLayout below) writes them.
 export function recomputeAllLayouts(db: Database.Database): void {
   recomputeTracksLayout(db);
+}
+
+// #46's "Rebuild map" (settings panel "canvas" group) — regenerates the
+// whole graph's layout in place, without touching the library on disk or
+// re-scanning it. Two things a routine recompute deliberately never does:
+//
+// 1. Clears every node's user_x/user_y first. A dragged node's placement
+//    used to be a permanent physics pin (`.fx`/`.fy`, never released — see
+//    Canvas.tsx's drag handling and Legato.md); #46 changed that so a drop
+//    is now just a starting position a node is free to drift from
+//    afterward, same as a server seed. That means a manually-placed node's
+//    user_x/user_y row is the only thing left "stuck" from before a
+//    rebuild — clearing it here is what actually frees it, not the physics
+//    change alone (recomputeTracksLayout never touches user_x/user_y, by
+//    design, so it wouldn't clear these on its own).
+// 2. Passes a fresh random jitterSeed and ignoreLock:true. computeSeeds is
+//    otherwise fully deterministic from node id/artist/decade — calling it
+//    again with no jitter would recompute the exact same positions
+//    (byte-identical, per upsertSeeds' own no-op guarantee), which would
+//    make a "rebuild" button that runs but visibly does nothing to any
+//    node that was never dragged. The random seed only perturbs each
+//    node's placement *within* its (artist, decade) cell — which cell a
+//    node lands in is still real data, not shuffled.
+//
+// The client-side effect of the DB changes this makes still needs a full
+// Canvas remount to actually show (App.tsx does this on the ws
+// "layout:rebuilt" broadcast this triggers, see routes/layout.ts) — a
+// plain refetch deliberately never moves an already-tracked node's x/y
+// (Canvas.tsx's syncGraph), which is right for every other kind of data
+// refresh but wrong for this one.
+export function rebuildLayout(db: Database.Database): void {
+  db.prepare(`UPDATE positions SET user_x = NULL, user_y = NULL WHERE granularity = 'tracks'`).run();
+  const jitterSeed = Math.floor(Math.random() * 0xffffffff);
+  recomputeTracksLayout(db, { jitterSeed, ignoreLock: true });
 }

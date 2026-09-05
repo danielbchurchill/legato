@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { openDb } from "../db.js";
-import { recomputeAllLayouts, recomputeTracksLayout } from "./seed.js";
+import { rebuildLayout, recomputeAllLayouts, recomputeTracksLayout } from "./seed.js";
 
 // computeClusteredSeeds' own properties (determinism, spread, decade/group
 // separation, unknown-region handling) are covered by layout/cluster.spec.ts
@@ -245,5 +245,58 @@ describe("recomputeAllLayouts", () => {
       .prepare("SELECT DISTINCT granularity FROM positions ORDER BY granularity")
       .all() as { granularity: string }[];
     expect(granularities.map((g) => g.granularity)).toEqual(["tracks"]);
+  });
+});
+
+describe("rebuildLayout (#46 'rebuild map')", () => {
+  it("clears a node's user_x/user_y — a manual placement doesn't survive a rebuild", () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO library_roots (path) VALUES ('/fake')").run();
+    const { recording } = buildLibrary(db);
+    recomputeTracksLayout(db);
+    db.prepare("UPDATE positions SET user_x = 12345, user_y = 6789 WHERE node_id = ? AND granularity = 'tracks'").run(
+      recording,
+    );
+
+    rebuildLayout(db);
+
+    const row = db
+      .prepare("SELECT user_x, user_y FROM positions WHERE node_id = ? AND granularity = 'tracks'")
+      .get(recording) as { user_x: number | null; user_y: number | null };
+    expect(row.user_x).toBeNull();
+    expect(row.user_y).toBeNull();
+  });
+
+  it("regenerates seed positions even while nodePositionsLocked is on", () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO library_roots (path) VALUES ('/fake')").run();
+    const { recording } = buildLibrary(db);
+    recomputeTracksLayout(db);
+    const before = db
+      .prepare("SELECT seed_x, seed_y FROM positions WHERE node_id = ? AND granularity = 'tracks'")
+      .get(recording) as { seed_x: number; seed_y: number };
+    db.prepare("INSERT INTO settings (key, value) VALUES ('nodePositionsLocked', 'true')").run();
+
+    // A plain recompute while locked would leave this untouched (see the
+    // nodePositionsLocked describe block above) — rebuildLayout must not,
+    // since "rebuild map" is an explicit, one-shot override of that lock.
+    // Re-clustering to a different artist is enough to move it on its own,
+    // but the jitterSeed alone (kept implicit here) would too even with
+    // identical clustering inputs — either is proof the lock was bypassed.
+    const artistB = db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', 'Artist B') RETURNING id").get() as {
+      id: number;
+    };
+    db.prepare("DELETE FROM edges WHERE from_node = ? AND type = 'performed_by'").run(recording);
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+      recording,
+      artistB.id,
+    );
+
+    rebuildLayout(db);
+
+    const after = db
+      .prepare("SELECT seed_x, seed_y FROM positions WHERE node_id = ? AND granularity = 'tracks'")
+      .get(recording) as { seed_x: number; seed_y: number };
+    expect(after).not.toEqual(before);
   });
 });

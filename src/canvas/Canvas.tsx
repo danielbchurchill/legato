@@ -262,9 +262,11 @@ function quantile(sorted: number[], q: number): number {
  * it was the state of the real library, where one dragged node sat ~78,000
  * units from the other 397 and squeezed them into ~6% of the viewport.
  *
- * Dragged positions are the user's and are never moved (Legato.md: "the user
- * layer always wins"), so the fix belongs here: frame the bulk of the graph
- * and let outliers sit off-screen until the user pans to them. */
+ * A node dropped far from the pack doesn't necessarily drift back on its
+ * own — forceLink's spring is deliberately weak (Legato.md), so a single
+ * far-flung node can sit there for a while, or indefinitely if nothing pulls
+ * on it. The fix belongs here rather than in the physics: frame the bulk of
+ * the graph and let outliers sit off-screen until the user pans to them. */
 function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } | null {
   if (graph.order === 0) return null
 
@@ -453,9 +455,11 @@ function nodeAttributes(node: GraphNode, showArt: boolean): Record<string, unkno
 }
 
 // A node's starting position — server seed, or wherever the user last
-// dropped it (persisted user_x/user_y, which also seeds this node's
-// simulation pin — see Canvas.tsx's data-sync effect). Only ever consulted
-// for a node's *first* appearance in the graph; see nodeAttributes above.
+// dropped it (persisted user_x/user_y). Only that: #46 changed dragging so
+// a drop is a starting point, not a standing pin — see the mousemovebody
+// drag recipe below for the part that used to make this permanent. Only
+// ever consulted for a node's *first* appearance in the graph; see
+// nodeAttributes above.
 function initialPosition(node: GraphNode): { x: number; y: number } | null {
   const x = node.user_x ?? node.seed_x
   const y = node.user_y ?? node.seed_y
@@ -1223,11 +1227,12 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         const dy = pos.y - groupDragStartPointer.y
         for (const [key, origin] of groupDragOrigins) moveNodeTo(key, origin.x + dx, origin.y + dy)
       } else {
-        // Permanent pin, not released on mouseup below — "the user layer
-        // always wins" (see robustBBox's own comment above): once dragged, a
-        // node never rejoins free physics, matching what user_x/user_y
-        // already meant before live physics existed. A deliberate departure
-        // from literal Obsidian, where a released node drifts again.
+        // Pinned only for the duration of this drag — handleMouseUp below
+        // releases it back to free physics the moment the pointer lifts (#46:
+        // used to stay pinned forever, "the user layer always wins"; Daniel's
+        // call on #46 was that a drop should just give a node a better
+        // starting position — literal Obsidian's own behavior — not weld it
+        // in place against everything connected to it).
         const pos = renderer.viewportToGraph(e)
         moveNodeTo(draggedNode, pos.x, pos.y)
       }
@@ -1239,6 +1244,20 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       e.preventSigmaDefault()
     })
 
+    // Releases a node's transient drag pin (moveNodeTo above sets fx/fy so
+    // physics doesn't fight the cursor mid-drag) back to free physics — #46:
+    // the drop position persists (patchNodePosition below) as this node's new
+    // starting point, but it no longer stays welded there. Left set, a locked
+    // drag's fx/fy would also resurface as a surprise permanent pin the next
+    // time "nodes > lock" gets turned off.
+    const releasePin = (key: string) => {
+      const simNode = sim.nodesByKey.get(key)
+      if (simNode) {
+        simNode.fx = null
+        simNode.fy = null
+      }
+    }
+
     const handleMouseUp = () => {
       if (draggedNode && didDrag) {
         if (groupDragOrigins) {
@@ -1248,6 +1267,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
             const x = simNode ? (simNode.x as number) : (graph.getNodeAttribute(key, 'x') as number)
             const y = simNode ? (simNode.y as number) : (graph.getNodeAttribute(key, 'y') as number)
             graph.removeNodeAttribute(key, 'highlighted')
+            releasePin(key)
             void patchNodePosition(id, x, y)
           }
         } else {
@@ -1256,6 +1276,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
           const x = simNode ? (simNode.x as number) : (graph.getNodeAttribute(draggedNode, 'x') as number)
           const y = simNode ? (simNode.y as number) : (graph.getNodeAttribute(draggedNode, 'y') as number)
           graph.removeNodeAttribute(draggedNode, 'highlighted')
+          releasePin(draggedNode)
           void patchNodePosition(id, x, y)
         }
         if (!nodesLockedRef.current) sim.simulation.alphaTarget(0)
@@ -1323,18 +1344,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // existing nodes keep their live position (nodeAttributes never writes
     // x/y for one, see its own comment), only a genuinely new node or a
     // changed radius (an images toggle) causes forceSimulation.ts to reheat.
-    const nodeById = new Map(nodes.map((n) => [n.id, n]))
     const simNodes: SimNodeInput[] = []
     graph.forEachNode((key, attrs) => {
-      const node = nodeById.get(Number(key))
-      simNodes.push({
-        key,
-        x: attrs.x as number,
-        y: attrs.y as number,
-        radius: attrs.size as number,
-        fx: node?.user_x ?? null,
-        fy: node?.user_y ?? null,
-      })
+      simNodes.push({ key, x: attrs.x as number, y: attrs.y as number, radius: attrs.size as number })
     })
     const simLinks: { source: string; target: string }[] = []
     graph.forEachEdge((_edgeKey, _attrs, source, target) => simLinks.push({ source, target }))

@@ -52,12 +52,6 @@ export type SimNodeInput = {
   x: number
   y: number
   radius: number
-  /** Set for a node with a persisted user_x/user_y — pinned from the
-   * moment it enters the simulation, and never cleared by a resync (only
-   * Canvas.tsx's own drag handling ever changes a node's fx/fy after that,
-   * by design — dragging pins permanently, "the user layer always wins"). */
-  fx: number | null
-  fy: number | null
 }
 
 export type ForceSimulationHandle = {
@@ -179,14 +173,14 @@ export function createForceSimulation(onTick: () => void): ForceSimulationHandle
         if (existing.radius !== n.radius) changed = true
         existing.radius = n.radius
       } else {
-        nodesByKey.set(n.key, {
-          id: n.key,
-          x: n.x,
-          y: n.y,
-          radius: n.radius,
-          fx: n.fx ?? undefined,
-          fy: n.fy ?? undefined,
-        })
+        // fx/fy start unset — a node's persisted user_x/user_y is only ever
+        // its *starting* x/y (baked into n.x/n.y before this is called, see
+        // Canvas.tsx's initialPosition), not a standing pin (#46: dragging
+        // used to set a permanent one; a drop is now just a starting point
+        // like any server seed, free to move under real physics from here).
+        // Canvas.tsx's own drag handling is the only thing that ever sets
+        // fx/fy on this object after this, for the duration of one drag.
+        nodesByKey.set(n.key, { id: n.key, x: n.x, y: n.y, radius: n.radius })
         changed = true
       }
     }

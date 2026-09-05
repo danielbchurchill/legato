@@ -4,6 +4,7 @@ import Sigma from 'sigma'
 import PlaybackSpike from './PlaybackSpike'
 import LibrarySetup, { Centered } from './LibrarySetup'
 import { useServerReady } from './hooks/useServerReady'
+import { useWsEvent } from './hooks/useWs'
 import Canvas, { type CanvasHandle } from './canvas/Canvas'
 import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
 import { resolveNodeSizeMultipliers } from './canvas/nodeTypes'
@@ -217,6 +218,17 @@ function MainApp() {
   const canvasRef = useRef<CanvasHandle>(null)
   const collectionPanelRef = useRef<CollectionPanelHandle>(null)
 
+  // #46 "rebuild map" (LegatoSettings' "canvas" group): the server clears
+  // every node's manual placement and reseeds with fresh jitter, but
+  // Canvas.tsx's own graph sync deliberately never moves an already-tracked
+  // node's x/y (right for every other kind of data refresh — enrichment,
+  // scan — wrong for this one). A full remount is the simplest way to
+  // actually show it: bumping this key tears down and rebuilds the whole
+  // graphology/Sigma/force-simulation stack from scratch, so every node's
+  // initial position comes fresh from the now-rebuilt seed/user_x columns.
+  const [rebuildEpoch, setRebuildEpoch] = useState(0)
+  useWsEvent(['layout:rebuilt'], () => setRebuildEpoch((e) => e + 1))
+
   // Settings gating Canvas's hover-dim effect and reduced-motion override —
   // string flags, matching the store's existing string-only convention
   // (enrichmentEnabled above uses the same '!== "false"' idiom).
@@ -339,6 +351,7 @@ function MainApp() {
   return (
     <AppShell>
       <Canvas
+        key={rebuildEpoch}
         ref={canvasRef}
         selectedNodeId={selectedNodeId}
         onSelectNode={(id) => {
