@@ -101,7 +101,6 @@
 
   --font-ui: 'Rubik Variable', system-ui, sans-serif;
   --font-mono: 'Sometype Mono Variable', ui-monospace, monospace;
-  --font-display: 'Luxurious Script', cursive;
 
   /* Design v2 (2026-08-27): a second size, for control chrome — settings
    * labels, sub-labels, slider/toggle readouts. --text-base stays what it

@@ -96,11 +96,16 @@ Measured in the render, that 0.25px white line peaks at `rgb(90–101)` against 
 
 ## Type
 
-Three families, and the division of labor is strict.
+Two families, and the division of labor is strict. The wordmark itself isn't
+type at all — it's a real vendored mark (`src/assets/brand/white-wordmark.svg`,
+sized off `--text-wordmark`/`--text-wordmark-header` the same way the old
+Luxurious Script rendering was), not a font-rendered string. There is no
+light-mode variant to switch to (the app "never has a light mode," `index.css`),
+so only the white version is ever used here; `black-wordmark.svg` sits
+alongside it as source material for any surface that isn't this dark canvas.
 
 | Token | Family | Use |
 |---|---|---|
-| `--font-display` | Luxurious Script 400 | The wordmark. Nothing else, ever. |
 | `--font-ui` | Rubik Variable | Labels, section headers, controls, prose |
 | `--font-mono` | Sometype Mono Variable | Values, data, anything the library supplied |
 

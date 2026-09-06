@@ -1,3 +1,4 @@
+import wordmarkSrc from '../assets/brand/white-wordmark.svg'
 import { Icon } from '../ui/Icon'
 import { Tooltip } from '../ui/Tooltip'
 import { Surface } from './Surface'
@@ -28,9 +29,11 @@ type LeftPanelHeaderProps = {
 const GEOMETRY = 'absolute top-0 left-0 z-10 flex h-[var(--header-height)] w-[calc(var(--rail-width)+var(--panel-width))] items-center p-[10px]'
 
 const wordmark = (
-  <span className="pointer-events-none select-none font-[family-name:var(--font-display)] text-[length:var(--text-wordmark-header)] leading-none text-[var(--color-ink)]">
-    legato
-  </span>
+  <img
+    src={wordmarkSrc}
+    alt="legato"
+    className="pointer-events-none h-[var(--text-wordmark-header)] w-auto select-none"
+  />
 )
 
 export function LeftPanelHeader({ expanded, onCollapse, onExpand }: LeftPanelHeaderProps) {

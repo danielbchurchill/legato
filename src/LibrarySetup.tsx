@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
+import wordmarkSrc from './assets/brand/white-wordmark.svg'
 import { useWsEvent } from './hooks/useWs'
 import { Button } from './ui/Button'
 import { SERVER_HOST } from './config/serverHost'
@@ -75,9 +76,7 @@ export default function LibrarySetup({ onLibraryReady }: { onLibraryReady: () =>
 
   return (
     <Centered>
-      <span className="font-[family-name:var(--font-display)] text-[length:var(--text-wordmark)] leading-none text-[var(--color-ink)]">
-        legato
-      </span>
+      <img src={wordmarkSrc} alt="legato" className="h-[var(--text-wordmark)] w-auto select-none" />
 
       {scanningRoot ? (
         filesTotal > 0 ? (

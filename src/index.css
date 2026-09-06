@@ -1,9 +1,7 @@
 /* Rubik and Sometype Mono ship every subset: they render library metadata, and
- * a music collection contains scripts we cannot predict. Luxurious Script only
- * ever sets the word "legato", so it takes latin alone. */
+ * a music collection contains scripts we cannot predict. */
 @import '@fontsource-variable/rubik/index.css';
 @import '@fontsource-variable/sometype-mono/index.css';
-@import '@fontsource/luxurious-script/latin-400.css';
 @import 'tailwindcss';
 @import './styles/tokens.css';
 

@@ -7,7 +7,6 @@
 
 @import '@fontsource-variable/rubik/index.css';
 @import '@fontsource-variable/sometype-mono/index.css';
-@import '@fontsource/luxurious-script/latin-400.css';
 
 :root {
   /* Surfaces */
@@ -32,7 +31,6 @@
   /* Type */
   --font-ui: 'Rubik Variable', system-ui, sans-serif;
   --font-mono: 'Sometype Mono Variable', ui-monospace, monospace;
-  --font-display: 'Luxurious Script', cursive;
 
   /* Geometry */
   --radius-surface: 25px;
@@ -212,15 +210,13 @@ section {
 }
 
 .wordmark {
-  font-family: var(--font-display);
-  font-size: 32px;
-  text-decoration: none;
-  color: var(--color-ink);
-  line-height: 1;
+  display: block;
+  height: 32px;
+  width: auto;
 }
 
 .wordmark.small {
-  font-size: 24px;
+  height: 24px;
 }
 
 .nav-links {
