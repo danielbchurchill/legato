@@ -8,9 +8,12 @@ const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* The transport, docked to the window's bottom edge.
  *
- * Note the transport is present whether or not anything is playing: it is
- * structural chrome, not a notification. With no track it simply reads 00:00
- * and its controls are inert. */
+ * #50: App.tsx only mounts this once something is actually queued
+ * (playback.currentTitle != null) — it used to render unconditionally,
+ * structural chrome present even with nothing loaded and every control
+ * disabled, but that read as a broken dock rather than an empty one. Every
+ * control below can assume a track is live; there's no more "nothing loaded"
+ * case to render inert. */
 
 function formatTime(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000))
@@ -112,7 +115,6 @@ function WaveformScrubber({
 
 type TransportDockProps = {
   status: PlaybackStatus
-  hasTrack: boolean
   shuffled: boolean
   // True while a previous/next/shuffle click (or a reorder/remove/add
   // elsewhere, e.g. NowPlayingPanel's up-next list) is still resolving —
@@ -132,7 +134,6 @@ type TransportDockProps = {
 
 export function TransportDock({
   status,
-  hasTrack,
   shuffled,
   queueBusy,
   onPause,
@@ -159,7 +160,7 @@ export function TransportDock({
              * inactive elsewhere: signal when on, muted when off. */}
             <button
               type="button"
-              disabled={!hasTrack || queueBusy}
+              disabled={queueBusy}
               onClick={onToggleShuffle}
               aria-label="Shuffle"
               aria-pressed={shuffled}
@@ -172,7 +173,7 @@ export function TransportDock({
 
             <button
               type="button"
-              disabled={!hasTrack || queueBusy}
+              disabled={queueBusy}
               onClick={onPrevious}
               aria-label="Previous track"
               className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"
@@ -182,7 +183,6 @@ export function TransportDock({
 
             <button
               type="button"
-              disabled={!hasTrack}
               onClick={status.playing ? onPause : onResume}
               aria-label={status.playing ? 'Pause' : 'Play'}
               className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"
@@ -192,7 +192,7 @@ export function TransportDock({
 
             <button
               type="button"
-              disabled={!hasTrack || queueBusy}
+              disabled={queueBusy}
               onClick={onNext}
               aria-label="Next track"
               className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"

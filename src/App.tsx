@@ -348,6 +348,14 @@ function MainApp() {
   // whatever is playing when nothing is selected.
   const anchorNodeId = selectedNodeId ?? playback.status.currentRecordingNodeId ?? null
 
+  // #57: the now-playing panel auto-collapses whenever nothing is queued,
+  // overriding whatever the header toggle last recorded — rightPanelExpanded
+  // itself stays untouched so the user's preference is still there to
+  // restore once something starts playing again (playRandom from the
+  // collapsed idle state, or any other playNode call, flips this back to
+  // true on its own the moment currentRecordingNodeId is set).
+  const rightPanelDisplayExpanded = rightPanelExpanded && playback.status.currentRecordingNodeId != null
+
   return (
     <AppShell>
       <Canvas
@@ -413,7 +421,7 @@ function MainApp() {
       )}
 
       <RightPanelHeader
-        expanded={rightPanelExpanded}
+        expanded={rightPanelDisplayExpanded}
         onCollapse={() => setRightPanelExpanded(false)}
         onExpand={() => setRightPanelExpanded(true)}
       />
@@ -427,9 +435,10 @@ function MainApp() {
        * (NowPlayingSections.tsx) and the inspector's unchanged pager
        * (NodeDetailPages.tsx). */}
       <RightPanel
-        expanded={rightPanelExpanded}
+        expanded={rightPanelDisplayExpanded}
         collapsedNodeId={playback.status.currentRecordingNodeId ?? null}
         onExpand={() => setRightPanelExpanded(true)}
+        onQuickPlay={() => void playback.playRandom()}
       >
         <NowPlayingPanel
           nodeId={playback.status.currentRecordingNodeId ?? null}
@@ -442,19 +451,22 @@ function MainApp() {
         />
       </RightPanel>
 
-      <TransportDock
-        status={playback.status}
-        hasTrack={playback.currentTitle != null}
-        shuffled={playback.shuffled}
-        queueBusy={playback.queueBusy}
-        onPause={playback.pause}
-        onResume={playback.resume}
-        onSeek={playback.seek}
-        onSetVolume={playback.setVolume}
-        onNext={playback.next}
-        onPrevious={playback.previous}
-        onToggleShuffle={playback.toggleShuffle}
-      />
+      {/* #50: structural chrome only while there's something to transport —
+       * hidden outright rather than shown inert with every control disabled. */}
+      {playback.currentTitle != null && (
+        <TransportDock
+          status={playback.status}
+          shuffled={playback.shuffled}
+          queueBusy={playback.queueBusy}
+          onPause={playback.pause}
+          onResume={playback.resume}
+          onSeek={playback.seek}
+          onSetVolume={playback.setVolume}
+          onNext={playback.next}
+          onPrevious={playback.previous}
+          onToggleShuffle={playback.toggleShuffle}
+        />
+      )}
 
       {inspectorOpen && selectedNodeId != null && (
         <NodeInspector

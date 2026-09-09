@@ -87,12 +87,16 @@ export function NowPlayingPanel({ nodeId, isPlaying, upNext, queueBusy, onSelect
   const { node, reload } = useNodeDetail(nodeId)
   const queuePosition = useQueuePosition(nodeId, upNext)
 
-  if (nodeId == null || !node) {
-    return (
-      <p className="pt-[40px] text-center text-[length:var(--text-base)] text-[var(--color-muted)]">
-        nothing playing
-      </p>
-    )
+  // #57: RightPanel now only ever mounts this panel once something is
+  // actually loaded (App.tsx's rightPanelDisplayExpanded forces the panel
+  // collapsed otherwise, showing NowPlayingCollapsed's own idle state
+  // instead) — nodeId == null shouldn't happen here anymore, but this stays
+  // as a defensive fallback rather than assuming the caller never changes.
+  // !node with a real nodeId is a genuine, reachable case: the detail fetch
+  // just hasn't resolved yet for whatever's now playing.
+  if (nodeId == null) return null
+  if (!node) {
+    return <p className="pt-[40px] text-center text-[length:var(--text-base)] text-[var(--color-muted)]">loading…</p>
   }
 
   const absoluteIndex = (upNextIndex: number) => queuePosition + 1 + upNextIndex

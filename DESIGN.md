@@ -446,6 +446,8 @@ The catalogue to build against:
 | Server not reachable | Whole window |
 | Scan failed | Canvas, with the error and a retry |
 
+Issues #50/#57 revised "Nothing playing" specifically: the row above described a static message left sitting in an otherwise-normal panel and transport, and in practice that read as broken chrome rather than a designed empty state. Both surfaces now remove themselves instead of narrating their own emptiness — `TransportDock.tsx` unmounts outright rather than showing every control disabled, and the now-playing panel auto-collapses to `NowPlayingCollapsed`'s narrow column (same collapsed treatment "Panel collapsed (v2)" above already uses for a manual collapse) instead of rendering the old "nothing playing" paragraph. That collapsed idle state gets one addition of its own: a quick-play button that queues a random recording from the library, since a fully empty affordance with no way back in was the one dead end left once the panel could no longer be expanded into.
+
 ---
 
 ## Working rules

@@ -507,6 +507,25 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     [playTracks],
   )
 
+  // #57's collapsed-empty-panel "quick play" button: no dedicated
+  // random-track endpoint exists server-side, so this just reuses GET
+  // /nodes (the same call Canvas.tsx's useGraphData makes to populate the
+  // graph — "the currently loaded library") and picks one recording node
+  // client-side. playNode does the actual queueing, same as every other
+  // entry point above.
+  const playRandom = useCallback(async () => {
+    try {
+      const nodes = (await fetch(`${API}/nodes`).then((r) => r.json())) as { id: number; type: string; title: string }[]
+      const recordings = nodes.filter((n) => n.type === 'recording')
+      if (recordings.length === 0) return
+      const pick = recordings[Math.floor(Math.random() * recordings.length)]
+      await playNode(pick.id, pick.title)
+    } catch {
+      // Same policy as playAlbum/playPlaylist's own catch — a resolution
+      // hiccup here just means playback doesn't start.
+    }
+  }, [playNode])
+
   const playAlbum = useCallback(
     async (releaseId: number) => {
       try {
@@ -860,6 +879,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     playTracks,
     playAlbum,
     playPlaylist,
+    playRandom,
     addToQueue,
     playNext,
     reorderQueue,
