@@ -126,13 +126,11 @@ const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) =
   }
 
   return (
-    <div className="relative">
-      {/* v2: a "search" label above the field (16px Rubik ink) — the field
-       * itself moves off --radius-surface onto --radius-control, the
+    <div className="relative mb-[20px]">
+      {/* v2: the field moves off --radius-surface onto --radius-control, the
        * bordered-well radius the v2 mockup actually specifies here. Still
        * inset, not raised: the field's fill is the canvas color and it
        * casts no shadow. See DESIGN.md "Raised and inset". */}
-      <p className="mb-[8px] text-[length:var(--text-base)] text-[var(--color-ink)]">search</p>
       <div className="flex h-[61px] items-center gap-[12px] rounded-[var(--radius-control)] border border-[var(--color-hairline)] bg-[var(--color-inset)] px-[20px]">
         <Icon
           name="search"
