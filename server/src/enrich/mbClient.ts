@@ -423,6 +423,53 @@ export async function searchArtist(name: string): Promise<MbArtistCandidate[]> {
   }));
 }
 
+// Issue #61: a "member of band" relation between two artist entities.
+// MusicBrainz's relationship model fixes entity0 as the individual member
+// and entity1 as the group regardless of which side is queried — the raw
+// JSON carries "direction": "backward" only when the queried artist is the
+// group (entity1); when the queried artist is the member (entity0) the
+// relation is the natural/forward direction and the API omits the
+// direction key entirely. `name` is always the *other* artist's name, so
+// the caller has to read `direction` to know which side of "X is a member
+// of Y" the queried artist is on.
+export type MbArtistRelation = { direction: "forward" | "backward"; name: string };
+
+type RawArtistMemberRel = {
+  type?: string;
+  "target-type"?: string;
+  direction?: string;
+  artist?: { name?: string };
+};
+
+// Split from the fetch below so the field mapping is unit-testable against
+// a captured real response, same reasoning as parseReleaseDetail (M-8).
+export function parseArtistMemberRelations(relations: RawArtistMemberRel[]): MbArtistRelation[] {
+  return relations
+    .filter((r) => r.type === "member of band" && r["target-type"] === "artist" && r.artist?.name)
+    .map((r) => ({
+      direction: r.direction === "backward" ? ("backward" as const) : ("forward" as const),
+      name: r.artist!.name!,
+    }));
+}
+
+// Artist nodes carry no MBID of their own (see resolveArtistMbid in
+// worker.ts) — the caller is expected to have already resolved one before
+// reaching here, the same precondition fetchUrlRelations's artist branch
+// depends on.
+export async function fetchArtistMemberRelations(mbid: string): Promise<MbArtistRelation[]> {
+  await throttle();
+
+  const url = `${API_ROOT}/artist/${mbid}?inc=artist-rels&fmt=json`;
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    throw new Error(`MusicBrainz artist relations lookup failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = (await res.json()) as { relations?: RawArtistMemberRel[] };
+  return parseArtistMemberRelations(data.relations ?? []);
+}
+
 export type MbUrlRelation = { type: string; url: string };
 
 // An entity's external links. The one this project cares about is 'wikidata',

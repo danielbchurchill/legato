@@ -33,6 +33,10 @@ const EDGE_TYPES = [
   "engineered_by",
   "performed_credit",
   "mixed_by",
+  // Issue #61: artist-to-artist band membership (enrich/members.ts) — the
+  // one edge type in this list that never touches a recording, drawn
+  // directly between two artist nodes.
+  "member_of",
 ];
 
 export function nodesRoutes(db: Database.Database) {

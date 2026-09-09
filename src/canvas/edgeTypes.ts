@@ -26,7 +26,10 @@
  * set's ≥44°-clearance rule without reworking the other seven's spacing
  * too (DESIGN.md's own "revisit when edge types widen" — a real design
  * pass, not something to squeeze in here). They render via
- * EDGE_COLOR_FALLBACK below, same as they already do in production today. */
+ * EDGE_COLOR_FALLBACK below, same as they already do in production today.
+ * member_of (issue #61, band membership between two artist nodes) joins
+ * them on the same basis — deliberately left out of the curated set rather
+ * than treated as a drive-by tenth hue. */
 export const EDGE_COLOR: Record<string, string> = {
   performed_by: '#bf68eb',
   appears_on: '#68b6eb',
@@ -50,8 +53,9 @@ const LABELS: Record<string, string> = {
 }
 
 /* The color picker only offers types with a real curated default above —
- * performed_credit/mixed_by still draw on canvas (via EDGE_COLOR_FALLBACK),
- * they just have nothing to seed a picker swatch from yet. */
+ * performed_credit/mixed_by/member_of still draw on canvas (via
+ * EDGE_COLOR_FALLBACK), they just have nothing to seed a picker swatch
+ * from yet. */
 export function edgeTypes(): EdgeTypeInfo[] {
   return Object.keys(EDGE_COLOR).map((type) => ({
     type,

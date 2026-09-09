@@ -9,6 +9,8 @@ import * as acoustid from "./acoustid.js";
 vi.mock("./mbClient.js", () => ({
   searchRecording: vi.fn(),
   lookupReleaseGroupForRecording: vi.fn(),
+  searchArtist: vi.fn(),
+  fetchArtistMemberRelations: vi.fn(),
 }));
 vi.mock("./coverArchive.js", () => ({ fetchCaaFrontImage: vi.fn() }));
 // Real storeCover shells out to ffmpeg to produce resized JPEGs — not
@@ -368,5 +370,98 @@ describe("tryFingerprintMatch — M-9's text-search fallback", () => {
 
     const node = db.prepare("SELECT mbid FROM nodes WHERE id = ?").get(nodeId) as { mbid: string };
     expect(node.mbid).toBe("mb-1");
+  });
+});
+
+// Issue #61.
+describe("processArtistMemberLookup — issue #61", () => {
+  function insertArtistNode(title: string): number {
+    const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get(title) as {
+      id: number;
+    };
+    return node.id;
+  }
+
+  function enqueueMemberLookup(nodeId: number): void {
+    db.prepare("INSERT INTO enrich_jobs (node_id, job_type, status) VALUES (?, 'artist_member_lookup', 'queued')").run(
+      nodeId,
+    );
+  }
+
+  function memberOfEdges() {
+    return db
+      .prepare(
+        `SELECT fn.title AS member, tn.title AS group_title
+         FROM edges e JOIN nodes fn ON fn.id = e.from_node JOIN nodes tn ON tn.id = e.to_node
+         WHERE e.type = 'member_of' ORDER BY fn.title, tn.title`,
+      )
+      .all() as { member: string; group_title: string }[];
+  }
+
+  it("resolves the artist's mbid, fetches member relations, and writes the resulting edges", async () => {
+    const beatles = insertArtistNode("The Beatles");
+    enqueueMemberLookup(beatles);
+    vi.mocked(mbClient.searchArtist).mockResolvedValue([
+      { mbid: "beatles-mbid", name: "The Beatles", score: 100, disambiguation: null },
+    ]);
+    vi.mocked(mbClient.fetchArtistMemberRelations).mockResolvedValue([
+      { direction: "backward", name: "George Harrison" },
+    ]);
+
+    await runDueJobs(db);
+
+    expect(mbClient.fetchArtistMemberRelations).toHaveBeenCalledWith("beatles-mbid");
+    expect(memberOfEdges()).toEqual([{ member: "George Harrison", group_title: "The Beatles" }]);
+    const job = db.prepare("SELECT status FROM enrich_jobs WHERE node_id = ?").get(beatles) as { status: string };
+    expect(job.status).toBe("done");
+  });
+
+  it("cascades: a member node created by this job gets its own member-lookup enqueued", async () => {
+    const beatles = insertArtistNode("The Beatles");
+    enqueueMemberLookup(beatles);
+    vi.mocked(mbClient.searchArtist).mockResolvedValue([
+      { mbid: "beatles-mbid", name: "The Beatles", score: 100, disambiguation: null },
+    ]);
+    vi.mocked(mbClient.fetchArtistMemberRelations).mockResolvedValue([
+      { direction: "backward", name: "George Harrison" },
+    ]);
+
+    await runDueJobs(db);
+
+    const george = db.prepare("SELECT id FROM nodes WHERE type = 'artist' AND title = ?").get("George Harrison") as {
+      id: number;
+    };
+    const cascadedJobs = db
+      .prepare("SELECT job_type FROM enrich_jobs WHERE node_id = ? ORDER BY job_type")
+      .all(george.id) as { job_type: string }[];
+    expect(cascadedJobs.map((j) => j.job_type)).toEqual([
+      "artist_image_lookup",
+      "artist_member_lookup",
+      "description_lookup",
+    ]);
+  });
+
+  it("marks the job done without fetching relations when the artist mbid can't be resolved", async () => {
+    const node = insertArtistNode("Totally Obscure Artist");
+    enqueueMemberLookup(node);
+    vi.mocked(mbClient.searchArtist).mockResolvedValue([]);
+
+    await runDueJobs(db);
+
+    expect(mbClient.fetchArtistMemberRelations).not.toHaveBeenCalled();
+    const job = db.prepare("SELECT status FROM enrich_jobs WHERE node_id = ?").get(node) as { status: string };
+    expect(job.status).toBe("done");
+  });
+
+  it("skips a credit-line title naming more than one artist, without calling MusicBrainz at all", async () => {
+    const node = insertArtistNode("JPEGMAFIA; Danny Brown");
+    enqueueMemberLookup(node);
+
+    await runDueJobs(db);
+
+    expect(mbClient.searchArtist).not.toHaveBeenCalled();
+    expect(mbClient.fetchArtistMemberRelations).not.toHaveBeenCalled();
+    const job = db.prepare("SELECT status FROM enrich_jobs WHERE node_id = ?").get(node) as { status: string };
+    expect(job.status).toBe("done");
   });
 });

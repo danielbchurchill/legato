@@ -10,6 +10,7 @@ import { fetchCaaFrontImage } from "./coverArchive.js";
 import { fetchArtistImage } from "./deezer.js";
 import { recordDescription } from "./descriptions.js";
 import {
+  fetchArtistMemberRelations,
   fetchReleaseDetail,
   fetchUrlRelations,
   lookupReleaseGroupForRecording,
@@ -21,7 +22,13 @@ import {
 } from "./mbClient.js";
 import { fetchDescriptionFromRelations } from "./wikipedia.js";
 import { applyCredits, recordIsrc, recordReleaseFields } from "./credits.js";
-import { enqueueCoverArtLookupIfNeeded } from "./queue.js";
+import { applyMemberRelations } from "./members.js";
+import {
+  enqueueArtistImageLookupIfNeeded,
+  enqueueArtistMemberLookupIfNeeded,
+  enqueueCoverArtLookupIfNeeded,
+  enqueueDescriptionLookupIfNeeded,
+} from "./queue.js";
 import { assignTracks, pickBestRelease, scoreReleaseCandidate, type LocalAlbumInput, type LocalTrack } from "./releaseMatch.js";
 import { looksSuspicious } from "./sanityCheck.js";
 import { pickBestMatch, scoreCandidate, type LocalMatchInput } from "./textSearch.js";
@@ -46,7 +53,12 @@ const ARTIST_NAME_MATCH_CONFIDENCE = 0.8;
 // without anything downstream having to guess where existing prose came from.
 const DESCRIPTION_SOURCE = "wikipedia";
 
-type EnrichJobType = "recording_lookup" | "cover_art_lookup" | "artist_image_lookup" | "description_lookup";
+type EnrichJobType =
+  | "recording_lookup"
+  | "cover_art_lookup"
+  | "artist_image_lookup"
+  | "description_lookup"
+  | "artist_member_lookup";
 
 type EnrichJob = { id: number; node_id: number; job_type: EnrichJobType; attempts: number };
 
@@ -590,6 +602,68 @@ async function processDescriptionLookup(db: Database.Database, job: EnrichJob): 
   finish();
 }
 
+// job.node_id is an artist node. Every outcome marks the job done, same
+// terminal-outcome policy as the artist image/description jobs above: an
+// artist tag naming more than one person will still name more than one
+// person tomorrow, and MusicBrainz genuinely having no member relations for
+// this artist is an answer, not a failure.
+//
+// Issue #61's confidence call: this reuses resolveArtistMbid's cached
+// fuzzy name-match (field_provenance's 'artist_mbid', not the identity-
+// grade nodes.mbid a recording match earns) rather than requiring a
+// stronger match first. That cache is already how every other artist-level
+// MusicBrainz lookup in this file (photo, description) decides which real
+// MusicBrainz artist a tag-derived node corresponds to, and a wrong artist
+// there produces a wrong photo or a wrong paragraph — a wrong member edge
+// is the same class of mistake, not a worse one, so it inherits the same
+// tolerance rather than being held to a bar nothing else here meets.
+async function processArtistMemberLookup(db: Database.Database, job: EnrichJob): Promise<void> {
+  const finish = () =>
+    db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
+
+  const node = db.prepare("SELECT title FROM nodes WHERE id = ? AND type = 'artist'").get(job.node_id) as
+    | { title: string }
+    | undefined;
+  if (!node) {
+    finish();
+    return;
+  }
+
+  if (looksLikeMultipleArtists(node.title)) {
+    // Same reasoning as the artist image job: a credit-line title like
+    // "Pussy Riot; Slayyyter" isn't one artist MusicBrainz can resolve
+    // member relations for.
+    finish();
+    return;
+  }
+
+  const artistMbid = await resolveArtistMbid(db, job.node_id, node.title);
+  if (!artistMbid) {
+    finish();
+    return;
+  }
+
+  const relations = await fetchArtistMemberRelations(artistMbid);
+  const newArtistNodeIds = applyMemberRelations(db, job.node_id, relations);
+  // A member or group discovered just now (findOrCreateNode's node.title
+  // collapse means this could also resolve to an *existing* node — one
+  // this artist's own recordings already created — in which case nothing
+  // new needs enqueueing) gets its own enrichment queued immediately,
+  // rather than waiting for the next scan's recompute() to notice it.
+  for (const newNodeId of newArtistNodeIds) {
+    enqueueArtistImageLookupIfNeeded(db, newNodeId);
+    enqueueDescriptionLookupIfNeeded(db, newNodeId);
+    enqueueArtistMemberLookupIfNeeded(db, newNodeId);
+  }
+
+  // The graph gained nodes/edges outside of a scan — the canvas and any
+  // open node panel need telling, the same event an artist photo landing
+  // already uses for exactly this reason (see processArtistImageLookup).
+  if (relations.length > 0) broadcast("enrich:applied", { nodeId: job.node_id, kind: "members" });
+
+  finish();
+}
+
 async function processJob(db: Database.Database, job: EnrichJob): Promise<void> {
   db.prepare("UPDATE enrich_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?").run(job.id);
 
@@ -600,6 +674,8 @@ async function processJob(db: Database.Database, job: EnrichJob): Promise<void> 
       await processArtistImageLookup(db, job);
     } else if (job.job_type === "description_lookup") {
       await processDescriptionLookup(db, job);
+    } else if (job.job_type === "artist_member_lookup") {
+      await processArtistMemberLookup(db, job);
     } else {
       await processRecordingLookup(db, job);
     }

@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { deriveLocalEdges } from "./match/edges.js";
 import {
   enqueueArtistImageLookupIfNeeded,
+  enqueueArtistMemberLookupIfNeeded,
   enqueueDescriptionLookupIfNeeded,
   enqueueEnrichmentIfNeeded,
 } from "./enrich/queue.js";
@@ -70,7 +71,16 @@ export function recompute(db: Database.Database): void {
     .prepare("SELECT id, type FROM nodes WHERE type IN ('artist','release')")
     .all() as { id: number; type: string }[];
   for (const node of enrichable) {
-    if (node.type === "artist") enqueueArtistImageLookupIfNeeded(db, node.id);
+    if (node.type === "artist") {
+      enqueueArtistImageLookupIfNeeded(db, node.id);
+      // Issue #61: an artist's "member of band" relations — every artist
+      // node gets this queued the same one-shot way as the photo lookup
+      // above, so a member/group node created mid-enrichment (see
+      // worker.ts's processArtistMemberLookup) still gets its own lookup
+      // the next time this runs, even on a machine where the cascade
+      // inside that job never got to it directly.
+      enqueueArtistMemberLookupIfNeeded(db, node.id);
+    }
     enqueueDescriptionLookupIfNeeded(db, node.id);
   }
 }

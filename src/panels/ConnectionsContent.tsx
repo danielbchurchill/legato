@@ -187,6 +187,60 @@ export function IncomingRecordingsList({ node, onSelectNode }: { node: NodeDetai
   )
 }
 
+// Issue #61: band membership between two artist nodes (server/src/enrich/
+// members.ts). Unlike ReleasesList above, there's no separate real-entity
+// table behind this — member_of is a plain edge, already sitting in
+// node.edges in both directions (routes/nodes.ts's node-detail endpoint
+// returns every edge touching a node, not just the ones drawn on canvas),
+// so this reads it directly rather than a dedicated node.* field.
+//
+// The two directions render as two independent sections: incoming
+// member_of edges are this artist's own members (a group's page — "The
+// Beatles" lists George, Paul, John, Ringo), outgoing ones are the groups
+// this artist belongs to (a member's own page — "George Harrison" lists
+// The Beatles and The Traveling Wilburys). Nothing stops both sections
+// from showing at once on one node (a supergroup that is itself credited
+// as a member of a larger collective), so both are checked independently
+// rather than one being an else-branch of the other.
+export function MembersList({ node, onSelectNode }: { node: NodeDetail; onSelectNode: (id: number) => void }) {
+  const members = node.edges.filter((e) => e.direction === 'in' && e.type === 'member_of')
+  const groups = node.edges.filter((e) => e.direction === 'out' && e.type === 'member_of')
+  if (members.length === 0 && groups.length === 0) return null
+
+  return (
+    <>
+      {members.length > 0 && (
+        <>
+          <SectionHeader title="members" />
+          <ul className="mt-[8px] flex max-h-[240px] flex-col gap-[2px] overflow-y-auto">
+            {members.map((e) => (
+              <li key={e.id}>
+                <button type="button" onClick={() => onSelectNode(e.other_id)} className="block w-full py-[2px] text-left">
+                  <ScrollingText text={e.other_title} className={`font-[family-name:var(--font-mono)] text-[length:var(--text-base)] ${linkClass}`} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {groups.length > 0 && (
+        <>
+          <SectionHeader title="member of" />
+          <ul className="mt-[8px] flex max-h-[240px] flex-col gap-[2px] overflow-y-auto">
+            {groups.map((e) => (
+              <li key={e.id}>
+                <button type="button" onClick={() => onSelectNode(e.other_id)} className="block w-full py-[2px] text-left">
+                  <ScrollingText text={e.other_title} className={`font-[family-name:var(--font-mono)] text-[length:var(--text-base)] ${linkClass}`} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </>
+  )
+}
+
 // "Sounds like", "sampled in", "played this at X" — the free-text personal
 // edge layer from Legato.md's edge-types spec. First-class, never
 // overwritten by re-scans (match/edges.ts only ever touches source='local').
@@ -368,6 +422,7 @@ export function ConnectionsBody({
     <>
       <FactGroupsList facts={node.facts} onSelectNode={onSelectNode} />
       <ReleasesList node={node} onSelectNode={onSelectNode} />
+      <MembersList node={node} onSelectNode={onSelectNode} />
       <IncomingRecordingsList node={node} onSelectNode={onSelectNode} />
       <PersonalEdgesSection node={node} reload={reload} onSelectNode={onSelectNode} />
     </>

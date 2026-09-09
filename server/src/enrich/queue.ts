@@ -66,6 +66,16 @@ export function enqueueDescriptionLookupIfNeeded(db: Database.Database, nodeId: 
   enqueueOnce(db, nodeId, "description_lookup");
 }
 
+// Issue #61: this artist's "member of band" relations, in both directions
+// (enrich/members.ts). Called for every artist node on recompute the same
+// way the two helpers above are, and also called directly from inside
+// processArtistMemberLookup for a node it just created — a member/group
+// discovered mid-drain gets its own lookup queued immediately rather than
+// waiting for the next scan's recompute pass to notice it exists.
+export function enqueueArtistMemberLookupIfNeeded(db: Database.Database, artistNodeId: number): void {
+  enqueueOnce(db, artistNodeId, "artist_member_lookup");
+}
+
 // Queued once a 'recording_lookup' job resolves a real MusicBrainz mbid —
 // only then does the release its recording belongs to have any MBID this
 // server can hand to Cover Art Archive (enrich/coverArchive.ts). node_id

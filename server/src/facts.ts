@@ -57,10 +57,16 @@ export function generateFacts(db: Database.Database, nodeId: number): Fact[] {
       // about artists who merely share a decade or a producer, while every
       // other edge type still reads e.label for its own purpose
       // (performed_credit's instrument/vocal part, just below).
+      // member_of is excluded here too — issue #61's dedicated members/
+      // "member of" sections (ConnectionsContent.tsx's MembersList) render
+      // both directions of that relation explicitly, the same reason
+      // ReleasesList/IncomingRecordingsList already live outside this
+      // generic list rather than duplicating through it.
       `SELECT e.type, e.label, e.to_node AS target_id, n.title, n.type AS target_type
        FROM edges e JOIN nodes n ON n.id = e.to_node
        WHERE e.from_node = ? AND e.source IN ('local', 'musicbrainz')
          AND (e.type != 'collaborated_with' OR e.label IS NULL)
+         AND e.type != 'member_of'
        ORDER BY e.type`,
     )
     .all(nodeId) as { type: string; label: string | null; target_id: number; title: string; target_type: string }[];

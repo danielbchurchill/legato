@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRecordingQuery, parseReleaseDetail, type RawReleaseDetail } from "./mbClient.js";
+import { buildRecordingQuery, parseArtistMemberRelations, parseReleaseDetail, type RawReleaseDetail } from "./mbClient.js";
 
 describe("buildRecordingQuery — M-2", () => {
   it("builds recording+artist only when nothing else is known", () => {
@@ -148,5 +148,53 @@ describe("parseReleaseDetail — M-8's wider field harvest", () => {
     expect(detail.tracks).toEqual([]);
     expect(detail.format).toBeNull();
     expect(detail.labelName).toBeNull();
+  });
+});
+
+// Issue #61: real shape confirmed against MusicBrainz's live API for The
+// Beatles (a "backward" member-of-band relation per member, no direction
+// key on a group's own relations to bands *it* was in) and cross-checked
+// against George Harrison's own artist page (the same relationship comes
+// back "forward", with no direction key at all).
+describe("parseArtistMemberRelations — issue #61", () => {
+  it("reads a group's own page: member relations come back 'backward', naming the member", () => {
+    const relations = parseArtistMemberRelations([
+      {
+        type: "member of band",
+        "target-type": "artist",
+        direction: "backward",
+        artist: { name: "George Harrison" },
+      },
+      {
+        type: "member of band",
+        "target-type": "artist",
+        direction: "backward",
+        artist: { name: "Paul McCartney" },
+      },
+    ]);
+    expect(relations).toEqual([
+      { direction: "backward", name: "George Harrison" },
+      { direction: "backward", name: "Paul McCartney" },
+    ]);
+  });
+
+  it("reads a member's own page: relations with no direction key are 'forward', naming the group", () => {
+    const relations = parseArtistMemberRelations([
+      { type: "member of band", "target-type": "artist", artist: { name: "The Beatles" } },
+      { type: "member of band", "target-type": "artist", artist: { name: "The Traveling Wilburys" } },
+    ]);
+    expect(relations).toEqual([
+      { direction: "forward", name: "The Beatles" },
+      { direction: "forward", name: "The Traveling Wilburys" },
+    ]);
+  });
+
+  it("drops relations of a different type or target-type, and ones missing an artist name", () => {
+    const relations = parseArtistMemberRelations([
+      { type: "founder of", "target-type": "artist", artist: { name: "Some Label" } },
+      { type: "member of band", "target-type": "release-group", artist: { name: "Not Actually An Artist" } },
+      { type: "member of band", "target-type": "artist" },
+    ]);
+    expect(relations).toEqual([]);
   });
 });
