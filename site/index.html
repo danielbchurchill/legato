@@ -156,11 +156,20 @@
         <form id="waitlist-form" class="waitlist-form">
           <label class="sr-only" for="waitlist-email">Email address</label>
           <input id="waitlist-email" name="email" type="email" placeholder="you@example.com" required autocomplete="email" />
+          <input
+            id="waitlist-company"
+            name="company"
+            type="text"
+            class="sr-only"
+            tabindex="-1"
+            autocomplete="off"
+            aria-hidden="true"
+          />
           <button type="submit" class="btn btn-pill">Notify me</button>
         </form>
+        <p class="form-message" id="waitlist-message" role="status" aria-live="polite" hidden></p>
         <p class="fine-print">
-          Opens your email client with a pre-filled message — legato.fm doesn't run a signup
-          server yet. See <a href="#" id="waitlist-note-link">why</a>.
+          Goes straight into the waitlist, nothing else. See <a href="#" id="waitlist-note-link">why</a>.
         </p>
       </div>
     </section>

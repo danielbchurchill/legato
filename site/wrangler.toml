@@ -1,3 +1,12 @@
 name = "legato-marketing-site"
 compatibility_date = "2026-09-03"
 pages_build_output_dir = "dist"
+
+# Backs functions/waitlist.ts. Real namespace IDs come from `wrangler kv
+# namespace create` — see DEPLOY.md. The placeholders below are enough for
+# `wrangler pages dev` to spin up a local KV store; they don't need to be
+# real until you deploy for real.
+[[kv_namespaces]]
+binding = "WAITLIST_KV"
+id = "REPLACE_WITH_PRODUCTION_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_KV_NAMESPACE_ID"

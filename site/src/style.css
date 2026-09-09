@@ -529,6 +529,17 @@ section {
   filter: brightness(1.08);
 }
 
+.form-message {
+  font-size: 13px;
+  color: var(--color-muted-hi);
+  max-width: 420px;
+  margin: 0 auto 12px;
+}
+
+.form-message.form-message-error {
+  color: var(--color-edge-produced-by);
+}
+
 .fine-print {
   font-size: 13px;
   color: var(--color-muted);

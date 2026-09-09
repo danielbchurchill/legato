@@ -1,23 +1,64 @@
-const WAITLIST_ADDRESS = 'waitlist@legato.fm';
+interface WaitlistResponse {
+  ok: boolean;
+  error?: string;
+  alreadyJoined?: boolean;
+}
 
 const form = document.querySelector<HTMLFormElement>('#waitlist-form');
 const emailInput = document.querySelector<HTMLInputElement>('#waitlist-email');
+const honeypotInput = document.querySelector<HTMLInputElement>('#waitlist-company');
 const submitButton = form?.querySelector<HTMLButtonElement>('button[type="submit"]');
+const messageEl = document.querySelector<HTMLParagraphElement>('#waitlist-message');
 
-form?.addEventListener('submit', (event) => {
+function setMessage(text: string, isError = false) {
+  if (!messageEl) return;
+  messageEl.textContent = text;
+  messageEl.classList.toggle('form-message-error', isError);
+  messageEl.hidden = text.length === 0;
+}
+
+form?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const email = emailInput?.value.trim();
   if (!email || !submitButton) return;
 
-  const subject = encodeURIComponent('Legato waitlist');
-  const body = encodeURIComponent(`Please add ${email} to the Legato launch waitlist.`);
-  window.location.href = `mailto:${WAITLIST_ADDRESS}?subject=${subject}&body=${body}`;
+  const originalLabel = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = 'Joining…';
+  setMessage('');
 
-  const original = submitButton.textContent;
-  submitButton.textContent = 'Opening your email client…';
-  window.setTimeout(() => {
-    submitButton.textContent = original;
-  }, 2500);
+  try {
+    const response = await fetch('/waitlist', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, company: honeypotInput?.value ?? '' }),
+    });
+
+    const result: WaitlistResponse | null = await response.json().catch(() => null);
+
+    if (!response.ok || !result?.ok) {
+      setMessage(result?.error ?? 'Something went wrong. Try again in a moment.', true);
+      submitButton.textContent = originalLabel;
+      submitButton.disabled = false;
+      return;
+    }
+
+    form.reset();
+    submitButton.textContent = result.alreadyJoined ? 'Already on the list' : "You're on the list";
+    setMessage(
+      result.alreadyJoined
+        ? 'That email is already on the waitlist.'
+        : "We'll email you when Legato is ready to install.",
+    );
+    window.setTimeout(() => {
+      submitButton.textContent = originalLabel;
+      submitButton.disabled = false;
+    }, 4000);
+  } catch {
+    setMessage('Could not reach the server. Check your connection and try again.', true);
+    submitButton.textContent = originalLabel;
+    submitButton.disabled = false;
+  }
 });
 
 const noteLink = document.querySelector<HTMLAnchorElement>('#waitlist-note-link');
@@ -30,6 +71,6 @@ noteLink?.addEventListener('click', (event) => {
   const detail = document.createElement('span');
   detail.className = 'note-detail';
   detail.textContent =
-    " legato.fm is a static site with no backend yet, so there's nothing to submit a form to. A mailto link is the honest version of a signup box until a real endpoint exists.";
+    ' Submitting stores your email in Cloudflare KV via a small serverless function — no mailing list provider, no tracking, no resale. One message, when Legato is ready to install.';
   finePrint.append(detail);
 });

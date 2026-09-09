@@ -65,24 +65,90 @@ DNS edit:
 Do not hand-author a DNS record ahead of this step — the target hostname doesn't exist
 until step 2 creates the project.
 
-## 4. Before calling it launched
+## 4. Set up the waitlist backend
 
-- **Waitlist email.** The signup form (see the root README/PR description for why) is a
-  `mailto:` link, not a real backend, pointed at `waitlist@legato.fm`. That address does
-  nothing until [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/)
-  is turned on for the zone and a forwarding rule is added — it's free and a five-minute
-  dashboard action, but it's not done as part of this deploy. Until then, either set it
-  up or change `WAITLIST_ADDRESS` in `site/src/main.ts` to an inbox that already exists.
-- **Screenshots are real but small-scale.** The three app screenshots on the page came
-  from a live dev instance of the app against a real (test-sized) library — see the PR
-  description. They hold up fine at the sizes used on the page; if the hero image is
-  ever swapped for something higher-resolution, recapture rather than upscale.
+The signup form POSTs to `/waitlist`, a Cloudflare Pages Function
+(`site/functions/waitlist.ts`) that validates the email, rate-limits and dedups by IP,
+and stores entries in a Workers KV namespace. It deploys as part of the same Pages
+project as the static site — no separate service, no separate domain, no CORS to
+configure — but the KV namespace it reads and writes has to exist first.
 
-## Follow-up, not done here
+### Create the KV namespace
 
-A real waitlist backend — a Cloudflare Pages Function (`site/functions/waitlist.ts`)
-writing to a KV namespace, replacing the `mailto:` link — is the natural next step once
-someone wants actual submission data instead of individual emails. Deliberately not
-built speculatively in this pass: it means provisioning a new KV namespace on an account
-this session has no access to, and the `mailto:` fallback is honest and fully working in
-the meantime. See the PR description for the full reasoning.
+```bash
+cd site
+npx wrangler login                      # once, if you haven't already
+npx wrangler kv namespace create WAITLIST_KV
+npx wrangler kv namespace create WAITLIST_KV --preview
+```
+
+Each command prints an `id`. Put the first into `id` and the second into `preview_id`
+in `site/wrangler.toml`'s `[[kv_namespaces]]` block, replacing the
+`REPLACE_WITH_..._KV_NAMESPACE_ID` placeholders that are checked in. `preview_id` backs
+`wrangler pages dev` locally and Pages' preview deploys; `id` backs production.
+
+### Deploy
+
+Pages Functions ship automatically with the Pages deploy — whichever of the two options
+in step 2 you use, `functions/waitlist.ts` goes out with it. There's no separate
+`wrangler deploy` for this piece; it isn't a standalone Worker.
+
+### No secrets needed
+
+The Worker doesn't call out to anything that needs a key — it only touches the KV
+namespace bound in `wrangler.toml`. If that changes later (an email-verification
+service, a Slack notification on new signups, etc.), add the key the normal Cloudflare
+way — `npx wrangler secret put SOME_KEY` from `site/`, or the same field in the
+dashboard under the Pages project's Settings → Environment variables — not a `.env`
+file. Nothing about this repo's own secrets convention (`server/.env.local`, see the
+root `CLAUDE.md`) applies here; that's for the Fastify service, not this Worker.
+
+### Read what's been collected
+
+There's no admin endpoint — one more piece of public surface area isn't worth it for
+reading a mailing list. Pull it straight from KV instead:
+
+```bash
+cd site
+npx wrangler kv key list --binding=WAITLIST_KV --remote --prefix="email:"
+npx wrangler kv key get --binding=WAITLIST_KV --remote "email:someone@example.com"
+```
+
+(Local testing uses `--local --preview` instead of `--remote` — see below.)
+
+### Local testing
+
+```bash
+cd site
+npm run dev:functions   # builds the site, then wrangler pages dev dist
+```
+
+This serves the built site *and* `/waitlist` together on `http://127.0.0.1:8788`,
+against a local KV store under `site/.wrangler/` (gitignored, safe to delete anytime).
+Plain `npm run dev` (Vite only, for frontend iteration) has nothing listening on
+`/waitlist` — submitting the form there will fail with a network error, which is
+expected; use `dev:functions` when the waitlist flow itself needs testing.
+
+### What the abuse protection actually does
+
+- **Real email format**, checked server-side against the same regex browsers use for
+  `<input type="email">` — not a full RFC 5322 parser, just enough to catch typos and
+  garbage.
+- **A honeypot field** (`#waitlist-company`, hidden from sighted and screen-reader users
+  alike) — a bot that fills in every input trips it; the request is accepted and
+  silently dropped instead of stored, so the bot has no signal that it failed.
+- **Per-IP rate limiting**, 5 submissions per 10 minutes, tracked in the same KV
+  namespace. KV writes aren't atomic, so a burst of truly concurrent requests from one
+  IP can occasionally slip a couple over the limit — a real gap, acceptable for a
+  low-traffic waitlist form, not a defense against a determined attacker. If actual
+  abuse shows up, the fix is Cloudflare's native Workers Rate Limiting binding, not a
+  more elaborate hand-rolled counter.
+- **Dedup by email** — resubmitting the same address is a no-op (`200`, not a second KV
+  write), so the count in KV reflects unique signups even if someone's form-happy.
+
+### Screenshots are real but small-scale
+
+The three app screenshots on the page came from a live dev instance of the app against
+a real (test-sized) library — see the PR description. They hold up fine at the sizes
+used on the page; if the hero image is ever swapped for something higher-resolution,
+recapture rather than upscale.
