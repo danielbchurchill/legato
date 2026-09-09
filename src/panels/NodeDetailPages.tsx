@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { SectionHeader } from '../ui/DataRow'
 import { ArticleBody } from '../ui/ArticleBody'
 import { Tooltip } from '../ui/Tooltip'
@@ -46,6 +46,8 @@ export function NodeDetailPages({ node, reload, isPlaying, onSelectNode, onPlay 
   const editingState = useMetadataEditing(node, reload)
   const [page, setPage] = useState(0)
   const swipeStartX = useRef<number | null>(null)
+  const dotsRef = useRef<HTMLDivElement>(null)
+  const [dotsHeight, setDotsHeight] = useState(0)
 
   // Reset the per-page view state whenever the node changes: a lyrics page
   // left open on the last track must not stay open, showing the last track's
@@ -59,6 +61,21 @@ export function NodeDetailPages({ node, reload, isPlaying, onSelectNode, onPlay 
     ...(node.type === 'recording' ? (['lyrics'] as const) : []),
     ...(node.article || node.description ? (['article'] as const) : []),
   ]
+
+  // The dots bar is a sticky sibling *after* the paged content in the same
+  // scrolling body, not an overlay outside it — so without this, a page's
+  // content scrolls up underneath it, and the bar's glass (translucent by
+  // design, DESIGN.md's "opacity may not go to 1") shows that content
+  // ghosting through its own pagination dots instead of the canvas behind
+  // the panel. Reserving exactly the dots bar's real height as bottom
+  // padding on the paged track — measured, not guessed, so it stays correct
+  // if the bar's own padding/border ever changes — means content always
+  // finishes scrolling before it would go under the bar at all. Applies to
+  // every page (metadata/lyrics/article) since it lives on the shared
+  // track, not per-page.
+  useLayoutEffect(() => {
+    setDotsHeight(dotsRef.current?.offsetHeight ?? 0)
+  }, [pages.length])
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -98,7 +115,12 @@ export function NodeDetailPages({ node, reload, isPlaying, onSelectNode, onPlay 
        * the row stretch to the tallest mounted page is simpler than
        * measuring the active one and costs nothing since the panel already
        * owns the scroll. */}
-      <div className="mt-[15px] overflow-hidden" onPointerDown={handleSwipeStart} onPointerUp={handleSwipeEnd}>
+      <div
+        className="mt-[15px] overflow-hidden"
+        style={{ paddingBottom: dotsHeight }}
+        onPointerDown={handleSwipeStart}
+        onPointerUp={handleSwipeEnd}
+      >
         <div
           className="flex transition-transform duration-[var(--motion-base)] ease-[var(--ease-out)] motion-reduce:transition-none"
           style={{ transform: `translateX(-${page * 100}%)` }}
@@ -191,7 +213,10 @@ export function NodeDetailPages({ node, reload, isPlaying, onSelectNode, onPlay 
        * directly under the title block — sticky rather than a Panel.tsx API
        * change, since the panel already owns the scrolling container. */}
       {pages.length > 1 && (
-        <div className="sticky bottom-0 mt-[15px] flex justify-center gap-[6px] border-t border-[var(--color-divider)] bg-[var(--color-surface-flat)]/80 py-[12px] backdrop-blur-[var(--blur-glass)]">
+        <div
+          ref={dotsRef}
+          className="sticky bottom-0 mt-[15px] flex justify-center gap-[6px] border-t border-[var(--color-divider)] bg-[var(--color-surface-flat)]/80 py-[12px] backdrop-blur-[var(--blur-glass)]"
+        >
           {pages.map((p, i) => (
             <button
               key={p}
