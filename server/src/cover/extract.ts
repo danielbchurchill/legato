@@ -21,6 +21,13 @@ const PRECEDENCE: CoverSource[] = ["manual", "artist_image", "embedded", "folder
 const FOLDER_ART_STEMS = new Set(["cover", "folder", "front", "album", "albumart"]);
 const FOLDER_ART_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 
+// A multi-disc rip nests each disc in its own CD1/CD2/Disc 3 folder under one
+// album root — real shape of e.g. "Wildflowers & All The Rest (Deluxe)"/CD4 —
+// and the actual cover art sits once in that root, not copied into every
+// disc folder. Matches the same cd/disc-number vocabulary sanityCheck.ts's
+// REVERSED_VOLUME_PREFIX already uses for the tag-side version of this.
+const DISC_SUBFOLDER = /^(cd|disc)\s*\d+$/i;
+
 export type EmbeddedPicture = { data: Buffer; mime: string | null };
 
 // music-metadata hands back every attached picture: front cover, back cover,
@@ -43,7 +50,20 @@ export function pickFrontCover(
 // rather than embedded in all twelve tracks.
 export async function findFolderArt(audioFilePath: string): Promise<{ path: string } | null> {
   const dir = path.dirname(audioFilePath);
+  const direct = await findArtInDir(dir);
+  if (direct) return direct;
 
+  // The disc folder itself came up empty — if it looks like "CD4" rather
+  // than an album folder in its own right, the art most likely lives one
+  // level up, shared across every disc.
+  if (DISC_SUBFOLDER.test(path.basename(dir))) {
+    return findArtInDir(path.dirname(dir));
+  }
+
+  return null;
+}
+
+async function findArtInDir(dir: string): Promise<{ path: string } | null> {
   let entries: string[];
   try {
     entries = await readdir(dir);

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type Database from "better-sqlite3";
@@ -90,6 +90,48 @@ describe("findFolderArt", () => {
 
   it("returns null rather than throwing when the folder is gone", async () => {
     expect(await findFolderArt("/nonexistent/dir/track.flac")).toBeNull();
+  });
+
+  // A box set's disc subfolders don't each carry their own copy of the
+  // cover — it sits once in the album root above them (issue #63's real
+  // repro: a 4-disc deluxe edition with folder.jpg beside CD1-CD4).
+  it("falls back to the album root's art when a disc subfolder has none", async () => {
+    const discDir = path.join(dir, "CD4");
+    await mkdir(discDir);
+    await writeFile(path.join(dir, "folder.jpg"), "x");
+
+    expect((await findFolderArt(path.join(discDir, "07 - track.flac")))?.path).toBe(
+      path.join(dir, "folder.jpg"),
+    );
+  });
+
+  it("is case- and spacing-insensitive about the disc subfolder name", async () => {
+    const discDir = path.join(dir, "Disc 2");
+    await mkdir(discDir);
+    await writeFile(path.join(dir, "cover.jpg"), "x");
+
+    expect((await findFolderArt(path.join(discDir, "01 - track.flac")))?.path).toBe(
+      path.join(dir, "cover.jpg"),
+    );
+  });
+
+  it("prefers a disc folder's own art over the album root's", async () => {
+    const discDir = path.join(dir, "CD1");
+    await mkdir(discDir);
+    await writeFile(path.join(discDir, "cover.jpg"), "disc-specific");
+    await writeFile(path.join(dir, "folder.jpg"), "album-root");
+
+    expect((await findFolderArt(path.join(discDir, "01 - track.flac")))?.path).toBe(
+      path.join(discDir, "cover.jpg"),
+    );
+  });
+
+  it("does not walk up from a folder that isn't disc-numbered", async () => {
+    const subDir = path.join(dir, "Bonus Tracks");
+    await mkdir(subDir);
+    await writeFile(path.join(dir, "folder.jpg"), "x");
+
+    expect(await findFolderArt(path.join(subDir, "01 - track.flac"))).toBeNull();
   });
 });
 
