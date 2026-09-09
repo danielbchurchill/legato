@@ -120,6 +120,14 @@
    * splash screen still wants the full 40px. See DESIGN.md's shell section. */
   --text-wordmark-header: 32px;
 
+  /* Issue #64 experiment: swapping the Left Panel Header's wordmark for the
+   * square logomark (white-logo.png). The PNG carries real transparent
+   * padding around the glyph (unlike the tightly-cropped wordmark SVG), so
+   * matching --text-wordmark-header's 32px box would read visually smaller
+   * than the wordmark did — sized up to compensate rather than reusing that
+   * token. Not committed to a keep; see PR description. */
+  --logo-header: 40px;
+
   /* ---- Geometry ------------------------------------------------------- */
 
   --radius-surface: 25px;

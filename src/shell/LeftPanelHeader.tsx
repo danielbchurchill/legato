@@ -1,4 +1,4 @@
-import wordmarkSrc from '../assets/brand/white-wordmark.svg'
+import logoSrc from '../assets/brand/white-logo.png'
 import { Icon } from '../ui/Icon'
 import { Tooltip } from '../ui/Tooltip'
 import { Surface } from './Surface'
@@ -28,11 +28,11 @@ type LeftPanelHeaderProps = {
 
 const GEOMETRY = 'absolute top-0 left-0 z-10 flex h-[var(--header-height)] w-[calc(var(--rail-width)+var(--panel-width))] items-center p-[10px]'
 
-const wordmark = (
+const logomark = (
   <img
-    src={wordmarkSrc}
+    src={logoSrc}
     alt="legato"
-    className="pointer-events-none h-[var(--text-wordmark-header)] w-auto select-none"
+    className="pointer-events-none h-[var(--logo-header)] w-[var(--logo-header)] select-none"
   />
 )
 
@@ -42,7 +42,7 @@ export function LeftPanelHeader({ expanded, onCollapse, onExpand }: LeftPanelHea
       {/* The drag region is whatever space isn't a button — same approach
        * the old single titlebar used. */}
       <div data-tauri-drag-region className="flex h-full flex-1 items-center justify-between">
-        {wordmark}
+        {logomark}
         <Tooltip label="Collapse panel">
           <button
             type="button"
@@ -58,7 +58,7 @@ export function LeftPanelHeader({ expanded, onCollapse, onExpand }: LeftPanelHea
   ) : (
     <>
       <div className="flex h-full shrink-0 items-center gap-[10px]">
-        {wordmark}
+        {logomark}
         <Tooltip label="Expand panel">
           <button
             type="button"
