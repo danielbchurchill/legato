@@ -55,34 +55,6 @@ export const NODE_CARD_WIDTH_PX = PAD_LEFT + COVER_PX + COLUMN_GAP + COLUMN_PX +
 export const NODE_CARD_COVER_CENTER_X = PAD_LEFT + COVER_PX / 2
 export const NODE_CARD_COVER_CENTER_Y = PAD_TOP + COVER_PX / 2
 
-/* Duplicated from Canvas.tsx's own SELECT_NODE_PX rather than imported —
- * Canvas.tsx imports NodeCard, so importing back would be circular, and this
- * file already duplicates other cross-file constants (EDGE_COLOR-style) the
- * same way, kept in sync by hand. This is the node's on-screen width, in
- * pixels, at the zoom the camera flies to on selection — the reference the
- * card's own geometry above was measured against. */
-const SELECT_NODE_PX = 130
-
-/* Sanity bounds, not measured values: the camera has no zoom limits (see
- * Canvas.tsx), so an unclamped scale could shrink the cover to nothing or
- * blow it up past what a DOM element can reasonably render at the extremes
- * of a scroll-wheel zoom. Governs only the cover now — see place() below —
- * so this no longer has to also keep text readable; that's a separate,
- * fixed size regardless of scale.
- *
- * MAX_CARD_SCALE was 2.5 — confirmed live that a realistic scroll-wheel
- * session hits it after only five or six notches,
- * well inside the camera's actually-reachable range: the cover would freeze
- * solid while everything around it, edges and neighboring nodes included,
- * kept visibly growing, reading as "stopped getting bigger" rather than as
- * an intentional ceiling. radiusPx has no cap of its own (sigma's node
- * rendering never stops growing), so *some* limit still has to exist here —
- * a DOM element can't scale forever — but it needs enough headroom that a
- * normal zoom-in session runs out of interest in the graph around it before
- * it ever reaches this number. */
-const MIN_CARD_SCALE = 0.4
-const MAX_CARD_SCALE = 6
-
 /* The card is real DOM with pointer-events: auto (its buttons need clicks),
  * sitting on top of sigma's canvas in a sibling layer — so a wheel event
  * over the card never reaches sigma's own listener at all; DOM events don't
@@ -121,26 +93,27 @@ function forwardWheelToCanvas(renderer: Sigma | null, e: React.WheelEvent<HTMLDi
 
 /* #20: scaling the *whole card* by the node's on-screen radius (the original
  * shape of this function) dragged its text out of step with the rest of the
- * app the moment the camera left exactly SELECT_NODE_PX — text rendered
+ * app the moment the camera left exactly the fly-to zoom — text rendered
  * legibly only at that one zoom level, and shrank below the inspector
  * panel's own --text-base the instant the user scrolled out even slightly,
  * which read as "the card is too small" and pushed people to zoom in further
  * just to read it. The glass panel and its text now stay a fixed, native
  * pixel size at every zoom — DESIGN.md ties this card's column to the same
  * panel rhythm (33px rows, 16px body text) the inspector panel uses, and a
- * size that tracked the camera would drift off that rhythm. Only the cover
- * art keeps growing/shrinking with the node (via --cover-scale below, read
- * by the CoverArt element's own inline transform), which is what actually
- * matters for "the card reads as the node opening" — the node's own artwork
- * has to keep pace with it, not the metadata column next to it. */
-function place(element: HTMLDivElement, { x, y, radiusPx }: NodeAnchor): void {
+ * size that tracked the camera would drift off that rhythm.
+ *
+ * #60: the cover used to track radiusPx the same way (via a --cover-scale
+ * custom property read by the CoverArt element's own inline transform),
+ * growing or shrinking with the node's on-screen radius as the user
+ * scrolled. But radiusPx is downstream of the map's node-size setting
+ * (Canvas.tsx's nodeSizeMultipliers) as well as camera zoom, so turning that
+ * setting up or down changed the cover's rendered size inside an already-open
+ * card — an on-canvas control reaching into a DOM element it has no business
+ * touching. The cover art is the one thing in this card that has to read as
+ * "the artwork itself," so it renders at a constant COVER_PX regardless of
+ * the node's underlying radius; only the card's position tracks the node. */
+function place(element: HTMLDivElement, { x, y }: NodeAnchor): void {
   element.style.transform = `translate(${x - NODE_CARD_COVER_CENTER_X}px, ${y - NODE_CARD_COVER_CENTER_Y}px)`
-
-  // Measured at SELECT_NODE_PX/2 radius (DESIGN.md's fly-to zoom), same as
-  // NodeHoverPlate's own geometry — 1 right after a fly-to, growing or
-  // shrinking from there as the user scrolls.
-  const coverScale = Math.min(MAX_CARD_SCALE, Math.max(MIN_CARD_SCALE, radiusPx / (SELECT_NODE_PX / 2)))
-  element.style.setProperty('--cover-scale', String(coverScale))
 }
 
 /** Mirrors NodeSummary in server/src/summary.ts. */
@@ -251,11 +224,10 @@ export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onO
           size="full"
           alt=""
           className="pointer-events-none relative shrink-0"
-          // Square, no radius: artwork is reproduced, not restyled. Scaled
-          // around its own centre (the default transform-origin) by
-          // --cover-scale, set on the wrapper element in place() above — the
-          // node's own on-screen size is what this tracks, not the card.
-          style={{ width: COVER_PX, height: COVER_PX, transform: 'scale(var(--cover-scale, 1))' }}
+          // Square, no radius: artwork is reproduced, not restyled. Fixed at
+          // COVER_PX regardless of the node's on-screen radius — see #60
+          // above place().
+          style={{ width: COVER_PX, height: COVER_PX }}
         />
 
         <div className="pointer-events-none relative flex flex-col" style={{ width: COLUMN_PX }}>
