@@ -204,6 +204,43 @@ export function markMissing(db: Database.Database, filePath: string): void {
   ).run(filePath);
 }
 
+export type RescanFileResult =
+  | { fileId: number; filePath: string; outcome: ScanOutcome | "missing" }
+  | { fileId: number; filePath: string; error: string };
+
+// Tag Manager's per-row "rescan" action (issue #65) — the same scanFile()
+// short-circuit/re-derive path the filesystem watcher already runs per
+// changed file, aimed at a node instead of a path so the route only needs
+// a node id. A recording can have more than one file (a merge — see
+// InstancesList in MetadataFields.tsx); every one of them is rescanned,
+// not just the first. Never throws per-file: a file gone missing since its
+// row was written is recorded via markMissing() exactly like the watcher's
+// own 'unlink' handler, and any other failure is captured in the result
+// list instead of aborting the rest of the node's files.
+export async function rescanNode(db: Database.Database, nodeId: number): Promise<RescanFileResult[]> {
+  const files = db
+    .prepare("SELECT id, library_root_id, file_path FROM files WHERE recording_node_id = ?")
+    .all(nodeId) as { id: number; library_root_id: number; file_path: string }[];
+
+  const results: RescanFileResult[] = [];
+  for (const file of files) {
+    try {
+      const outcome = await scanFile(db, file.library_root_id, file.file_path);
+      results.push({ fileId: file.id, filePath: file.file_path, outcome });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        markMissing(db, file.file_path);
+        results.push({ fileId: file.id, filePath: file.file_path, outcome: "missing" });
+        continue;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      results.push({ fileId: file.id, filePath: file.file_path, error: message });
+    }
+  }
+
+  return results;
+}
+
 export type ScanProgress = {
   jobId: number;
   libraryRootId: number;

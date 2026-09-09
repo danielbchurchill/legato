@@ -72,7 +72,7 @@ export type Release = {
 export type FieldDiff = { field: string; oldValue: string | number; newValue: string | number }
 export type TagWriteRow = { id: number; status: string; diff_json: string }
 export type LyricsData = { plainLyrics: string | null; syncedLyrics: string | null; instrumental: boolean; found: boolean }
-export type EditableFields = { bpm?: number; label?: string; releaseType?: string }
+export type EditableFields = { bpm?: number; label?: string; releaseType?: string; releaseDate?: string }
 export type SearchResult = { id: number; type: string; title: string }
 
 // Mirrors server/src/facts.ts's EDGE_VERB — same duplication pattern as

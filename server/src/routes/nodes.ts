@@ -4,7 +4,9 @@ import { resolveCoverForNode } from "../cover/extract.js";
 import { getDescription } from "../enrich/descriptions.js";
 import { listArtistReleases } from "../entities/aggregate.js";
 import { generateFacts } from "../facts.js";
+import { rescanNode } from "../scan/scanner.js";
 import { nodeSummary } from "../summary.js";
+import { broadcast } from "../ws.js";
 
 // The one combined graph is always 'tracks' now (2026-08-29 — see
 // Legato.md) — 'granularity' persists only because `positions` still keys
@@ -189,6 +191,37 @@ export function nodesRoutes(db: Database.Database) {
         return { error: "not found" };
       }
       return summary;
+    });
+
+    // Per-node "rescan this file" (issue #65) — Tag Manager lists tracks
+    // missing bpm/label/release_date/release_type, but had no action for
+    // them beyond flying to the canvas. rescanNode (scan/scanner.ts) does
+    // the actual work; this route is the thin id-resolution/broadcast
+    // wrapper around it, same split as every other route in this file.
+    app.post<{ Params: { id: string } }>("/nodes/:id/rescan", async (request, reply) => {
+      const id = Number(request.params.id);
+      const node = db.prepare("SELECT id FROM nodes WHERE id = ?").get(id);
+      if (!node) {
+        reply.code(404);
+        return { error: "not found" };
+      }
+
+      const results = await rescanNode(db, id);
+      if (results.length === 0) {
+        reply.code(404);
+        return { error: "no files for this node" };
+      }
+
+      for (const result of results) {
+        broadcast(
+          "outcome" in result ? "scan:file" : "scan:error",
+          "outcome" in result
+            ? { nodeId: id, filePath: result.filePath, outcome: result.outcome }
+            : { nodeId: id, filePath: result.filePath, error: result.error },
+        );
+      }
+
+      return { results };
     });
 
     // Writes user_x/user_y only — seed_x/seed_y are derived and only ever

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
 import { openDb } from "../db.js";
-import { markMissing, runFullScan, runIncrementalScan, scanFile } from "./scanner.js";
+import { markMissing, rescanNode, runFullScan, runIncrementalScan, scanFile } from "./scanner.js";
 
 // A minimal-but-valid 44-byte-header WAV (silence) — enough for
 // music-metadata to report format/duration without needing a real codec or
@@ -143,6 +143,83 @@ describe("markMissing", () => {
     ).missing_since;
 
     expect(second).toBe(first);
+  });
+});
+
+describe("rescanNode", () => {
+  it("re-derives a node's file and reports the outcome", async () => {
+    const filePath = path.join(dir, "track.wav");
+    writeSilentWav(filePath, 1);
+    await scanFile(db, libraryRootId, filePath);
+    const file = db.prepare("SELECT id, recording_node_id FROM files WHERE file_path = ?").get(filePath) as {
+      id: number;
+      recording_node_id: number;
+    };
+
+    writeSilentWav(filePath, 2); // different size/duration, same as scanFile's own "updated" test
+    const results = await rescanNode(db, file.recording_node_id);
+
+    expect(results).toEqual([{ fileId: file.id, filePath, outcome: "updated" }]);
+    const updated = db.prepare("SELECT duration_ms FROM files WHERE id = ?").get(file.id) as {
+      duration_ms: number;
+    };
+    expect(updated.duration_ms).toBeGreaterThan(1500);
+  });
+
+  it("rescans every file for a node with more than one file (a merge)", async () => {
+    const pathA = path.join(dir, "a.wav");
+    const pathB = path.join(dir, "b.wav");
+    writeSilentWav(pathA, 1);
+    writeSilentWav(pathB, 1);
+    await scanFile(db, libraryRootId, pathA);
+    await scanFile(db, libraryRootId, pathB);
+    const fileA = db.prepare("SELECT id, recording_node_id FROM files WHERE file_path = ?").get(pathA) as {
+      id: number;
+      recording_node_id: number;
+    };
+    const fileB = db.prepare("SELECT id FROM files WHERE file_path = ?").get(pathB) as { id: number };
+    // Simulate the merge InstancesList (MetadataFields.tsx) renders: two
+    // files sharing one recording node, same as match/collapse.ts produces
+    // for a real duplicate.
+    db.prepare("UPDATE files SET recording_node_id = ? WHERE id = ?").run(fileA.recording_node_id, fileB.id);
+
+    writeSilentWav(pathA, 2);
+    writeSilentWav(pathB, 2);
+    const results = await rescanNode(db, fileA.recording_node_id);
+
+    expect(results).toHaveLength(2);
+    expect(results).toEqual(
+      expect.arrayContaining([
+        { fileId: fileA.id, filePath: pathA, outcome: "updated" },
+        { fileId: fileB.id, filePath: pathB, outcome: "updated" },
+      ]),
+    );
+  });
+
+  it("marks a file missing, rather than throwing, when it's vanished from disk since its row was written", async () => {
+    const filePath = path.join(dir, "track.wav");
+    writeSilentWav(filePath);
+    await scanFile(db, libraryRootId, filePath);
+    const file = db.prepare("SELECT id, recording_node_id FROM files WHERE file_path = ?").get(filePath) as {
+      id: number;
+      recording_node_id: number;
+    };
+
+    rmSync(filePath);
+    const results = await rescanNode(db, file.recording_node_id);
+
+    expect(results).toEqual([{ fileId: file.id, filePath, outcome: "missing" }]);
+    const row = db.prepare("SELECT missing_since FROM files WHERE id = ?").get(file.id) as {
+      missing_since: string | null;
+    };
+    expect(row.missing_since).toBeTruthy();
+  });
+
+  it("returns an empty list for a node with no files", async () => {
+    const artist = db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', 'Some Artist') RETURNING id").get() as {
+      id: number;
+    };
+    expect(await rescanNode(db, artist.id)).toEqual([]);
   });
 });
 

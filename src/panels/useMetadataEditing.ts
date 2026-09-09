@@ -18,8 +18,8 @@ export type MetadataEditingState = {
  * inspector and the persistent panel's track-metadata disclosure drive one
  * state machine instead of two copies that could drift apart. Editable
  * fields are exactly what the tag write-back API supports
- * (server/src/tagwrite/fields.ts): bpm, label, release type. Editing is
- * file-scoped, so it only ever applies to recording nodes. */
+ * (server/src/tagwrite/fields.ts): bpm, label, release type, release date.
+ * Editing is file-scoped, so it only ever applies to recording nodes. */
 export function useMetadataEditing(node: NodeDetail, reload: () => void): MetadataEditingState {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<EditableFields>({})
@@ -36,7 +36,12 @@ export function useMetadataEditing(node: NodeDetail, reload: () => void): Metada
 
   const startEditing = () => {
     const file = node.files[0] as FileRow | undefined
-    setDraft({ bpm: file?.bpm ?? undefined, label: file?.label ?? undefined, releaseType: file?.release_type ?? undefined })
+    setDraft({
+      bpm: file?.bpm ?? undefined,
+      label: file?.label ?? undefined,
+      releaseType: file?.release_type ?? undefined,
+      releaseDate: file?.release_date ?? undefined,
+    })
     setEditing(true)
   }
 

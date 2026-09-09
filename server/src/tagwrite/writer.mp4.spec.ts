@@ -75,13 +75,14 @@ describe("applyTagWrite (MP4)", () => {
 });
 
 describe("widened field vocabulary (MP4)", () => {
-  it("round-trips discNo/genre/bpm/label/releaseType — each field readable back by name", async () => {
+  it("round-trips discNo/genre/bpm/label/releaseType/releaseDate — each field readable back by name", async () => {
     await applyTagWrite(filePath, {
       discNo: 2,
       genre: ["Rock", "Psychedelic Rock"],
       bpm: 82,
       label: "Apple Records",
       releaseType: "album",
+      releaseDate: "1969-09-26",
     });
 
     // TagLib# round-trips this cleanly through its own reader: multi-value
@@ -95,6 +96,7 @@ describe("widened field vocabulary (MP4)", () => {
         bpm: 82,
         label: "Apple Records",
         releaseType: "album",
+        releaseDate: "1969-09-26",
       }),
     ).toEqual([]);
   });
@@ -143,6 +145,19 @@ describe("widened field vocabulary (MP4)", () => {
 
     const { common } = await parseFile(filePath, { duration: true });
     expect(common.genre).toEqual(["Rock; Psychedelic Rock"]);
+  });
+
+  // Same LABEL-style freeform atom as above, one field over: TagLib# has no
+  // named property that lands on ORIGINALDATE, so fields.ts writes the atom
+  // directly via setItunesStrings rather than risking a mismatched default.
+  it("writes releaseDate to the ORIGINALDATE freeform atom music-metadata reads back as originaldate", async () => {
+    await applyTagWrite(filePath, { releaseDate: "1969-09-26" });
+
+    const { common, native } = await parseFile(filePath, { duration: true });
+    expect(common.originaldate).toBe("1969-09-26");
+
+    const nativeIds = native.iTunes?.map((tag) => tag.id) ?? [];
+    expect(nativeIds).toContain("----:com.apple.iTunes:ORIGINALDATE");
   });
 });
 

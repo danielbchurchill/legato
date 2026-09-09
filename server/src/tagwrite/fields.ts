@@ -1,5 +1,6 @@
 import {
   Id3v2FrameClassType,
+  Id3v2FrameIdentifiers,
   Id3v2UserTextInformationFrame,
   TagTypes,
 } from "node-taglib-sharp";
@@ -22,6 +23,12 @@ export type TagFields = {
   bpm?: number;
   label?: string;
   releaseType?: string;
+  // "when was this music made," matching scan/tags.ts's own priority
+  // (originaldate ?? releasedate ?? date) — writes and reads the
+  // originaldate-equivalent field per format so a write here is picked up
+  // as release_date by the very next scan, not shadowed by a DATE/TDRC
+  // tag the file already carries.
+  releaseDate?: string;
 };
 
 export type AudioFormat = "flac" | "mp3" | "mp4";
@@ -96,6 +103,13 @@ function findUserTextFrame(id3: Id3v2Tag, description: string): Id3v2UserTextInf
 // beatsPerMinute (tmpo atom) and musicBrainzReleaseType
 // (`----:com.apple.iTunes:MusicBrainz Album Type`) both matched
 // music-metadata's expectations and go through the named properties.
+//
+// releaseDate follows the same per-format verification: FLAC's raw Vorbis
+// "ORIGINALDATE" field, ID3v2's TDOR ("original release time") text frame,
+// and MP4's `----:com.apple.iTunes:ORIGINALDATE` freeform atom are exactly
+// what music-metadata's VorbisTagMapper/ID3v24TagMapper/MP4TagMapper each
+// map to 'originaldate' — the field scan/tags.ts checks first when it
+// derives release_date.
 export function readFields(tag: Tag, format: AudioFormat): Required<TagFields> {
   const base = {
     title: tag.title ?? "",
@@ -115,6 +129,7 @@ export function readFields(tag: Tag, format: AudioFormat): Required<TagFields> {
       bpm: Number.isNaN(bpm) ? 0 : bpm,
       label: xiphComment(tag).getFieldFirstValue("LABEL") || "",
       releaseType: xiphComment(tag).getFieldFirstValue("RELEASETYPE") || "",
+      releaseDate: xiphComment(tag).getFieldFirstValue("ORIGINALDATE") || "",
     };
   }
 
@@ -125,6 +140,7 @@ export function readFields(tag: Tag, format: AudioFormat): Required<TagFields> {
       bpm: id3?.beatsPerMinute || 0,
       label: id3?.publisher || "",
       releaseType: id3?.musicBrainzReleaseType || "",
+      releaseDate: (id3 && id3.getTextAsString(Id3v2FrameIdentifiers.TDOR)) || "",
     };
   }
 
@@ -134,6 +150,7 @@ export function readFields(tag: Tag, format: AudioFormat): Required<TagFields> {
     bpm: apple.beatsPerMinute || 0,
     label: apple.getFirstItunesString(ITUNES_MEAN, "LABEL") || "",
     releaseType: apple.musicBrainzReleaseType || "",
+    releaseDate: apple.getFirstItunesString(ITUNES_MEAN, "ORIGINALDATE") || "",
   };
 }
 
@@ -150,6 +167,7 @@ export function writeFields(tag: Tag, changes: TagFields, format: AudioFormat): 
     if (changes.bpm !== undefined) xiphComment(tag).setFieldAsUint("BPM", changes.bpm);
     if (changes.label !== undefined) xiphComment(tag).setFieldAsStrings("LABEL", changes.label);
     if (changes.releaseType !== undefined) xiphComment(tag).setFieldAsStrings("RELEASETYPE", changes.releaseType);
+    if (changes.releaseDate !== undefined) xiphComment(tag).setFieldAsStrings("ORIGINALDATE", changes.releaseDate);
     return;
   }
 
@@ -158,6 +176,7 @@ export function writeFields(tag: Tag, changes: TagFields, format: AudioFormat): 
     if (changes.bpm !== undefined) id3.beatsPerMinute = changes.bpm;
     if (changes.label !== undefined) id3.publisher = changes.label;
     if (changes.releaseType !== undefined) id3.musicBrainzReleaseType = changes.releaseType;
+    if (changes.releaseDate !== undefined) id3.setTextFrame(Id3v2FrameIdentifiers.TDOR, changes.releaseDate);
     return;
   }
 
@@ -165,6 +184,7 @@ export function writeFields(tag: Tag, changes: TagFields, format: AudioFormat): 
   if (changes.bpm !== undefined) apple.beatsPerMinute = changes.bpm;
   if (changes.label !== undefined) apple.setItunesStrings(ITUNES_MEAN, "LABEL", changes.label);
   if (changes.releaseType !== undefined) apple.musicBrainzReleaseType = changes.releaseType;
+  if (changes.releaseDate !== undefined) apple.setItunesStrings(ITUNES_MEAN, "ORIGINALDATE", changes.releaseDate);
 }
 
 // The written_by_app guard marker (see guard.ts) needs a real mechanism per

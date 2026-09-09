@@ -105,6 +105,17 @@ export function MetadataRows({
             }
           />
           <DataRow
+            label="release date"
+            value={
+              <input
+                type="text"
+                value={draft.releaseDate ?? ''}
+                onChange={(e) => updateDraft({ releaseDate: e.target.value })}
+                className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
+              />
+            }
+          />
+          <DataRow
             label="release type"
             value={
               <input

@@ -27,12 +27,25 @@ import { useNodeDetail } from './useNodeDetail'
 type NodeInspectorProps = {
   nodeId: number
   isPlaying: boolean
+  /** Set when this inspector was opened via TagManager's "edit" action
+   * (issue #65) — the id of the node to drop straight into edit mode on,
+   * once. See NodeDetailPages.tsx for where it's consumed. */
+  autoEditNodeId: number | null
+  onAutoEditConsumed: () => void
   onSelectNode: (id: number) => void
   onPlay: (nodeId: number, title: string) => void
   onClose: () => void
 }
 
-export function NodeInspector({ nodeId, isPlaying, onSelectNode, onPlay, onClose }: NodeInspectorProps) {
+export function NodeInspector({
+  nodeId,
+  isPlaying,
+  autoEditNodeId,
+  onAutoEditConsumed,
+  onSelectNode,
+  onPlay,
+  onClose,
+}: NodeInspectorProps) {
   const { phase, requestClose } = useModalTransition(onClose)
   const { node, reload } = useNodeDetail(nodeId)
 
@@ -78,6 +91,8 @@ export function NodeInspector({ nodeId, isPlaying, onSelectNode, onPlay, onClose
                   node={node}
                   reload={reload}
                   isPlaying={isPlaying}
+                  autoEditNodeId={autoEditNodeId}
+                  onAutoEditConsumed={onAutoEditConsumed}
                   onSelectNode={onSelectNode}
                   onPlay={onPlay}
                 />

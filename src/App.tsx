@@ -196,6 +196,11 @@ function MainApp() {
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
   const [hygieneOpen, setHygieneOpen] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  // Set only by TagManager's "edit" action (issue #65) — the inspector
+  // consumes it once, on the node it was requested for, and clears it, so
+  // navigating elsewhere inside an already-open inspector never re-triggers
+  // edit mode on a node nobody asked to edit.
+  const [autoEditNodeId, setAutoEditNodeId] = useState<number | null>(null)
   // The rail's own selection doubles as the left shell's expand/collapse
   // state — "exactly one active at a time, or none when collapsed" is
   // literally what DESIGN.md's shell section specifies, so there is no
@@ -286,6 +291,15 @@ function MainApp() {
   const selectAndFly = (id: number) => {
     setSelectedNodeId(id)
     canvasRef.current?.flyToNode(id)
+  }
+
+  // TagManager's "edit" action (issue #65): select, fly, open the
+  // inspector, and mark this node as the one to drop straight into edit
+  // mode on — rather than the user hunting for the pencil icon themselves.
+  const selectFlyAndEdit = (id: number) => {
+    selectAndFly(id)
+    setInspectorOpen(true)
+    setAutoEditNodeId(id)
   }
 
   // Escape unwinds one layer at a time. The inspector owns its own Escape
@@ -405,7 +419,7 @@ function MainApp() {
           settingsContent={
             <LegatoSettings settings={settings} updateSettings={updateSettings} onSetAudioDevice={playback.setAudioDevice} />
           }
-          tagsContent={<TagManager onSelectNode={selectAndFly} />}
+          tagsContent={<TagManager onSelectNode={selectAndFly} onEditNode={selectFlyAndEdit} />}
           databaseContent={<DatabaseInspector />}
           favouritesContent={<Favourites onSelectNode={selectAndFly} playback={playback} />}
           playlistsContent={<Playlists playback={playback} />}
@@ -472,6 +486,8 @@ function MainApp() {
         <NodeInspector
           nodeId={selectedNodeId}
           isPlaying={selectedNodeId === playback.status.currentRecordingNodeId}
+          autoEditNodeId={autoEditNodeId}
+          onAutoEditConsumed={() => setAutoEditNodeId(null)}
           onSelectNode={(id) => {
             // Following a fact or edge link inside the inspector moves the
             // selection — and the canvas underneath — rather than opening a
@@ -479,7 +495,10 @@ function MainApp() {
             selectAndFly(id)
           }}
           onPlay={playback.playNode}
-          onClose={() => setInspectorOpen(false)}
+          onClose={() => {
+            setInspectorOpen(false)
+            setAutoEditNodeId(null)
+          }}
         />
       )}
 

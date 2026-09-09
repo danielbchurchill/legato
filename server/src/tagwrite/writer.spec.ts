@@ -98,13 +98,14 @@ describe("applyTagWrite", () => {
 });
 
 describe("widened field vocabulary", () => {
-  it("round-trips discNo/genre/bpm/label/releaseType — each field readable back by name", async () => {
+  it("round-trips discNo/genre/bpm/label/releaseType/releaseDate — each field readable back by name", async () => {
     await applyTagWrite(filePath, {
       discNo: 2,
       genre: ["Rock", "Psychedelic Rock"],
       bpm: 82,
       label: "Apple Records",
       releaseType: "album",
+      releaseDate: "1969-09-26",
     });
 
     expect(
@@ -114,6 +115,7 @@ describe("widened field vocabulary", () => {
         bpm: 82,
         label: "Apple Records",
         releaseType: "album",
+        releaseDate: "1969-09-26",
       }),
     ).toEqual([]);
   });
@@ -133,6 +135,22 @@ describe("widened field vocabulary", () => {
     expect(lower.organization).toBeUndefined();
     expect(lower.releasetype).toBe("album");
     expect(lower.musicbrainz_albumtype).toBeUndefined();
+  });
+
+  // scan/tags.ts reads release_date as originaldate ?? releasedate ?? date
+  // — writing the raw ORIGINALDATE Vorbis field (rather than going through
+  // TagLib#'s tag.year, which targets bare DATE/YEAR) is what makes a
+  // manual release-date edit win that priority order on the next scan.
+  it("writes releaseDate to the raw ORIGINALDATE Vorbis field music-metadata reads back as originaldate", async () => {
+    await applyTagWrite(filePath, { releaseDate: "1969-09-26" });
+
+    const raw = execFileSync("ffprobe", ["-v", "quiet", "-show_entries", "format_tags", "-of", "json", filePath], {
+      encoding: "utf8",
+    });
+    const tags = (JSON.parse(raw).format.tags ?? {}) as Record<string, string>;
+    const lower = Object.fromEntries(Object.entries(tags).map(([k, v]) => [k.toLowerCase(), v]));
+
+    expect(lower.originaldate).toBe("1969-09-26");
   });
 });
 

@@ -38,11 +38,26 @@ type NodeDetailPagesProps = {
    * playback as an attribute of the node being viewed, per P-5, rather than
    * a fork into a separate component. */
   isPlaying: boolean
+  /** Set when TagManager's "edit" action (issue #65) opened this inspector
+   * wanting to land straight in edit mode rather than making the user hunt
+   * for the pencil icon. Consumed once the ids match — see the effect
+   * below — so navigating elsewhere inside an already-open inspector never
+   * re-triggers it. */
+  autoEditNodeId: number | null
+  onAutoEditConsumed: () => void
   onSelectNode: (id: number) => void
   onPlay: (nodeId: number, title: string) => void
 }
 
-export function NodeDetailPages({ node, reload, isPlaying, onSelectNode, onPlay }: NodeDetailPagesProps) {
+export function NodeDetailPages({
+  node,
+  reload,
+  isPlaying,
+  autoEditNodeId,
+  onAutoEditConsumed,
+  onSelectNode,
+  onPlay,
+}: NodeDetailPagesProps) {
   const editingState = useMetadataEditing(node, reload)
   const [page, setPage] = useState(0)
   const swipeStartX = useRef<number | null>(null)
@@ -55,6 +70,16 @@ export function NodeDetailPages({ node, reload, isPlaying, onSelectNode, onPlay 
   useEffect(() => {
     setPage(0)
   }, [node.id])
+
+  useEffect(() => {
+    if (autoEditNodeId !== node.id) return
+    editingState.startEditing()
+    onAutoEditConsumed()
+    // editingState/onAutoEditConsumed intentionally excluded: this must run
+    // only when the target node id changes, not on every render of a
+    // closure that's recreated each time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoEditNodeId, node.id])
 
   const pages: Array<'metadata' | 'lyrics' | 'article'> = [
     'metadata' as const,

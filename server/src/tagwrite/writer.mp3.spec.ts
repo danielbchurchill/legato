@@ -77,13 +77,14 @@ describe("applyTagWrite (MP3)", () => {
 });
 
 describe("widened field vocabulary (MP3)", () => {
-  it("round-trips discNo/genre/bpm/label/releaseType — each field readable back by name", async () => {
+  it("round-trips discNo/genre/bpm/label/releaseType/releaseDate — each field readable back by name", async () => {
     await applyTagWrite(filePath, {
       discNo: 2,
       genre: ["Rock", "Psychedelic Rock"],
       bpm: 82,
       label: "Apple Records",
       releaseType: "album",
+      releaseDate: "1969-09-26",
     });
 
     expect(
@@ -93,6 +94,7 @@ describe("widened field vocabulary (MP3)", () => {
         bpm: 82,
         label: "Apple Records",
         releaseType: "album",
+        releaseDate: "1969-09-26",
       }),
     ).toEqual([]);
   });
@@ -114,6 +116,17 @@ describe("widened field vocabulary (MP3)", () => {
     expect(common.bpm).toBe(120);
     expect(common.label).toEqual(["Apple Records"]);
     expect(common.releasetype).toEqual(["album"]);
+  });
+
+  // TDOR ("original release time") is what ID3v24TagMapper maps to
+  // originaldate — the field scan/tags.ts checks first — as opposed to
+  // TDRC (recording time, mapped to plain 'date') which ffmpeg's fixture
+  // already populates above.
+  it("writes releaseDate to the TDOR frame music-metadata reads back as originaldate", async () => {
+    await applyTagWrite(filePath, { releaseDate: "1969-09-26" });
+
+    const { common } = await parseFile(filePath, { duration: true });
+    expect(common.originaldate).toBe("1969-09-26");
   });
 });
 
