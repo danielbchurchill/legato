@@ -126,6 +126,16 @@ function flyToDurationForDistance(distancePx: number): number {
   return FLY_TO_DURATION_MIN_MS + (FLY_TO_DURATION_MAX_MS - FLY_TO_DURATION_MIN_MS) * Math.sqrt(t)
 }
 
+/* #56: duration for the one-time settle refit (`end.initialFit` below). A
+ * plain constant rather than flyTo's distance-scaled range — this always
+ * reframes the whole graph by roughly the same relative amount (seed spread
+ * to settled equilibrium), not a variable hop to one node, so there's no
+ * distance to scale against. Above DESIGN.md's headline 120-200ms: it's
+ * animating every node's screen position at once (see animateBBox), not one
+ * element moving, and needs a beat longer to read as a deliberate reframe
+ * rather than a fast blur. */
+const SETTLE_REFIT_DURATION_MS = 320
+
 /* Hover dwell + dim crossfade (MO-6). Engaging the dim only after a short
  * dwell keeps a cursor merely passing over a dense cluster from strobing
  * enterNode/leaveNode dozens of times; crossfading it in and out keeps
@@ -176,6 +186,44 @@ function animateScalar(
     } else {
       onDone?.()
     }
+  })
+  return () => cancelAnimationFrame(raf)
+}
+
+/* #56: the settle-time camera refit (see `end.initialFit` below) used to call
+ * setCustomBBox once, straight to the settled bbox. Every node's on-screen
+ * position is a function of the *current* bbox — Sigma renormalizes every
+ * node's coordinate against it on the next process(), not just the camera —
+ * so a single hard swap moved every node on screen in the same frame. That
+ * read as the whole graph jittering, not as a camera move. Interpolating the
+ * bbox itself, frame by frame, keeps the same renormalization but spreads it
+ * across a short ease instead of one jump, matching how flyTo above already
+ * treats a programmatic reframe (DESIGN.md's Motion section: "camera moves to
+ * a searched node" are eased, unlike direct-manipulation pan/zoom/drag). */
+function animateBBox(
+  renderer: Sigma,
+  from: { x: [number, number]; y: [number, number] },
+  to: { x: [number, number]; y: [number, number] },
+  durationMs: number,
+  reducedMotion: boolean,
+): () => void {
+  if (reducedMotion) {
+    renderer.setCustomBBox(to)
+    renderer.refresh()
+    return () => {}
+  }
+  const start = performance.now()
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t
+  let raf = requestAnimationFrame(function step(now) {
+    const t = Math.min(1, (now - start) / durationMs)
+    // Same --ease-out approximation as animateScalar above.
+    const eased = 1 - (1 - t) ** 3
+    renderer.setCustomBBox({
+      x: [lerp(from.x[0], to.x[0], eased), lerp(from.x[1], to.x[1], eased)],
+      y: [lerp(from.y[0], to.y[0], eased), lerp(from.y[1], to.y[1], eased)],
+    })
+    renderer.refresh()
+    if (t < 1) raf = requestAnimationFrame(step)
   })
   return () => cancelAnimationFrame(raf)
 }
@@ -879,12 +927,30 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // immediately on creation, before any node has arrived. Never fires
     // again after that: a later reheat (a drag, a slider, a resync) must
     // not yank the camera out from under whatever the user is looking at.
+    //
+    // #56: this used to call setCustomBBox directly, snapping straight from
+    // the seed-spread framing to the settled one in a single frame — since
+    // every node's screen position is renormalized against the bbox, not
+    // just the camera, that snap read as the whole graph jittering rather
+    // than as a deliberate camera move. animateBBox eases the same
+    // renormalization across SETTLE_REFIT_DURATION_MS instead, so the end
+    // framing is identical but arrives as one smooth reframe.
     let hasFitAfterSettle = false
+    let cancelSettleFitAnim: (() => void) | null = null
     sim.simulation.on('end.initialFit', () => {
       if (hasFitAfterSettle || graph.order === 0) return
       hasFitAfterSettle = true
       const bbox = robustBBox(graph)
-      if (bbox) renderer.setCustomBBox(insetForShell(renderer, bbox))
+      if (!bbox) return
+      const target = insetForShell(renderer, bbox)
+      const from = renderer.getCustomBBox() ?? renderer.getBBox()
+      cancelSettleFitAnim = animateBBox(
+        renderer,
+        from,
+        target,
+        SETTLE_REFIT_DURATION_MS,
+        osPrefersReducedMotion() || reducedMotionForcedRef.current,
+      )
     })
 
     // Hover/neighbor highlighting — dims everything not connected to the
@@ -1313,6 +1379,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     return () => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
       cancelDimAnim?.()
+      cancelSettleFitAnim?.()
       sim.simulation.stop()
       simulationRef.current = null
       renderer.kill()
