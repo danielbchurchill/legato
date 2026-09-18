@@ -1,20 +1,71 @@
 import { useEffect, useState } from 'react'
 import { DataRow, SectionHeader } from '../ui/DataRow'
+import { Popover } from '../ui/Popover'
 import { useWsEvent } from '../hooks/useWs'
-import { formatBytes } from './format'
+import { formatBytes, formatDurationHours } from './format'
 import { SERVER_HOST } from '../config/serverHost'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
-/* The Database Inspector — the operational/engineering counterpart to
- * CollectionPanel.tsx's OverviewBlock. That block answers "what's in my
- * collection" from /stats (a curatorial view); this answers "is the
- * pipeline healthy and what does the raw schema actually hold" from
+/* The Database Inspector. OverviewBlock (issue #83: moved here from
+ * CollectionPanel.tsx, now this panel's top element) answers "what's in my
+ * collection" from /stats — a curatorial view; everything below it answers
+ * "is the pipeline healthy and what does the raw schema actually hold" from
  * /db-inspector — the numbers Daniel currently has to open `sqlite3` by
  * hand to see. Mounted by App.tsx into InspectorPanel's 'database' rail
  * destination. Every value renders in mono ink via DataRow — this is all
  * data about the library, not control chrome, so DESIGN.md's "one rule"
  * applies with no Rubik-control exception. */
+
+type Stats = {
+  artists: number
+  albums: number
+  tracks: number
+  totalBytes: number
+  totalDurationMs: number
+  topArtist: { id: number; title: string } | null
+  topAlbum: { id: number; title: string } | null
+  topTrack: { id: number; title: string } | null
+}
+
+function OverviewBlock() {
+  const [stats, setStats] = useState<Stats | null>(null)
+
+  useEffect(() => {
+    fetch(`${API}/stats`)
+      .then((r) => r.json())
+      .then(setStats)
+      .catch(() => setStats(null))
+  }, [])
+
+  // Absent rather than stubbed while loading or on failure — a row of
+  // dashes reads as broken, not as "still loading."
+  if (!stats) return null
+
+  return (
+    <>
+      <SectionHeader
+        title="overview"
+        action={
+          <Popover label="About these stats">
+            Top artist/album/track are based on real play history — 50% of a track&rsquo;s duration or 4 minutes
+            listened, whichever comes first.
+          </Popover>
+        }
+      />
+      <div className="mt-[8px]">
+        <DataRow label="artists" value={stats.artists.toLocaleString()} />
+        <DataRow label="albums" value={stats.albums.toLocaleString()} />
+        <DataRow label="tracks" value={stats.tracks.toLocaleString()} />
+        <DataRow label="size" value={formatBytes(stats.totalBytes)} />
+        <DataRow label="duration" value={formatDurationHours(stats.totalDurationMs)} />
+        {stats.topArtist && <DataRow label="top artist" value={stats.topArtist.title} />}
+        {stats.topAlbum && <DataRow label="top album" value={stats.topAlbum.title} />}
+        {stats.topTrack && <DataRow label="top track" value={stats.topTrack.title} />}
+      </div>
+    </>
+  )
+}
 
 type LatestScan = {
   id: number
@@ -145,14 +196,19 @@ export function DatabaseInspector() {
   // dedicated event.
   useWsEvent(['scan:done', 'scan:file', 'hygiene:changed', 'tag-write:written'], load)
 
-  if (snapshot === null) return <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">loading…</p>
-
   return (
     <div className="flex flex-col">
-      <PipelineSection pipeline={snapshot.pipeline} />
-      <MatchQualitySection matchQuality={snapshot.matchQuality} />
-      <SchemaSection schema={snapshot.schema} />
-      <StorageSection storage={snapshot.storage} />
+      <OverviewBlock />
+      {snapshot === null ? (
+        <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">loading…</p>
+      ) : (
+        <>
+          <PipelineSection pipeline={snapshot.pipeline} />
+          <MatchQualitySection matchQuality={snapshot.matchQuality} />
+          <SchemaSection schema={snapshot.schema} />
+          <StorageSection storage={snapshot.storage} />
+        </>
+      )}
     </div>
   )
 }

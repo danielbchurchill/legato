@@ -378,11 +378,6 @@ function MainApp() {
   if (hasLibrary === null) return <Centered>loading library…</Centered>
   if (!hasLibrary) return <LibrarySetup onLibraryReady={() => setHasLibrary(true)} />
 
-  // The similarity strips' and maintenance preview's anchor: whatever is
-  // selected takes precedence (the more recent intent), falling back to
-  // whatever is playing when nothing is selected.
-  const anchorNodeId = selectedNodeId ?? playback.status.currentRecordingNodeId ?? null
-
   // #87: no more render-time override here — rightPanelExpanded (nudged by
   // the hasQueuedContent effect above, otherwise set only by the user's own
   // collapse/expand clicks) is the whole answer now. It used to be
@@ -452,7 +447,6 @@ function MainApp() {
         >
           <CollectionPanel
             ref={collectionPanelRef}
-            anchorNodeId={anchorNodeId}
             onSelectNode={selectAndFly}
             onOpenMaintenance={() => setHygieneOpen(true)}
             playback={playback}

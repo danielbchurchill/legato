@@ -1,12 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Icon } from '../ui/Icon'
-import { CoverArt } from '../ui/CoverArt'
-import { DataRow, SectionHeader } from '../ui/DataRow'
+import { SectionHeader } from '../ui/DataRow'
 import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
-import { Popover } from '../ui/Popover'
 import { useWsEvent } from '../hooks/useWs'
-import { formatBytes, formatDurationHours } from './format'
 import { SERVER_HOST } from '../config/serverHost'
 import { PlayNodeButton } from './PlayNodeButton'
 import { AddToPlaylistButton } from './AddToPlaylistButton'
@@ -14,20 +11,15 @@ import type { usePlayback } from '../playback/usePlayback'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
-/* The left-hand panel: search, the real collection overview, similarity
- * strips anchored on whatever is selected (or playing), and a condensed
- * maintenance worklist. */
+/* The search rail destination's panel content: the search field, with its
+ * results rendered inline underneath it, and a condensed maintenance
+ * worklist. Issue #83 retired what this panel used to also carry — the
+ * collection overview moved to Database Inspector as its own top element,
+ * and the similarity strips anchored on the current selection are gone
+ * outright, kept only as a note that they may be rebuilt elsewhere later. */
 
 type SearchResult = { id: number; type: string; title: string }
 
-// P-9 + MO-12: results used to render inline, so typing pushed overview,
-// similarity and maintenance down the panel and clearing the query snapped
-// them back. Now a floating popover — it never displaces the panel's own
-// layout — with real keyboard navigation and a container that animates in
-// once per search session (first two-character query to the query being
-// cleared), not once per keystroke. The list *contents* inside it never
-// animate: they're replaced wholesale on every debounced fetch, and a
-// transition there would just smear.
 export type SearchFieldHandle = {
   /** Backs the app-wide "/" shortcut — focusing the field is enough to let
    * the user start typing immediately. */
@@ -36,6 +28,17 @@ export type SearchFieldHandle = {
 
 type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum'>
 
+// Issue #83: results render inline again, directly under the field, rather
+// than in the floating popover P-9/MO-12 introduced — that popover read as
+// its own separate "mini modal" hovering over the Inspector Panel instead
+// of content living in it, which is exactly the complaint the issue raised.
+// The popover's real improvements — debounce, keyboard nav, ARIA wiring,
+// the in-flight search icon — all carry over unchanged; only the
+// positioning goes back to participating in the panel's own layout. See
+// DESIGN.md's "The Search frame's Inspector Panel has one more
+// unreconciled piece" for why this still isn't split into the v2 mockup's
+// separate `top hits`/`suggested tracks` headers — Figma draws no rows
+// under either to build against.
 const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) => void; playback: Playback }>(
   function SearchField({ onSelectNode, playback }, ref) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -53,7 +56,7 @@ const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) =
   const trimmed = query.trim()
   const open = trimmed.length >= 2
 
-  // Mount once when the popover should first appear, unmount when the
+  // Mount once when the results should first appear, unmount when the
   // query drops back below two characters — not on every result update
   // while it's already open, which is what makes this a once-per-session
   // entrance rather than a per-keystroke one.
@@ -126,7 +129,7 @@ const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) =
   }
 
   return (
-    <div className="relative mb-[20px]">
+    <div className="mb-[20px]">
       {/* v2: the field moves off --radius-surface onto --radius-control, the
        * bordered-well radius the v2 mockup actually specifies here. Still
        * inset, not raised: the field's fill is the canvas color and it
@@ -153,16 +156,16 @@ const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) =
         />
       </div>
 
-      {/* Floats over the panel rather than participating in its layout —
-       * the overview/similarity/maintenance below never move. Mounts once
-       * per search session at opacity 0 and a 2px offset, then flips to
-       * settled on the next frame — same technique as Tooltip.tsx —
-       * reusing --motion-fast (140ms) rather than inventing a token for
-       * one specific number: this is the same class of small state change
-       * DESIGN.md already reserves that token for. */}
+      {/* Participates in the panel's own layout now, not floated over it —
+       * mounts once per search session at opacity 0 and a 2px offset, then
+       * flips to settled on the next frame — same technique as
+       * Tooltip.tsx — reusing --motion-fast (140ms) rather than inventing a
+       * token for one specific number. The list *contents* never animate:
+       * they're replaced wholesale on every debounced fetch, and a
+       * transition there would just smear. */}
       {mounted && (
         <div
-          className="absolute top-full left-0 z-20 mt-[8px] w-full rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] p-[12px] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--ease-out)] motion-reduce:transition-none"
+          className="mt-[12px] transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--ease-out)] motion-reduce:transition-none"
           style={{ opacity: shown ? 1 : 0, transform: shown ? 'translateY(0)' : 'translateY(-2px)' }}
         >
           {searched && results.length === 0 && (
@@ -200,148 +203,21 @@ const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) =
   )
 })
 
-type Stats = {
-  artists: number
-  albums: number
-  tracks: number
-  totalBytes: number
-  totalDurationMs: number
-  topArtist: { id: number; title: string } | null
-  topAlbum: { id: number; title: string } | null
-  topTrack: { id: number; title: string } | null
-}
-
-function OverviewBlock() {
-  const [stats, setStats] = useState<Stats | null>(null)
-
-  useEffect(() => {
-    fetch(`${API}/stats`)
-      .then((r) => r.json())
-      .then(setStats)
-      .catch(() => setStats(null))
-  }, [])
-
-  // Absent rather than stubbed while loading or on failure — a row of
-  // dashes reads as broken, not as "still loading."
-  if (!stats) return null
-
-  return (
-    <>
-      <SectionHeader
-        title="overview"
-        action={
-          <Popover label="About these stats">
-            Top artist/album/track are based on real play history — 50% of a track&rsquo;s duration or 4 minutes
-            listened, whichever comes first.
-          </Popover>
-        }
-      />
-      <div className="mt-[8px]">
-        <DataRow label="artists" value={stats.artists.toLocaleString()} />
-        <DataRow label="albums" value={stats.albums.toLocaleString()} />
-        <DataRow label="tracks" value={stats.tracks.toLocaleString()} />
-        <DataRow label="size" value={formatBytes(stats.totalBytes)} />
-        <DataRow label="duration" value={formatDurationHours(stats.totalDurationMs)} />
-        {stats.topArtist && <DataRow label="top artist" value={stats.topArtist.title} />}
-        {stats.topAlbum && <DataRow label="top album" value={stats.topAlbum.title} />}
-        {stats.topTrack && <DataRow label="top track" value={stats.topTrack.title} />}
-      </div>
-    </>
-  )
-}
-
-type SimilarityItem = { id: number; title: string; has_cover: boolean }
-
-function SimilarityStrip({
-  title,
-  items,
-  onSelectNode,
-}: {
-  title: string
-  items: SimilarityItem[]
-  onSelectNode: (id: number) => void
-}) {
-  // Absent rather than a strip of grey squares — nothing to show is a
-  // normal state (the anchor isn't a recording, or the library is too
-  // small/uniform to have a real contrast), not a broken feature.
-  if (items.length === 0) return null
-
-  return (
-    <>
-      <SectionHeader title={title} />
-      <div className="mt-[8px] grid grid-cols-3 gap-[15px]">
-        {items.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => onSelectNode(item.id)}
-            className="aspect-square w-full"
-          >
-            {/* 'thumb' is 256px, comfortably over the 75px slot's 150 device
-                pixels on a 2x display — 'full' would be four times the bytes
-                for a quarter of the grid. */}
-            <CoverArt nodeId={item.id} size="thumb" alt={item.title} className="h-full w-full" />
-          </button>
-        ))}
-      </div>
-    </>
-  )
-}
-
-function SimilaritySection({ anchorNodeId, onSelectNode }: { anchorNodeId: number | null; onSelectNode: (id: number) => void }) {
-  const [similar, setSimilar] = useState<SimilarityItem[]>([])
-  const [dissimilar, setDissimilar] = useState<SimilarityItem[]>([])
-
-  useEffect(() => {
-    if (anchorNodeId == null) {
-      setSimilar([])
-      setDissimilar([])
-      return
-    }
-    // Aborted, not just ignored, on the next anchor change: a boolean guard
-    // alone stops a stale response from overwriting the grid, but leaves the
-    // request itself running in the background, still holding a connection
-    // slot on the same origin the cover art requests compete for. Rapidly
-    // clicking through anchors piled these up and starved/delayed the real
-    // image loads, which read as artwork flashing/failing to load even
-    // after the stale-overwrite case itself was fixed.
-    const controller = new AbortController()
-    // A 4xx/5xx still resolves with a JSON body (Fastify's own error shape,
-    // `{statusCode, error, message}` — not an array), and .json() parses it
-    // without complaint either way. Without the r.ok check and the isArray
-    // guard, a failed request handed SimilarityStrip that object directly;
-    // items.length was undefined (not 0), so it fell through to
-    // items.map — a real crash, confirmed live against a 500 from
-    // /nodes/:id/similar, and with no error boundary anywhere above this it
-    // took the whole app down to a blank screen over one optional strip.
-    fetch(`${API}/nodes/${anchorNodeId}/similar`, { signal: controller.signal })
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => setSimilar(Array.isArray(data) ? data : []))
-      .catch((err) => err.name !== 'AbortError' && setSimilar([]))
-    fetch(`${API}/nodes/${anchorNodeId}/dissimilar`, { signal: controller.signal })
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => setDissimilar(Array.isArray(data) ? data : []))
-      .catch((err) => err.name !== 'AbortError' && setDissimilar([]))
-    return () => controller.abort()
-  }, [anchorNodeId])
-
-  return (
-    <>
-      <SimilarityStrip title="more like this" items={similar} onSelectNode={onSelectNode} />
-      <SimilarityStrip title="completely different" items={dissimilar} onSelectNode={onSelectNode} />
-    </>
-  )
-}
-
 type WorklistItem =
   | { type: 'fuzzy_pending'; fileId: number; filePath: string; nodeId: number; nodeTitle: string; candidateNodeId: number; candidateTitle: string }
-  | { type: 'enrichment_flag'; nodeId: number; nodeTitle: string; note: string | null; updatedAt: string }
   | { type: 'missing_file'; fileId: number; filePath: string; nodeId: number; nodeTitle: string; missingSince: string }
   | { type: 'wont_decode'; fileId: number; filePath: string; nodeId: number; nodeTitle: string; error: string; updatedAt: string }
 
+// The server's worklist (server/src/hygiene.ts) also carries `enrichment_flag`
+// rows — issue #83: this preview no longer surfaces them, since an
+// enrichment issue now gets fixed in Tag Manager rather than from here.
+// Typed separately from WorklistItem so the filter below is a real
+// narrowing, not a cast, and a future worklist type still has to be added
+// to both before it can render.
+type ServerWorklistItem = WorklistItem | { type: 'enrichment_flag'; nodeId: number; nodeTitle: string; note: string | null; updatedAt: string }
+
 const TYPE_LABEL: Record<WorklistItem['type'], string> = {
   fuzzy_pending: 'possible duplicate',
-  enrichment_flag: 'enrichment issue',
   wont_decode: "won't decode",
   missing_file: 'missing file',
 }
@@ -358,7 +234,7 @@ function MaintenancePreview({
   const load = () => {
     fetch(`${API}/hygiene/worklist`)
       .then((r) => r.json())
-      .then(setItems)
+      .then((data: ServerWorklistItem[]) => setItems(data.filter((i): i is WorklistItem => i.type !== 'enrichment_flag')))
       .catch(() => setItems([]))
   }
 
@@ -416,7 +292,6 @@ function MaintenancePreview({
 }
 
 type CollectionPanelProps = {
-  anchorNodeId: number | null
   onSelectNode: (id: number) => void
   onOpenMaintenance: () => void
   playback: Playback
@@ -428,7 +303,7 @@ export type CollectionPanelHandle = {
 }
 
 export const CollectionPanel = forwardRef<CollectionPanelHandle, CollectionPanelProps>(function CollectionPanel(
-  { anchorNodeId, onSelectNode, onOpenMaintenance, playback },
+  { onSelectNode, onOpenMaintenance, playback },
   ref,
 ) {
   const searchRef = useRef<SearchFieldHandle>(null)
@@ -444,8 +319,6 @@ export const CollectionPanel = forwardRef<CollectionPanelHandle, CollectionPanel
        * "Legato Settings" destination now, so this panel needs no entry
        * point of its own. */}
       <SearchField ref={searchRef} onSelectNode={onSelectNode} playback={playback} />
-      <SimilaritySection anchorNodeId={anchorNodeId} onSelectNode={onSelectNode} />
-      <OverviewBlock />
       <MaintenancePreview onSelectNode={onSelectNode} onOpenMaintenance={onOpenMaintenance} />
     </div>
   )
