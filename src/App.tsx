@@ -209,7 +209,12 @@ function MainApp() {
   // shared a single collapse state in the mockup to begin with, only a
   // shared *concept* of one. Both default open, matching today's baseline.
   const [activeRailDestination, setActiveRailDestination] = useState<RailDestination | null>('search')
-  const [rightPanelExpanded, setRightPanelExpanded] = useState(true)
+  // Starts false, not true: usePlayback's own status always starts at
+  // currentRecordingNodeId: null (nothing resumes synchronously on mount),
+  // so the hasQueuedContent effect below would immediately correct a `true`
+  // default back to false anyway — starting here avoids a one-frame flash
+  // of the idle "nothing playing" panel on every launch.
+  const [rightPanelExpanded, setRightPanelExpanded] = useState(false)
   // The left header's collapsed-state expand icon (Figma's later "Panel
   // Collapse" revision, node 66:85 — see DESIGN.md "Panel collapsed (v2)")
   // has no destination of its own to open, unlike a rail icon click. This
@@ -222,6 +227,22 @@ function MainApp() {
   const playback = usePlayback(replaygainMode)
   const canvasRef = useRef<CanvasHandle>(null)
   const collectionPanelRef = useRef<CollectionPanelHandle>(null)
+
+  // #87: the now-playing panel auto-expands the moment something starts
+  // playing and auto-collapses the moment playback goes idle again — but
+  // only as a one-shot nudge on that transition, not a standing override.
+  // Keyed on the has-content boolean rather than the raw node id so it
+  // fires once per transition instead of once per track change. Because
+  // this only *sets* rightPanelExpanded rather than masking it at render
+  // time (the old `rightPanelExpanded && currentRecordingNodeId != null`
+  // approach), an explicit collapse/expand click while the transition
+  // hasn't fired again — including expanding the panel by hand while
+  // nothing is queued, to reach NowPlayingPanel's "nothing playing"
+  // quick-play state — sticks until the next transition.
+  const hasQueuedContent = playback.status.currentRecordingNodeId != null
+  useEffect(() => {
+    setRightPanelExpanded(hasQueuedContent)
+  }, [hasQueuedContent])
 
   // #46 "rebuild map" (LegatoSettings' "canvas" group): the server clears
   // every node's manual placement and reseeds with fresh jitter, but
@@ -362,13 +383,18 @@ function MainApp() {
   // whatever is playing when nothing is selected.
   const anchorNodeId = selectedNodeId ?? playback.status.currentRecordingNodeId ?? null
 
-  // #57: the now-playing panel auto-collapses whenever nothing is queued,
-  // overriding whatever the header toggle last recorded — rightPanelExpanded
-  // itself stays untouched so the user's preference is still there to
-  // restore once something starts playing again (playRandom from the
-  // collapsed idle state, or any other playNode call, flips this back to
-  // true on its own the moment currentRecordingNodeId is set).
-  const rightPanelDisplayExpanded = rightPanelExpanded && playback.status.currentRecordingNodeId != null
+  // #87: no more render-time override here — rightPanelExpanded (nudged by
+  // the hasQueuedContent effect above, otherwise set only by the user's own
+  // collapse/expand clicks) is the whole answer now. It used to be
+  // `rightPanelExpanded && currentRecordingNodeId != null`, which forced the
+  // panel collapsed any time playback was idle regardless of what the user
+  // had just clicked — the mechanism NowPlayingCollapsed's quick-play
+  // suggestion leaned on to stay reachable, at the cost of that same
+  // suggestion floating over the canvas unasked for any time playback was
+  // idle. NowPlayingPanel now renders its own "nothing playing" + quick-play
+  // state when explicitly expanded with nothing queued, so there's nothing
+  // left for a render-time override to protect against.
+  const rightPanelDisplayExpanded = rightPanelExpanded
 
   return (
     <AppShell>
@@ -452,7 +478,6 @@ function MainApp() {
         expanded={rightPanelDisplayExpanded}
         collapsedNodeId={playback.status.currentRecordingNodeId ?? null}
         onExpand={() => setRightPanelExpanded(true)}
-        onQuickPlay={() => void playback.playRandom()}
       >
         <NowPlayingPanel
           nodeId={playback.status.currentRecordingNodeId ?? null}
@@ -462,6 +487,7 @@ function MainApp() {
           onSelectNode={selectAndFly}
           onPlay={playback.playNode}
           queuePlayback={playback}
+          onQuickPlay={() => void playback.playRandom()}
         />
       </RightPanel>
 

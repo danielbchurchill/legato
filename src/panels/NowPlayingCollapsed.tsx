@@ -1,7 +1,5 @@
 import { CoverArt } from '../ui/CoverArt'
-import { Icon } from '../ui/Icon'
 import { ScrollingText } from '../ui/ScrollingText'
-import { Tooltip } from '../ui/Tooltip'
 import { useNodeDetail } from './useNodeDetail'
 
 /* v2's collapsed right panel content — DESIGN.md "Panel collapsed (v2)":
@@ -11,39 +9,19 @@ import { useNodeDetail } from './useNodeDetail'
  * targets the expanded panel's rhythm (2px line gap, no fixed pitch), and
  * this state calls out its own 24px number explicitly.
  *
- * #57: nodeId == null now means two different things, not one. RightPanel
- * only ever passes null here for the auto-collapsed *idle* case (nothing
- * queued at all) — a node that's merely still loading never reaches this
- * component in the first place, since RightPanel's collapsed branch is
- * driven off playback.status.currentRecordingNodeId, not a fetch. onQuickPlay
- * is only present for that idle case (RightPanel omits it once something's
- * actually playing), which is what selects the empty-state branch below
- * rather than a loading spinner. */
+ * #87: this component only ever renders the "something's queued" case now.
+ * RightPanel stopped mounting it at all for the idle (nothing queued) case —
+ * the collapsed column shows nothing rather than narrating its own emptiness
+ * or offering a quick-play affordance, since that affordance now lives in
+ * the panel's expanded idle state instead (NowPlayingPanel.tsx), reachable
+ * by explicitly expanding. A `nodeId` that's merely still loading (fetch in
+ * flight) falls through to `!node` below and also renders nothing, same as
+ * before. */
 
-export function NowPlayingCollapsed({ nodeId, onQuickPlay }: { nodeId: number | null; onQuickPlay?: () => void }) {
+export function NowPlayingCollapsed({ nodeId }: { nodeId: number | null }) {
   const { node } = useNodeDetail(nodeId)
 
-  if (nodeId == null || !node) {
-    if (!onQuickPlay) return null
-
-    return (
-      <div className="flex flex-col items-center gap-[12px] pt-[24px] text-center">
-        <p className="font-[family-name:var(--font-ui)] text-[length:var(--text-base)] text-[var(--color-muted)]">
-          nothing playing
-        </p>
-        <Tooltip label="Play something random">
-          <button
-            type="button"
-            onClick={onQuickPlay}
-            aria-label="Play a random track from your library"
-            className="grid size-[48px] place-items-center rounded-full text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80"
-          >
-            <Icon name="play" size={24} />
-          </button>
-        </Tooltip>
-      </div>
-    )
-  }
+  if (nodeId == null || !node) return null
 
   const artist = node.edges.find((e) => e.direction === 'out' && e.type === 'performed_by')
   const album = node.edges.find((e) => e.direction === 'out' && e.type === 'appears_on')

@@ -49,6 +49,8 @@ type NowPlayingPanelProps = {
   onSelectNode: (id: number) => void
   onPlay: (nodeId: number, title: string) => void
   queuePlayback: QueuePlayback
+  // Only reachable once nothing is queued — see the idle branch below.
+  onQuickPlay: () => void
 }
 
 /* usePlayback.ts's removeFromQueue/reorderQueue both take an index into the
@@ -83,18 +85,46 @@ function useQueuePosition(nodeId: number | null, upNext: QueueEntry[]): number {
   return positionRef.current
 }
 
-export function NowPlayingPanel({ nodeId, isPlaying, upNext, queueBusy, onSelectNode, onPlay, queuePlayback }: NowPlayingPanelProps) {
+export function NowPlayingPanel({
+  nodeId,
+  isPlaying,
+  upNext,
+  queueBusy,
+  onSelectNode,
+  onPlay,
+  queuePlayback,
+  onQuickPlay,
+}: NowPlayingPanelProps) {
   const { node, reload } = useNodeDetail(nodeId)
   const queuePosition = useQueuePosition(nodeId, upNext)
 
-  // #57: RightPanel now only ever mounts this panel once something is
-  // actually loaded (App.tsx's rightPanelDisplayExpanded forces the panel
-  // collapsed otherwise, showing NowPlayingCollapsed's own idle state
-  // instead) — nodeId == null shouldn't happen here anymore, but this stays
-  // as a defensive fallback rather than assuming the caller never changes.
+  // #87: nodeId == null is a real, reachable case now — App.tsx no longer
+  // forces the panel collapsed whenever nothing is queued, so a user who
+  // explicitly expands the idle panel lands here. This is the one place the
+  // "nothing playing" empty state (and its quick-play way back in) lives;
+  // NowPlayingCollapsed's matching branch was removed in the same change so
+  // that suggestion doesn't also float over the canvas while collapsed.
+  if (nodeId == null) {
+    return (
+      <div className="flex flex-col items-center gap-[12px] pt-[40px] text-center">
+        <p className="font-[family-name:var(--font-ui)] text-[length:var(--text-base)] text-[var(--color-muted)]">
+          nothing playing
+        </p>
+        <Tooltip label="Play something random">
+          <button
+            type="button"
+            onClick={onQuickPlay}
+            aria-label="Play a random track from your library"
+            className="grid size-[48px] place-items-center rounded-full text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80"
+          >
+            <Icon name="play" size={24} />
+          </button>
+        </Tooltip>
+      </div>
+    )
+  }
   // !node with a real nodeId is a genuine, reachable case: the detail fetch
   // just hasn't resolved yet for whatever's now playing.
-  if (nodeId == null) return null
   if (!node) {
     return <p className="pt-[40px] text-center text-[length:var(--text-base)] text-[var(--color-muted)]">loading…</p>
   }

@@ -17,14 +17,14 @@ import { NowPlayingCollapsed } from '../panels/NowPlayingCollapsed'
  * (click the cover/track block to bring the panel back) is this file's own
  * addition to close that gap, not a measured value.
  *
- * #57: `expanded` is no longer purely a manual toggle — App.tsx forces it
- * false whenever nothing is loaded (collapsedNodeId null), auto-collapsing
- * the panel instead of leaving it open on NowPlayingPanel's old "nothing
- * playing" text. That idle case gets its own branch below rather than
- * reusing the click-to-expand button: there's nothing queued to expand
- * into, so the collapsed content's own quick-play button (NowPlayingCollapsed)
- * is the only affordance, and it can't sit inside another <button> (invalid
- * HTML — the outer element would swallow its clicks). */
+ * #87: the idle (collapsedNodeId null) branch renders nothing at all now,
+ * rather than NowPlayingCollapsed's old "nothing playing" text plus a
+ * quick-play button floating over the canvas — that affordance was showing
+ * up unasked for any time playback was idle, whether or not the user had
+ * ever looked at the panel. RightPanelHeader's expand control is still live
+ * in this state (App.tsx no longer forces `expanded` false while idle), so
+ * the user can reach the same "nothing playing" + quick-play content on
+ * their own terms, in NowPlayingPanel's expanded idle state instead. */
 
 const COLLAPSED_GEOMETRY =
   // grid, not the no-display-utility default: a native <button>'s content is
@@ -48,19 +48,12 @@ type RightPanelProps = {
   expanded: boolean
   collapsedNodeId: number | null
   onExpand: () => void
-  onQuickPlay: () => void
   children: ReactNode
 }
 
-export function RightPanel({ expanded, collapsedNodeId, onExpand, onQuickPlay, children }: RightPanelProps) {
+export function RightPanel({ expanded, collapsedNodeId, onExpand, children }: RightPanelProps) {
   if (!expanded) {
-    if (collapsedNodeId == null) {
-      return (
-        <div className={COLLAPSED_GEOMETRY}>
-          <NowPlayingCollapsed nodeId={null} onQuickPlay={onQuickPlay} />
-        </div>
-      )
-    }
+    if (collapsedNodeId == null) return null
 
     return (
       <button type="button" onClick={onExpand} aria-label="Expand now playing" className={COLLAPSED_GEOMETRY}>
