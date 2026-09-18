@@ -1,13 +1,141 @@
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::BufReader;
-use std::sync::{Arc, Mutex};
+use std::io::{self, Read, Seek, SeekFrom};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
+
+// A larger BufReader alone isn't enough for a network-mounted library
+// (confirmed live against an NFS mount over Tailscale): it only changes
+// how much data one read() call asks for, and that call still happens
+// synchronously on symphonia's decode path, in step with real-time
+// playback. One slow NFS round trip — a retransmit, a server-side GETATTR
+// revalidation, anything that stalls a couple hundred ms — still starves
+// cpal's output callback and is audible as a pop, no matter how big the
+// buffer is, because nothing is fetching ahead of where decode is.
+//
+// This instead reads the file continuously on its own background thread,
+// as fast as the network/disk allows, into a growing in-memory buffer.
+// Decode only ever blocks on that buffer (a Mutex + Condvar, not the
+// network), and because the background thread has no obligation to keep
+// pace with real-time playback — only to run flat out — it's almost
+// always already well ahead of whatever byte decode actually needs next,
+// absorbing exactly the kind of transient stall that a bigger BufReader
+// couldn't.
+struct NetworkAheadReader {
+  shared: Arc<Shared>,
+  pos: u64,
+}
+
+struct Shared {
+  state: Mutex<PrefetchState>,
+  ready: Condvar,
+  len: u64,
+}
+
+struct PrefetchState {
+  buf: Vec<u8>,
+  // None while the background thread is still reading. Some(Ok(())) once
+  // it's reached EOF. Some(Err(_)) if the underlying read failed partway
+  // through (the mount vanishing mid-track, say) — surfaced to the decode
+  // thread as a real io::Error instead of a silent truncation that would
+  // otherwise look like "the track just ended early."
+  done: Option<io::Result<()>>,
+}
+
+impl NetworkAheadReader {
+  fn new(mut file: File) -> io::Result<Self> {
+    let len = file.metadata()?.len();
+    // Capped, not because files here ever approach it, but so a
+    // surprising metadata length can't turn into an oversized upfront
+    // allocation before a single byte has actually been read.
+    let initial_capacity = len.min(64 << 20) as usize;
+    let shared = Arc::new(Shared {
+      state: Mutex::new(PrefetchState { buf: Vec::with_capacity(initial_capacity), done: None }),
+      ready: Condvar::new(),
+      len,
+    });
+
+    let background = shared.clone();
+    std::thread::spawn(move || {
+      let mut chunk = vec![0u8; 256 * 1024];
+      loop {
+        match file.read(&mut chunk) {
+          Ok(0) => {
+            let mut state = background.state.lock().unwrap();
+            state.done = Some(Ok(()));
+            background.ready.notify_all();
+            break;
+          }
+          Ok(n) => {
+            let mut state = background.state.lock().unwrap();
+            state.buf.extend_from_slice(&chunk[..n]);
+            background.ready.notify_all();
+          }
+          Err(e) => {
+            let mut state = background.state.lock().unwrap();
+            state.done = Some(Err(e));
+            background.ready.notify_all();
+            break;
+          }
+        }
+      }
+    });
+
+    Ok(NetworkAheadReader { shared, pos: 0 })
+  }
+}
+
+impl Read for NetworkAheadReader {
+  fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+    let mut state = self.shared.state.lock().unwrap();
+    loop {
+      let available = state.buf.len() as u64 - self.pos;
+      if available > 0 {
+        let n = available.min(out.len() as u64) as usize;
+        let start = self.pos as usize;
+        out[..n].copy_from_slice(&state.buf[start..start + n]);
+        self.pos += n as u64;
+        return Ok(n);
+      }
+      match &state.done {
+        Some(Ok(())) => return Ok(0),
+        Some(Err(e)) => return Err(io::Error::new(e.kind(), e.to_string())),
+        None => state = self.shared.ready.wait(state).unwrap(),
+      }
+    }
+  }
+}
+
+impl Seek for NetworkAheadReader {
+  fn seek(&mut self, seek: SeekFrom) -> io::Result<u64> {
+    let target = match seek {
+      SeekFrom::Start(n) => n,
+      SeekFrom::End(n) => (self.shared.len as i64 + n).max(0) as u64,
+      SeekFrom::Current(n) => (self.pos as i64 + n).max(0) as u64,
+    };
+
+    // A seek is really just a read that discards what it reads — it needs
+    // the same wait, since the target byte may not have arrived yet
+    // either. The whole file stays buffered once downloaded (nothing is
+    // ever evicted), so seeking backward is always immediate.
+    let mut state = self.shared.state.lock().unwrap();
+    while (state.buf.len() as u64) < target {
+      match &state.done {
+        Some(Ok(())) => break,
+        Some(Err(e)) => return Err(io::Error::new(e.kind(), e.to_string())),
+        None => state = self.shared.ready.wait(state).unwrap(),
+      }
+    }
+
+    self.pos = target;
+    Ok(target)
+  }
+}
 
 // Desktop playback engine — replaces the fixed-medley
 // play_native_gapless_spike command (kept alive, debug-gated, as a smoke
@@ -194,7 +322,12 @@ pub fn queue_enqueue(app: AppHandle, state: State<PlaybackState>, track: QueueTr
   let session = guard.as_mut().unwrap();
 
   let file = File::open(&track.file_path).map_err(|e| format!("failed to open {}: {e}", track.file_path))?;
-  let source = Decoder::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+  // See NetworkAheadReader above: confirmed live over an NFS-mounted
+  // library that a plain File/BufReader pops mid-track, even with a large
+  // buffer, because decode's reads are still synchronous with the
+  // network. This background-prefetches instead.
+  let reader = NetworkAheadReader::new(file).map_err(|e| e.to_string())?;
+  let source = Decoder::new(reader).map_err(|e| e.to_string())?;
   let gain = gain_db(&track);
 
   session.sink.append(source.amplify_decibel(gain));
@@ -319,7 +452,8 @@ mod tests {
     let sink = Sink::connect_new(stream.mixer());
 
     let file = File::open(&path).expect("open test file");
-    let source = Decoder::new(BufReader::new(file)).expect("decode test file");
+    let reader = NetworkAheadReader::new(file).expect("start prefetching test file");
+    let source = Decoder::new(reader).expect("decode test file");
     sink.append(source.amplify_decibel(-6.0)); // ReplayGain-style attenuation
 
     std::thread::sleep(Duration::from_millis(800));
