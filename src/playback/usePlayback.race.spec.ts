@@ -278,4 +278,118 @@ describe('usePlayback Tauri queue-operation serialization', () => {
 
     unmount()
   })
+
+  // #81 persisted past PR #94 because that PR only put pause/resume behind
+  // `serialized` — playTracks (what every "click a track/album to play it"
+  // button in the app actually calls, via playNode/playAlbum/playRandom/
+  // playPlaylist) ran its own queue_stop -> queue_enqueue... -> queue_play
+  // sequence completely unguarded. Two rapid clicks on a play button —
+  // ordinary double-click, or the reflex of clicking one track then
+  // immediately another — could interleave two such sequences exactly like
+  // the original bug.
+  it('runs a second playTracks() call strictly after the first completes, instead of interleaving their invoke sequences', async () => {
+    const { result, unmount } = renderPlaybackHook()
+    await act(async () => {
+      await delay(0)
+    })
+
+    invokeMock.mockClear()
+
+    let p1: Promise<void> = Promise.resolve()
+    let p2: Promise<void> = Promise.resolve()
+    act(() => {
+      p1 = result.current!.playTracks([10, 20], 0, 'Track 10')
+      p2 = result.current!.playTracks([30, 40], 0, 'Track 30')
+    })
+    await act(async () => {
+      await Promise.all([p1, p2])
+    })
+
+    expect(summarizeCalls(invokeMock.mock.calls)).toEqual([
+      { cmd: 'queue_stop' },
+      { cmd: 'queue_enqueue', recordingNodeId: 10 },
+      { cmd: 'queue_enqueue', recordingNodeId: 20 },
+      { cmd: 'queue_play' },
+      { cmd: 'queue_stop' },
+      { cmd: 'queue_enqueue', recordingNodeId: 30 },
+      { cmd: 'queue_enqueue', recordingNodeId: 40 },
+      { cmd: 'queue_play' },
+    ])
+    // The second click's queue is what's actually live — not a mix of both.
+    expect(result.current!.status.currentRecordingNodeId).toBe(30)
+
+    unmount()
+  })
+
+  it('runs a queued playTracks() strictly after an in-flight previous() rebuild, instead of interleaving a fresh queue into the middle of it', async () => {
+    const { result, unmount } = renderPlaybackHook()
+    await act(async () => {
+      await delay(0)
+    })
+
+    await act(async () => {
+      await result.current!.playTracks([10, 20, 30, 40], 3, 'Track 40')
+    })
+    expect(result.current!.status.currentRecordingNodeId).toBe(40)
+
+    invokeMock.mockClear()
+
+    // Same shape as a real "click a different track to play right as
+    // previous is still resolving": previous()'s rebuild is mid-flight when
+    // a play button for an unrelated track fires playTracks().
+    let p1: Promise<void> = Promise.resolve()
+    let p2: Promise<void> = Promise.resolve()
+    act(() => {
+      p1 = result.current!.previous()
+      p2 = result.current!.playTracks([20], 0, 'Track 20')
+    })
+    await act(async () => {
+      await Promise.all([p1, p2])
+    })
+
+    // previous()'s whole rebuild lands first, uninterrupted; playTracks()'s
+    // fresh single-track queue follows as its own complete sequence.
+    expect(summarizeCalls(invokeMock.mock.calls)).toEqual([
+      { cmd: 'queue_stop' },
+      { cmd: 'queue_enqueue', recordingNodeId: 30 },
+      { cmd: 'queue_enqueue', recordingNodeId: 40 },
+      { cmd: 'queue_play' },
+      { cmd: 'queue_stop' },
+      { cmd: 'queue_enqueue', recordingNodeId: 20 },
+      { cmd: 'queue_play' },
+    ])
+    expect(result.current!.status.currentRecordingNodeId).toBe(20)
+
+    unmount()
+  })
+
+  // playTracks is split into an unserialized playTracksCore plus a
+  // serialized wrapper specifically so addToQueue/playNext can call the
+  // core directly from their own "nothing queued yet" branch — calling the
+  // serialized playTracks from inside an already-running serialized
+  // callback would wait on a promise chain that can't resolve until that
+  // very callback returns. This guards the refactor: addToQueue on an
+  // empty queue must still resolve, not hang.
+  it('resolves addToQueue() called against an empty queue instead of deadlocking on its own serialized lock', async () => {
+    const { result, unmount } = renderPlaybackHook()
+    await act(async () => {
+      await delay(0)
+    })
+
+    invokeMock.mockClear()
+    expect(result.current!.status.currentRecordingNodeId).toBeNull()
+
+    await act(async () => {
+      await result.current!.addToQueue(10)
+    })
+
+    expect(summarizeCalls(invokeMock.mock.calls)).toEqual([
+      { cmd: 'queue_stop' },
+      { cmd: 'queue_enqueue', recordingNodeId: 10 },
+      { cmd: 'queue_play' },
+    ])
+    expect(result.current!.status.currentRecordingNodeId).toBe(10)
+
+    unmount()
+  })
 })

@@ -156,7 +156,7 @@ function summaryRows(summary: NodeSummary): { label: string; value: string }[] {
   }
 }
 
-type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum'>
+type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum' | 'queueBusy'>
 
 type NodeCardProps = {
   renderer: Sigma | null
@@ -258,8 +258,14 @@ export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onO
                         <button
                           type="button"
                           onClick={() => (type === 'release' ? playback.playAlbum(nodeId) : playback.playNode(nodeId, title))}
+                          // #81: same guard as PlayNodeButton — playNode/
+                          // playAlbum both funnel into the serialized
+                          // playTracks, so disabling here prevents a
+                          // redundant click piling another full rebuild
+                          // behind one already in flight.
+                          disabled={playback.queueBusy}
                           aria-label="Play"
-                          className="text-[var(--color-muted)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:text-[var(--color-muted-hi)]"
+                          className="text-[var(--color-muted)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-40"
                         >
                           <Icon name="play" size={24} />
                         </button>

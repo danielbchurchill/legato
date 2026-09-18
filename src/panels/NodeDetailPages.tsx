@@ -38,6 +38,9 @@ type NodeDetailPagesProps = {
    * playback as an attribute of the node being viewed, per P-5, rather than
    * a fork into a separate component. */
   isPlaying: boolean
+  // #81: onPlay funnels into usePlayback's serialized playTracks — see
+  // MetadataActions, the actual consumer of this.
+  queueBusy: boolean
   /** Set when TagManager's "edit" action (issue #65) opened this inspector
    * wanting to land straight in edit mode rather than making the user hunt
    * for the pencil icon. Consumed once the ids match — see the effect
@@ -53,6 +56,7 @@ export function NodeDetailPages({
   node,
   reload,
   isPlaying,
+  queueBusy,
   autoEditNodeId,
   onAutoEditConsumed,
   onSelectNode,
@@ -157,7 +161,14 @@ export function NodeDetailPages({
                 action={
                   !editingState.editing &&
                   !editingState.pendingWrite && (
-                    <MetadataActions node={node} file={file} isPlaying={isPlaying} onPlay={onPlay} onEdit={editingState.startEditing} />
+                    <MetadataActions
+                      node={node}
+                      file={file}
+                      isPlaying={isPlaying}
+                      queueBusy={queueBusy}
+                      onPlay={onPlay}
+                      onEdit={editingState.startEditing}
+                    />
                   )
                 }
               />

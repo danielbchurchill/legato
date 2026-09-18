@@ -593,7 +593,7 @@ type Props = {
    * button — the selection card is the one canvas surface that needs them.
    * status is read for status.currentRecordingNodeId, to anchor the
    * currently-playing halo (issue #85) regardless of what's selected. */
-  playback: Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum' | 'status'>
+  playback: Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum' | 'status' | 'queueBusy'>
   onStats?: (stats: { nodes: number; edges: number }) => void
   /** Settings "hover-dim" toggle. Gates only the neighbor-dim effect —
    * NodeHoverPlate still shows regardless, since naming the node under the

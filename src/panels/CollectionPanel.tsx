@@ -26,7 +26,7 @@ export type SearchFieldHandle = {
   focus: () => void
 }
 
-type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum'>
+type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum' | 'queueBusy'>
 
 // Issue #83: results render inline again, directly under the field, rather
 // than in the floating popover P-9/MO-12 introduced — that popover read as

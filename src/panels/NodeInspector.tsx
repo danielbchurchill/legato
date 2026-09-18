@@ -27,6 +27,9 @@ import { useNodeDetail } from './useNodeDetail'
 type NodeInspectorProps = {
   nodeId: number
   isPlaying: boolean
+  // #81: onPlay funnels into usePlayback's serialized playTracks — see
+  // NodeDetailPages/MetadataFields, the actual consumers of this.
+  queueBusy: boolean
   /** Set when this inspector was opened via TagManager's "edit" action
    * (issue #65) — the id of the node to drop straight into edit mode on,
    * once. See NodeDetailPages.tsx for where it's consumed. */
@@ -40,6 +43,7 @@ type NodeInspectorProps = {
 export function NodeInspector({
   nodeId,
   isPlaying,
+  queueBusy,
   autoEditNodeId,
   onAutoEditConsumed,
   onSelectNode,
@@ -91,6 +95,7 @@ export function NodeInspector({
                   node={node}
                   reload={reload}
                   isPlaying={isPlaying}
+                  queueBusy={queueBusy}
                   autoEditNodeId={autoEditNodeId}
                   onAutoEditConsumed={onAutoEditConsumed}
                   onSelectNode={onSelectNode}

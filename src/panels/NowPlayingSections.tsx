@@ -43,11 +43,13 @@ export function TrackMetadataDisclosure({
   node,
   reload,
   isPlaying,
+  queueBusy,
   onPlay,
 }: {
   node: NodeDetail
   reload: () => void
   isPlaying: boolean
+  queueBusy: boolean
   onPlay: (nodeId: number, title: string) => void
 }) {
   const editingState = useMetadataEditing(node, reload)
@@ -60,7 +62,14 @@ export function TrackMetadataDisclosure({
       action={
         !editingState.editing &&
         !editingState.pendingWrite && (
-          <MetadataActions node={node} file={file} isPlaying={isPlaying} onPlay={onPlay} onEdit={editingState.startEditing} />
+          <MetadataActions
+            node={node}
+            file={file}
+            isPlaying={isPlaying}
+            queueBusy={queueBusy}
+            onPlay={onPlay}
+            onEdit={editingState.startEditing}
+          />
         )
       }
     >

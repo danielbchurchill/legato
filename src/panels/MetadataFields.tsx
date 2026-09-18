@@ -21,12 +21,14 @@ export function MetadataActions({
   node,
   file,
   isPlaying,
+  queueBusy,
   onPlay,
   onEdit,
 }: {
   node: NodeDetail
   file: FileRow | undefined
   isPlaying: boolean
+  queueBusy: boolean
   onPlay: (nodeId: number, title: string) => void
   onEdit: () => void
 }) {
@@ -37,8 +39,11 @@ export function MetadataActions({
           <button
             type="button"
             onClick={() => onPlay(node.id, node.title)}
+            // #81: onPlay funnels into usePlayback's serialized playTracks
+            // same as every other play entry point in the app.
+            disabled={queueBusy}
             aria-label="Play"
-            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+            className="text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-40"
           >
             <Icon name="play" size={24} />
           </button>

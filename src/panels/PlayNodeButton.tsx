@@ -9,7 +9,7 @@ import type { usePlayback } from '../playback/usePlayback'
  * has no single audio stream to start, so the button doesn't render at all
  * rather than being shown disabled. */
 
-type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum'>
+type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum' | 'queueBusy'>
 
 export function PlayNodeButton({
   id,
@@ -35,8 +35,14 @@ export function PlayNodeButton({
       <button
         type="button"
         onClick={play}
+        // #81: playNode/playAlbum both funnel into usePlayback's serialized
+        // playTracks — disabling here mirrors TransportDock's own play/pause
+        // guard so a click while another queue operation is mid-flight reads
+        // as "queued, wait a beat" rather than inviting a redundant second
+        // click that just queues another full rebuild behind the first.
+        disabled={playback.queueBusy}
         aria-label="Play"
-        className={`shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] ${className}`}
+        className={`shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-40 ${className}`}
       >
         <Icon name="play" size={size} />
       </button>

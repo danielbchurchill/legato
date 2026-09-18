@@ -31,7 +31,7 @@ type PlaylistTrackDetail = {
   playlist_track_id: number
 }
 
-type Playback = Pick<ReturnType<typeof usePlayback>, 'playTracks' | 'playPlaylist'>
+type Playback = Pick<ReturnType<typeof usePlayback>, 'playTracks' | 'playPlaylist' | 'queueBusy'>
 
 function CreatePlaylistForm({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState('')
@@ -219,6 +219,7 @@ function PlaylistTrackRow({
   track,
   isFirst,
   isLast,
+  queueBusy,
   onPlay,
   onRemove,
   onMoveUp,
@@ -227,6 +228,10 @@ function PlaylistTrackRow({
   track: PlaylistTrackDetail
   isFirst: boolean
   isLast: boolean
+  // #81: this row's title doubles as a play button (playFrom -> playTracks,
+  // usePlayback.ts's serialized queue-rebuild sequence) — same guard as
+  // NowPlayingPanel's up-next row titles get from queueBusy.
+  queueBusy: boolean
   onPlay: () => void
   onRemove: () => void
   onMoveUp: () => void
@@ -241,7 +246,8 @@ function PlaylistTrackRow({
         <button
           type="button"
           onClick={onPlay}
-          className="block w-full text-left text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+          disabled={queueBusy}
+          className="block w-full text-left text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)] disabled:pointer-events-none disabled:opacity-50"
         >
           <ScrollingText text={track.title} className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)]" />
         </button>
@@ -368,8 +374,18 @@ function PlaylistDetail({
       />
 
       <div className="mt-[8px] flex items-center gap-[16px]">
-        <Button onClick={() => void playback.playPlaylist(playlistId)}>play</Button>
-        <Button onClick={() => void playback.playPlaylist(playlistId, true)}>shuffle play</Button>
+        {/* #81: playPlaylist/playTracks both funnel into usePlayback's
+         * serialized playTracks — disabled here for the same reason
+         * TransportDock's transport controls are: a click while another
+         * queue operation is mid-flight is queued, not lost, but leaving
+         * the button clickable invites a redundant click piling one more
+         * full rebuild behind it. */}
+        <Button onClick={() => void playback.playPlaylist(playlistId)} disabled={playback.queueBusy}>
+          play
+        </Button>
+        <Button onClick={() => void playback.playPlaylist(playlistId, true)} disabled={playback.queueBusy}>
+          shuffle play
+        </Button>
       </div>
 
       {tracks === null ? (
@@ -386,6 +402,7 @@ function PlaylistDetail({
               track={t}
               isFirst={i === 0}
               isLast={i === tracks.length - 1}
+              queueBusy={playback.queueBusy}
               onPlay={() => playFrom(i)}
               onRemove={() => void remove(t.playlist_track_id)}
               onMoveUp={() => void move(i, -1)}

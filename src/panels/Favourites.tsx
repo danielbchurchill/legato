@@ -28,7 +28,7 @@ const TYPE_LABEL: Record<string, string> = {
   artist: 'artist',
 }
 
-type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum'>
+type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum' | 'queueBusy'>
 
 function FavouriteRow({
   item,
