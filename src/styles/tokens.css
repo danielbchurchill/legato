@@ -94,7 +94,9 @@
 
   /* ---- Controls ------------------------------------------------------- */
 
-  /* Waveform bars and the now-playing page dots share one value. */
+  /* Waveform bars and the now-playing page dots share one value. The
+   * canvas's currently-playing halo (NodePlayingHalo.tsx, issue #85) reuses
+   * it too — one hue for "this is what's playing", wherever it shows up. */
   --color-signal: #d9d9d9;
 
   /* ---- Type ----------------------------------------------------------- */
@@ -212,8 +214,37 @@
   --motion-base: 180ms; /* pagination, disclosure, modal entry    */
   --motion-exit: 120ms; /* leaving is faster than arriving        */
 
+  /* The one loop duration in the app — see NodePlayingHalo.tsx and
+   * DESIGN.md Motion's "the currently-playing halo" exception. Not grouped
+   * with the four durations above: those are all one-shot state changes,
+   * this is the only one meant to keep repeating for as long as something
+   * is actually happening. */
+  --motion-pulse: 1800ms;
+
   /* Response to input: starts at full speed, decelerates into place. */
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   /* Reserved for things reversible mid-flight, like a disclosure toggled twice. */
   --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* The currently-playing halo's breathing glow (issue #85, NodePlayingHalo.tsx).
+ * Opacity only, never transform/scale — the property reduced motion already
+ * treats as safe to keep (DESIGN.md Motion, "Reduced motion means less
+ * movement, not less feedback"), and index.css's global reduced-motion rule
+ * zeroes this animation's duration/iteration-count for either the OS
+ * preference or the settings override, landing on the resting 40% frame
+ * rather than losing the cue outright.
+ *
+ * @keyframes can't live inside @theme (Tailwind only reads plain custom
+ * properties there), so this sits beside it in the same file instead of the
+ * component — "tokens, not values" for anything more than a one-off
+ * literal. */
+@keyframes node-halo-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
 }

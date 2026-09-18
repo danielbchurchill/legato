@@ -10,6 +10,7 @@ import { useScanStatus } from '../hooks/useScanStatus'
 import { Button } from '../ui/Button'
 import { NodeCard, NODE_CARD_COVER_CENTER_X, NODE_CARD_WIDTH_PX } from './NodeCard'
 import { NodeHoverPlate } from './NodeHoverPlate'
+import { NodePlayingHalo } from './NodePlayingHalo'
 import { SERVER_HOST } from '../config/serverHost'
 import type { usePlayback } from '../playback/usePlayback'
 
@@ -588,9 +589,11 @@ type Props = {
    * summary, and everything deeper (facts, edges, lyrics, tag write-back)
    * lives behind this. */
   onOpenInspector: () => void
-  /** Threaded straight through to NodeCard's own play button — the
-   * selection card is the one canvas surface that needs it. */
-  playback: Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum'>
+  /** playNode/playAlbum are threaded straight through to NodeCard's own play
+   * button — the selection card is the one canvas surface that needs them.
+   * status is read for status.currentRecordingNodeId, to anchor the
+   * currently-playing halo (issue #85) regardless of what's selected. */
+  playback: Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum' | 'status'>
   onStats?: (stats: { nodes: number; edges: number }) => void
   /** Settings "hover-dim" toggle. Gates only the neighbor-dim effect —
    * NodeHoverPlate still shows regardless, since naming the node under the
@@ -1464,6 +1467,13 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // it is, in more detail, in the same place.
   const hoveredNode =
     hoveredNodeId != null && hoveredNodeId !== selectedNodeId ? nodes.find((n) => n.id === hoveredNodeId) : undefined
+  // Issue #85: independent of both of the above — whatever the transport has
+  // loaded, on the canvas, whether or not it's the thing selected or
+  // hovered. Looked up against the fetched node list rather than assumed
+  // present: a track can finish resolving on the transport before its node
+  // has arrived in this graph's current fetch.
+  const playingNodeId = playback.status.currentRecordingNodeId
+  const playingNode = playingNodeId != null ? nodes.find((n) => n.id === playingNodeId) : undefined
 
   return (
     <div className="absolute inset-0">
@@ -1488,6 +1498,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
           className="absolute top-0 left-0 rounded-[12px] border border-[var(--color-hairline)]"
           style={{ visibility: 'hidden' }}
         />
+        {playingNode && <NodePlayingHalo key={playingNode.id} renderer={activeRenderer} nodeKey={nodeKey(playingNode.id)} />}
         {hoveredNode && (
           <NodeHoverPlate
             key={hoveredNode.id}
