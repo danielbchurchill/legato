@@ -10,7 +10,7 @@ export type RailDestination = 'search' | 'graph' | 'database' | 'favourites' | '
 
 export const RAIL_ITEMS: { id: RailDestination; icon: IconName; label: string }[] = [
   { id: 'search', icon: 'search', label: 'Search' },
-  { id: 'graph', icon: 'map', label: 'Graph Inspector' },
+  { id: 'graph', icon: 'map', label: 'Music Map' },
   { id: 'database', icon: 'database', label: 'Database Inspector' },
   { id: 'favourites', icon: 'heart', label: 'Favourites' },
   { id: 'playlists', icon: 'list', label: 'Playlists' },

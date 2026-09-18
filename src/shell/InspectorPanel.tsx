@@ -17,9 +17,8 @@ const PLACEHOLDER_LABEL: Partial<Record<RailDestination, string>> = {}
 
 // The panel title, in the same lowercase Rubik-muted voice as every
 // SectionHeader and RightPanel's own "now playing" — not RAIL_ITEMS' Title
-// Case tooltip labels, and not always the same string: 'graph' opens Music
-// Map settings, so it's titled to match what's actually on screen rather
-// than the rail's own (unrelated) "Graph Inspector" tooltip.
+// Case tooltip labels, though the words themselves now agree ('graph' ->
+// "Music Map" tooltip, 'music map' title) same as every other destination.
 const TITLES: Record<RailDestination, string> = {
   search: 'search',
   graph: 'music map',
