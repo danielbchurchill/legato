@@ -1008,15 +1008,23 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       // (drawingMode "background" is a no-op once texel.a is 1) nor tint one
       // without fully replacing it (drawingMode "color" discards the image
       // outright) — there is no continuous crossfade available for a texture
-      // the way mixTowardDim gives every flat-colored node below. So an art
-      // node's dim is a hard cut straight to DIMMED_NODE_COLOR the instant
-      // dimProgress engages, not an interpolation from its own color — that
-      // attribute is only ever the inert `#ffffff` placeholder nodeAttributes
-      // sets and NodeImageProgram never reads at rest, so crossfading from it
-      // (the earlier attempt here) read as a bright white flash before
-      // settling dark, on top of losing the release/track shape distinction.
+      // the way mixTowardDim gives every flat-colored node below. #80: the
+      // earlier fix here cut straight to DIMMED_NODE_COLOR the instant
+      // dimProgress left 0, popping a full-size cover to flat grey in a
+      // single frame while every flat-colored node was still mid-fade — the
+      // mismatch read as a flicker, not a fade. Since the texture itself
+      // can't crossfade, this crossfades size instead: the cover shrinks to
+      // nothing over the first half of dimProgress, then the dim circle
+      // grows back in over the second half. The type swap still happens in
+      // one frame, but at dimProgress 0.5 the node renders at size 0 on
+      // either side of it, so the swap itself is invisible — what's left on
+      // screen is a continuous shrink-then-grow that reads as a dissolve to
+      // grey, and (since it's a pure function of dimProgress) plays the same
+      // way in reverse as the pointer leaves and dimProgress falls back to 0.
       if (data.type === 'cover' || data.type === 'coverSquare') {
-        return { ...scaled, type: 'circle', square: false, color: DIMMED_NODE_COLOR }
+        const size = scaled.size as number
+        if (dimProgress <= 0.5) return { ...scaled, size: size * (1 - dimProgress / 0.5) }
+        return { ...scaled, type: 'circle', square: false, color: DIMMED_NODE_COLOR, size: size * ((dimProgress - 0.5) / 0.5) }
       }
       // Every other type has no art to protect, so its color crossfades
       // toward the dim tone continuously. `square` is cleared alongside
