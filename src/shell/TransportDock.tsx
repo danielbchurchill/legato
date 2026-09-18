@@ -116,12 +116,13 @@ function WaveformScrubber({
 type TransportDockProps = {
   status: PlaybackStatus
   shuffled: boolean
-  // True while a previous/next/shuffle click (or a reorder/remove/add
-  // elsewhere, e.g. NowPlayingPanel's up-next list) is still resolving —
-  // usePlayback.ts serializes all of them behind one shared lock, so a
-  // click on any of these while another is in flight gets queued rather
-  // than lost. Disabling here just makes that visible instead of leaving
-  // the dock looking inert for however long the in-flight one takes.
+  // True while a previous/next/shuffle/play/pause click (or a reorder/
+  // remove/add elsewhere, e.g. NowPlayingPanel's up-next list) is still
+  // resolving — usePlayback.ts serializes all of them behind one shared
+  // lock, so a click on any of these while another is in flight gets
+  // queued rather than lost. Disabling here just makes that visible
+  // instead of leaving the dock looking inert for however long the
+  // in-flight one takes.
   queueBusy: boolean
   onPause: () => void
   onResume: () => void
@@ -183,6 +184,7 @@ export function TransportDock({
 
             <button
               type="button"
+              disabled={queueBusy}
               onClick={status.playing ? onPause : onResume}
               aria-label={status.playing ? 'Pause' : 'Play'}
               className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"

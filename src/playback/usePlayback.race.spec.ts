@@ -230,4 +230,52 @@ describe('usePlayback Tauri queue-operation serialization', () => {
 
     unmount()
   })
+
+  // #81: pause() used to run outside this lock entirely, so a pause fired
+  // while a previous()/next()/toggleShuffle() rebuild was mid-flight could
+  // land its lone queue_pause invoke() before that rebuild's own trailing
+  // queue_play — getting silently overwritten by it, the exact "play/pause
+  // needs several clicks" symptom filed as #81.
+  it('runs a queued pause() strictly after an in-flight previous() rebuild, instead of letting the rebuild silently overwrite it', async () => {
+    const { result, unmount } = renderPlaybackHook()
+    await act(async () => {
+      await delay(0)
+    })
+
+    await act(async () => {
+      await result.current!.playTracks([10, 20, 30, 40], 3, 'Track 40')
+    })
+    expect(result.current!.status.currentRecordingNodeId).toBe(40)
+    expect(result.current!.status.playing).toBe(true)
+
+    invokeMock.mockClear()
+
+    // Same shape as a real "hit pause right as a previous-track click is
+    // still resolving": previous()'s rebuild (queue_stop -> enqueue -> its
+    // own queue_play) is still in flight when pause() fires.
+    let p1: Promise<void> = Promise.resolve()
+    let p2: Promise<void> = Promise.resolve()
+    act(() => {
+      p1 = result.current!.previous()
+      p2 = result.current!.pause()
+    })
+    await act(async () => {
+      await Promise.all([p1, p2])
+    })
+
+    // pause()'s queue_pause lands after previous()'s whole rebuild sequence,
+    // not interleaved somewhere inside it — without the fix this could show
+    // up anywhere in the middle, including before the rebuild's own
+    // queue_play, which would undo it.
+    expect(summarizeCalls(invokeMock.mock.calls)).toEqual([
+      { cmd: 'queue_stop' },
+      { cmd: 'queue_enqueue', recordingNodeId: 30 },
+      { cmd: 'queue_enqueue', recordingNodeId: 40 },
+      { cmd: 'queue_play' },
+      { cmd: 'queue_pause' },
+    ])
+    expect(result.current!.status.playing).toBe(false)
+
+    unmount()
+  })
 })

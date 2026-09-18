@@ -40,15 +40,23 @@ export function LeftPanelHeader({ expanded, onCollapse, onExpand }: LeftPanelHea
   const content = expanded ? (
     <>
       {/* The drag region is whatever space isn't a button — same approach
-       * the old single titlebar used. */}
-      <div data-tauri-drag-region className="flex h-full flex-1 items-center justify-between">
-        {logomark}
+       * the old single titlebar used. It has to stop short of the button
+       * itself rather than wrap it: Tauri's drag-region mousedown handler
+       * doesn't cleanly release a descendant to its own click on WebKitGTK,
+       * so a button nested inside data-tauri-drag-region needs two or three
+       * clicks before it registers (confirmed, #81 — the fix is keeping the
+       * attribute on a sibling that only covers the empty space, per
+       * Tauri's own guidance that it never bubbles to children on purpose). */}
+      <div className="flex h-full flex-1 items-center justify-between">
+        <div data-tauri-drag-region className="flex h-full flex-1 items-center">
+          {logomark}
+        </div>
         <Tooltip label="Collapse panel">
           <button
             type="button"
             onClick={onCollapse}
             aria-label="Collapse panel"
-            className="inline-flex items-center justify-center text-[var(--color-muted)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-muted-hi)]"
+            className="inline-flex shrink-0 items-center justify-center text-[var(--color-muted)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-muted-hi)]"
           >
             <Icon name="panel-left-collapse" size={24} />
           </button>

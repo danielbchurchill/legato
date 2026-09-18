@@ -207,9 +207,9 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
   const currentPlay = useRef<PlayInProgress | null>(null)
 
   // Serializes every queue-mutating operation (next/previous/toggleShuffle/
-  // reorderQueue/removeFromQueue/addToQueue/playNext) so a click fired
-  // while a previous one is still in flight runs strictly after it instead
-  // of interleaving with it. Each of those reads currentIndex.current/
+  // reorderQueue/removeFromQueue/addToQueue/playNext/pause/resume) so a
+  // click fired while a previous one is still in flight runs strictly after
+  // it instead of interleaving with it. Each of those reads currentIndex.current/
   // playSequence.current, then runs a chain of sequential `await
   // invoke(...)` Tauri calls (queue_stop, a loop of queue_enqueue,
   // queue_play) before writing its own update back to those refs — without
@@ -641,25 +641,43 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     [playTracks, toggleShuffle],
   )
 
-  const pause = useCallback(async () => {
-    if (IS_TAURI) await invoke('queue_pause')
-    else audioRef.current?.pause()
-    setStatus((s) => ({ ...s, playing: false }))
-  }, [])
+  // #81: pause/resume used to run outside `serialized`, the one queue-
+  // mutating operation that did — a click here could fire its single
+  // queue_pause/queue_play invoke() in the middle of another operation's
+  // queue_stop -> queue_enqueue... -> queue_play rebuild sequence (previous/
+  // toggleShuffle/reorderQueue/etc.), landing before that rebuild's own
+  // trailing queue_play (or queue_pause, when the rebuild has to restore a
+  // paused state) and getting silently overwritten by it. That reproduces
+  // exactly as "play/pause needs several clicks before anything happens" —
+  // same race class `serialized`'s own module comment above already
+  // documents, just for the one call it hadn't been applied to.
+  const pause = useCallback(
+    () =>
+      serialized(async () => {
+        if (IS_TAURI) await invoke('queue_pause')
+        else audioRef.current?.pause()
+        setStatus((s) => ({ ...s, playing: false }))
+      }),
+    [serialized],
+  )
 
-  const resume = useCallback(async () => {
-    if (IS_TAURI) {
-      await invoke('queue_play')
-      setStatus((s) => ({ ...s, playing: true }))
-      return
-    }
-    try {
-      await audioRef.current?.play()
-      setStatus((s) => ({ ...s, playing: true }))
-    } catch {
-      setStatus((s) => ({ ...s, playing: false }))
-    }
-  }, [])
+  const resume = useCallback(
+    () =>
+      serialized(async () => {
+        if (IS_TAURI) {
+          await invoke('queue_play')
+          setStatus((s) => ({ ...s, playing: true }))
+          return
+        }
+        try {
+          await audioRef.current?.play()
+          setStatus((s) => ({ ...s, playing: true }))
+        } catch {
+          setStatus((s) => ({ ...s, playing: false }))
+        }
+      }),
+    [serialized],
+  )
 
   const stop = useCallback(async () => {
     finalizeCurrentPlay()
@@ -870,10 +888,10 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     upNext,
     shuffled,
     // True whenever a next/previous/toggleShuffle/reorderQueue/
-    // removeFromQueue/addToQueue/playNext call is running or queued behind
-    // one that is — see the `serialized` lock above. Drive button-disabled
-    // states off this rather than tracking per-call pending state locally,
-    // since any of these operations blocks all the others.
+    // removeFromQueue/addToQueue/playNext/pause/resume call is running or
+    // queued behind one that is — see the `serialized` lock above. Drive
+    // button-disabled states off this rather than tracking per-call pending
+    // state locally, since any of these operations blocks all the others.
     queueBusy,
     playNode,
     playTracks,

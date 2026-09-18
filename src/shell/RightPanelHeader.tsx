@@ -47,13 +47,18 @@ const avatar = (
 export function RightPanelHeader({ expanded, onCollapse, onExpand }: RightPanelHeaderProps) {
   const content = expanded ? (
     <>
-      <div data-tauri-drag-region className="flex h-full flex-1 items-center">
+      {/* The button comes before the drag region, not inside it — Tauri's
+       * drag-region mousedown handler doesn't cleanly release a descendant
+       * to its own click on WebKitGTK, so a button nested inside
+       * data-tauri-drag-region needs two or three clicks before it
+       * registers (confirmed, #81; see LeftPanelHeader's matching fix). */}
+      <div className="flex h-full flex-1 items-center">
         <Tooltip label="Collapse panel">
           <button
             type="button"
             onClick={onCollapse}
             aria-label="Collapse panel"
-            className="inline-flex items-center justify-center text-[var(--color-muted)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-muted-hi)]"
+            className="inline-flex shrink-0 items-center justify-center text-[var(--color-muted)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-muted-hi)]"
           >
             {/* Same glyph as the left header's collapse icon, rotated —
              * confirmed in the Figma file, not a separate asset. */}
@@ -62,6 +67,7 @@ export function RightPanelHeader({ expanded, onCollapse, onExpand }: RightPanelH
             </span>
           </button>
         </Tooltip>
+        <div data-tauri-drag-region className="h-full flex-1" />
       </div>
       {avatar}
     </>
