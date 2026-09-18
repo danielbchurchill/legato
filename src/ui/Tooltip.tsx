@@ -128,6 +128,20 @@ export function Tooltip({ label, children, monospace = false }: TooltipProps) {
       className="relative inline-flex"
       onPointerEnter={scheduleShow}
       onPointerLeave={hide}
+      // C-82: a click on the trigger routinely reorders or removes the very
+      // row it lives in (Playlists' move up/down, Favourites' remove,
+      // NowPlayingPanel's queue reorder — all keyed lists, so React
+      // relocates the same DOM node rather than remounting it) without the
+      // pointer itself moving. Browsers only recompute hover on an actual
+      // pointer move, so no pointerleave ever fires on a node that was
+      // yanked out from under a stationary cursor — the tooltip is
+      // orphaned at its old position until the next real mouse movement
+      // finally produces a leave/enter pair, sometimes surfacing a
+      // neighboring tooltip in its place. Dismissing on pointerdown, before
+      // the click handler gets a chance to touch the DOM, sidesteps this
+      // outright instead of chasing it through every list that reorders or
+      // shrinks on click.
+      onPointerDown={hide}
       onFocus={scheduleShow}
       onBlur={hide}
     >
