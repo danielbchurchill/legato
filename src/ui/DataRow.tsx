@@ -30,7 +30,17 @@ export function DataRow({ label, value, truncate = true }: DataRowProps) {
     // the row grow for that case while staying exactly --spacing-row tall
     // for the common single-line one.
     <div className="grid min-h-[var(--spacing-row)] grid-cols-[57%_43%] items-center">
-      <span className="text-[length:var(--text-base)] leading-[24px] text-[var(--color-muted)]">{label}</span>
+      {/* wrap-anywhere, not the bare wrapping this comment used to assume: a
+       * label with a space (e.g. "release date") wraps for free, but one
+       * that's a single snake_case token (e.g. "edges: featured_artist" —
+       * "featured_artist" has no space for the browser to break on) has no
+       * wrap opportunity at all without it, and CSS grid's default automatic
+       * minimum size lets that unbroken word overflow straight out of its
+       * 57% column instead of onto a second line — confirmed against the
+       * exact case this file's own history flagged as already handled. */}
+      <span className="text-[length:var(--text-base)] leading-[24px] wrap-anywhere text-[var(--color-muted)]">
+        {label}
+      </span>
       {scrollable ? (
         <ScrollingText
           text={String(value)}

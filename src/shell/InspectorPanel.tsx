@@ -75,7 +75,16 @@ export function InspectorPanel({
       <h2 className="shrink-0 pt-[21px] pb-[10px] text-center text-[length:var(--text-base)] font-normal text-[var(--color-muted)]">
         {TITLES[active]}
       </h2>
-      <div className="min-h-0 flex-1 overflow-y-auto px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
+      {/* overflow-x-hidden is load-bearing, not decorative: `overflow-y-auto`
+       * alone computes to `overflow-x: auto` too (CSS upgrades a lone
+       * 'visible' axis to 'auto' the moment its sibling axis isn't), so any
+       * child that ever manages to spill past this single narrow column
+       * would surface as a real horizontal scrollbar here — issue #86 — on
+       * a panel every one of these rail destinations shares one instance
+       * of. Pinning x closed is what makes "never a scrollbar" actually
+       * true rather than "true until the next panel content someone adds
+       * doesn't wrap or truncate correctly." */}
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
         {content ?? (
           <p className="pt-[40px] text-center text-[length:var(--text-base)] text-[var(--color-muted)]">
             {PLACEHOLDER_LABEL[active]}
