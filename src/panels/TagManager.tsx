@@ -139,7 +139,15 @@ export function TagManager({
                 </span>
               </div>
               {row.artist && (
-                <p className="font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
+                // #86: the title alongside this (above) routes through
+                // ScrollingText, which truncates on its own — this plain
+                // paragraph doesn't, and normal word-wrap only breaks at
+                // spaces. Most artist names have one, but a single unbroken
+                // name (or a "various artists"-style slash-joined string)
+                // doesn't, and would otherwise overflow this column with
+                // nothing to catch it — same defect DataRow's own
+                // wrap-anywhere exists for.
+                <p className="wrap-anywhere font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-muted)]">
                   {row.artist}
                 </p>
               )}

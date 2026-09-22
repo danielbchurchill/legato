@@ -310,7 +310,17 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
                 <li key={r.id} className="flex flex-col gap-[var(--spacing-xs)]">
                   {confirming ? (
                     <>
-                      <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                      {/* #86: the non-confirming row below (r.label ?? r.path,
+                       * same fallback) truncates to one line on purpose — this
+                       * sentence is meant to wrap instead, but a real
+                       * filesystem path or a user-typed label can still be one
+                       * unbroken run with nowhere to break, e.g. a Windows
+                       * path's backslashes carry no browser line-break
+                       * opportunity the way "/" does. wrap-anywhere only
+                       * kicks in once normal wrapping runs out of room, so
+                       * "Legato stops watching it" still breaks at spaces
+                       * first. */}
+                      <p className="wrap-anywhere text-[length:var(--text-sm)] text-[color:var(--color-control)]">
                         Remove {r.label ?? r.path}? Legato stops watching it — already-scanned tracks stay in your
                         library.
                       </p>

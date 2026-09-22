@@ -38,10 +38,26 @@ export function Popover({ label, children }: { label: string; children: ReactNod
         <Icon name="info" size={24} />
       </button>
       {open && (
+        // #86: unlike Tooltip.tsx (portaled to document.body, so it never
+        // touches an ancestor's overflow), this renders as a normal DOM
+        // child of whichever scrolling column opened it — today that's
+        // always the Inspector Panel's content div, which clips its x-axis
+        // (InspectorPanel.tsx's `overflow-x-hidden`, load-bearing per that
+        // file's own comment). A bare `w-[280px]` doesn't fit the panel's
+        // narrower widths (--panel-width floors at 300px, minus two
+        // --spacing-panel of padding is 252px) — right-0 anchors this to the
+        // trigger's own right edge, so the excess used to get clipped off
+        // the *left* side with nothing to scroll to, not just hidden behind
+        // a scrollbar: a real "hidden/cropped content" case, not merely
+        // "still shows a scrollbar." `max-w` caps it at the same available
+        // width DataRow/ScrollingText already respect, so it wraps onto more
+        // lines instead — 280px stays the preferred width wherever the panel
+        // has scaled wide enough (--panel-width grows past 1440px viewport
+        // width) to actually offer it.
         <div
           role="dialog"
           aria-label={label}
-          className="absolute top-full right-0 z-30 mt-[6px] w-[280px] rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] p-[16px] text-[length:var(--text-base)] text-[var(--color-muted)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)]"
+          className="absolute top-full right-0 z-30 mt-[6px] w-[280px] max-w-[calc(var(--panel-width)-var(--spacing-panel)*2)] rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] p-[16px] text-[length:var(--text-base)] text-[var(--color-muted)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)]"
         >
           {children}
         </div>
