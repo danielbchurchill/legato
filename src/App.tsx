@@ -506,6 +506,7 @@ function MainApp() {
         <NodeInspector
           nodeId={selectedNodeId}
           isPlaying={selectedNodeId === playback.status.currentRecordingNodeId}
+          queueBusy={playback.queueBusy}
           autoEditNodeId={autoEditNodeId}
           onAutoEditConsumed={() => setAutoEditNodeId(null)}
           onSelectNode={(id) => {

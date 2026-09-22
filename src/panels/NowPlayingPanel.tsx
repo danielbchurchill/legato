@@ -114,8 +114,13 @@ export function NowPlayingPanel({
           <button
             type="button"
             onClick={onQuickPlay}
+            // #81: playRandom funnels into usePlayback's serialized
+            // playTracks same as every other play entry point — this button
+            // had no busy guard at all before, unlike every other queue
+            // control in this panel.
+            disabled={queueBusy}
             aria-label="Play a random track from your library"
-            className="grid size-[48px] place-items-center rounded-full text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80"
+            className="grid size-[48px] place-items-center rounded-full text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:pointer-events-none disabled:opacity-40"
           >
             <Icon name="play" size={24} />
           </button>
@@ -214,7 +219,7 @@ export function NowPlayingPanel({
        * closed); "about" is this session's own addition slotted in after
        * connections — see NowPlayingSections.tsx's top comment. */}
       <div className="mt-[15px] flex flex-col gap-[15px]">
-        <TrackMetadataDisclosure node={node} reload={reload} isPlaying={isPlaying} onPlay={onPlay} />
+        <TrackMetadataDisclosure node={node} reload={reload} isPlaying={isPlaying} queueBusy={queueBusy} onPlay={onPlay} />
         <LyricsDisclosure node={node} />
         <ConnectionsDisclosure node={node} reload={reload} onSelectNode={onSelectNode} />
         <AboutDisclosure node={node} onSelectNode={onSelectNode} />

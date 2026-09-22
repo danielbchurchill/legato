@@ -206,11 +206,11 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
   const originalOrder = useRef<QueueEntry[]>([])
   const currentPlay = useRef<PlayInProgress | null>(null)
 
-  // Serializes every queue-mutating operation (next/previous/toggleShuffle/
-  // reorderQueue/removeFromQueue/addToQueue/playNext/pause/resume) so a
-  // click fired while a previous one is still in flight runs strictly after
-  // it instead of interleaving with it. Each of those reads currentIndex.current/
-  // playSequence.current, then runs a chain of sequential `await
+  // Serializes every queue-mutating operation (playTracks/next/previous/
+  // toggleShuffle/reorderQueue/removeFromQueue/addToQueue/playNext/pause/
+  // resume) so a click fired while a previous one is still in flight runs
+  // strictly after it instead of interleaving with it. Each of those reads
+  // currentIndex.current/playSequence.current, then runs a chain of sequential `await
   // invoke(...)` Tauri calls (queue_stop, a loop of queue_enqueue,
   // queue_play) before writing its own update back to those refs — without
   // this, a second call's queue_stop can land mid-rebuild of the first
@@ -431,7 +431,24 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
   // engine's own queue is forward-only, so anything before the start point
   // exists solely in this hook's bookkeeping (for previous() to walk back
   // into).
-  const playTracks = useCallback(
+  //
+  // #81 persisted past PR #94: that PR put pause/resume behind `serialized`
+  // but never touched this function, which runs the exact same
+  // queue_stop -> queue_enqueue... -> queue_play shape every other
+  // serialized operation does. Every "click a track/album to play it"
+  // button in the app (PlayNodeButton, NodeCard's canvas card, the
+  // MetadataActions play icon, NowPlayingPanel's quick-play, Playlists) goes
+  // through playNode/playAlbum/playRandom/playPlaylist and lands here, so
+  // clicking play while a next()/previous()/pause() rebuild was mid-flight —
+  // or just double-clicking a play button — could interleave two invoke()
+  // chains exactly like the original bug, just for the entry point that
+  // starts a fresh queue instead of mutating an existing one. Split into an
+  // unserialized core (below) plus this serialized wrapper so addToQueue/
+  // playNext can call the core directly from inside their own `serialized`
+  // block without deadlocking (re-entering `serialized` while already
+  // running inside it would wait on a promise chain that can't resolve
+  // until the very call doing the waiting returns).
+  const playTracksCore = useCallback(
     async (recordingNodeIds: number[], startIndex: number, title: string) => {
       const tracks = await resolveTracks(recordingNodeIds)
       if (tracks.length === 0) return
@@ -495,6 +512,12 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
       }))
     },
     [cacheTracks, finalizeCurrentPlay, replaygainMode, startWebTrack],
+  )
+
+  const playTracks = useCallback(
+    (recordingNodeIds: number[], startIndex: number, title: string) =>
+      serialized(() => playTracksCore(recordingNodeIds, startIndex, title)),
+    [playTracksCore, serialized],
   )
 
   const playNode = useCallback(
@@ -802,7 +825,11 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     (recordingNodeId: number) =>
       serialized(async () => {
         if (currentIndex.current === -1) {
-          await playTracks([recordingNodeId], 0, await fetchNodeTitle(recordingNodeId))
+          // playTracksCore, not playTracks — this callback already runs
+          // inside `serialized`, and playTracks re-entering that same lock
+          // would wait on a promise chain that can't resolve until this
+          // very call returns.
+          await playTracksCore([recordingNodeId], 0, await fetchNodeTitle(recordingNodeId))
           return
         }
 
@@ -820,14 +847,15 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
         }
         await rebuildTauriQueueInPlace()
       }),
-    [playTracks, rebuildTauriQueueInPlace, cacheTracks, serialized],
+    [playTracksCore, rebuildTauriQueueInPlace, cacheTracks, serialized],
   )
 
   const playNext = useCallback(
     (recordingNodeId: number) =>
       serialized(async () => {
         if (currentIndex.current === -1) {
-          await playTracks([recordingNodeId], 0, await fetchNodeTitle(recordingNodeId))
+          // See addToQueue's comment above — playTracksCore, not playTracks.
+          await playTracksCore([recordingNodeId], 0, await fetchNodeTitle(recordingNodeId))
           return
         }
 
@@ -850,7 +878,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
         }
         await rebuildTauriQueueInPlace()
       }),
-    [playTracks, rebuildTauriQueueInPlace, cacheTracks, serialized],
+    [playTracksCore, rebuildTauriQueueInPlace, cacheTracks, serialized],
   )
 
   const seek = useCallback(async (positionMs: number) => {
@@ -887,11 +915,15 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     currentTitle,
     upNext,
     shuffled,
-    // True whenever a next/previous/toggleShuffle/reorderQueue/
+    // True whenever a playTracks/next/previous/toggleShuffle/reorderQueue/
     // removeFromQueue/addToQueue/playNext/pause/resume call is running or
     // queued behind one that is — see the `serialized` lock above. Drive
     // button-disabled states off this rather than tracking per-call pending
     // state locally, since any of these operations blocks all the others.
+    // playNode/playAlbum/playRandom/playPlaylist all fire this through
+    // playTracks (or, for playPlaylist's optional shuffle, a follow-up
+    // toggleShuffle call), so it covers every "play this" button too, not
+    // just the transport controls.
     queueBusy,
     playNode,
     playTracks,
