@@ -39,12 +39,24 @@ type Playback = Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum' | 
 // unreconciled piece" for why this still isn't split into the v2 mockup's
 // separate `top hits`/`suggested tracks` headers — Figma draws no rows
 // under either to build against.
-const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) => void; playback: Playback }>(
-  function SearchField({ onSelectNode, playback }, ref) {
+type SearchFieldProps = {
+  onSelectNode: (id: number) => void
+  playback: Playback
+  /** Controlled rather than owning its own `useState` (issue #126) — the
+   * library view filters against this same text, so typing here or there
+   * updates one shared value instead of two independent search boxes that
+   * happen to sit in different parts of the shell. */
+  query: string
+  onQueryChange: (query: string) => void
+}
+
+const SearchField = forwardRef<SearchFieldHandle, SearchFieldProps>(function SearchField(
+  { onSelectNode, playback, query, onQueryChange },
+  ref,
+) {
   const inputRef = useRef<HTMLInputElement>(null)
   useImperativeHandle(ref, () => ({ focus: () => inputRef.current?.focus() }), [])
 
-  const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   // Distinct from "results is empty because nothing was typed yet" —
   // DESIGN.md's "search matched nothing" state only applies once a real
@@ -109,7 +121,7 @@ const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) =
 
   const choose = (result: SearchResult) => {
     onSelectNode(result.id)
-    setQuery('')
+    onQueryChange('')
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -124,7 +136,7 @@ const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) =
       e.preventDefault()
       choose(results[highlighted ?? 0])
     } else if (e.key === 'Escape') {
-      setQuery('')
+      onQueryChange('')
     }
   }
 
@@ -145,7 +157,7 @@ const SearchField = forwardRef<SearchFieldHandle, { onSelectNode: (id: number) =
         <input
           ref={inputRef}
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => onQueryChange(event.target.value)}
           onKeyDown={handleKeyDown}
           aria-label="Search collection"
           role="combobox"
@@ -295,6 +307,9 @@ type CollectionPanelProps = {
   onSelectNode: (id: number) => void
   onOpenMaintenance: () => void
   playback: Playback
+  /** Lifted to MainApp (issue #126) — see SearchFieldProps' own comment. */
+  query: string
+  onQueryChange: (query: string) => void
 }
 
 export type CollectionPanelHandle = {
@@ -303,7 +318,7 @@ export type CollectionPanelHandle = {
 }
 
 export const CollectionPanel = forwardRef<CollectionPanelHandle, CollectionPanelProps>(function CollectionPanel(
-  { onSelectNode, onOpenMaintenance, playback },
+  { onSelectNode, onOpenMaintenance, playback, query, onQueryChange },
   ref,
 ) {
   const searchRef = useRef<SearchFieldHandle>(null)
@@ -318,7 +333,7 @@ export const CollectionPanel = forwardRef<CollectionPanelHandle, CollectionPanel
        * above (P-9) is gone — settings live behind the rail's own `sliders`
        * "Legato Settings" destination now, so this panel needs no entry
        * point of its own. */}
-      <SearchField ref={searchRef} onSelectNode={onSelectNode} playback={playback} />
+      <SearchField ref={searchRef} onSelectNode={onSelectNode} playback={playback} query={query} onQueryChange={onQueryChange} />
       <MaintenancePreview onSelectNode={onSelectNode} onOpenMaintenance={onOpenMaintenance} />
     </div>
   )
