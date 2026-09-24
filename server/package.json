@@ -13,7 +13,8 @@
     "backfill:waveforms": "bun src/waveform/backfill-cli.ts",
     "sweep:caches": "bun src/maintenance/sweep-caches-cli.ts",
     "generate:migrations": "node scripts/generate-migrations-manifest.mjs",
-    "compile": "bun scripts/compile.ts"
+    "compile": "bun scripts/compile.ts",
+    "check:migration-boot": "bun scripts/check-migration-boot.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
