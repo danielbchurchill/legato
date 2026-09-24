@@ -401,10 +401,26 @@ section {
   padding: var(--spacing-panel);
 }
 
+/* The icons draw in currentColor, which an SVG loaded as an image never
+   inherits (it resolves to black, invisible on the dark canvas). Using the
+   SVG as a mask instead lets the hero's accent gradient fill the strokes. */
 .card-icon {
-  color: var(--color-muted);
+  display: block;
+  width: 24px;
+  height: 24px;
   margin-bottom: 16px;
+  background: linear-gradient(135deg, var(--color-edge-performed-by), var(--color-edge-appears-on));
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
 }
+
+.card-icon[data-icon='map'] { --icon: url('/icons/map.svg'); }
+.card-icon[data-icon='tag'] { --icon: url('/icons/tag.svg'); }
+.card-icon[data-icon='list'] { --icon: url('/icons/list.svg'); }
+.card-icon[data-icon='brightness'] { --icon: url('/icons/brightness.svg'); }
+.card-icon[data-icon='database'] { --icon: url('/icons/database.svg'); }
+.card-icon[data-icon='laptop'] { --icon: url('/icons/laptop.svg'); }
+.card-icon[data-icon='globe'] { --icon: url('/icons/globe.svg'); }
 
 .card h3 {
   font-size: 18px;
