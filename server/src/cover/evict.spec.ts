@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Database } from "../sqlite.js";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { openDb } from "../db.js";
 import { sweepCoverCache } from "./evict.js";
 
-let db: Database.Database;
+let db: Database;
 let dir: string;
 
 beforeEach(() => {

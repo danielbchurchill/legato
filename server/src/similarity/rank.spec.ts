@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { rankMostDissimilar, rankMostSimilar, type Candidate } from "./rank.js";
 
 describe("rankMostSimilar", () => {

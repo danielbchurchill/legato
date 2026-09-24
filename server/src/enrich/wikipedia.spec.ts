@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { WIKIPEDIA_LICENSE, parseSummary, parseWikidataId, parseWikipediaUrl } from "./wikipedia.js";
 
 describe("parseWikidataId", () => {

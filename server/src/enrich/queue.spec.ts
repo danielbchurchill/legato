@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { beforeEach, describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import {
   enqueueArtistImageLookupIfNeeded,
@@ -9,7 +9,7 @@ import {
   isEnrichmentEnabled,
 } from "./queue.js";
 
-let db: Database.Database;
+let db: Database;
 
 beforeEach(() => {
   db = openDb(":memory:");

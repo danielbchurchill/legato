@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { findMostDissimilar, findMostSimilar, recomputeSimilarityFeatures } from "./similarity.js";
 
-function makeNode(db: Database.Database, type: string, title: string): number {
+function makeNode(db: Database, type: string, title: string): number {
   const row = db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as {
     id: number;
   };
@@ -11,7 +11,7 @@ function makeNode(db: Database.Database, type: string, title: string): number {
 }
 
 function makeRecording(
-  db: Database.Database,
+  db: Database,
   title: string,
   opts: { artist?: number; label?: number; year?: number; genre?: string[]; releaseType?: string; durationMs?: number },
 ): number {
@@ -58,7 +58,7 @@ function makeRecording(
   return recording;
 }
 
-function appearsOn(db: Database.Database, recording: number, release: number): void {
+function appearsOn(db: Database, recording: number, release: number): void {
   db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
     recording,
     release,

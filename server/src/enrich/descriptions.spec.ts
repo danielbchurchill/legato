@@ -1,10 +1,10 @@
-import type Database from "better-sqlite3";
-import { beforeEach, describe, expect, it } from "vitest";
+import type { Database } from "../sqlite.js";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { openDb } from "../db.js";
 import { getDescription, recordDescription } from "./descriptions.js";
 import { WIKIPEDIA_LICENSE } from "./wikipedia.js";
 
-let db: Database.Database;
+let db: Database;
 
 beforeEach(() => {
   db = openDb(":memory:");

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import type { MbRecordingCandidate } from "./mbClient.js";
 import { lengthScore, pickBestMatch, scoreCandidate, similarity2, type LocalMatchInput } from "./textSearch.js";
 

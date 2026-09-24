@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import type { ICommonTagsResult, IFormat } from "music-metadata";
 import { normalizeTags } from "./tags.js";
 

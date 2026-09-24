@@ -2,13 +2,13 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { applyTagWrite } from "./writer.js";
 import { isSelfWrite } from "./guard.js";
 
-let db: Database.Database;
+let db: Database;
 let dir: string;
 let filePath: string;
 let fileId: number;
