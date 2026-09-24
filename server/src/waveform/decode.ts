@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { FFMPEG_PATH } from "../mediaBinaries.js";
+import { runMediaTask } from "../media/queue.js";
 
 // Sample rate for the *decode*, not the original file — a peak envelope
 // only needs enough resolution to find the loudest sample in each bucket,
@@ -76,7 +77,10 @@ export function pcmToPeaks(pcm: Buffer, bucketCount: number = DEFAULT_BUCKET_COU
   return peaks;
 }
 
+// Issue #111: waveform decode only ever runs during a scan, a backfill, or
+// an on-demand peaks request — never playback — so this always takes the
+// media queue's "background" lane.
 export async function computePeaks(filePath: string, bucketCount: number = DEFAULT_BUCKET_COUNT): Promise<number[]> {
-  const pcm = await decodePcm(filePath);
+  const pcm = await runMediaTask("background", () => decodePcm(filePath));
   return pcmToPeaks(pcm, bucketCount);
 }

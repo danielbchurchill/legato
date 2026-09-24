@@ -8,6 +8,7 @@ import Fastify from "fastify";
 import { openDb } from "./db.js";
 import { PORT, DATA_DIR } from "./config.js";
 import { FFMPEG_PATH, FPCALC_PATH } from "./mediaBinaries.js";
+import { acquireMediaSlot } from "./media/queue.js";
 import { healthRoutes } from "./routes/health.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { libraryRootsRoutes } from "./routes/library-roots.js";
@@ -174,6 +175,15 @@ app.get<{ Params: { filename: string } }>("/stream/:filename", async (request, r
     return { error: "invalid filename" };
   }
 
+  // Issue #111: this bare spawn is #98's to rewrite properly (it's the
+  // route that trusts a client-supplied filename directly — see
+  // routes/files.ts's own comment on why it exists only for the debug
+  // spike now), so the edit here is deliberately narrow: just give this
+  // spawn a playback-priority slot in the shared media queue, same as the
+  // real GET /files/:id/stream route (stream/cache.ts's ensureCached), so
+  // a scan's background ffmpeg work can't starve this one either.
+  const release = await acquireMediaSlot("playback");
+
   // Decode the source to PCM and re-encode to FLAC — one transport format
   // for every client regardless of source codec, per Legato's design.
   const ffmpeg = spawn("ffmpeg", [
@@ -194,6 +204,13 @@ app.get<{ Params: { filename: string } }>("/stream/:filename", async (request, r
   ffmpeg.stderr.on("data", (chunk: Buffer) => {
     request.log.warn(chunk.toString());
   });
+
+  // Released once this spawn is actually done, not once this handler
+  // returns — the handler hands the stream to reply.send() and returns
+  // long before ffmpeg exits. release() is idempotent, so both 'close'
+  // and 'error' firing is harmless.
+  ffmpeg.on("close", release);
+  ffmpeg.on("error", release);
 
   request.raw.on("close", () => {
     if (!ffmpeg.killed) ffmpeg.kill("SIGTERM");
