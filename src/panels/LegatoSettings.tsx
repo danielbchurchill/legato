@@ -9,6 +9,7 @@ import type { Settings } from '../hooks/useSettings'
 import type { ReplayGainMode } from '../playback/usePlayback'
 import { SERVER_HOST } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
+import { formatLongDuration } from '../ui/format'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
@@ -22,13 +23,45 @@ const API = `http://${SERVER_HOST}:8899/api/v1`
  * content a home behind the rail's `sliders` destination instead. */
 
 type LibraryRoot = { id: number; path: string; label: string | null; enabled: number }
+type ScanStage = 'discover' | 'read_tags' | 'match' | 'collapse' | 'layout' | 'enrich_queued'
 type ScanProgress = {
   jobId: number
   libraryRootId: number
+  stage: ScanStage
+  stageDone: number
+  stageTotal: number | null
   filesScanned: number
   filesTotal: number
   filesAdded: number
   filesUpdated: number
+  rate: number | null
+  etaSeconds: number | null
+}
+// A run actively scanning (progress) vs. one a pause request stopped mid-way
+// — the same job id, kept visible with a resume affordance rather than
+// disappearing the way a genuinely finished run does (issue #123, D17).
+type RunningScan = { progress: ScanProgress; paused: boolean }
+type ScanFileError = { file_path: string; stage: string; reason: string }
+
+// docs/plans/04-library-and-scan.md's own wording for the pipeline, reused
+// verbatim as the stage list's labels.
+const SCAN_STAGE_LABELS: Record<ScanStage, string> = {
+  discover: 'discover',
+  read_tags: 'read tags',
+  match: 'match',
+  collapse: 'collapse',
+  layout: 'layout',
+  enrich_queued: 'enrich queued',
+}
+const SCAN_STAGES: ScanStage[] = ['discover', 'read_tags', 'match', 'collapse', 'layout', 'enrich_queued']
+
+// H1: "estimating…" rather than a guess — mirrors what RateEstimator itself
+// withholds server-side (server/src/scan/rate.ts) until a stage has run long
+// enough to trust.
+function formatEta(etaSeconds: number | null): string {
+  if (etaSeconds === null) return 'estimating…'
+  if (etaSeconds < 60) return 'less than a minute left'
+  return `${formatLongDuration(etaSeconds * 1000)} left`
 }
 
 const REPLAYGAIN_OPTIONS = [
@@ -188,7 +221,8 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
   const [roots, setRoots] = useState<LibraryRoot[] | null>(null)
   const [confirmingRemoveId, setConfirmingRemoveId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [scanning, setScanning] = useState<Record<number, ScanProgress>>({})
+  const [scanning, setScanning] = useState<Record<number, RunningScan>>({})
+  const [scanErrors, setScanErrors] = useState<Record<number, ScanFileError[]>>({})
   const [devices, setDevices] = useState<string[] | null>(null)
   const [confirmingRebuild, setConfirmingRebuild] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
@@ -210,19 +244,53 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
     }
   }, [])
 
+  // Per-file problems the scan noticed and moved past rather than stopping
+  // for (H9) — fetched once a run stops (paused, canceled, done, or error),
+  // since scan_file_errors isn't itself broadcast live over the socket.
+  const loadScanErrors = (jobId: number, libraryRootId: number) => {
+    fetch(`${API}/scan-jobs/${jobId}`)
+      .then((r) => r.json())
+      .then((job: { errors: ScanFileError[] }) => {
+        if (job.errors?.length > 0) setScanErrors((s) => ({ ...s, [libraryRootId]: job.errors }))
+      })
+      .catch(() => undefined)
+  }
+
   useWsEvent(['scan:progress'], (payload) => {
     const p = payload as ScanProgress
-    setScanning((s) => ({ ...s, [p.libraryRootId]: p }))
+    setScanning((s) => ({ ...s, [p.libraryRootId]: { progress: p, paused: false } }))
+    // A fresh run's errors, if any, haven't happened yet — last run's list
+    // would otherwise sit there looking like it's about this one.
+    setScanErrors((s) => {
+      if (!(p.libraryRootId in s)) return s
+      const next = { ...s }
+      delete next[p.libraryRootId]
+      return next
+    })
   })
-  useWsEvent(['scan:done', 'scan:error'], (payload) => {
-    const p = payload as { libraryRootId: number }
+  useWsEvent(['scan:paused'], (payload) => {
+    const p = payload as { jobId: number; libraryRootId: number }
+    setScanning((s) => {
+      const existing = s[p.libraryRootId]
+      if (!existing) return s
+      return { ...s, [p.libraryRootId]: { ...existing, paused: true } }
+    })
+    loadScanErrors(p.jobId, p.libraryRootId)
+  })
+  useWsEvent(['scan:done', 'scan:error', 'scan:canceled'], (payload) => {
+    const p = payload as { jobId: number | null; libraryRootId: number }
     setScanning((s) => {
       const next = { ...s }
       delete next[p.libraryRootId]
       return next
     })
+    if (p.jobId != null) loadScanErrors(p.jobId, p.libraryRootId)
     loadRoots()
   })
+
+  const pauseScan = (jobId: number) => fetch(`${API}/scan-jobs/${jobId}/pause`, { method: 'POST' })
+  const resumeScan = (jobId: number) => fetch(`${API}/scan-jobs/${jobId}/resume`, { method: 'POST' })
+  const cancelScan = (jobId: number) => fetch(`${API}/scan-jobs/${jobId}/cancel`, { method: 'POST' })
 
   const addFolder = async () => {
     if (!IS_TAURI) return
@@ -304,7 +372,8 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
         ) : (
           <ul className="flex flex-col gap-[var(--spacing-sm)]">
             {roots.map((r) => {
-              const progress = scanning[r.id]
+              const run = scanning[r.id]
+              const errors = scanErrors[r.id]
               const confirming = confirmingRemoveId === r.id
               return (
                 <li key={r.id} className="flex flex-col gap-[var(--spacing-xs)]">
@@ -343,34 +412,114 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
                         <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-sm)] text-[var(--color-ink)]">
                           {r.label ?? r.path}
                         </p>
-                        {progress && (
-                          <div className="flex items-center gap-[var(--spacing-xs)] py-[2px]">
-                            <p className="shrink-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-                              {progress.filesScanned}/{progress.filesTotal}
+                        {run && (
+                          <div className="flex flex-col gap-[2px] py-[2px]">
+                            {/* Issue #123 (D17): discover → read tags → match →
+                             * collapse → layout → enrich queued, the current
+                             * stage in ink, everything else in control-color —
+                             * same active/inactive contrast SegmentedControl
+                             * above uses. */}
+                            <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                              {SCAN_STAGES.map((stage, i) => (
+                                <span key={stage}>
+                                  {i > 0 && ' → '}
+                                  <span
+                                    className={
+                                      stage === run.progress.stage ? 'text-[var(--color-ink)]' : undefined
+                                    }
+                                  >
+                                    {SCAN_STAGE_LABELS[stage]}
+                                  </span>
+                                </span>
+                              ))}
                             </p>
-                            {/* MO-11: determinate progress is data, not decoration — stepped
-                             * not eased, same as MusicMapSettings' peers respect for live data. */}
-                            <div className="h-[3px] flex-1 overflow-hidden rounded-full bg-[var(--color-divider)]">
-                              <div
-                                className="h-full rounded-full bg-[var(--color-signal)]"
-                                style={{
-                                  width: `${progress.filesTotal > 0 ? Math.min(100, (progress.filesScanned / progress.filesTotal) * 100) : 0}%`,
-                                }}
-                              />
+                            <div className="flex items-center gap-[var(--spacing-xs)]">
+                              <p className="shrink-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                                {run.progress.stageDone}
+                                {run.progress.stageTotal != null ? `/${run.progress.stageTotal}` : ''}
+                              </p>
+                              {/* MO-11: determinate progress is data, not decoration — stepped
+                               * not eased, same as MusicMapSettings' peers respect for live data. */}
+                              <div className="h-[3px] flex-1 overflow-hidden rounded-full bg-[var(--color-divider)]">
+                                <div
+                                  className="h-full rounded-full bg-[var(--color-signal)]"
+                                  style={{
+                                    width: `${
+                                      run.progress.stageTotal
+                                        ? Math.min(100, (run.progress.stageDone / run.progress.stageTotal) * 100)
+                                        : 0
+                                    }%`,
+                                  }}
+                                />
+                              </div>
                             </div>
+                            <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                              {run.paused
+                                ? 'paused'
+                                : run.progress.rate != null
+                                  ? `${Math.round(run.progress.rate)}/s · ${formatEta(run.progress.etaSeconds)}`
+                                  : formatEta(run.progress.etaSeconds)}
+                            </p>
                           </div>
+                        )}
+                        {!run && errors && errors.length > 0 && (
+                          <details className="py-[2px]">
+                            {/* H9: per-file problems the scan moved past rather
+                             * than stopping for — named with a reason, not just
+                             * a count, once expanded. */}
+                            <summary className="cursor-pointer text-[length:var(--text-sm)] text-[color:var(--color-control)] hover:text-[var(--color-muted-hi)]">
+                              {errors.length} file{errors.length === 1 ? '' : 's'} couldn't be read
+                            </summary>
+                            <ul className="flex flex-col gap-[2px] pt-[2px]">
+                              {errors.map((e, i) => (
+                                <li key={i} className="wrap-anywhere text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                                  <span className="font-[family-name:var(--font-mono)]">{e.file_path}</span> —{' '}
+                                  {e.reason}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-[var(--spacing-sm)]">
-                        <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmingRemoveId(r.id)}
-                          aria-label={`Remove ${r.label ?? r.path}`}
-                          className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-                        >
-                          <Icon name="cancel" size={16} />
-                        </button>
+                        {run ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void (run.paused ? resumeScan(run.progress.jobId) : pauseScan(run.progress.jobId))
+                              }
+                              aria-label={
+                                run.paused
+                                  ? `Resume scanning ${r.label ?? r.path}`
+                                  : `Pause scanning ${r.label ?? r.path}`
+                              }
+                              className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                            >
+                              <Icon name={run.paused ? 'play' : 'pause'} size={16} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void cancelScan(run.progress.jobId)}
+                              aria-label={`Cancel scanning ${r.label ?? r.path}`}
+                              className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                            >
+                              <Icon name="cancel" size={16} />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingRemoveId(r.id)}
+                              aria-label={`Remove ${r.label ?? r.path}`}
+                              className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                            >
+                              <Icon name="cancel" size={16} />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
