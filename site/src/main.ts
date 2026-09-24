@@ -71,6 +71,6 @@ noteLink?.addEventListener('click', (event) => {
   const detail = document.createElement('span');
   detail.className = 'note-detail';
   detail.textContent =
-    ' Submitting stores your email in Cloudflare KV via a small serverless function — no mailing list provider, no tracking, no resale. One message, when Legato is ready to install.';
+    " Submitting stores your email in Cloudflare KV through a small serverless function. There's no mailing list provider, tracking, or resale, and you'll get one message when Legato is ready to install.";
   finePrint.append(detail);
 });

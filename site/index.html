@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Legato — your music library, as a graph</title>
-  <meta name="description" content="Legato is a local-first music player that treats your library as a graph, not a list. Every recording, artist, and album gets its own wiki-style article. Free and local forever — pay only for remote access." />
+  <title>Legato: your music library as a graph</title>
+  <meta name="description" content="Legato is a local-first music player that lays your library out as a graph. Each recording, artist, and album gets its own wiki-style article. Run it on a home server or your Mac or PC, or start in a browser from your Spotify playlists. Local use is free; you pay only for remote access." />
 
-  <meta property="og:title" content="Legato — your music library, as a graph" />
-  <meta property="og:description" content="Every recording, artist, and album gets its own wiki-style article, dense with links to everything else you own. Browse by association, not by search." />
+  <meta property="og:title" content="Legato: your music library as a graph" />
+  <meta property="og:description" content="Each recording, artist, and album gets its own wiki-style article, linked to the rest of what you own. Browse your library by association." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://legato.fm" />
   <meta property="og:image" content="/images/article-view.webp" />
@@ -23,8 +23,9 @@
     <div class="row">
       <a href="#top" aria-label="legato"><img src="/wordmark.svg" alt="" class="wordmark" /></a>
       <nav class="nav-links">
-        <a href="#graph">Graph</a>
+        <a href="#graph">Map</a>
         <a href="#articles">Articles</a>
+        <a href="#ways-in">Ways in</a>
         <a href="#pricing">Pricing</a>
         <a href="#status">Status</a>
       </nav>
@@ -38,74 +39,129 @@
       <div class="hero-content glass">
         <p class="eyebrow">pre-release</p>
         <h1>
-          Every music app treats your library as a list.
+          Most music apps treat your library as a list.
           <span class="accent">Legato treats it as a graph.</span>
         </h1>
         <p class="lede">
-          A local-first player where every recording, artist, album, and label gets its own
-          wiki-style article — dense with links to everything else in your collection.
-          Read about a track and it teaches you something: the engineer also worked on three
-          other records you own, or two artists you never connected share a producer.
+          A local-first player that gives each recording, artist, album, and label its own
+          wiki-style article, linked to the rest of your library. Open a track's article and
+          you might learn its engineer worked on three other records you own, or that two
+          artists you never connected share a producer.
         </p>
         <div class="hero-actions">
           <a class="btn btn-pill" href="#waitlist">Join the waitlist</a>
-          <a class="btn btn-link" href="#graph">See the graph ↓</a>
+          <a class="btn btn-link" href="#graph">See the map ↓</a>
         </div>
       </div>
     </section>
 
     <section class="feature-block" id="graph">
       <div class="feature-text">
-        <p class="eyebrow">the canvas</p>
-        <h2>Browse by association, not by search</h2>
+        <p class="eyebrow">the map</p>
+        <h2>Browse by association</h2>
         <p>
-          There's no folder tree and no flat list of ten thousand tracks. The canvas is a live,
-          force-directed graph of your library — recordings, artists, releases, labels,
-          producers — laid out by how they connect to each other. Pan into a cluster and
-          you're exploring the shape of your own taste.
+          The map is a live, force-directed graph of your library. Recordings, artists,
+          releases, labels, and producers sit where their connections pull them.
         </p>
       </div>
       <figure class="feature-figure">
-        <img src="/images/graph-overview.webp" alt="Legato's canvas view showing a real scanned library rendered as a node graph, with the collection panel open on the left." loading="lazy" width="1200" height="683" />
-        <figcaption>A real scan, live in the app — 26 artists, 52 albums, 715 tracks.</figcaption>
+        <img src="/images/graph-overview.webp" alt="Legato's map view showing a real scanned library rendered as a node graph, with the collection panel open on the left." loading="lazy" width="1200" height="683" />
+        <figcaption>A real scan, live in the app: 26 artists, 52 albums, 715 tracks.</figcaption>
       </figure>
     </section>
 
     <section class="feature-block reverse" id="articles">
       <div class="feature-text">
         <p class="eyebrow">the article</p>
-        <h2>Every record has something to teach you</h2>
+        <h2>Read your records like an encyclopedia</h2>
         <p>
-          Click a node and it opens like an encyclopedia entry, not a details pane. Releases,
-          recordings, credits — every fact links somewhere else in your collection, so reading
-          about a record is how you find the connections you didn't know were there.
+          Click a node and Legato opens its article. Releases, recordings, and credits each
+          link to their own articles, so you find connections by reading.
         </p>
       </div>
       <figure class="feature-figure">
         <img src="/images/article-view.webp" alt="An artist's full article view in Legato, listing real releases and recordings pulled from a scanned library, each one a link." loading="lazy" width="1600" height="913" />
-        <figcaption>Real releases, real recordings, real links — pulled from an actual scanned library, not sample data.</figcaption>
+        <figcaption>Releases and recordings from a scanned library, each one a link.</figcaption>
       </figure>
     </section>
 
     <section class="two-col" id="understanding">
       <article class="glass card">
-        <img class="card-icon" src="/icons/map.svg" alt="" width="24" height="24" />
+        <span class="card-icon" data-icon="map" aria-hidden="true"></span>
         <h3>See the shape of your taste</h3>
         <p>
-          Collection understanding: clusters, gaps, and the corners of your library that are
-          quietly over-represented. The graph makes the shape of what you own visible — size
-          alone doesn't show it.
+          The map shows the clusters and gaps in your library, and the corners that take up
+          more of it than you realised.
         </p>
       </article>
       <article class="glass card">
-        <img class="card-icon" src="/icons/tag.svg" alt="" width="24" height="24" />
+        <span class="card-icon" data-icon="tag" aria-hidden="true"></span>
         <h3>Fix your metadata in place</h3>
         <p>
-          Library hygiene: Legato surfaces missing, inconsistent, or conflicting tags and lets
-          you fix them right there on the graph — no separate tagging app, no round trip through
-          a spreadsheet.
+          Legato flags missing and conflicting tags, and you fix them on the map itself,
+          without a separate tagging app.
         </p>
       </article>
+      <article class="glass card">
+        <span class="card-icon" data-icon="list" aria-hidden="true"></span>
+        <h3>A plain library when you want one</h3>
+        <p>
+          Some nights you want to pick an album and press play. Next to the map sits an
+          ordinary album grid and track table that stays fast at thirty thousand albums. Both
+          share one search and selection, so switching views keeps your place.
+        </p>
+      </article>
+      <article class="glass card">
+        <span class="card-icon" data-icon="brightness" aria-hidden="true"></span>
+        <h3>Ink or paper</h3>
+        <p>
+          The dark theme you see here, plus a light one modelled on sheet music: warm off-white
+          paper and pen-ink black. Every text and edge colour passes WCAG AA contrast. Pick one
+          or follow your system setting.
+        </p>
+      </article>
+    </section>
+
+    <section class="ways-in" id="ways-in">
+      <p class="eyebrow center">ways in</p>
+      <h2 class="center">Start wherever your music already lives</h2>
+      <div class="three-col">
+        <article class="glass card">
+          <span class="card-icon" data-icon="database" aria-hidden="true"></span>
+          <p class="eyebrow">on a home server</p>
+          <h3>For the NAS in the closet</h3>
+          <p>
+            Docker, Synology Container Manager, Unraid, or a one-line install on Linux. First
+            boot shows a short claim code; after that any device on your network can open
+            Legato in a browser, no desktop session required. Built for six-figure FLAC
+            libraries, with a scan you can pause and resume.
+          </p>
+        </article>
+        <article class="glass card">
+          <span class="card-icon" data-icon="laptop" aria-hidden="true"></span>
+          <p class="eyebrow">on your computer</p>
+          <h3>For the library on your laptop</h3>
+          <p>
+            A signed desktop app for Mac (Apple Silicon and Intel), Windows, and Linux. It finds
+            your music folders, plays gaplessly through native audio, and can keep serving your
+            library from the menu bar after you close the window, so your phone still reaches it.
+          </p>
+        </article>
+        <article class="glass card">
+          <span class="card-icon" data-icon="globe" aria-hidden="true"></span>
+          <p class="eyebrow">in a browser</p>
+          <h3>For people who own no files at all</h3>
+          <p>
+            A free legato.fm account turns your Spotify playlists into a map of your taste. Play
+            tracks through a friend's Legato server when they invite you, or hand them off to
+            Spotify. Nothing to install, and running your own library stays an option for later.
+          </p>
+        </article>
+      </div>
+      <p class="ways-in-note">
+        On your phone, Legato installs from the browser at launch, with lock-screen controls.
+        Native mobile apps follow.
+      </p>
     </section>
 
     <section class="pricing" id="pricing">
@@ -118,8 +174,18 @@
           <ul>
             <li>Runs entirely on your own machine</li>
             <li>Your library never leaves your disk</li>
-            <li>Full graph, full playback, full hygiene tools</li>
+            <li>Full map, playback, and hygiene tools</li>
             <li>No account, no subscription</li>
+          </ul>
+        </article>
+        <article class="glass card pricing-card">
+          <h3>legato.fm account</h3>
+          <p class="price"><span class="mono">$0</span></p>
+          <ul>
+            <li>Legato in any browser, nothing to install</li>
+            <li>Import your Spotify playlists as a map</li>
+            <li>Join friends' servers when they invite you</li>
+            <li>Optional. A home install doesn't need one.</li>
           </ul>
         </article>
         <article class="glass card pricing-card">
@@ -128,7 +194,8 @@
           <ul>
             <li>An always-on bridge from your phone to your own home library</li>
             <li>Off-LAN access, Plex/Jellyfin-style</li>
-            <li>Never stores your audio — it relays, it doesn't host</li>
+            <li>Lossless at home, sized to the connection when you're out</li>
+            <li>Relays your audio without storing it</li>
             <li>The only thing Legato ever charges for</li>
           </ul>
         </article>
@@ -140,10 +207,10 @@
         <p class="eyebrow">status</p>
         <h2>Legato isn't out yet.</h2>
         <p>
-          The app is real and running against real libraries — every screenshot on this page is
-          a live scan, not a mockup. It isn't packaged for public download yet: we're finishing
-          the design pass and cross-platform builds before the first release. Join the waitlist
-          below to hear the moment that changes.
+          The app runs today against real libraries, and each screenshot on this page comes
+          from a live scan. It isn't packaged for public download yet. The beta opens in
+          three waves: home servers first, then the Mac and Windows desktop app, then the
+          browser and Spotify path. Join the waitlist below to hear when your wave opens.
         </p>
       </div>
     </section>
@@ -152,7 +219,7 @@
       <div class="glass waitlist-panel">
         <p class="eyebrow">get notified</p>
         <h2>Join the waitlist</h2>
-        <p>No newsletter, no spam — one email when Legato is ready to install.</p>
+        <p>One email when Legato is ready to install. No newsletter.</p>
         <form id="waitlist-form" class="waitlist-form">
           <label class="sr-only" for="waitlist-email">Email address</label>
           <input id="waitlist-email" name="email" type="email" placeholder="you@example.com" required autocomplete="email" />
