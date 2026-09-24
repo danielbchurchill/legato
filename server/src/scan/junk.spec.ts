@@ -69,6 +69,16 @@ describe("CHOKIDAR_IGNORED", () => {
     watcher.on("add", (filePath) => added.push(toPosixRelative(dir, filePath)));
     await new Promise<void>((resolve) => watcher.once("ready", resolve));
 
+    // On macOS, fs.watch can drop events written in the first moments after
+    // chokidar reports "ready", which made this test miss the real file ~1 run
+    // in 5. Re-touch a probe until the watcher demonstrably sees it, so every
+    // junk write below lands on a watcher that is actually live.
+    const probe = path.join(dir, "Artist", "Album", "00 Probe.flac");
+    for (let start = Date.now(); !added.includes("Artist/Album/00 Probe.flac") && Date.now() - start < 5000; ) {
+      writeFileSync(probe, "x");
+      await waitUntil(() => added.includes("Artist/Album/00 Probe.flac"), 250);
+    }
+
     for (const junkDir of JUNK_DIRS) {
       writeFileSync(path.join(dir, "Artist", junkDir, "junk.flac"), "x");
     }
@@ -82,6 +92,6 @@ describe("CHOKIDAR_IGNORED", () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     await watcher.close();
 
-    expect(added).toEqual(["Artist/Album/01 Real Track.flac"]);
+    expect(added).toEqual(["Artist/Album/00 Probe.flac", "Artist/Album/01 Real Track.flac"]);
   }, 15000);
 });
