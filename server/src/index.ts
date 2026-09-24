@@ -176,7 +176,7 @@ app.get<{ Params: { filename: string } }>("/stream/:filename", async (request, r
 
   // Decode the source to PCM and re-encode to FLAC — one transport format
   // for every client regardless of source codec, per Legato's design.
-  const ffmpeg = spawn("ffmpeg", [
+  const ffmpeg = spawn(FFMPEG_PATH, [
     "-hide_banner",
     "-loglevel",
     "error",
