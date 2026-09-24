@@ -29,7 +29,9 @@ import { RightPanelHeader } from './shell/RightPanelHeader'
 import { InspectorRail } from './shell/InspectorRail'
 import { InspectorPanel } from './shell/InspectorPanel'
 import { RightPanel } from './shell/RightPanel'
+import { ViewSwitch, type ViewMode } from './shell/ViewSwitch'
 import type { RailDestination } from './shell/rail'
+import { LibraryView } from './library/LibraryView'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -231,6 +233,15 @@ function MainApp() {
   // time.
   const lastRailDestinationRef = useRef<RailDestination>('search')
   const { settings, updateSettings } = useSettings()
+  // Issue #126, D11: the map/library switch persists like every other
+  // settings-backed toggle in the app (hoverDimEnabled, replaygainMode,
+  // etc.) rather than resetting to the map on every launch.
+  const viewMode = (settings.viewMode as ViewMode) || 'map'
+  // Lifted out of CollectionPanel's SearchField (which used to own this as
+  // local state) so the library view can filter against the exact same
+  // text — "shared search" per the issue means one query, not two search
+  // boxes that happen to agree by coincidence.
+  const [libraryQuery, setLibraryQuery] = useState('')
   const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
   // D12: repeat is a persisted player setting (unlike shuffle, which lives
   // entirely inside usePlayback's own playSequence/originalOrder), so it
@@ -406,33 +417,46 @@ function MainApp() {
 
   return (
     <AppShell>
-      <Canvas
-        key={rebuildEpoch}
-        ref={canvasRef}
-        selectedNodeId={selectedNodeId}
-        onSelectNode={(id) => {
-          setSelectedNodeId(id)
-          // Deselecting has to take the inspector with it — it is a view of
-          // the selected node, and there would be nothing behind it.
-          if (id == null) setInspectorOpen(false)
-        }}
-        onOpenInspector={() => setInspectorOpen(true)}
-        playback={playback}
-        dimOnHoverEnabled={dimOnHoverEnabled}
-        reducedMotionForced={reducedMotionForced}
-        showArtistArt={showArtistArt}
-        showReleaseArt={showReleaseArt}
-        showTrackArt={showTrackArt}
-        showCreditNodes={showCreditNodes}
-        nodeSizeMultipliers={nodeSizeMultipliers}
-        edgeThicknessMultiplier={edgeThicknessMultiplier}
-        edgeColorOverrides={edgeColorOverrides}
-        nodesLocked={nodesLocked}
-        forceCenterStrength={forceCenterStrength}
-        forceRepelStrength={forceRepelStrength}
-        forceLinkStrength={forceLinkStrength}
-        linkDistance={linkDistance}
-      />
+      {viewMode === 'map' ? (
+        <Canvas
+          key={rebuildEpoch}
+          ref={canvasRef}
+          selectedNodeId={selectedNodeId}
+          onSelectNode={(id) => {
+            setSelectedNodeId(id)
+            // Deselecting has to take the inspector with it — it is a view of
+            // the selected node, and there would be nothing behind it.
+            if (id == null) setInspectorOpen(false)
+          }}
+          onOpenInspector={() => setInspectorOpen(true)}
+          playback={playback}
+          dimOnHoverEnabled={dimOnHoverEnabled}
+          reducedMotionForced={reducedMotionForced}
+          showArtistArt={showArtistArt}
+          showReleaseArt={showReleaseArt}
+          showTrackArt={showTrackArt}
+          showCreditNodes={showCreditNodes}
+          nodeSizeMultipliers={nodeSizeMultipliers}
+          edgeThicknessMultiplier={edgeThicknessMultiplier}
+          edgeColorOverrides={edgeColorOverrides}
+          nodesLocked={nodesLocked}
+          forceCenterStrength={forceCenterStrength}
+          forceRepelStrength={forceRepelStrength}
+          forceLinkStrength={forceLinkStrength}
+          linkDistance={linkDistance}
+        />
+      ) : (
+        // Selecting a row here reuses the exact same selectAndFly the
+        // canvas's own node click uses — flyToNode on canvasRef is a no-op
+        // while Canvas is unmounted (the ref is null), so the selection
+        // itself carries over but the camera move is deferred rather than
+        // queued: switching back to the map does not re-fly to whatever was
+        // last picked here. Documented scope boundary, not a bug — see
+        // DESIGN.md "Library view".
+        <LibraryView query={libraryQuery} onSelectNode={selectAndFly} />
+      )}
+
+      <ViewSwitch value={viewMode} onChange={(mode) => void updateSettings({ viewMode: mode })} />
 
       <LeftPanelHeader
         expanded={activeRailDestination != null}
@@ -463,6 +487,8 @@ function MainApp() {
             onSelectNode={selectAndFly}
             onOpenMaintenance={() => setHygieneOpen(true)}
             playback={playback}
+            query={libraryQuery}
+            onQueryChange={setLibraryQuery}
           />
         </InspectorPanel>
       )}
