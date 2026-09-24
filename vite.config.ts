@@ -16,10 +16,11 @@ export default defineConfig({
     host: '127.0.0.1',
   },
   test: {
-    // Without this, vitest's default recursive glob from repo root also
-    // picks up server/src/**/*.spec.ts — a separate suite with its own
-    // runner (npm --prefix server test), own conventions, and no reason to
-    // run twice under two different configs.
-    exclude: ['server/**', 'node_modules/**'],
+    // Root tests are the React app's only. server/ and relay/ each run their
+    // own suite with their own node_modules (npm --prefix server test,
+    // npm --prefix relay test), so a repo-wide glob either runs them twice or
+    // fails to resolve their dependencies from here. An allowlist keeps the
+    // next top-level package from breaking this the same way relay/ did.
+    include: ['src/**/*.spec.{ts,tsx}'],
   },
 })
