@@ -1,7 +1,9 @@
-import logoSrc from '../assets/brand/white-logo.png'
+import whiteLogoSrc from '../assets/brand/white-logo.png'
+import blackLogoSrc from '../assets/brand/black-logo.png'
 import { Icon } from '../ui/Icon'
 import { Tooltip } from '../ui/Tooltip'
 import { Surface } from './Surface'
+import type { ResolvedTheme } from '../hooks/useTheme'
 
 /* v2's left header: docked to the top-left corner, matching the rail +
  * Inspector Panel's combined width below it. Same position and size
@@ -24,19 +26,23 @@ type LeftPanelHeaderProps = {
   expanded: boolean
   onCollapse: () => void
   onExpand: () => void
+  /** #136: same reasoning as LibrarySetup's wordmark — a real vendored PNG,
+   * not type a color token can reach, so this is the one place the header
+   * needs to know which theme is active. */
+  theme: ResolvedTheme
 }
 
 const GEOMETRY = 'absolute top-0 left-0 z-10 flex h-[var(--header-height)] w-[calc(var(--rail-width)+var(--panel-width))] items-center p-[10px]'
 
-const logomark = (
-  <img
-    src={logoSrc}
-    alt="legato"
-    className="pointer-events-none h-[var(--logo-header)] w-[var(--logo-header)] select-none"
-  />
-)
+export function LeftPanelHeader({ expanded, onCollapse, onExpand, theme }: LeftPanelHeaderProps) {
+  const logomark = (
+    <img
+      src={theme === 'light' ? blackLogoSrc : whiteLogoSrc}
+      alt="legato"
+      className="pointer-events-none h-[var(--logo-header)] w-[var(--logo-header)] select-none"
+    />
+  )
 
-export function LeftPanelHeader({ expanded, onCollapse, onExpand }: LeftPanelHeaderProps) {
   const content = expanded ? (
     <>
       {/* The drag region is whatever space isn't a button — same approach
