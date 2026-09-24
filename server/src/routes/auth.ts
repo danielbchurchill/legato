@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import {
   GOOGLE_CLIENT_ID,
@@ -56,7 +56,7 @@ export type OAuthProfile = {
 // the same account refreshes the profile fields and last_login_at rather
 // than inserting a new row, so a session created before this call keeps
 // pointing at a valid user.id.
-export function upsertUser(db: Database.Database, provider: Provider, profile: OAuthProfile): UserRow {
+export function upsertUser(db: Database, provider: Provider, profile: OAuthProfile): UserRow {
   db.prepare(
     `INSERT INTO users (provider, provider_user_id, email, display_name, avatar_url)
      VALUES (?, ?, ?, ?, ?)
@@ -77,7 +77,7 @@ export function upsertUser(db: Database.Database, provider: Provider, profile: O
 // live forever.
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-export function createSession(db: Database.Database, userId: number): { token: string; expiresAt: Date } {
+export function createSession(db: Database, userId: number): { token: string; expiresAt: Date } {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
   db.prepare("INSERT INTO sessions (id, user_id, expires_at) VALUES (?, ?, ?)").run(
@@ -88,7 +88,7 @@ export function createSession(db: Database.Database, userId: number): { token: s
   return { token, expiresAt };
 }
 
-export function getUserBySessionToken(db: Database.Database, token: string): UserRow | null {
+export function getUserBySessionToken(db: Database, token: string): UserRow | null {
   const row = db
     .prepare(
       `SELECT u.* FROM sessions s
@@ -99,7 +99,7 @@ export function getUserBySessionToken(db: Database.Database, token: string): Use
   return row ?? null;
 }
 
-export function deleteSession(db: Database.Database, token: string): void {
+export function deleteSession(db: Database, token: string): void {
   db.prepare("DELETE FROM sessions WHERE id = ?").run(token);
 }
 
@@ -248,7 +248,7 @@ function successPage(displayName: string | null): string {
 </html>`;
 }
 
-export function authRoutes(db: Database.Database) {
+export function authRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/auth/google", async (_request, reply) => {
       if (!isGoogleConfigured()) {

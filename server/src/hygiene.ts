@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "./sqlite.js";
 
 export type WorklistItem =
   | {
@@ -19,7 +19,7 @@ export type WorklistItem =
 // enrichment ambiguity/no-match/malformed-tag flags (M7, recorded via
 // field_provenance), and files that vanished from disk (M1, never
 // deleted, just marked).
-export function getWorklist(db: Database.Database, typeFilter?: string): WorklistItem[] {
+export function getWorklist(db: Database, typeFilter?: string): WorklistItem[] {
   const items: WorklistItem[] = [];
 
   if (!typeFilter || typeFilter === "fuzzy_pending") {

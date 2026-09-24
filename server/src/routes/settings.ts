@@ -1,14 +1,14 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 
 type SettingRow = { key: string; value: string };
 
-function allSettings(db: Database.Database) {
+function allSettings(db: Database) {
   const rows = db.prepare("SELECT key, value FROM settings").all() as SettingRow[];
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
 }
 
-export function settingsRoutes(db: Database.Database) {
+export function settingsRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/settings", async () => allSettings(db));
 

@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { broadcast } from "../ws.js";
 
@@ -28,7 +28,7 @@ export type PlaylistTrackDetail = {
   playlist_track_id: number;
 };
 
-export function listPlaylists(db: Database.Database): PlaylistListRow[] {
+export function listPlaylists(db: Database): PlaylistListRow[] {
   return db
     .prepare(
       `SELECT p.id, p.name, p.created_at, p.updated_at,
@@ -39,13 +39,13 @@ export function listPlaylists(db: Database.Database): PlaylistListRow[] {
     .all() as PlaylistListRow[];
 }
 
-export function createPlaylist(db: Database.Database, name: string): PlaylistRow {
+export function createPlaylist(db: Database, name: string): PlaylistRow {
   return db
     .prepare("INSERT INTO playlists (name) VALUES (?) RETURNING id, name, created_at, updated_at")
     .get(name) as PlaylistRow;
 }
 
-export function renamePlaylist(db: Database.Database, id: number, name: string): PlaylistRow {
+export function renamePlaylist(db: Database, id: number, name: string): PlaylistRow {
   return db
     .prepare(
       `UPDATE playlists SET name = ?, updated_at = datetime('now')
@@ -54,7 +54,7 @@ export function renamePlaylist(db: Database.Database, id: number, name: string):
     .get(name, id) as PlaylistRow;
 }
 
-export function deletePlaylist(db: Database.Database, id: number): void {
+export function deletePlaylist(db: Database, id: number): void {
   db.prepare("DELETE FROM playlists WHERE id = ?").run(id);
 }
 
@@ -63,7 +63,7 @@ export function deletePlaylist(db: Database.Database, id: number): void {
 // n.id — a node can legitimately appear in this result more than once
 // (same track twice in one playlist), so collapsing on the node would
 // wrongly merge those rows back into one.
-export function listPlaylistTracks(db: Database.Database, playlistId: number): PlaylistTrackDetail[] {
+export function listPlaylistTracks(db: Database, playlistId: number): PlaylistTrackDetail[] {
   return db
     .prepare(
       `SELECT n.id, n.title, f.track_no, f.disc_no, r.canonical_duration_ms,
@@ -79,7 +79,7 @@ export function listPlaylistTracks(db: Database.Database, playlistId: number): P
     .all(playlistId) as PlaylistTrackDetail[];
 }
 
-export function addTrackToPlaylist(db: Database.Database, playlistId: number, nodeId: number): PlaylistTrackRow {
+export function addTrackToPlaylist(db: Database, playlistId: number, nodeId: number): PlaylistTrackRow {
   return db.transaction(() => {
     const { maxPosition } = db
       .prepare("SELECT MAX(position) AS maxPosition FROM playlist_tracks WHERE playlist_id = ?")
@@ -102,7 +102,7 @@ export function addTrackToPlaylist(db: Database.Database, playlistId: number, no
 // old and new position — simpler to reason about, and the row counts here
 // (a playlist's track list) never get large enough for that to matter.
 export function reorderPlaylistTrack(
-  db: Database.Database,
+  db: Database,
   playlistId: number,
   trackRowId: number,
   newPosition: number,
@@ -127,7 +127,7 @@ export function reorderPlaylistTrack(
   })();
 }
 
-export function removeTrackFromPlaylist(db: Database.Database, playlistId: number, trackRowId: number): void {
+export function removeTrackFromPlaylist(db: Database, playlistId: number, trackRowId: number): void {
   db.transaction(() => {
     db.prepare("DELETE FROM playlist_tracks WHERE id = ? AND playlist_id = ?").run(trackRowId, playlistId);
 
@@ -142,7 +142,7 @@ export function removeTrackFromPlaylist(db: Database.Database, playlistId: numbe
   })();
 }
 
-export function playlistsRoutes(db: Database.Database) {
+export function playlistsRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/playlists", async () => listPlaylists(db));
 

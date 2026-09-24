@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "./sqlite.js";
 
 /* The three metadata rows on the canvas's selected-node card
  * (src/canvas/NodeCard.tsx), and nothing else.
@@ -40,7 +40,7 @@ export type NodeSummary =
  * rather than a zero — "nothing has been played yet" and "this artist's
  * albums have been played zero times" are different claims, and only one of
  * them is true on a fresh library. */
-function topAlbumForArtist(db: Database.Database, artistNodeId: number): { id: number; title: string } | null {
+function topAlbumForArtist(db: Database, artistNodeId: number): { id: number; title: string } | null {
   const row = db
     .prepare(
       `SELECT n.id AS id, n.title AS title, COUNT(*) AS playCount
@@ -62,7 +62,7 @@ function topAlbumForArtist(db: Database.Database, artistNodeId: number): { id: n
 }
 
 /** Null for a node id that does not exist — the route turns that into a 404. */
-export function nodeSummary(db: Database.Database, nodeId: number): NodeSummary {
+export function nodeSummary(db: Database, nodeId: number): NodeSummary {
   const node = db.prepare("SELECT id, type FROM nodes WHERE id = ?").get(nodeId) as
     | { id: number; type: string }
     | undefined;

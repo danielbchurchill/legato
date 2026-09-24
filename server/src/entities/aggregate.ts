@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { pickMode } from "./mode.js";
 
 export type EdgeRef = { fromNode: number; toNode: number };
@@ -136,7 +136,7 @@ export type ArtistRelease = {
 // client-side regrouping of the flattened recording list GET /nodes/:id
 // also returns. Ordered oldest-first (undated releases last) since a
 // discography reads chronologically by default.
-export function listArtistReleases(db: Database.Database, artistNodeId: number): ArtistRelease[] {
+export function listArtistReleases(db: Database, artistNodeId: number): ArtistRelease[] {
   return db
     .prepare(
       `SELECT n.id AS id, n.title AS title, al.track_count AS trackCount,
@@ -166,7 +166,7 @@ export function listArtistReleases(db: Database.Database, artistNodeId: number):
 // Prunes against the ids this run computed rather than a SQL rewrite of the
 // same rule — two expressions of "what counts as an artist" would drift,
 // and the one in SQL would be the one nobody remembered to update.
-function pruneEntities(db: Database.Database, table: "albums" | "artists", keep: number[]): void {
+function pruneEntities(db: Database, table: "albums" | "artists", keep: number[]): void {
   db.prepare("CREATE TEMP TABLE IF NOT EXISTS entity_keep (node_id INTEGER PRIMARY KEY)").run();
   db.prepare("DELETE FROM entity_keep").run();
   const insert = db.prepare("INSERT OR IGNORE INTO entity_keep (node_id) VALUES (?)");
@@ -175,7 +175,7 @@ function pruneEntities(db: Database.Database, table: "albums" | "artists", keep:
   db.prepare(`DELETE FROM ${table} WHERE node_id NOT IN (SELECT node_id FROM entity_keep)`).run();
 }
 
-export function recomputeEntities(db: Database.Database): void {
+export function recomputeEntities(db: Database): void {
   const appearsOn = db
     .prepare("SELECT from_node AS fromNode, to_node AS toNode FROM edges WHERE type = 'appears_on'")
     .all() as EdgeRef[];

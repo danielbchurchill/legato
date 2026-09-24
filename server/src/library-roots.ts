@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "./sqlite.js";
 
 export type LibraryRootContents = { files: number; plays: number; tagWrites: number };
 
@@ -9,7 +9,7 @@ export type LibraryRootContents = { files: number; plays: number; tagWrites: num
 /** What removing this root would destroy. plays is the number that matters:
  *  a re-scan rebuilds files, nodes and edges from disk, but nothing brings
  *  listening history back. */
-export function countLibraryRootContents(db: Database.Database, id: number): LibraryRootContents {
+export function countLibraryRootContents(db: Database, id: number): LibraryRootContents {
   return db
     .prepare(
       `SELECT
@@ -30,7 +30,7 @@ export function countLibraryRootContents(db: Database.Database, id: number): Lib
 //
 // One transaction: a half-removed root leaves files pointing at a library
 // root that no longer exists, which no later scan would ever reconcile.
-export function removeLibraryRootCascade(db: Database.Database, id: number): void {
+export function removeLibraryRootCascade(db: Database, id: number): void {
   const scopedFiles = "SELECT id FROM files WHERE library_root_id = ?";
   const remove = db.transaction(() => {
     db.prepare(`DELETE FROM plays WHERE file_id IN (${scopedFiles})`).run(id);

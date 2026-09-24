@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { MbArtistRelation } from "./mbClient.js";
 
 // Mirrors match/edges.ts's findOrCreateNode and credits.ts's
@@ -10,7 +10,7 @@ import type { MbArtistRelation } from "./mbClient.js";
 // created so the caller can cascade enrichment onto it — a member/group
 // discovered this way starts with no MBID, no photo, and no member
 // relations of its own looked up yet.
-function findOrCreateArtistNode(db: Database.Database, title: string): { id: number; created: boolean } {
+function findOrCreateArtistNode(db: Database, title: string): { id: number; created: boolean } {
   const existing = db
     .prepare("SELECT id FROM nodes WHERE type = 'artist' AND lower(trim(title)) = lower(trim(?))")
     .get(title) as { id: number } | undefined;
@@ -41,7 +41,7 @@ function findOrCreateArtistNode(db: Database.Database, title: string): { id: num
 // description, and their own member-relation lookup) rather than waiting
 // for the next full recompute to notice them.
 export function applyMemberRelations(
-  db: Database.Database,
+  db: Database,
   artistNodeId: number,
   relations: MbArtistRelation[],
 ): number[] {

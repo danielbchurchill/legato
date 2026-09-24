@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 
 type CountsRow = {
@@ -17,7 +17,7 @@ type TopRow = { id: number; title: string; playCount: number };
 // current-library aggregates, not play counts, and joining plays straight
 // through the edge that actually links a recording to its artist/release
 // avoids a second source of truth for that relationship.
-function topByEdge(db: Database.Database, edgeType: "performed_by" | "appears_on"): TopRow | null {
+function topByEdge(db: Database, edgeType: "performed_by" | "appears_on"): TopRow | null {
   return (
     (db
       .prepare(
@@ -33,7 +33,7 @@ function topByEdge(db: Database.Database, edgeType: "performed_by" | "appears_on
   );
 }
 
-function topTrack(db: Database.Database): TopRow | null {
+function topTrack(db: Database): TopRow | null {
   return (
     (db
       .prepare(
@@ -48,7 +48,7 @@ function topTrack(db: Database.Database): TopRow | null {
   );
 }
 
-export function statsRoutes(db: Database.Database) {
+export function statsRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/stats", async () => {
       const counts = db

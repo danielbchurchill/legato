@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { computeFingerprint } from "./fingerprint.js";
 
 type FileRow = {
@@ -37,7 +37,7 @@ function normalizeForFuzzyMatch(value: string): string {
 }
 
 function setMatch(
-  db: Database.Database,
+  db: Database,
   fileId: number,
   recordingNodeId: number,
   matchSource: string,
@@ -54,7 +54,7 @@ function setMatch(
 // alone at its current node (e.g. a repeat re-scan after a previous split),
 // this is a no-op — otherwise every re-scan would fork off a fresh orphaned
 // node forever, since merge_overrides is checked unconditionally every time.
-function ensureStandaloneNode(db: Database.Database, file: FileRow): number {
+function ensureStandaloneNode(db: Database, file: FileRow): number {
   const siblings = db
     .prepare("SELECT COUNT(*) AS n FROM files WHERE recording_node_id = ? AND id != ?")
     .get(file.recording_node_id, file.id) as { n: number };
@@ -72,7 +72,7 @@ function ensureStandaloneNode(db: Database.Database, file: FileRow): number {
 
 // The user layer always wins and is never re-evaluated by the tiers below —
 // checked first, on every re-scan, per Legato's node-collapse design.
-function applyOverrideIfPresent(db: Database.Database, file: FileRow): boolean {
+function applyOverrideIfPresent(db: Database, file: FileRow): boolean {
   const override = db
     .prepare(
       "SELECT forced_recording_node_id FROM merge_overrides WHERE file_id = ? ORDER BY decided_at DESC LIMIT 1",
@@ -91,7 +91,7 @@ function applyOverrideIfPresent(db: Database.Database, file: FileRow): boolean {
 // Tier 1 — same MusicBrainz recording MBID, read from locally embedded tags
 // only (a live MusicBrainz text-search lookup that assigns an MBID to an
 // untagged file is M7's job, not this). High confidence: matched files only.
-function tryMbidMatch(db: Database.Database, file: FileRow): boolean {
+function tryMbidMatch(db: Database, file: FileRow): boolean {
   const mbid = parseTagsRaw(file.tags_raw)?.mbRecordingId;
   if (!mbid) return false;
 
@@ -117,7 +117,7 @@ function tryMbidMatch(db: Database.Database, file: FileRow): boolean {
 // Fingerprinting is local-only (see fingerprint.ts); if fpcalc isn't
 // installed this tier silently never matches, which is fine — it degrades
 // to relying on tier 3, it doesn't break anything.
-async function tryAcoustidMatch(db: Database.Database, file: FileRow): Promise<boolean> {
+async function tryAcoustidMatch(db: Database, file: FileRow): Promise<boolean> {
   let fingerprint = (
     db.prepare("SELECT acoustid FROM recordings WHERE node_id = ?").get(file.recording_node_id) as
       | { acoustid: string | null }
@@ -150,7 +150,7 @@ async function tryAcoustidMatch(db: Database.Database, file: FileRow): Promise<b
 // Tier 3 — fuzzy artist+title+duration among still-unmatched files. Low
 // confidence: flags a candidate but never merges silently — confirmation
 // happens via POST /api/v1/merge-overrides against GET /merge-suggestions.
-function tryFuzzyMatch(db: Database.Database, file: FileRow): boolean {
+function tryFuzzyMatch(db: Database, file: FileRow): boolean {
   const tags = parseTagsRaw(file.tags_raw);
   if (!tags?.title || !tags?.artist) return false;
 
@@ -185,7 +185,7 @@ function tryFuzzyMatch(db: Database.Database, file: FileRow): boolean {
   return false;
 }
 
-export async function collapseFile(db: Database.Database, fileId: number): Promise<void> {
+export async function collapseFile(db: Database, fileId: number): Promise<void> {
   const file = db
     .prepare("SELECT id, recording_node_id, file_path, tags_raw, match_source FROM files WHERE id = ?")
     .get(fileId) as FileRow | undefined;

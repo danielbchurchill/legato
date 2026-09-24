@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { parseTags } from "./tags.js";
 
 export type TagBackfillProgress = {
@@ -23,7 +23,7 @@ export type TagBackfillProgress = {
 // under a growing tag vocabulary matters more than avoiding a few seconds
 // of re-parsing an already-current library.
 export async function backfillTagColumns(
-  db: Database.Database,
+  db: Database,
   onProgress?: (progress: TagBackfillProgress) => void,
 ): Promise<TagBackfillProgress> {
   const files = db.prepare("SELECT id, file_path FROM files WHERE missing_since IS NULL ORDER BY id").all() as {

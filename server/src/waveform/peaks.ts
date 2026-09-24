@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { computePeaks } from "./decode.js";
 import { isCached, readPeaks, writePeaks } from "./store.js";
 
@@ -6,7 +6,7 @@ import { isCached, readPeaks, writePeaks } from "./store.js";
 // duplicate, or the same track copied under a different library root)
 // share one computed envelope, the same reasoning cover/store.ts's cache
 // already uses for cover art.
-export async function getOrComputePeaks(db: Database.Database, fileId: number): Promise<number[] | null> {
+export async function getOrComputePeaks(db: Database, fileId: number): Promise<number[] | null> {
   const file = db.prepare("SELECT file_path, file_hash FROM files WHERE id = ?").get(fileId) as
     | { file_path: string; file_hash: string | null }
     | undefined;
@@ -24,7 +24,7 @@ export async function getOrComputePeaks(db: Database.Database, fileId: number): 
 // cover/extract.ts's attachCoverForFile — computes and caches peaks for a
 // freshly-scanned file without making the scan wait on anything already
 // cached (isCached is a cheap stat, computePeaks is a real ffmpeg decode).
-export async function ensurePeaksForFile(db: Database.Database, fileId: number): Promise<void> {
+export async function ensurePeaksForFile(db: Database, fileId: number): Promise<void> {
   const file = db.prepare("SELECT file_path, file_hash FROM files WHERE id = ?").get(fileId) as
     | { file_path: string; file_hash: string | null }
     | undefined;

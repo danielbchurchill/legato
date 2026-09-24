@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { parseTags } from "../scan/tags.js";
 import { attachCoverForFile, coverTargetNode, resolveCover } from "./extract.js";
 
@@ -21,7 +21,7 @@ export type BackfillProgress = {
 // without ever being opened. On a typical library that means roughly one file
 // read per album rather than one per track.
 export async function backfillCovers(
-  db: Database.Database,
+  db: Database,
   onProgress?: (progress: BackfillProgress) => void,
 ): Promise<BackfillProgress> {
   const files = db

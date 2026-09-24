@@ -1,11 +1,11 @@
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import Database from "better-sqlite3";
 import { DATA_DIR } from "./config.js";
+import { type Database, openSqlite } from "./sqlite.js";
 
 const MIGRATIONS_DIR = path.join(import.meta.dirname, "migrations");
 
-function runMigrations(db: Database.Database) {
+function runMigrations(db: Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -38,11 +38,11 @@ function runMigrations(db: Database.Database) {
 
 // dbPath defaults to the real on-disk DB; tests pass ":memory:" (or a temp
 // file) to get the same schema/migrations against an isolated database.
-export function openDb(dbPath: string = path.join(DATA_DIR, "legato.db")): Database.Database {
+export function openDb(dbPath: string = path.join(DATA_DIR, "legato.db")): Database {
   if (dbPath !== ":memory:") mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
+  const db = openSqlite(dbPath);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
   runMigrations(db);
   return db;
 }

@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { computeClusteredSeeds, type ClusterInput, type Seed } from "./cluster.js";
 
 export type { Seed };
@@ -13,7 +13,7 @@ function decadeOf(year: number | null): number | null {
 // once set, are never touched by anything in this file). Un-dragged nodes
 // have no such protection: their seed position is free to drift on every
 // rescan as the clustering inputs shift, which is what this flag stops.
-function isPositionsLocked(db: Database.Database): boolean {
+function isPositionsLocked(db: Database): boolean {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'nodePositionsLocked'").get() as
     | { value: string }
     | undefined;
@@ -35,7 +35,7 @@ function isPositionsLocked(db: Database.Database): boolean {
 // track added by a rescan while locked still gets a position and isn't
 // silently dropped from the graph (routes/nodes.ts serves the node list by
 // joining on this table).
-function upsertSeeds(db: Database.Database, seeds: Map<number, Seed>, locked: boolean): void {
+function upsertSeeds(db: Database, seeds: Map<number, Seed>, locked: boolean): void {
   const upsert = db.prepare(
     locked
       ? `INSERT INTO positions (node_id, granularity, seed_x, seed_y, seed_version) VALUES (?, 'tracks', ?, ?, 1)
@@ -76,7 +76,7 @@ function upsertSeeds(db: Database.Database, seeds: Map<number, Seed>, locked: bo
 // the graph by joining on this table — never returned them: the data was
 // real, the graph just had nowhere to put it.
 export function recomputeTracksLayout(
-  db: Database.Database,
+  db: Database,
   options?: {
     // #46's "Rebuild map" (rebuildLayout below) is the only caller that ever
     // passes either of these — the normal post-scan path (recomputeAllLayouts)
@@ -180,7 +180,7 @@ export function recomputeTracksLayout(
 // produced_by or engineered_by, both counting toward the same centroid,
 // unlike release/artist which each have exactly one qualifying edge type.
 function centroidSeeds(
-  db: Database.Database,
+  db: Database,
   recordingSeeds: Map<number, Seed>,
   entitySql: string,
   edgeTypes: string[],
@@ -217,7 +217,7 @@ function centroidSeeds(
 
 // user_x/user_y are never touched by this — only a PATCH /nodes/:id/position
 // request (or rebuildLayout below) writes them.
-export function recomputeAllLayouts(db: Database.Database): void {
+export function recomputeAllLayouts(db: Database): void {
   recomputeTracksLayout(db);
 }
 
@@ -249,7 +249,7 @@ export function recomputeAllLayouts(db: Database.Database): void {
 // plain refetch deliberately never moves an already-tracked node's x/y
 // (Canvas.tsx's syncGraph), which is right for every other kind of data
 // refresh but wrong for this one.
-export function rebuildLayout(db: Database.Database): void {
+export function rebuildLayout(db: Database): void {
   db.prepare(`UPDATE positions SET user_x = NULL, user_y = NULL WHERE granularity = 'tracks'`).run();
   const jitterSeed = Math.floor(Math.random() * 0xffffffff);
   recomputeTracksLayout(db, { jitterSeed, ignoreLock: true });

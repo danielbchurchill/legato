@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { parseLookupResponse } from "./acoustid.js";
 
 describe("parseLookupResponse — M-9's fingerprint fallback", () => {

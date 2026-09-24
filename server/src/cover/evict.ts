@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import path from "node:path";
 import { sweepCache, type SweepReport } from "../maintenance/evict.js";
 import { CACHE_DIR } from "./store.js";
@@ -9,7 +9,7 @@ import { CACHE_DIR } from "./store.js";
 // store.ts's own "Known gap" note above readCover(): a replaced or deleted
 // manual override, or a whole directory a superseded size ladder left
 // behind. cover_art_hash exists precisely so this query is cheap.
-function liveCoverHashes(db: Database.Database): Set<string> {
+function liveCoverHashes(db: Database): Set<string> {
   const rows = db.prepare("SELECT DISTINCT hash FROM cover_art").all() as { hash: string }[];
   return new Set(rows.map((row) => row.hash));
 }
@@ -27,7 +27,7 @@ function parseHash(filePath: string): string | null {
 }
 
 export async function sweepCoverCache(
-  db: Database.Database,
+  db: Database,
   { dryRun = true, cacheDir = CACHE_DIR }: { dryRun?: boolean; cacheDir?: string } = {},
 ): Promise<SweepReport> {
   return sweepCache(cacheDir, liveCoverHashes(db), parseHash, dryRun);

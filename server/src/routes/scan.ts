@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { createScanJob, executeScan, type ScanMode } from "../scan/scanner.js";
 import { watchLibraryRoot } from "../scan/watcher.js";
@@ -6,7 +6,7 @@ import { broadcast } from "../ws.js";
 
 type LibraryRootRow = { id: number; path: string; enabled: number };
 
-function runInBackground(db: Database.Database, root: LibraryRootRow, jobId: number, mode: ScanMode) {
+function runInBackground(db: Database, root: LibraryRootRow, jobId: number, mode: ScanMode) {
   executeScan(db, jobId, root.id, root.path, (progress) => broadcast("scan:progress", progress), mode)
     .then(() => {
       watchLibraryRoot(db, root.id, root.path);
@@ -18,7 +18,7 @@ function runInBackground(db: Database.Database, root: LibraryRootRow, jobId: num
     });
 }
 
-export function scanRoutes(db: Database.Database) {
+export function scanRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     // Fires the scan in the background and returns job ids immediately —
     // callers poll GET /scan-jobs/:id rather than blocking on the full walk.

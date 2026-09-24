@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { markMissing, rescanNode, runFullScan, runIncrementalScan, scanFile } from "./scanner.js";
 
@@ -43,7 +43,7 @@ function toScannedPath(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
-let db: Database.Database;
+let db: Database;
 let dir: string;
 let libraryRootId: number;
 

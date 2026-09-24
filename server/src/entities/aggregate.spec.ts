@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import {
   computeAlbumAggregates,
@@ -109,7 +109,7 @@ describe("computeArtistAggregates", () => {
 });
 
 describe("recomputeEntities", () => {
-  let db: Database.Database;
+  let db: Database;
 
   function makeNode(type: string, title: string): number {
     const row = db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as {
@@ -274,7 +274,7 @@ describe("recomputeEntities", () => {
 });
 
 describe("listArtistReleases", () => {
-  let db: Database.Database;
+  let db: Database;
 
   function makeNode(type: string, title: string): number {
     const row = db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as {

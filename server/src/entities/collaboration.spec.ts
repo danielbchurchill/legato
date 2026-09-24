@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import {
   computeAlbumRelations,
@@ -133,7 +133,7 @@ describe("computeArtistAffinities — G-7's wider artist-graph signals", () => {
 });
 
 describe("recomputeCollaborationEdges", () => {
-  function makeNode(db: Database.Database, type: string, title: string): number {
+  function makeNode(db: Database, type: string, title: string): number {
     const row = db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as {
       id: number;
     };

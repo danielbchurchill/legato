@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { backfillLocalEdges } from "./backfill-edges.js";
 
-function insertFile(db: Database.Database, tags: Record<string, unknown>): { fileId: number; nodeId: number } {
+function insertFile(db: Database, tags: Record<string, unknown>): { fileId: number; nodeId: number } {
   const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id").get() as {
     id: number;
   };

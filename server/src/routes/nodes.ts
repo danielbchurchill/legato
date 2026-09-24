@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { resolveCoverForNode } from "../cover/extract.js";
 import { getDescription } from "../enrich/descriptions.js";
@@ -41,7 +41,7 @@ const EDGE_TYPES = [
   "member_of",
 ];
 
-export function nodesRoutes(db: Database.Database) {
+export function nodesRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Querystring: { limit?: string } }>("/nodes", async (request) => {
       const limit = Math.min(Number(request.query.limit ?? 5000), 20000);

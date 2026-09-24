@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { storeCover } from "./store.js";
 
 export type CoverSource = "embedded" | "folder" | "caa" | "manual" | "artist_image";
@@ -107,7 +107,7 @@ async function findArtInDir(dir: string): Promise<{ path: string } | null> {
 // coincidentally matches an appears_on source or an albums.
 // primary_artist_node_id, and both queries simply return nothing for one —
 // falling through to the unchanged `?? nodeId` identity case.
-export function coverTargetNode(db: Database.Database, nodeId: number): number {
+export function coverTargetNode(db: Database, nodeId: number): number {
   const release = db
     .prepare("SELECT to_node FROM edges WHERE from_node = ? AND type = 'appears_on' LIMIT 1")
     .get(nodeId) as { to_node: number } | undefined;
@@ -120,7 +120,7 @@ export function coverTargetNode(db: Database.Database, nodeId: number): number {
 }
 
 export function recordCover(
-  db: Database.Database,
+  db: Database,
   entry: {
     nodeId: number;
     source: CoverSource;
@@ -151,7 +151,7 @@ export function recordCover(
 
 export type ResolvedCover = { hash: string; mime: string | null; source: CoverSource };
 
-export function resolveCover(db: Database.Database, nodeId: number): ResolvedCover | null {
+export function resolveCover(db: Database, nodeId: number): ResolvedCover | null {
   const rows = db
     .prepare("SELECT hash, mime, source FROM cover_art WHERE node_id = ?")
     .all(nodeId) as ResolvedCover[];
@@ -175,7 +175,7 @@ export function resolveCover(db: Database.Database, nodeId: number): ResolvedCov
 // of an artist's albums it borrowed from (G-7's own comment admits it).
 // Divergence there is invisible until it isn't: the graph would render one
 // album's cover on a node whose panel then shows a different one.
-export function resolveCoverForNode(db: Database.Database, nodeId: number): ResolvedCover | null {
+export function resolveCoverForNode(db: Database, nodeId: number): ResolvedCover | null {
   const direct = resolveCover(db, nodeId);
   if (direct) return direct;
 
@@ -190,7 +190,7 @@ export function resolveCoverForNode(db: Database.Database, nodeId: number): Reso
 // must not fail the scan of an otherwise perfectly good audio file. The caller
 // logs; the file still ends up in the library, just without art.
 export async function attachCoverForFile(
-  db: Database.Database,
+  db: Database,
   file: { id: number; path: string; recordingNodeId: number },
   embedded: EmbeddedPicture | null,
 ): Promise<CoverSource | null> {

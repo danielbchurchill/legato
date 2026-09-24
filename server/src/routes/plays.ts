@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { shouldScrobble } from "../plays/scrobble.js";
 
@@ -9,7 +9,7 @@ type PlayBody = { fileId: number; startedAt: string; msPlayed: number };
 // the single place that decides whether it actually counts as a play, so a
 // future second client (LAN/remote/mobile, per Legato's platform split)
 // gets the same rule for free instead of re-implementing it.
-export function playsRoutes(db: Database.Database) {
+export function playsRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.post<{ Body: PlayBody }>("/plays", async (request, reply) => {
       const { fileId, startedAt, msPlayed } = request.body;

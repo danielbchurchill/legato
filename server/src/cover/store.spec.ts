@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { cachePath, hashBytes } from "./store.js";
 
 const HASH = "0123456789abcdef0123456789abcdef01234567";

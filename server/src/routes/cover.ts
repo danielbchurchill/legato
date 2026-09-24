@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { recordCover, resolveCoverForNode } from "../cover/extract.js";
 import { readCover, storeCover } from "../cover/store.js";
@@ -11,7 +11,7 @@ const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 // length, hex only, so no request can walk out of the cover cache directory.
 const HASH_PATTERN = /^[0-9a-f]{40}$/;
 
-export function coverRoutes(db: Database.Database) {
+export function coverRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     // Art by content hash rather than by node.
     //

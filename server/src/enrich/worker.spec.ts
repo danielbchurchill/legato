@@ -1,33 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type Database from "better-sqlite3";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
+import { mocked } from "../testing.js";
 import * as mbClient from "./mbClient.js";
 import * as coverArchive from "./coverArchive.js";
 import * as fingerprint from "../match/fingerprint.js";
 import * as acoustid from "./acoustid.js";
 
-vi.mock("./mbClient.js", () => ({
-  searchRecording: vi.fn(),
-  lookupReleaseGroupForRecording: vi.fn(),
-  searchArtist: vi.fn(),
-  fetchArtistMemberRelations: vi.fn(),
+mock.module("./mbClient.js", () => ({
+  searchRecording: mock(),
+  lookupReleaseGroupForRecording: mock(),
+  searchArtist: mock(),
+  fetchArtistMemberRelations: mock(),
 }));
-vi.mock("./coverArchive.js", () => ({ fetchCaaFrontImage: vi.fn() }));
+mock.module("./coverArchive.js", () => ({ fetchCaaFrontImage: mock() }));
 // Real storeCover shells out to ffmpeg to produce resized JPEGs — not
 // interesting to this suite, which only cares whether a CAA hit gets
 // recorded as a cover_art row at all.
-vi.mock("../cover/store.js", () => ({ storeCover: vi.fn().mockResolvedValue("fake-hash") }));
+mock.module("../cover/store.js", () => ({ storeCover: mock().mockResolvedValue("fake-hash") }));
 // M-9: real computeFingerprint shells out to fpcalc (not installed on the
 // machine this was built on) and real lookupFingerprint hits AcoustID's
 // live API (needs a client key nobody has configured here) — mocked so
 // the fallback's own branching logic is what's under test, not either
 // external dependency's availability.
-vi.mock("../match/fingerprint.js", () => ({ computeFingerprint: vi.fn() }));
-vi.mock("./acoustid.js", () => ({ lookupFingerprint: vi.fn() }));
+mock.module("../match/fingerprint.js", () => ({ computeFingerprint: mock() }));
+mock.module("./acoustid.js", () => ({ lookupFingerprint: mock() }));
 
 const { runDueJobs, applyMatch, tryFingerprintMatch } = await import("./worker.js");
 
-let db: Database.Database;
+let db: Database;
 
 function insertNode(title: string, artist: string | null, durationMs: number | null): number {
   const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', ?) RETURNING id").get(title) as {
@@ -52,14 +53,14 @@ function enqueue(nodeId: number): void {
 
 beforeEach(() => {
   db = openDb(":memory:");
-  vi.clearAllMocks();
+  mock.clearAllMocks();
 });
 
 describe("runDueJobs", () => {
   it("applies a confident match: sets node.mbid, files.match_source, and field_provenance", async () => {
     const nodeId = insertNode("Come Together", "The Beatles", 262000);
     enqueue(nodeId);
-    vi.mocked(mbClient.searchRecording).mockResolvedValue([
+    mocked(mbClient.searchRecording).mockResolvedValue([
       { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000, releases: [] },
     ]);
 
@@ -94,7 +95,7 @@ describe("runDueJobs", () => {
 
     const duplicateId = insertNode("Yellow Submarine", "The Beatles", 160100);
     enqueue(duplicateId);
-    vi.mocked(mbClient.searchRecording).mockResolvedValue([
+    mocked(mbClient.searchRecording).mockResolvedValue([
       { mbid: "mb-existing", score: 100, title: "Yellow Submarine", artist: "The Beatles", durationMs: 160000, releases: [] },
     ]);
 
@@ -109,7 +110,7 @@ describe("runDueJobs", () => {
   it("does not apply an ambiguous result, but records it in match_candidates for the maintenance view (M-5)", async () => {
     const nodeId = insertNode("Come Together", "The Beatles", null);
     enqueue(nodeId);
-    vi.mocked(mbClient.searchRecording).mockResolvedValue([
+    mocked(mbClient.searchRecording).mockResolvedValue([
       {
         mbid: "mb-1",
         score: 100,
@@ -190,7 +191,7 @@ describe("runDueJobs", () => {
   it("backs off on a network error instead of marking the job done", async () => {
     const nodeId = insertNode("Come Together", "The Beatles", null);
     enqueue(nodeId);
-    vi.mocked(mbClient.searchRecording).mockRejectedValue(new Error("network blip"));
+    mocked(mbClient.searchRecording).mockRejectedValue(new Error("network blip"));
 
     await runDueJobs(db);
 
@@ -211,7 +212,7 @@ describe("runDueJobs", () => {
     // bug found by watching a live retry never fire, not by inspection.
     const nodeId = insertNode("Come Together", "The Beatles", null);
     enqueue(nodeId);
-    vi.mocked(mbClient.searchRecording).mockRejectedValue(new Error("network blip"));
+    mocked(mbClient.searchRecording).mockRejectedValue(new Error("network blip"));
 
     await runDueJobs(db);
 
@@ -239,11 +240,11 @@ describe("runDueJobs", () => {
       release.id,
     );
     enqueue(nodeId);
-    vi.mocked(mbClient.searchRecording).mockResolvedValue([
+    mocked(mbClient.searchRecording).mockResolvedValue([
       { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000, releases: [] },
     ]);
-    vi.mocked(mbClient.lookupReleaseGroupForRecording).mockResolvedValue("rg-1");
-    vi.mocked(coverArchive.fetchCaaFrontImage).mockResolvedValue({
+    mocked(mbClient.lookupReleaseGroupForRecording).mockResolvedValue("rg-1");
+    mocked(coverArchive.fetchCaaFrontImage).mockResolvedValue({
       bytes: Buffer.from("fake-jpeg"),
       mime: "image/jpeg",
     });
@@ -278,7 +279,7 @@ describe("runDueJobs", () => {
       "INSERT INTO cover_art (node_id, source, hash, mime) VALUES (?, 'folder', 'existing-hash', 'image/jpeg')",
     ).run(release.id);
     enqueue(nodeId);
-    vi.mocked(mbClient.searchRecording).mockResolvedValue([
+    mocked(mbClient.searchRecording).mockResolvedValue([
       { mbid: "mb-1", score: 100, title: "Come Together", artist: "The Beatles", durationMs: 262000, releases: [] },
     ]);
 
@@ -303,7 +304,7 @@ describe("tryFingerprintMatch — M-9's text-search fallback", () => {
 
   it("returns false when fpcalc can't produce a fingerprint (missing binary, undecodable file)", async () => {
     const nodeId = insertNode("Come Together", "The Beatles", 262000);
-    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue(null);
+    mocked(fingerprint.computeFingerprint).mockResolvedValue(null);
 
     expect(await tryFingerprintMatch(db, nodeId)).toBe(false);
     expect(acoustid.lookupFingerprint).not.toHaveBeenCalled();
@@ -311,7 +312,7 @@ describe("tryFingerprintMatch — M-9's text-search fallback", () => {
 
   it("returns false without calling AcoustID when the recording has no known duration", async () => {
     const nodeId = insertNode("Come Together", "The Beatles", null);
-    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
+    mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
 
     expect(await tryFingerprintMatch(db, nodeId)).toBe(false);
     expect(acoustid.lookupFingerprint).not.toHaveBeenCalled();
@@ -319,8 +320,8 @@ describe("tryFingerprintMatch — M-9's text-search fallback", () => {
 
   it("returns false when AcoustID has nothing, or nothing confident enough", async () => {
     const nodeId = insertNode("Come Together", "The Beatles", 262000);
-    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
-    vi.mocked(acoustid.lookupFingerprint).mockResolvedValue([{ recordingMbid: "mb-weak", score: 0.2 }]);
+    mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
+    mocked(acoustid.lookupFingerprint).mockResolvedValue([{ recordingMbid: "mb-weak", score: 0.2 }]);
 
     expect(await tryFingerprintMatch(db, nodeId)).toBe(false);
     const node = db.prepare("SELECT mbid FROM nodes WHERE id = ?").get(nodeId) as { mbid: string | null };
@@ -329,11 +330,11 @@ describe("tryFingerprintMatch — M-9's text-search fallback", () => {
 
   it("applies the top AcoustID match (trusting lookupFingerprint's own best-first order), the same way a text match does", async () => {
     const nodeId = insertNode("Come Together", "The Beatles", 262000);
-    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
+    mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
     // Deliberately best-first, matching acoustid.ts's own parseLookupResponse
     // contract — tryFingerprintMatch trusts matches[0] rather than
     // re-sorting or scanning for the max itself.
-    vi.mocked(acoustid.lookupFingerprint).mockResolvedValue([
+    mocked(acoustid.lookupFingerprint).mockResolvedValue([
       { recordingMbid: "mb-strong", score: 0.91 },
       { recordingMbid: "mb-weak", score: 0.4 },
     ]);
@@ -346,8 +347,8 @@ describe("tryFingerprintMatch — M-9's text-search fallback", () => {
   it("falls back to fingerprinting when there's no local artist tag to search with at all", async () => {
     const nodeId = insertNode("Come Together", null, 262000);
     enqueue(nodeId);
-    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
-    vi.mocked(acoustid.lookupFingerprint).mockResolvedValue([{ recordingMbid: "mb-1", score: 0.9 }]);
+    mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
+    mocked(acoustid.lookupFingerprint).mockResolvedValue([{ recordingMbid: "mb-1", score: 0.9 }]);
 
     await runDueJobs(db);
 
@@ -362,9 +363,9 @@ describe("tryFingerprintMatch — M-9's text-search fallback", () => {
   it("falls back to fingerprinting when a real text search comes back with no match", async () => {
     const nodeId = insertNode("Come Together", "The Beatles", 262000);
     enqueue(nodeId);
-    vi.mocked(mbClient.searchRecording).mockResolvedValue([]);
-    vi.mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
-    vi.mocked(acoustid.lookupFingerprint).mockResolvedValue([{ recordingMbid: "mb-1", score: 0.9 }]);
+    mocked(mbClient.searchRecording).mockResolvedValue([]);
+    mocked(fingerprint.computeFingerprint).mockResolvedValue("fake-fingerprint");
+    mocked(acoustid.lookupFingerprint).mockResolvedValue([{ recordingMbid: "mb-1", score: 0.9 }]);
 
     await runDueJobs(db);
 
@@ -401,10 +402,10 @@ describe("processArtistMemberLookup — issue #61", () => {
   it("resolves the artist's mbid, fetches member relations, and writes the resulting edges", async () => {
     const beatles = insertArtistNode("The Beatles");
     enqueueMemberLookup(beatles);
-    vi.mocked(mbClient.searchArtist).mockResolvedValue([
+    mocked(mbClient.searchArtist).mockResolvedValue([
       { mbid: "beatles-mbid", name: "The Beatles", score: 100, disambiguation: null },
     ]);
-    vi.mocked(mbClient.fetchArtistMemberRelations).mockResolvedValue([
+    mocked(mbClient.fetchArtistMemberRelations).mockResolvedValue([
       { direction: "backward", name: "George Harrison" },
     ]);
 
@@ -419,10 +420,10 @@ describe("processArtistMemberLookup — issue #61", () => {
   it("cascades: a member node created by this job gets its own member-lookup enqueued", async () => {
     const beatles = insertArtistNode("The Beatles");
     enqueueMemberLookup(beatles);
-    vi.mocked(mbClient.searchArtist).mockResolvedValue([
+    mocked(mbClient.searchArtist).mockResolvedValue([
       { mbid: "beatles-mbid", name: "The Beatles", score: 100, disambiguation: null },
     ]);
-    vi.mocked(mbClient.fetchArtistMemberRelations).mockResolvedValue([
+    mocked(mbClient.fetchArtistMemberRelations).mockResolvedValue([
       { direction: "backward", name: "George Harrison" },
     ]);
 
@@ -444,7 +445,7 @@ describe("processArtistMemberLookup — issue #61", () => {
   it("marks the job done without fetching relations when the artist mbid can't be resolved", async () => {
     const node = insertArtistNode("Totally Obscure Artist");
     enqueueMemberLookup(node);
-    vi.mocked(mbClient.searchArtist).mockResolvedValue([]);
+    mocked(mbClient.searchArtist).mockResolvedValue([]);
 
     await runDueJobs(db);
 

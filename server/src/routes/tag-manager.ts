@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 
 /* The Tag Manager rail destination's one job: proactive, library-wide
@@ -31,7 +31,7 @@ const ARTIST_SUBQUERY = `(SELECT an.title
   ORDER BY e.id
   LIMIT 1)`;
 
-export function getMissingField(db: Database.Database, field: TagManagerField): TagManagerRow[] {
+export function getMissingField(db: Database, field: TagManagerField): TagManagerRow[] {
   if (field === "unmatched") {
     return db
       .prepare(
@@ -63,7 +63,7 @@ function isValidField(field: string | undefined): field is TagManagerField {
   return field != null && (field === "unmatched" || field in MISSING_FIELD_COLUMNS);
 }
 
-export function tagManagerRoutes(db: Database.Database) {
+export function tagManagerRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Querystring: { field?: string } }>("/tag-manager", async (request, reply) => {
       const { field } = request.query;

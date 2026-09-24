@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { coverTargetNode, recordCover, resolveCover } from "../cover/extract.js";
 import { storeCover } from "../cover/store.js";
 import { computeFingerprint } from "../match/fingerprint.js";
@@ -62,7 +62,7 @@ type EnrichJobType =
 
 type EnrichJob = { id: number; node_id: number; job_type: EnrichJobType; attempts: number };
 
-function getNextDueJob(db: Database.Database): EnrichJob | undefined {
+function getNextDueJob(db: Database): EnrichJob | undefined {
   return db
     .prepare(
       `SELECT id, node_id, job_type, attempts FROM enrich_jobs
@@ -81,7 +81,7 @@ type SearchInput = LocalMatchInput & RecordingSearchInput & { albumartist: strin
 // albumartist feeds M-6's release search specifically — the *track*
 // artist (a featured guest, say) isn't necessarily who the album search
 // should be scoped to.
-function getSearchInput(db: Database.Database, nodeId: number): SearchInput | null {
+function getSearchInput(db: Database, nodeId: number): SearchInput | null {
   const node = db.prepare("SELECT title FROM nodes WHERE id = ?").get(nodeId) as { title: string } | undefined;
   if (!node) return null;
 
@@ -117,7 +117,7 @@ function getSearchInput(db: Database.Database, nodeId: number): SearchInput | nu
 }
 
 function recordProvenance(
-  db: Database.Database,
+  db: Database,
   nodeId: number,
   value: string | null,
   confidence: number,
@@ -136,7 +136,7 @@ function recordProvenance(
 // the maintenance view writes the chosen mbid through this exact path,
 // not a separate one — a manually-resolved match should behave
 // identically to a confident automatic one everywhere downstream.
-export function applyMatch(db: Database.Database, nodeId: number, mbid: string, confidence: number): void {
+export function applyMatch(db: Database, nodeId: number, mbid: string, confidence: number): void {
   const canonical = db
     .prepare("SELECT id FROM nodes WHERE type = 'recording' AND mbid = ? AND id != ?")
     .get(mbid, nodeId) as { id: number } | undefined;
@@ -178,7 +178,7 @@ type SiblingFile = { fileId: number; nodeId: number; trackNo: number | null; dis
 // runs to hundreds of files, not enough for the difference to matter, and
 // it keeps this working the same way regardless of whether the SQLite
 // build has JSON1 compiled in.
-function findUnmatchedAlbumSiblings(db: Database.Database, album: string, albumartist: string | null): SiblingFile[] {
+function findUnmatchedAlbumSiblings(db: Database, album: string, albumartist: string | null): SiblingFile[] {
   const rows = db
     .prepare(
       `SELECT f.id AS fileId, f.recording_node_id AS nodeId, f.tags_raw AS tagsRaw,
@@ -217,7 +217,7 @@ function findUnmatchedAlbumSiblings(db: Database.Database, album: string, albuma
 // this resolves along the way (not just the one job that happened to run
 // first) gets applied and its own pending job marked done — the actual
 // point of grouping by album at all.
-async function tryAlbumMatch(db: Database.Database, targetNodeId: number, input: SearchInput): Promise<boolean> {
+async function tryAlbumMatch(db: Database, targetNodeId: number, input: SearchInput): Promise<boolean> {
   if (!input.album) return false;
 
   const siblings = findUnmatchedAlbumSiblings(db, input.album, input.albumartist);
@@ -312,7 +312,7 @@ async function tryAlbumMatch(db: Database.Database, targetNodeId: number, input:
 // itself. Quietly returns false (never throws) whenever the tier isn't
 // available at all — no local file, fpcalc missing, no duration to send
 // AcoustID, no API key configured, or nothing scored high enough to trust.
-export async function tryFingerprintMatch(db: Database.Database, nodeId: number): Promise<boolean> {
+export async function tryFingerprintMatch(db: Database, nodeId: number): Promise<boolean> {
   const file = db
     .prepare("SELECT file_path FROM files WHERE recording_node_id = ? AND missing_since IS NULL ORDER BY id LIMIT 1")
     .get(nodeId) as { file_path: string } | undefined;
@@ -334,7 +334,7 @@ export async function tryFingerprintMatch(db: Database.Database, nodeId: number)
   return true;
 }
 
-async function processRecordingLookup(db: Database.Database, job: EnrichJob): Promise<void> {
+async function processRecordingLookup(db: Database, job: EnrichJob): Promise<void> {
   const input = getSearchInput(db, job.node_id);
   if (!input) {
     // No artist tag to search with at all — text search structurally can't
@@ -414,7 +414,7 @@ async function processRecordingLookup(db: Database.Database, job: EnrichJob): Pr
 // off of, no release-group found, CAA has nothing for it) marks the job
 // done rather than an error: none of them are transient, so nothing would
 // change on a retry.
-async function processCoverArtLookup(db: Database.Database, job: EnrichJob): Promise<void> {
+async function processCoverArtLookup(db: Database, job: EnrichJob): Promise<void> {
   const releaseNodeId = job.node_id;
 
   if (resolveCover(db, releaseNodeId)) {
@@ -457,7 +457,7 @@ async function processCoverArtLookup(db: Database.Database, job: EnrichJob): Pro
 // pickArtistMatch (enrich/artistName.ts), not from taking the first result —
 // the note records MusicBrainz's own disambiguation text for whichever one was
 // chosen, so the decision is auditable rather than implicit.
-async function resolveArtistMbid(db: Database.Database, nodeId: number, name: string): Promise<string | null> {
+async function resolveArtistMbid(db: Database, nodeId: number, name: string): Promise<string | null> {
   const cached = db
     .prepare("SELECT value FROM field_provenance WHERE node_id = ? AND field = 'artist_mbid' ORDER BY id DESC LIMIT 1")
     .get(nodeId) as { value: string | null } | undefined;
@@ -478,7 +478,7 @@ async function resolveArtistMbid(db: Database.Database, nodeId: number, name: st
 // is a table read; otherwise it costs the same recording -> release-group hop
 // the Cover Art Archive lookup makes, and is written back so it only ever
 // happens once per album.
-async function resolveReleaseGroupMbid(db: Database.Database, releaseNodeId: number): Promise<string | null> {
+async function resolveReleaseGroupMbid(db: Database, releaseNodeId: number): Promise<string | null> {
   const cached = db
     .prepare(
       "SELECT value FROM field_provenance WHERE node_id = ? AND field = 'release_group_mbid' ORDER BY id DESC LIMIT 1",
@@ -509,7 +509,7 @@ async function resolveReleaseGroupMbid(db: Database.Database, releaseNodeId: num
 // a tag that names two artists will still name two artists tomorrow, and
 // Deezer not having a photo is an answer, not a failure. Only a thrown
 // network error reaches the retry/backoff path below.
-async function processArtistImageLookup(db: Database.Database, job: EnrichJob): Promise<void> {
+async function processArtistImageLookup(db: Database, job: EnrichJob): Promise<void> {
   const finish = () =>
     db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
 
@@ -561,7 +561,7 @@ async function processArtistImageLookup(db: Database.Database, job: EnrichJob): 
 // job.node_id is an artist or release node. Same terminal-outcome policy as
 // the artist image above, with the miss written to descriptions (found = 0) so
 // nothing re-asks on the next scan.
-async function processDescriptionLookup(db: Database.Database, job: EnrichJob): Promise<void> {
+async function processDescriptionLookup(db: Database, job: EnrichJob): Promise<void> {
   const finish = () =>
     db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
 
@@ -617,7 +617,7 @@ async function processDescriptionLookup(db: Database.Database, job: EnrichJob): 
 // there produces a wrong photo or a wrong paragraph — a wrong member edge
 // is the same class of mistake, not a worse one, so it inherits the same
 // tolerance rather than being held to a bar nothing else here meets.
-async function processArtistMemberLookup(db: Database.Database, job: EnrichJob): Promise<void> {
+async function processArtistMemberLookup(db: Database, job: EnrichJob): Promise<void> {
   const finish = () =>
     db.prepare("UPDATE enrich_jobs SET status = 'done', updated_at = datetime('now') WHERE id = ?").run(job.id);
 
@@ -664,7 +664,7 @@ async function processArtistMemberLookup(db: Database.Database, job: EnrichJob):
   finish();
 }
 
-async function processJob(db: Database.Database, job: EnrichJob): Promise<void> {
+async function processJob(db: Database, job: EnrichJob): Promise<void> {
   db.prepare("UPDATE enrich_jobs SET status = 'running', updated_at = datetime('now') WHERE id = ?").run(job.id);
 
   try {
@@ -707,7 +707,7 @@ let running = false;
 // enforces the 1req/sec spacing). Safe to call repeatedly/concurrently —
 // the `running` guard means overlapping calls (e.g. a poller tick landing
 // mid-drain) just no-op instead of double-processing.
-export async function runDueJobs(db: Database.Database): Promise<void> {
+export async function runDueJobs(db: Database): Promise<void> {
   if (running) return;
   running = true;
   try {

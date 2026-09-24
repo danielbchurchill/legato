@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { buildFeatureSpace, buildFeatureVector, computeArtistClusters, type RecordingFeatureInput } from "./features.js";
 import { rankMostDissimilar, rankMostSimilar, type RankedResult } from "./rank.js";
 
@@ -8,7 +8,7 @@ import { rankMostDissimilar, rankMostSimilar, type RankedResult } from "./rank.j
 // every vector is rebuilt together from current data on every pass. Only
 // recording nodes with a real file get a vector; a similarity strip has
 // nothing to anchor on for anything else.
-export function recomputeSimilarityFeatures(db: Database.Database): void {
+export function recomputeSimilarityFeatures(db: Database): void {
   // MIN(f.id) is the only aggregate in this query, which is what makes
   // SQLite's "bare column" rule apply: genre/release_type/duration_ms are
   // guaranteed to come from the same row as that minimum — SQLite-specific
@@ -157,7 +157,7 @@ export function recomputeSimilarityFeatures(db: Database.Database): void {
   applyAll();
 }
 
-function loadVectors(db: Database.Database): Map<number, { type: string; vector: number[] }> {
+function loadVectors(db: Database): Map<number, { type: string; vector: number[] }> {
   const rows = db
     .prepare(
       `SELECT nsf.node_id AS nodeId, n.type AS type, nsf.vector_json AS vectorJson
@@ -172,7 +172,7 @@ function loadVectors(db: Database.Database): Map<number, { type: string; vector:
 // genre/artist/label/type/decade are identical for every track on a
 // record. Same-release candidates are excluded outright now rather than
 // merely deprioritized, so the strip always spans more than one release.
-function releasesByRecording(db: Database.Database): Map<number, Set<number>> {
+function releasesByRecording(db: Database): Map<number, Set<number>> {
   const map = new Map<number, Set<number>>();
   for (const row of db
     .prepare("SELECT from_node AS recordingId, to_node AS releaseId FROM edges WHERE type = 'appears_on'")
@@ -184,7 +184,7 @@ function releasesByRecording(db: Database.Database): Map<number, Set<number>> {
 }
 
 function rankAgainst(
-  db: Database.Database,
+  db: Database,
   nodeId: number,
   limit: number,
   rankFn: typeof rankMostSimilar,
@@ -216,10 +216,10 @@ function rankAgainst(
   return rankFn(anchor.vector, candidates, limit);
 }
 
-export function findMostSimilar(db: Database.Database, nodeId: number, limit = 3): RankedResult[] {
+export function findMostSimilar(db: Database, nodeId: number, limit = 3): RankedResult[] {
   return rankAgainst(db, nodeId, limit, rankMostSimilar);
 }
 
-export function findMostDissimilar(db: Database.Database, nodeId: number, limit = 3): RankedResult[] {
+export function findMostDissimilar(db: Database, nodeId: number, limit = 3): RankedResult[] {
   return rankAgainst(db, nodeId, limit, rankMostDissimilar);
 }

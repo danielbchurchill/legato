@@ -1,5 +1,5 @@
 import chokidar, { type FSWatcher } from "chokidar";
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { broadcast } from "../ws.js";
 import { isSelfWrite } from "../tagwrite/guard.js";
 import { markMissing, scanFile } from "./scanner.js";
@@ -12,7 +12,7 @@ const activeWatchers = new Map<number, FSWatcher>();
 // single changed/added/removed path directly via scanFile()/markMissing()
 // instead of re-walking the whole root — a one-file tag edit produces a
 // one-file incremental scan, not a full rewalk.
-export function watchLibraryRoot(db: Database.Database, libraryRootId: number, rootPath: string): void {
+export function watchLibraryRoot(db: Database, libraryRootId: number, rootPath: string): void {
   if (activeWatchers.has(libraryRootId)) return;
 
   const watcher = chokidar.watch(rootPath, {

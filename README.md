@@ -13,6 +13,7 @@ For architecture, conventions, and day-to-day workflow, see [CLAUDE.md](CLAUDE.m
 ## Requirements
 
 - Node, pinned in `.nvmrc` — run `nvm use` before anything else.
+- [Bun](https://bun.sh/) — `server/` runs on it (issue #100); everything else (root app, `relay/`, `site/`) still runs on Node.
 - Rust toolchain, for the Tauri shell (`npx tauri dev` / `npx tauri build`).
 - [Tailscale](https://tailscale.com/), only if you're previewing this from a different machine than the one running it (see below).
 
@@ -38,7 +39,7 @@ Two narrower variants, useful when working on one half only:
 
 ```bash
 npm run dev          # Vite only — needs a server already running elsewhere
-npm run dev:server   # standalone server only (tsx watch, auto-restarts on server code changes)
+npm run dev:server   # standalone server only (bun --watch, auto-restarts on server code changes)
 ```
 
 ## Previewing from another machine (e.g. through Orca SSH)
@@ -84,7 +85,7 @@ RELAY_SHARED_SECRET=dev npm start
 **Preview loads blank, or API calls fail, or you're seeing stale data.** Check whether a dev server is already running — either from an earlier session you forgot about, or from a *different* worktree of this repo:
 
 ```bash
-ps aux | grep -E "tsx watch|vite"
+ps aux | grep -E "bun --watch|vite"
 ```
 
 The standalone server binds `0.0.0.0:8899` with no override by default, and Vite binds one address (loopback for `dev`, this machine's Tailscale IP for `dev:remote`). If you run more than one Legato worktree at once (e.g. `~/dev/legato` and `~/dev/legato-chromis`), **only one server can hold port 8899**, and Vite will silently auto-increment past a taken `5173` to `5174`, `5175`, etc. — so a second worktree's frontend can end up pointed at nothing (server startup failed) or, worse, at the *first* worktree's server and its data. Don't assume a broken preview means broken code — check for a leftover process first.
@@ -92,10 +93,10 @@ The standalone server binds `0.0.0.0:8899` with no override by default, and Vite
 If you find one you don't recognize, it may be another live session's active work — don't kill it without checking. To run this worktree's server in isolation, on its own port, without touching anyone else's:
 
 ```bash
-LEGATO_PORT=8901 LEGATO_DATA_DIR="$HOME/.local/share/fm.legato.app" npx tsx watch src/index.ts   # from server/
+LEGATO_PORT=8901 LEGATO_DATA_DIR="$HOME/.local/share/fm.legato.app" bun --watch src/index.ts   # from server/
 ```
 
-**Server changes aren't showing up.** The *embedded* server (the one Tauri spawns) does not hot-reload — it's a plain `tsx src/index.ts` child with no watch mode. Any change to `server/` needs the whole app restarted when running via `npx tauri dev`. `npm run dev:server` (standalone, via `tsx watch`) does auto-restart on change — use that when iterating on server code alone.
+**Server changes aren't showing up.** The *embedded* server (the one Tauri spawns) does not hot-reload — it's a plain `bun src/index.ts` child with no watch mode. Any change to `server/` needs the whole app restarted when running via `npx tauri dev`. `npm run dev:server` (standalone, via `bun --watch`) does auto-restart on change — use that when iterating on server code alone.
 
 **Standalone server can't find your library / opens an empty database.** Set `LEGATO_DATA_DIR` explicitly. Tauri sets this automatically to its per-OS app-data directory; a bare `npm --prefix server run dev` without it falls back to `~/.local/share/legato/` — a second, empty database next to your real one:
 
@@ -109,7 +110,7 @@ Startup logs the resolved DB path and file count, so a wrong path is a one-line 
 
 ```bash
 npm run lint            # oxlint (root)
-npm --prefix server test    # vitest, server-side (scan/match/layout/facts/enrich/hygiene/tagwrite/cover)
+npm --prefix server test    # bun test, server-side (scan/match/layout/facts/enrich/hygiene/tagwrite/cover)
 ```
 
 ## Building
@@ -123,4 +124,4 @@ npx tauri build      # full native desktop build
 
 Primary development happens on Linux, but `.github/workflows/build.yml` builds and tests this app for real on **macOS, Windows, and Linux** on every push — not just claimed, actually run: [latest results](https://github.com/danielbchurchill/legato/actions/workflows/build.yml). A green run produces real unsigned installers you can download from that run's Artifacts: `.dmg`/`.app` (macOS), `.msi`/`.exe` via NSIS (Windows), `.AppImage`/`.deb`/`.rpm` (Linux).
 
-**What that CI run does and doesn't prove.** It proves the Rust shell and frontend genuinely compile and pass `server`'s test suite on all three platforms — real, not assumed (it already caught and fixed one macOS-only bug this way, a `cpal`/CoreAudio thread-safety issue invisible on Linux and Windows). It does **not** yet prove the packaged app *runs* correctly end-to-end for someone who just installs it: the embedded server still launches via `tsx` (a TypeScript interpreter), which means it currently assumes Node.js is installed on whatever machine runs it. That's fine for development; it's not yet true "install and go" for macOS/Windows users. No code signing or notarization either — Gatekeeper/SmartScreen will warn on an unsigned build, expected for now.
+**What that CI run does and doesn't prove.** It proves the Rust shell and frontend genuinely compile and pass `server`'s test suite on all three platforms — real, not assumed (it already caught and fixed one macOS-only bug this way, a `cpal`/CoreAudio thread-safety issue invisible on Linux and Windows). It does **not** yet prove the packaged app *runs* correctly end-to-end for someone who just installs it: the embedded server still launches via `bun src/index.ts` from source, which means it currently assumes Bun is installed on whatever machine runs it. That's fine for development; it's not yet true "install and go" for macOS/Windows users — that's what compiling the server to a self-contained binary (issue #102) is for. No code signing or notarization either — Gatekeeper/SmartScreen will warn on an unsigned build, expected for now.

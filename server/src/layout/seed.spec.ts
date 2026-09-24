@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { rebuildLayout, recomputeAllLayouts, recomputeTracksLayout } from "./seed.js";
 
@@ -10,18 +10,18 @@ import { rebuildLayout, recomputeAllLayouts, recomputeTracksLayout } from "./see
 // (since 2026-08-29's combined graph) how release/artist entities get
 // seeded from their recordings' positions.
 
-function makeNode(db: Database.Database, type: string, title: string): number {
+function makeNode(db: Database, type: string, title: string): number {
   const row = db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as {
     id: number;
   };
   return row.id;
 }
 
-function insertEdge(db: Database.Database, from: number, to: number, type: string): void {
+function insertEdge(db: Database, from: number, to: number, type: string): void {
   db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, ?, 'local')").run(from, to, type);
 }
 
-function buildLibrary(db: Database.Database) {
+function buildLibrary(db: Database) {
   const artist = makeNode(db, "artist", "The Beatles");
   const release = makeNode(db, "release", "Abbey Road");
   const year = makeNode(db, "year", "1969");
@@ -38,7 +38,7 @@ function buildLibrary(db: Database.Database) {
   return { artist, release, year, recording };
 }
 
-function pos(db: Database.Database, nodeId: number) {
+function pos(db: Database, nodeId: number) {
   return db.prepare("SELECT seed_x, seed_y FROM positions WHERE node_id = ? AND granularity = 'tracks'").get(nodeId) as
     | { seed_x: number; seed_y: number }
     | undefined;

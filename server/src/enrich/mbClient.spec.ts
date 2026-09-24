@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { buildRecordingQuery, parseArtistMemberRelations, parseReleaseDetail, type RawReleaseDetail } from "./mbClient.js";
 
 describe("buildRecordingQuery — M-2", () => {

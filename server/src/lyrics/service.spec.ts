@@ -1,13 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type Database from "better-sqlite3";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
+import { mocked } from "../testing.js";
 import * as lrclib from "./lrclib.js";
 
-vi.mock("./lrclib.js", () => ({ fetchLrclibLyrics: vi.fn() }));
+mock.module("./lrclib.js", () => ({ fetchLrclibLyrics: mock() }));
 
 const { getLyrics } = await import("./service.js");
 
-let db: Database.Database;
+let db: Database;
 
 function insertRecording(title: string, artist: string | null, durationMs: number | null): number {
   const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', ?) RETURNING id").get(title) as {
@@ -28,13 +29,13 @@ function insertRecording(title: string, artist: string | null, durationMs: numbe
 
 beforeEach(() => {
   db = openDb(":memory:");
-  vi.clearAllMocks();
+  mock.clearAllMocks();
 });
 
 describe("getLyrics", () => {
   it("fetches, caches, and returns a real hit", async () => {
     const nodeId = insertRecording("Come Together", "The Beatles", 262000);
-    vi.mocked(lrclib.fetchLrclibLyrics).mockResolvedValue({
+    mocked(lrclib.fetchLrclibLyrics).mockResolvedValue({
       plainLyrics: "Here come old flat top...",
       syncedLyrics: "[00:12.00]Here come old flat top...",
       instrumental: false,
@@ -58,7 +59,7 @@ describe("getLyrics", () => {
 
   it("caches a real negative result and does not re-fetch on the next call", async () => {
     const nodeId = insertRecording("Obscure B-Side", "Some Artist", null);
-    vi.mocked(lrclib.fetchLrclibLyrics).mockResolvedValue(null);
+    mocked(lrclib.fetchLrclibLyrics).mockResolvedValue(null);
 
     const first = await getLyrics(db, nodeId);
     const second = await getLyrics(db, nodeId);
@@ -70,7 +71,7 @@ describe("getLyrics", () => {
 
   it("reuses a cached hit on the second call without hitting the network again", async () => {
     const nodeId = insertRecording("Come Together", "The Beatles", 262000);
-    vi.mocked(lrclib.fetchLrclibLyrics).mockResolvedValue({
+    mocked(lrclib.fetchLrclibLyrics).mockResolvedValue({
       plainLyrics: "lyrics",
       syncedLyrics: null,
       instrumental: false,

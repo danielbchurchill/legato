@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { createMediaQueue } from "./queue.js";
 
 // A promise plus the resolve function that settles it, so a test can hold

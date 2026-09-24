@@ -1,9 +1,9 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { recomputeAllLayouts, rebuildLayout } from "../layout/seed.js";
 import { broadcast } from "../ws.js";
 
-export function layoutRoutes(db: Database.Database) {
+export function layoutRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     // Manual trigger — the combined graph's seeds recompute automatically at
     // the end of every scan (see scan/scanner.ts), this is for dev/testing

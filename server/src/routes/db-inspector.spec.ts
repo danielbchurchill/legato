@@ -1,12 +1,12 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { beforeEach, describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { dbInspectorSnapshot } from "./db-inspector.js";
 
-let db: Database.Database;
+let db: Database;
 
 beforeEach(() => {
   db = openDb(":memory:");

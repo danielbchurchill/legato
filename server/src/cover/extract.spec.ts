@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Database } from "../sqlite.js";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { openDb } from "../db.js";
 import {
   coverTargetNode,
@@ -136,7 +136,7 @@ describe("findFolderArt", () => {
 });
 
 describe("cover attachment", () => {
-  let db: Database.Database;
+  let db: Database;
 
   beforeEach(() => {
     db = openDb(":memory:");

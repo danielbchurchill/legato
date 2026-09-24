@@ -53,6 +53,16 @@ jobs:
       - name: build root app (tsc -b && vite build)
         run: npm run build
 
+      # server/ runs on Bun, not Node — issue #100. Dependencies still
+      # install via npm (server/package-lock.json stays the source of
+      # truth), but `npm --prefix server test` shells out to `bun test`
+      # per server/package.json's "test" script, so Bun needs to be on
+      # PATH first.
+      - name: install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+
       - name: install server dependencies
         run: npm --prefix server ci
 

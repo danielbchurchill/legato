@@ -2,12 +2,12 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { Database, SQLQueryBindings } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { backfillTagColumns } from "./backfill-tags.js";
 
-let db: Database.Database;
+let db: Database;
 let dir: string;
 
 beforeEach(() => {
@@ -31,7 +31,7 @@ function insertFile(filePath: string, extraColumns: Record<string, unknown> = {}
   const placeholders = columns.map(() => "?").join(", ");
   const row = db
     .prepare(`INSERT INTO files (${columns.join(", ")}) VALUES (${placeholders}) RETURNING id`)
-    .get(...values) as { id: number };
+    .get(...(values as SQLQueryBindings[])) as { id: number };
   return row.id;
 }
 

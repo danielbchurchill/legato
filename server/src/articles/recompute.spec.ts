@@ -1,16 +1,16 @@
-import { describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { recomputeArticles } from "./recompute.js";
 
-function makeNode(db: Database.Database, type: string, title: string): number {
+function makeNode(db: Database, type: string, title: string): number {
   const row = db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as {
     id: number;
   };
   return row.id;
 }
 
-function edge(db: Database.Database, from: number, to: number, type: string, label: string | null = null): void {
+function edge(db: Database, from: number, to: number, type: string, label: string | null = null): void {
   db.prepare("INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, ?, 'local', ?)").run(
     from,
     to,
@@ -19,7 +19,7 @@ function edge(db: Database.Database, from: number, to: number, type: string, lab
   );
 }
 
-function articleFor(db: Database.Database, nodeId: number): string | undefined {
+function articleFor(db: Database, nodeId: number): string | undefined {
   return (db.prepare("SELECT body_md FROM articles WHERE node_id = ?").get(nodeId) as { body_md: string } | undefined)
     ?.body_md;
 }

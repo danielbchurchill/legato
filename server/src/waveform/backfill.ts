@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { isCached, writePeaks } from "./store.js";
 import { computePeaks } from "./decode.js";
 
@@ -27,14 +27,14 @@ export type WaveformBackfillProgress = {
 // hygiene.ts's worklist query (MAX(id) per node) reads whichever happened
 // most recently — self-clearing if Daniel re-encodes the file and backfill
 // runs again, with no separate "is this still broken" check needed.
-function recordDecodeOutcome(db: Database.Database, recordingNodeId: number, error: string | null): void {
+function recordDecodeOutcome(db: Database, recordingNodeId: number, error: string | null): void {
   db.prepare(
     "INSERT INTO field_provenance (node_id, field, value, source, note) VALUES (?, 'decode_error', ?, 'local', ?)",
   ).run(recordingNodeId, error, error);
 }
 
 export async function backfillWaveforms(
-  db: Database.Database,
+  db: Database,
   onProgress?: (progress: WaveformBackfillProgress) => void,
 ): Promise<WaveformBackfillProgress> {
   const files = db

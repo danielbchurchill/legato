@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { isPlaceholderImageUrl, pickArtistImageUrl } from "./deezer.js";
 
 // Both URL shapes are verbatim from live responses — the real one for Genesis

@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { beforeEach, describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { libraryRoutes } from "./library.js";
 
-let db: Database.Database;
+let db: Database;
 let app: FastifyInstance;
 
 beforeEach(async () => {
