@@ -21,7 +21,22 @@ const API = `http://${SERVER_HOST}:8899/api/v1`
  * placeholder-only, as an open seam; this closes it by giving the real
  * content a home behind the rail's `sliders` destination instead. */
 
-type LibraryRoot = { id: number; path: string; label: string | null; enabled: number }
+// watch_status/watch_fallback_reason are issue #122's fields — the watcher
+// (server/src/scan/watcher.ts) writes them straight onto the row it
+// already owns, independent of #123's scan-job/status work landing
+// alongside this. 'fallback' means chokidar's watch either errored
+// (ENOSPC/EMFILE) or came close to fs.inotify.max_user_watches, and the
+// server has switched that root to periodic incremental rescans instead.
+type LibraryRoot = {
+  id: number
+  path: string
+  label: string | null
+  enabled: number
+  watch_status: 'watching' | 'fallback'
+  watch_fallback_reason: 'enospc' | 'emfile' | 'near_limit' | null
+}
+
+const WATCH_LIMIT_DOCS_URL = 'https://github.com/danielbchurchill/legato/blob/main/docs/watch-limit.md'
 type ScanProgress = {
   jobId: number
   libraryRootId: number
@@ -223,6 +238,11 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
     })
     loadRoots()
   })
+  // watch:status (issue #122) fires whenever a root's watcher falls back
+  // to polling, or comes back once it's re-watched — a plain "go refetch"
+  // is simpler than patching one row in place, and this only fires on a
+  // real state change, not on every tick of the fallback timer.
+  useWsEvent(['watch:status'], () => loadRoots())
 
   const addFolder = async () => {
     if (!IS_TAURI) return
@@ -253,6 +273,20 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ libraryRootId: id }),
+    })
+  }
+
+  // Issue #122's manual "check for new music" — the same incremental mode
+  // (server/src/scan/scanner.ts) the fallback timer runs on its own every
+  // 30 minutes, just triggered on demand for whoever doesn't want to wait.
+  // Only offered while a root is actually in fallback: a live watcher
+  // already notices new files itself, so the button would have nothing to
+  // do for anyone not affected by this.
+  const checkForNewMusic = async (id: number) => {
+    await fetch(`${API}/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ libraryRootId: id, mode: 'incremental' }),
     })
   }
 
@@ -360,8 +394,31 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
                             </div>
                           </div>
                         )}
+                        {/* Issue #122: no red/alert token exists in DESIGN.md's
+                         * palette on purpose (see Button.tsx's note on
+                         * `destructive`) — muted control-color text, same
+                         * shape as this group's own error paragraph below,
+                         * carries this the same way. */}
+                        {r.watch_status === 'fallback' && (
+                          <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                            Watching for changes isn't available on this system, so Legato checks every 30
+                            minutes.{' '}
+                            <a
+                              href={WATCH_LIMIT_DOCS_URL}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-muted-hi)]"
+                            >
+                              Raise the limit
+                            </a>
+                            .
+                          </p>
+                        )}
                       </div>
                       <div className="flex shrink-0 items-center gap-[var(--spacing-sm)]">
+                        {r.watch_status === 'fallback' && (
+                          <Button onClick={() => void checkForNewMusic(r.id)}>check for new music</Button>
+                        )}
                         <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
                         <button
                           type="button"
