@@ -2,9 +2,17 @@ import { useState } from 'react'
 import { Toggle } from '../ui/Toggle'
 import { Slider } from '../ui/Slider'
 import { ColorSwatch } from '../ui/ColorSwatch'
+import { Button } from '../ui/Button'
 import { CURATED_EDGE_HUES, edgeColorSettingKey, edgeTypes, isHueTooClose, type EdgeTypeInfo } from '../canvas/edgeTypes'
 import { NODE_TYPES, nodeSizeSettingKey } from '../canvas/nodeTypes'
+import {
+  FORCE_SLIDER_LABELS,
+  MAP_PRESET_IDS,
+  MAP_PRESET_LABELS,
+  type MapPresetId,
+} from '../canvas/mapPresets'
 import type { Settings } from '../hooks/useSettings'
+import type { MapPresetHistory } from '../hooks/useMapPresetHistory'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 
 /* The Music Map settings panel — DESIGN.md's "v2: settings primitives" and
@@ -55,6 +63,62 @@ function LabeledToggle({ label, checked, onChange }: { label: string; checked: b
     <div className="flex flex-col items-center gap-[var(--spacing-xs)]">
       <Toggle checked={checked} onChange={onChange} label={label} />
       <span className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{label}</span>
+    </div>
+  )
+}
+
+/* #127/D19: the three preset pills. Selection reuses ColorSwatch's own
+ * ring-1/ring-offset treatment (see that file) rather than inventing a
+ * second "this is the selected one" language — no pill selected at all
+ * means "custom", once a slider's been dragged off every named point. */
+function PresetPicker({ activePreset, onApplyPreset }: { activePreset: MapPresetId | null; onApplyPreset: (id: MapPresetId) => void }) {
+  return (
+    <div className="flex flex-wrap gap-[var(--spacing-sm)]">
+      {MAP_PRESET_IDS.map((id) => (
+        <button
+          key={id}
+          type="button"
+          aria-pressed={activePreset === id}
+          onClick={() => onApplyPreset(id)}
+          className={`rounded-full border border-[var(--color-hairline)] px-[14px] py-[4px] text-[length:var(--text-sm)] text-[color:var(--color-control)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:bg-white/8 ${
+            activePreset === id ? 'ring-1 ring-[var(--color-ink)] ring-offset-2 ring-offset-[var(--color-canvas)]' : ''
+          }`}
+        >
+          {MAP_PRESET_LABELS[id]}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/* A "forces" slider row with D19's plain-language label as the primary
+ * text and the technical name (what MusicMapSettings called this before
+ * #127, and what forceSimulation.ts's own comments still call it) kept as
+ * secondary text next to it — see FORCE_SLIDER_LABELS in mapPresets.ts. */
+function ForceSliderRow({
+  plain,
+  technical,
+  value,
+  onChange,
+  min,
+  max,
+  step,
+}: {
+  plain: string
+  technical: string
+  value: number
+  onChange: (v: number) => void
+  min?: number
+  max?: number
+  step?: number
+}) {
+  return (
+    <div className="flex flex-col gap-[var(--spacing-xs)]">
+      <div className="flex flex-wrap items-baseline gap-x-[var(--spacing-xs)]">
+        <span className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{plain}</span>
+        <span className="text-[length:var(--text-sm)] text-[color:var(--color-muted)]">{technical}</span>
+      </div>
+      <Slider value={value} onChange={onChange} min={min} max={max} step={step} label={technical} />
     </div>
   )
 }
@@ -115,9 +179,15 @@ function EdgeColorPicker({
 type MusicMapSettingsProps = {
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>
+  /** #127: session preset/undo state — held in App.tsx (see
+   * useMapPresetHistory's own comment for why it can't live here), passed
+   * down rather than recomputed so this panel and the canvas's "map spread
+   * out of view" recovery banner both undo/restore-defaults the same
+   * session history. */
+  mapPresets: MapPresetHistory
 }
 
-export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsProps) {
+export function MusicMapSettings({ settings, updateSettings, mapPresets }: MusicMapSettingsProps) {
   const nodesLocked = settings.nodePositionsLocked === 'true'
   const showCreditNodes = settings.showCreditNodes === 'true'
   const edgeThickness = parseMultiplier(settings.edgeThicknessMultiplier, 1)
@@ -128,6 +198,20 @@ export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsP
 
   return (
     <div className="flex flex-col gap-[var(--spacing-sm)]">
+      <SettingsGroup title="layout">
+        <SettingsRow label="preset" align="start">
+          <PresetPicker activePreset={mapPresets.activePreset} onApplyPreset={mapPresets.applyPreset} />
+        </SettingsRow>
+        <SettingsRow label="history">
+          <div className="flex items-center gap-[var(--spacing-lg)]">
+            <Button onClick={mapPresets.undo} disabled={!mapPresets.canUndo}>
+              undo
+            </Button>
+            <Button onClick={mapPresets.restoreDefaults}>restore defaults</Button>
+          </div>
+        </SettingsRow>
+      </SettingsGroup>
+
       <SettingsGroup title="nodes">
         <SettingsRow label="lock">
           <Toggle
@@ -196,31 +280,35 @@ export function MusicMapSettings({ settings, updateSettings }: MusicMapSettingsP
         </SettingsRow>
       </SettingsGroup>
 
+      {/* #127/D19: plain-language primary label, technical name secondary —
+       * "link force" / "repel" / "center" are still what forceSimulation.ts
+       * and this settings store's own keys call these, just no longer the
+       * first thing a person reads here. No `align="start"` SettingsRow
+       * wrapper — each row now owns its full label-above-slider layout via
+       * ForceSliderRow, since the plain-language text is too long for the
+       * shared 68px label column every other row in this panel uses. */}
       <SettingsGroup title="forces">
-        <SettingsRow label="center">
-          <Slider
-            value={forceCenter}
-            onChange={(v) => void updateSettings({ forceCenterStrength: v.toFixed(2) })}
-            label="center force"
-          />
-        </SettingsRow>
-        <SettingsRow label="repel">
-          <Slider
-            value={forceRepel}
-            onChange={(v) => void updateSettings({ forceRepelStrength: v.toFixed(0) })}
-            min={0}
-            max={200}
-            step={1}
-            label="repel force"
-          />
-        </SettingsRow>
-        <SettingsRow label="link">
-          <Slider
-            value={forceLink}
-            onChange={(v) => void updateSettings({ forceLinkStrength: v.toFixed(2) })}
-            label="link force"
-          />
-        </SettingsRow>
+        <ForceSliderRow
+          plain={FORCE_SLIDER_LABELS.forceCenterStrength.plain}
+          technical={FORCE_SLIDER_LABELS.forceCenterStrength.technical}
+          value={forceCenter}
+          onChange={(v) => void updateSettings({ forceCenterStrength: v.toFixed(2) })}
+        />
+        <ForceSliderRow
+          plain={FORCE_SLIDER_LABELS.forceRepelStrength.plain}
+          technical={FORCE_SLIDER_LABELS.forceRepelStrength.technical}
+          value={forceRepel}
+          onChange={(v) => void updateSettings({ forceRepelStrength: v.toFixed(0) })}
+          min={0}
+          max={200}
+          step={1}
+        />
+        <ForceSliderRow
+          plain={FORCE_SLIDER_LABELS.forceLinkStrength.plain}
+          technical={FORCE_SLIDER_LABELS.forceLinkStrength.technical}
+          value={forceLink}
+          onChange={(v) => void updateSettings({ forceLinkStrength: v.toFixed(2) })}
+        />
       </SettingsGroup>
     </div>
   )
