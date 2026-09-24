@@ -23,7 +23,7 @@ import { SERVER_HOST } from './config/serverHost'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
 import { useSettings } from './hooks/useSettings'
-import type { ReplayGainMode } from './playback/usePlayback'
+import type { ReplayGainMode, RepeatMode } from './playback/usePlayback'
 import { LeftPanelHeader } from './shell/LeftPanelHeader'
 import { RightPanelHeader } from './shell/RightPanelHeader'
 import { InspectorRail } from './shell/InspectorRail'
@@ -38,6 +38,14 @@ import type { RailDestination } from './shell/rail'
 
 const NODE_COUNT = 10000
 const EDGES_PER_NODE = 2 // ~20k edges: rough stand-in for artist/label/producer edge density
+
+// D12: off -> all -> one -> off. The dock's single repeat button cycles
+// through this rather than exposing three separate controls.
+const NEXT_REPEAT_MODE: Record<RepeatMode, RepeatMode> = {
+  off: 'all',
+  all: 'one',
+  one: 'off',
+}
 
 function buildGraph(): Graph {
   const graph = new Graph()
@@ -224,7 +232,12 @@ function MainApp() {
   const lastRailDestinationRef = useRef<RailDestination>('search')
   const { settings, updateSettings } = useSettings()
   const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
-  const playback = usePlayback(replaygainMode)
+  // D12: repeat is a persisted player setting (unlike shuffle, which lives
+  // entirely inside usePlayback's own playSequence/originalOrder), so it
+  // reads from the same settings store as replaygainMode rather than being
+  // hook-internal state.
+  const repeatMode = (settings.repeatMode as RepeatMode) || 'off'
+  const playback = usePlayback(replaygainMode, repeatMode)
   const canvasRef = useRef<CanvasHandle>(null)
   const collectionPanelRef = useRef<CollectionPanelHandle>(null)
 
@@ -492,6 +505,7 @@ function MainApp() {
           status={playback.status}
           shuffled={playback.shuffled}
           queueBusy={playback.queueBusy}
+          repeatMode={repeatMode}
           onPause={playback.pause}
           onResume={playback.resume}
           onSeek={playback.seek}
@@ -499,6 +513,7 @@ function MainApp() {
           onNext={playback.next}
           onPrevious={playback.previous}
           onToggleShuffle={playback.toggleShuffle}
+          onCycleRepeat={() => void updateSettings({ repeatMode: NEXT_REPEAT_MODE[repeatMode] })}
         />
       )}
 
