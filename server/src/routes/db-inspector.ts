@@ -1,6 +1,6 @@
 import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { DATA_DIR } from "../config.js";
 
@@ -57,7 +57,7 @@ export type DbInspectorSnapshot = {
   };
 };
 
-function pipelineSnapshot(db: Database.Database): DbInspectorSnapshot["pipeline"] {
+function pipelineSnapshot(db: Database): DbInspectorSnapshot["pipeline"] {
   const latest = db
     .prepare(
       `SELECT id, status, files_scanned, files_added, files_updated, files_missing, started_at, finished_at
@@ -84,7 +84,7 @@ function pipelineSnapshot(db: Database.Database): DbInspectorSnapshot["pipeline"
   };
 }
 
-function matchQualitySnapshot(db: Database.Database): DbInspectorSnapshot["matchQuality"] {
+function matchQualitySnapshot(db: Database): DbInspectorSnapshot["matchQuality"] {
   // Same WHERE missing_since IS NULL scope stats.ts's own track count uses —
   // a file marked missing by a re-scan is still on disk in this table, but
   // isn't part of the "live" library match quality describes.
@@ -98,7 +98,7 @@ function matchQualitySnapshot(db: Database.Database): DbInspectorSnapshot["match
   return rows.map((r) => ({ ...r, share: total > 0 ? r.count / total : 0 }));
 }
 
-function schemaSnapshot(db: Database.Database): DbInspectorSnapshot["schema"] {
+function schemaSnapshot(db: Database): DbInspectorSnapshot["schema"] {
   const nodesByType = db.prepare("SELECT type, COUNT(*) AS count FROM nodes GROUP BY type").all() as TypeCountRow[];
   const edgesByType = db.prepare("SELECT type, COUNT(*) AS count FROM edges GROUP BY type").all() as TypeCountRow[];
 
@@ -160,7 +160,7 @@ function storageSnapshot(dbPath: string, coverCacheDir: string): DbInspectorSnap
 // default-param testability trick db.ts's openDb() uses) so a spec test can
 // point them at a temp file/dir without touching the real DATA_DIR.
 export function dbInspectorSnapshot(
-  db: Database.Database,
+  db: Database,
   dbPath: string = path.join(DATA_DIR, "legato.db"),
   coverCacheDir: string = path.join(DATA_DIR, "covers"),
 ): DbInspectorSnapshot {
@@ -172,7 +172,7 @@ export function dbInspectorSnapshot(
   };
 }
 
-export function dbInspectorRoutes(db: Database.Database) {
+export function dbInspectorRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/db-inspector", async () => dbInspectorSnapshot(db));
   };

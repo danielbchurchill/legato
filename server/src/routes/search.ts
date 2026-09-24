@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 
 // Strips FTS5 query-syntax characters and turns the rest into a
@@ -13,7 +13,7 @@ function toFtsQuery(raw: string): string | null {
     .join(" ");
 }
 
-export function searchRoutes(db: Database.Database) {
+export function searchRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Querystring: { q?: string; limit?: string } }>("/search", async (request) => {
       const ftsQuery = toFtsQuery(request.query.q ?? "");

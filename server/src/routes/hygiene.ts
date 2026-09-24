@@ -1,10 +1,10 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { getWorklist } from "../hygiene.js";
 import { applyMatch } from "../enrich/worker.js";
 import { broadcast } from "../ws.js";
 
-export function hygieneRoutes(db: Database.Database) {
+export function hygieneRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Querystring: { type?: string } }>("/hygiene/worklist", async (request) =>
       getWorklist(db, request.query.type),

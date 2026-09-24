@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FetchedDescription } from "./wikipedia.js";
 
 export type StoredDescription = {
@@ -12,7 +12,7 @@ export type StoredDescription = {
 // Only ever returns a description that exists. A row with found = 0 is the
 // negative cache — it records that a lookup ran and came back empty, which is
 // information the queue needs and the UI must not render as an empty section.
-export function getDescription(db: Database.Database, nodeId: number): StoredDescription | null {
+export function getDescription(db: Database, nodeId: number): StoredDescription | null {
   const row = db
     .prepare(
       `SELECT body, source, source_url, license, fetched_at
@@ -29,7 +29,7 @@ export function getDescription(db: Database.Database, nodeId: number): StoredDes
 // re-learning it (see enrich/queue.ts on why a finished job is never
 // automatically retried).
 export function recordDescription(
-  db: Database.Database,
+  db: Database,
   nodeId: number,
   source: string,
   description: FetchedDescription | null,

@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { findMostDissimilar, findMostSimilar } from "../similarity/similarity.js";
 import { resolveCoverForNode } from "../cover/extract.js";
@@ -17,7 +17,7 @@ type RankedResult = { nodeId: number; score: number };
 // here so the field means what it says for whatever does start reading it.
 // Now resolved through the same shared chain both the image endpoint and the
 // graph's node list use, rather than a third local rendition of it.
-function hydrate(db: Database.Database, ranked: RankedResult[]) {
+function hydrate(db: Database, ranked: RankedResult[]) {
   const nodeRow = db.prepare(`SELECT title, type FROM nodes WHERE id = ?`);
   return ranked.map((r) => {
     const node = nodeRow.get(r.nodeId) as { title: string; type: string };
@@ -31,7 +31,7 @@ function hydrate(db: Database.Database, ranked: RankedResult[]) {
   });
 }
 
-export function similarityRoutes(db: Database.Database) {
+export function similarityRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
       "/nodes/:id/similar",

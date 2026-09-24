@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { fetchLrclibLyrics } from "./lrclib.js";
 
 export type LyricsResponse = {
@@ -8,7 +8,7 @@ export type LyricsResponse = {
   found: boolean;
 };
 
-function edgeTargetTitle(db: Database.Database, fromNode: number, type: string): string | null {
+function edgeTargetTitle(db: Database, fromNode: number, type: string): string | null {
   const row = db
     .prepare(`SELECT n.title FROM edges e JOIN nodes n ON n.id = e.to_node WHERE e.from_node = ? AND e.type = ? LIMIT 1`)
     .get(fromNode, type) as { title: string } | undefined;
@@ -25,7 +25,7 @@ const NOT_FOUND: LyricsResponse = { plainLyrics: null, syncedLyrics: null, instr
 // Returns null only when nodeId isn't a real recording — every other case
 // (no artist to search with, LRCLIB has nothing, LRCLIB has it) resolves to
 // a real LyricsResponse, found:false covering the first two.
-export async function getLyrics(db: Database.Database, nodeId: number): Promise<LyricsResponse | null> {
+export async function getLyrics(db: Database, nodeId: number): Promise<LyricsResponse | null> {
   const cached = db
     .prepare("SELECT plain_lyrics, synced_lyrics, instrumental, found FROM lyrics WHERE node_id = ?")
     .get(nodeId) as

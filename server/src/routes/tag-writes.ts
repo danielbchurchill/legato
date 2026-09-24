@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { computeDiff, type FieldDiff } from "../tagwrite/diff.js";
 import { applyTagWrite, revertTagWrite } from "../tagwrite/writer.js";
@@ -8,7 +8,7 @@ import { broadcast } from "../ws.js";
 type FileRow = { id: number; file_path: string };
 type TagWriteRow = { id: number; file_id: number; status: string; diff_json: string };
 
-export function tagWritesRoutes(db: Database.Database) {
+export function tagWritesRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/tag-writes", async () =>
       db.prepare("SELECT * FROM tag_writes ORDER BY id DESC LIMIT 100").all(),

@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "./sqlite.js";
 import { deriveLocalEdges } from "./match/edges.js";
 import {
   enqueueArtistImageLookupIfNeeded,
@@ -23,7 +23,7 @@ import { recomputeArticles } from "./articles/recompute.js";
 // for every file currently in the library — not just the ones that
 // changed this run. Meant to be the last one of these ever needed: the
 // next derived field lands here, not in a fifth backfill script.
-export function recompute(db: Database.Database): void {
+export function recompute(db: Database): void {
   const files = db.prepare("SELECT id FROM files WHERE missing_since IS NULL").all() as { id: number }[];
   for (const { id } of files) {
     deriveLocalEdges(db, id);

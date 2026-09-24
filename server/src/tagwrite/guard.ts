@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { readWriteMarker } from "./writer.js";
 
 // Distinguishes "this chokidar change event is our own write settling"
@@ -9,7 +9,7 @@ import { readWriteMarker } from "./writer.js";
 // needed -> writes again, forever. Both the on-disk write-id (a custom
 // Vorbis comment field, see writer.ts) and the mtime have to match what
 // we stamped — either alone could coincidentally match.
-export async function isSelfWrite(db: Database.Database, filePath: string): Promise<boolean> {
+export async function isSelfWrite(db: Database, filePath: string): Promise<boolean> {
   const row = db
     .prepare("SELECT app_write_marker, last_written_mtime FROM files WHERE file_path = ?")
     .get(filePath) as { app_write_marker: string | null; last_written_mtime: string | null } | undefined;

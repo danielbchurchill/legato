@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { extraCreditedArtists, splitArtistCredit } from "../scan/artist-credit.js";
 
 type LocalTags = {
@@ -39,7 +39,7 @@ function parseTagsRaw(tagsRaw: string | null): LocalTags | null {
 // aggregates in entities/aggregate.ts. Safe without a transaction/lock:
 // better-sqlite3 is fully synchronous, so there's no interleaving between
 // the SELECT and the INSERT within one process.
-function findOrCreateNode(db: Database.Database, type: string, title: string): number {
+function findOrCreateNode(db: Database, type: string, title: string): number {
   const existing = db
     .prepare("SELECT id FROM nodes WHERE type = ? AND lower(trim(title)) = lower(trim(?))")
     .get(type, title) as { id: number } | undefined;
@@ -50,7 +50,7 @@ function findOrCreateNode(db: Database.Database, type: string, title: string): n
   return row.id;
 }
 
-function insertEdge(db: Database.Database, fromNode: number, toNode: number, type: string): void {
+function insertEdge(db: Database, fromNode: number, toNode: number, type: string): void {
   db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, ?, 'local')").run(
     fromNode,
     toNode,
@@ -69,7 +69,7 @@ function insertEdge(db: Database.Database, fromNode: number, toNode: number, typ
 // source='local' edges first, then reinserts. The WHERE clause is scoped to
 // source='local' specifically — never touches source='manual' rows, which
 // is the actual mechanism behind "manual edges survive re-scan" (M5).
-export function deriveLocalEdges(db: Database.Database, fileId: number): void {
+export function deriveLocalEdges(db: Database, fileId: number): void {
   const file = db.prepare("SELECT recording_node_id, tags_raw FROM files WHERE id = ?").get(fileId) as
     | { recording_node_id: number; tags_raw: string | null }
     | undefined;

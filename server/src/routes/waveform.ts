@@ -1,8 +1,8 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { getOrComputePeaks } from "../waveform/peaks.js";
 
-export function waveformRoutes(db: Database.Database) {
+export function waveformRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     // On-demand fallback for anything the scan's inline pass missed
     // (ensurePeaksForFile is best-effort, non-fatal, same as cover art) —

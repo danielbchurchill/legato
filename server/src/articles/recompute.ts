@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import {
   generateArtistArticle,
   generateCreditArticle,
@@ -8,7 +8,7 @@ import {
   type NodeRef,
 } from "./generate.js";
 
-function edgeTargets(db: Database.Database, fromNode: number, type: string): NodeRef[] {
+function edgeTargets(db: Database, fromNode: number, type: string): NodeRef[] {
   return db
     .prepare(
       // Ordered by edge id so edgeTarget() below means "the first credited
@@ -21,11 +21,11 @@ function edgeTargets(db: Database.Database, fromNode: number, type: string): Nod
     .all(fromNode, type) as NodeRef[];
 }
 
-function edgeTarget(db: Database.Database, fromNode: number, type: string): NodeRef | null {
+function edgeTarget(db: Database, fromNode: number, type: string): NodeRef | null {
   return edgeTargets(db, fromNode, type)[0] ?? null;
 }
 
-function recordingArticle(db: Database.Database, nodeId: number): string | null {
+function recordingArticle(db: Database, nodeId: number): string | null {
   const artist = edgeTarget(db, nodeId, "performed_by");
   const release = edgeTarget(db, nodeId, "appears_on");
   const yearNode = edgeTarget(db, nodeId, "released_in");
@@ -54,7 +54,7 @@ function recordingArticle(db: Database.Database, nodeId: number): string | null 
   });
 }
 
-function artistArticle(db: Database.Database, nodeId: number): string | null {
+function artistArticle(db: Database, nodeId: number): string | null {
   const row = db.prepare("SELECT track_count, album_count FROM artists WHERE node_id = ?").get(nodeId) as
     | { track_count: number; album_count: number }
     | undefined;
@@ -80,7 +80,7 @@ function artistArticle(db: Database.Database, nodeId: number): string | null {
   });
 }
 
-function releaseArticle(db: Database.Database, nodeId: number): string | null {
+function releaseArticle(db: Database, nodeId: number): string | null {
   const row = db
     .prepare(
       `SELECT primary_artist_node_id, track_count, total_duration_ms, year_min, year_max FROM albums WHERE node_id = ?`,
@@ -126,7 +126,7 @@ function releaseArticle(db: Database.Database, nodeId: number): string | null {
   });
 }
 
-function labelArticle(db: Database.Database, nodeId: number): string | null {
+function labelArticle(db: Database, nodeId: number): string | null {
   const recordings = db
     .prepare(`SELECT n.id, n.title FROM edges e JOIN nodes n ON n.id = e.from_node WHERE e.to_node = ? AND e.type = 'released_on'`)
     .all(nodeId) as NodeRef[];
@@ -144,7 +144,7 @@ function labelArticle(db: Database.Database, nodeId: number): string | null {
   return generateLabelArticle({ recordings, artistCount });
 }
 
-function creditArticle(db: Database.Database, nodeId: number): string | null {
+function creditArticle(db: Database, nodeId: number): string | null {
   const producedRecordings = db
     .prepare(`SELECT n.id, n.title FROM edges e JOIN nodes n ON n.id = e.from_node WHERE e.to_node = ? AND e.type = 'produced_by'`)
     .all(nodeId) as NodeRef[];
@@ -161,7 +161,7 @@ function creditArticle(db: Database.Database, nodeId: number): string | null {
 // to go stale between recomputes. work/year nodes get no article (nothing
 // in generate.ts handles them) — a "year" page would just repeat the
 // released_in facts.ts already lists, not add anything.
-export function recomputeArticles(db: Database.Database): void {
+export function recomputeArticles(db: Database): void {
   const nodes = db.prepare("SELECT id, type FROM nodes WHERE type IN ('recording','artist','release','label','credit')").all() as {
     id: number;
     type: string;

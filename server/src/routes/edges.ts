@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 
 // Manual, user-authored edges — the free-text "sounds like"/"sampled in"
@@ -7,7 +7,7 @@ import type { FastifyInstance } from "fastify";
 // only ones a person actually created here. Survives re-scan because
 // match/edges.ts's regeneration is scoped to `WHERE source = 'local'` —
 // this route existing is what that guard is actually protecting.
-export function edgesRoutes(db: Database.Database) {
+export function edgesRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.post<{ Body: { fromNode: number; toNode: number; type: string; label?: string; note?: string } }>(
       "/edges",

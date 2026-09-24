@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { broadcast } from "../ws.js";
 
@@ -11,7 +11,7 @@ export type FavouriteRow = { id: number; type: string; title: string };
 
 // Recency, not alphabetical — a favourites list is "what did I just find",
 // not a library index (see 0020_favourites.sql's rationale).
-export function listFavourites(db: Database.Database): FavouriteRow[] {
+export function listFavourites(db: Database): FavouriteRow[] {
   return db
     .prepare(
       `SELECT n.id, n.type, n.title
@@ -24,15 +24,15 @@ export function listFavourites(db: Database.Database): FavouriteRow[] {
 
 // Idempotent — the frontend flips its heart optimistically before this
 // resolves, so a stale double-click landing here twice must not error.
-export function addFavourite(db: Database.Database, nodeId: number): void {
+export function addFavourite(db: Database, nodeId: number): void {
   db.prepare("INSERT OR IGNORE INTO favourites (node_id) VALUES (?)").run(nodeId);
 }
 
-export function removeFavourite(db: Database.Database, nodeId: number): void {
+export function removeFavourite(db: Database, nodeId: number): void {
   db.prepare("DELETE FROM favourites WHERE node_id = ?").run(nodeId);
 }
 
-export function favouritesRoutes(db: Database.Database) {
+export function favouritesRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/favourites", async () => listFavourites(db));
 

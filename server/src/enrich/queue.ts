@@ -1,10 +1,10 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 
 // Auto-queues on scan, gated by one global switch — no per-node consent
 // prompts. Missing the setting entirely means enabled: a new library
 // should start enriching itself the first time it's scanned, per
 // Legato.md's consent model, not wait for an explicit opt-in.
-export function isEnrichmentEnabled(db: Database.Database): boolean {
+export function isEnrichmentEnabled(db: Database): boolean {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'enrichmentEnabled'").get() as
     | { value: string }
     | undefined;
@@ -15,7 +15,7 @@ export function isEnrichmentEnabled(db: Database.Database): boolean {
 // lookup — tier 1 already resolved the rest (match/collapse.ts) without
 // spending a rate-limited request. Skips enqueueing a duplicate if one is
 // already queued/running for this node.
-export function enqueueEnrichmentIfNeeded(db: Database.Database, nodeId: number): void {
+export function enqueueEnrichmentIfNeeded(db: Database, nodeId: number): void {
   if (!isEnrichmentEnabled(db)) return;
 
   const file = db.prepare("SELECT match_source FROM files WHERE recording_node_id = ? LIMIT 1").get(nodeId) as
@@ -42,7 +42,7 @@ export function enqueueEnrichmentIfNeeded(db: Database.Database, nodeId: number)
 // spend a rate-limited request re-learning that on every no-op re-scan. Asking
 // again is a deliberate act (delete the job row, or the eventual refresh
 // action in the maintenance view), not a side effect of pressing scan.
-function enqueueOnce(db: Database.Database, nodeId: number, jobType: string): void {
+function enqueueOnce(db: Database, nodeId: number, jobType: string): void {
   if (!isEnrichmentEnabled(db)) return;
 
   const existing = db
@@ -56,13 +56,13 @@ function enqueueOnce(db: Database.Database, nodeId: number, jobType: string): vo
 // A photograph of the artist (enrich/deezer.ts). Priority is left at the
 // default, behind nothing and ahead of nothing: an artist photo is worth no
 // more than a recording match, and the queue drains in id order anyway.
-export function enqueueArtistImageLookupIfNeeded(db: Database.Database, artistNodeId: number): void {
+export function enqueueArtistImageLookupIfNeeded(db: Database, artistNodeId: number): void {
   enqueueOnce(db, artistNodeId, "artist_image_lookup");
 }
 
 // Prose about an artist or an album (enrich/wikipedia.ts). Recordings are
 // excluded at the call site *and* in the worker — see processDescriptionLookup.
-export function enqueueDescriptionLookupIfNeeded(db: Database.Database, nodeId: number): void {
+export function enqueueDescriptionLookupIfNeeded(db: Database, nodeId: number): void {
   enqueueOnce(db, nodeId, "description_lookup");
 }
 
@@ -72,7 +72,7 @@ export function enqueueDescriptionLookupIfNeeded(db: Database.Database, nodeId: 
 // processArtistMemberLookup for a node it just created — a member/group
 // discovered mid-drain gets its own lookup queued immediately rather than
 // waiting for the next scan's recompute pass to notice it exists.
-export function enqueueArtistMemberLookupIfNeeded(db: Database.Database, artistNodeId: number): void {
+export function enqueueArtistMemberLookupIfNeeded(db: Database, artistNodeId: number): void {
   enqueueOnce(db, artistNodeId, "artist_member_lookup");
 }
 
@@ -81,7 +81,7 @@ export function enqueueArtistMemberLookupIfNeeded(db: Database.Database, artistN
 // server can hand to Cover Art Archive (enrich/coverArchive.ts). node_id
 // here is the *release* node, not a recording — see 0014's migration note
 // on enrich_jobs.node_id's job_type-dependent meaning.
-export function enqueueCoverArtLookupIfNeeded(db: Database.Database, releaseNodeId: number): void {
+export function enqueueCoverArtLookupIfNeeded(db: Database, releaseNodeId: number): void {
   const existing = db
     .prepare(
       "SELECT id FROM enrich_jobs WHERE node_id = ? AND job_type = 'cover_art_lookup' AND status IN ('queued','running')",

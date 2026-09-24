@@ -1,8 +1,8 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { getLyrics } from "../lyrics/service.js";
 
-export function lyricsRoutes(db: Database.Database) {
+export function lyricsRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     // On demand, not during scan — see migration 0017's comment. First
     // open of a track's lyrics page pays LRCLIB's round trip; every one

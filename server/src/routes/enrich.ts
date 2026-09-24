@@ -1,8 +1,8 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { runDueJobs } from "../enrich/worker.js";
 
-export function enrichRoutes(db: Database.Database) {
+export function enrichRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/enrich-jobs", async () =>
       db.prepare("SELECT * FROM enrich_jobs ORDER BY id DESC LIMIT 100").all(),

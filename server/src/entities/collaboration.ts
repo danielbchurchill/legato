@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { pickMode } from "./mode.js";
 
 // affinityReason is null for a real tie (shared recording) and a specific
@@ -165,7 +165,7 @@ export function computeAlbumRelations(
 // graph layouts (session 4) cluster by the same label affinity this module
 // already needs for same_label edges, so it's one query with two readers
 // rather than two copies of the same join.
-export function getAlbumLabelMap(db: Database.Database): Map<number, number | null> {
+export function getAlbumLabelMap(db: Database): Map<number, number | null> {
   const labelRows = db
     .prepare(
       `SELECT release.to_node AS releaseNodeId, label.to_node AS labelNodeId
@@ -212,7 +212,7 @@ function dedupeEdges(edges: CollaborationEdge[]): CollaborationEdge[] {
   return result;
 }
 
-export function recomputeCollaborationEdges(db: Database.Database): void {
+export function recomputeCollaborationEdges(db: Database): void {
   const performerEdges = db
     .prepare(
       "SELECT from_node AS fromNode, to_node AS toNode FROM edges WHERE type IN ('performed_by', 'featured_artist')",

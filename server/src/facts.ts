@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "./sqlite.js";
 
 // groupType carries the raw edge type (e.g. "same_artist") so the client
 // can collapse repeats of the same relationship into one row with a count
@@ -35,7 +35,7 @@ const EDGE_VERB: Record<string, string> = {
 // provenance-tracked fields. Facts here come straight from edges (M2's
 // local hard edges) and file/tag data instead — the actual source of
 // everything currently known about a node.
-export function generateFacts(db: Database.Database, nodeId: number): Fact[] {
+export function generateFacts(db: Database, nodeId: number): Fact[] {
   const node = db.prepare("SELECT id, type, title FROM nodes WHERE id = ?").get(nodeId) as
     | { id: number; type: string; title: string }
     | undefined;

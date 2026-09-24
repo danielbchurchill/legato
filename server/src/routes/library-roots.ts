@@ -1,5 +1,5 @@
 import { existsSync, statSync } from "node:fs";
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { countLibraryRootContents, removeLibraryRootCascade } from "../library-roots.js";
 import { recompute } from "../recompute.js";
@@ -15,7 +15,7 @@ type LibraryRoot = {
   added_at: string;
 };
 
-export function libraryRootsRoutes(db: Database.Database) {
+export function libraryRootsRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/library-roots", async () =>
       db.prepare("SELECT * FROM library_roots ORDER BY id").all() as LibraryRoot[],

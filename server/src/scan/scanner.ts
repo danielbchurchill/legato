@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import { recompute } from "../recompute.js";
 import { enqueueEnrichmentIfNeeded } from "../enrich/queue.js";
 import { attachCoverForFile } from "../cover/extract.js";
@@ -39,7 +39,7 @@ export type ScanOutcome = "added" | "updated" | "unchanged";
 // chokidar event, so "a tag edit re-scans just that file" and "a full scan
 // skips untouched files" are the same guarantee, not two implementations.
 export async function scanFile(
-  db: Database.Database,
+  db: Database,
   libraryRootId: number,
   filePath: string,
   // Non-fatal problems (currently only cover art) surface here rather than
@@ -198,7 +198,7 @@ export async function scanFile(
 // node/edge/play history rather than losing it, same don't-destroy-data
 // bias as merge_overrides. Idempotent: a file already marked missing stays
 // at its original missing_since timestamp.
-export function markMissing(db: Database.Database, filePath: string): void {
+export function markMissing(db: Database, filePath: string): void {
   db.prepare(
     "UPDATE files SET missing_since = datetime('now') WHERE file_path = ? AND missing_since IS NULL",
   ).run(filePath);
@@ -217,7 +217,7 @@ export type RescanFileResult =
 // row was written is recorded via markMissing() exactly like the watcher's
 // own 'unlink' handler, and any other failure is captured in the result
 // list instead of aborting the rest of the node's files.
-export async function rescanNode(db: Database.Database, nodeId: number): Promise<RescanFileResult[]> {
+export async function rescanNode(db: Database, nodeId: number): Promise<RescanFileResult[]> {
   const files = db
     .prepare("SELECT id, library_root_id, file_path FROM files WHERE recording_node_id = ?")
     .all(nodeId) as { id: number; library_root_id: number; file_path: string }[];
@@ -258,7 +258,7 @@ export type ScanMode = "full" | "incremental";
 // long-running part a route handler fires-and-forgets while the client
 // polls GET /api/v1/scan-jobs/:id for status.
 export function createScanJob(
-  db: Database.Database,
+  db: Database,
   libraryRootId: number,
   mode: ScanMode = "full",
 ): number {
@@ -278,7 +278,7 @@ export function createScanJob(
 // missing_since onto rows this mode is promising not to touch. A file that
 // moved, was edited, or vanished is still 'full' rescan's job.
 export async function executeScan(
-  db: Database.Database,
+  db: Database,
   jobId: number,
   libraryRootId: number,
   rootPath: string,
@@ -355,7 +355,7 @@ export async function executeScan(
 // chaining "scan, then start watching" on library-root creation) rather
 // than fire-and-forget an HTTP response.
 export async function runFullScan(
-  db: Database.Database,
+  db: Database,
   libraryRootId: number,
   rootPath: string,
   onProgress?: (progress: ScanProgress) => void,
@@ -369,7 +369,7 @@ export async function runFullScan(
 // mode: "incremental") that want to await a whole incremental run rather
 // than poll a job id.
 export async function runIncrementalScan(
-  db: Database.Database,
+  db: Database,
   libraryRootId: number,
   rootPath: string,
   onProgress?: (progress: ScanProgress) => void,

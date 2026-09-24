@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { ensureCached } from "../stream/cache.js";
 
@@ -13,7 +13,7 @@ import { ensureCached } from "../stream/cache.js";
 // the case this split-service architecture exists to support. The old
 // /stream/:filename spike (server/src/index.ts) trusted a client-supplied
 // filename directly; this route is what replaces it for real playback.
-export function filesRoutes(db: Database.Database) {
+export function filesRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Params: { id: string } }>("/files/:id/stream", async (request, reply) => {
       const file = db
