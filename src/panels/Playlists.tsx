@@ -5,9 +5,11 @@ import { CoverArt } from '../ui/CoverArt'
 import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
 import { Button } from '../ui/Button'
+import { Disclosure } from '../ui/Disclosure'
 import { formatDuration } from '../ui/format'
 import { SERVER_HOST } from '../config/serverHost'
 import type { usePlayback } from '../playback/usePlayback'
+import { ImportReportView, PlaylistImport, type ImportEntryResult } from './PlaylistImport'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -168,7 +170,7 @@ function PlaylistRow({
   )
 }
 
-function PlaylistList({ onOpen }: { onOpen: (id: number, name: string) => void }) {
+function PlaylistList({ onOpen, onImport }: { onOpen: (id: number, name: string) => void; onImport: () => void }) {
   const [items, setItems] = useState<PlaylistListItem[] | null>(null)
 
   const load = useCallback(() => {
@@ -198,6 +200,13 @@ function PlaylistList({ onOpen }: { onOpen: (id: number, name: string) => void }
   return (
     <div>
       <CreatePlaylistForm onCreated={load} />
+      {/* #124: the M3U/M3U8 import entry point — plain text, same shape as
+       * "+ create" above it rather than a new icon, since this panel's own
+       * precedent (that button) is already text-only for its primary
+       * actions. */}
+      <div className="mb-[15px]">
+        <Button onClick={onImport}>import m3u…</Button>
+      </div>
       {items === null ? (
         <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">loading…</p>
       ) : items.length === 0 ? (
@@ -305,6 +314,12 @@ function PlaylistDetail({
   playback: Playback
 }) {
   const [tracks, setTracks] = useState<PlaylistTrackDetail[] | null>(null)
+  // #124: whether this playlist has a persisted import report — "report
+  // stays viewable" means viewable on return visits, not only in the
+  // moment right after import, so this checks every time the detail view
+  // opens rather than only when PlaylistImport hands off a fresh one.
+  // null = none (or not loaded yet); the 404 case both share.
+  const [importReport, setImportReport] = useState<{ sourceFilename: string; entries: ImportEntryResult[] } | null>(null)
 
   const load = useCallback(() => {
     fetch(`${API}/playlists/${playlistId}/tracks`)
@@ -314,6 +329,13 @@ function PlaylistDetail({
   }, [playlistId])
 
   useEffect(load, [load])
+  useEffect(() => {
+    setImportReport(null)
+    fetch(`${API}/playlists/${playlistId}/import-report`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((report) => setImportReport(report ? { sourceFilename: report.sourceFilename, entries: report.entries } : null))
+      .catch(() => setImportReport(null))
+  }, [playlistId])
   useWsEvent(['playlist:tracks-changed'], (payload) => {
     if ((payload as { playlistId?: number } | undefined)?.playlistId === playlistId) load()
   })
@@ -388,6 +410,18 @@ function PlaylistDetail({
         </Button>
       </div>
 
+      {/* #124: the persisted report for playlists that came from an M3U
+       * import — folded away by default since most playlists have none
+       * and every other playlist here would otherwise render an empty
+       * Disclosure for nothing. */}
+      {importReport && (
+        <div className="mt-[15px]">
+          <Disclosure title="import report">
+            <ImportReportView sourceFilename={importReport.sourceFilename} entries={importReport.entries} />
+          </Disclosure>
+        </div>
+      )}
+
       {tracks === null ? (
         <p className="pt-[24px] text-[length:var(--text-base)] text-[var(--color-muted)]">loading…</p>
       ) : tracks.length === 0 ? (
@@ -417,6 +451,10 @@ function PlaylistDetail({
 
 export function Playlists({ playback }: { playback: Playback }) {
   const [selected, setSelected] = useState<{ id: number; name: string } | null>(null)
+  // #124: a third view alongside list/detail, entered from PlaylistList's
+  // "import m3u…" button and exited either by cancelling or by landing on
+  // the freshly-created playlist's own detail view.
+  const [importing, setImporting] = useState(false)
 
   if (selected) {
     return (
@@ -429,5 +467,17 @@ export function Playlists({ playback }: { playback: Playback }) {
     )
   }
 
-  return <PlaylistList onOpen={(id, name) => setSelected({ id, name })} />
+  if (importing) {
+    return (
+      <PlaylistImport
+        onImported={(playlist) => {
+          setImporting(false)
+          setSelected(playlist)
+        }}
+        onCancel={() => setImporting(false)}
+      />
+    )
+  }
+
+  return <PlaylistList onOpen={(id, name) => setSelected({ id, name })} onImport={() => setImporting(true)} />
 }
