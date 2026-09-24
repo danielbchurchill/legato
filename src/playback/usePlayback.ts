@@ -19,6 +19,11 @@ type ResolvedTrack = {
 
 export type QueueEntry = { recordingNodeId: number; title: string; durationMs: number | null }
 export type ReplayGainMode = 'track' | 'album' | 'off'
+// D12 (docs/plans/05-listening-and-map.md): off -> all -> one, a persisted
+// player setting (App.tsx reads/writes it via useSettings, same as
+// replaygainMode) rather than per-queue state — unlike shuffle, which lives
+// entirely in playSequence/originalOrder below.
+export type RepeatMode = 'off' | 'all' | 'one'
 
 // 'album' falls back to track gain when a recording's release has none
 // (an untagged single, a compilation with mixed source masters) — "no
@@ -160,7 +165,7 @@ function reportPlay(entry: PlayInProgress): void {
 // was. The web path never has this problem — the <audio> element only ever
 // holds the one currently-playing source, so queue edits are a plain array
 // splice.
-export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
+export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode: RepeatMode = 'off') {
   const [status, setStatus] = useState<PlaybackStatus>({
     playing: false,
     positionMs: 0,
@@ -181,6 +186,14 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
   useEffect(() => {
     statusRef.current = status
   }, [status])
+
+  // Mirrors the `repeatMode` argument the same way statusRef mirrors
+  // `status` — read by the imperative Tauri/web callbacks below without
+  // making every one of them a new function identity on every mode change.
+  const repeatModeRef = useRef(repeatMode)
+  useEffect(() => {
+    repeatModeRef.current = repeatMode
+  }, [repeatMode])
 
   // fileId/filePath/durationMs/gain per recording node, populated the first
   // time a track resolves (playTracks, or any queue-mutating call that
@@ -335,6 +348,27 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     [finalizeCurrentPlay],
   )
 
+  // D12's off/all/one for the web-fallback path — Rust's reconcile_repeat
+  // (playback.rs) has no equivalent here since there's no Sink to
+  // re-append to, so the <audio> element just gets told which index to
+  // load next. Shared by onEnded (automatic) and the manual next() below
+  // so both honor the same wraparound.
+  const advanceWebTrack = useCallback(
+    (fromIndex: number) => {
+      if (repeatModeRef.current === 'one') {
+        startWebTrack(fromIndex)
+        return
+      }
+      const nextIndex = fromIndex + 1
+      if (repeatModeRef.current === 'all' && !playSequence.current[nextIndex]) {
+        startWebTrack(0)
+        return
+      }
+      startWebTrack(nextIndex)
+    },
+    [startWebTrack],
+  )
+
   // Web-fallback event wiring — <audio>'s own timeupdate/ended replace the
   // playback://position and playback://track-changed events Rust emits.
   useEffect(() => {
@@ -347,7 +381,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
       setStatus((s) => ({ ...s, positionMs }))
       if (currentPlay.current) currentPlay.current.lastPositionMs = positionMs
     }
-    const onEnded = () => startWebTrack(currentIndex.current + 1)
+    const onEnded = () => advanceWebTrack(currentIndex.current)
 
     audio.addEventListener('timeupdate', onTimeUpdate)
     audio.addEventListener('ended', onEnded)
@@ -355,7 +389,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
       audio.removeEventListener('timeupdate', onTimeUpdate)
       audio.removeEventListener('ended', onEnded)
     }
-  }, [startWebTrack])
+  }, [advanceWebTrack])
 
   useEffect(() => {
     if (!IS_TAURI) return
@@ -475,7 +509,13 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
       originalOrder.current = []
       setShuffled(false)
 
-      const toPlay = sequence.slice(resolvedStartIndex)
+      // Repeat-one only ever hands Rust the one track it's going to loop —
+      // see rebuildTauriQueueInPlace's comment below for why the rest of
+      // the tail has to wait rather than being pre-enqueued as usual.
+      const toPlay =
+        repeatModeRef.current === 'one'
+          ? sequence.slice(resolvedStartIndex, resolvedStartIndex + 1)
+          : sequence.slice(resolvedStartIndex)
 
       if (!IS_TAURI) {
         startWebTrack(resolvedStartIndex)
@@ -585,7 +625,18 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
       ...playSequence.current.slice(0, currentIndex.current),
       ...entries.filter((e) => resolvedIds.has(e.recordingNodeId)),
     ]
-    const toEnqueue = playSequence.current.slice(currentIndex.current)
+    // Repeat-one deliberately enqueues only the current track into Rust,
+    // never the rest of the tail behind it — rodio's Sink plays whatever's
+    // appended strictly in append order, so anything queued behind the
+    // looping track would play *after* it finishes once instead of the
+    // track looping. Rust's own reconcile_repeat (playback.rs) re-appends
+    // that same lone track on every natural completion to keep the loop
+    // gapless; the rest of playSequence stays valid app-side (up-next still
+    // shows it) and gets sent for real the moment repeat leaves 'one'.
+    const toEnqueue =
+      repeatModeRef.current === 'one'
+        ? playSequence.current.slice(currentIndex.current, currentIndex.current + 1)
+        : playSequence.current.slice(currentIndex.current)
     if (toEnqueue.length === 0) return
 
     const wasPlaying = statusRef.current.playing
@@ -611,6 +662,23 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
 
     setUpNext(playSequence.current.slice(currentIndex.current + 1))
   }, [ensureResolved, replaygainMode])
+
+  // Pushes a repeat-mode change straight to Rust (queue_set_repeat, used by
+  // its own natural-completion gapless looping) and rebuilds the live
+  // session to match the new mode's enqueue policy — entering 'one' has to
+  // shrink what's enqueued down to just the current track, leaving it has
+  // to restore the rest of the tail. See rebuildTauriQueueInPlace's own
+  // comment above for why the enqueued set has to change at all. No-ops
+  // when nothing's playing (currentIndex is -1) — there's nothing to push
+  // to yet, and the next playTracksCore call already reads repeatModeRef
+  // fresh.
+  useEffect(() => {
+    if (!IS_TAURI) return
+    invoke('queue_set_repeat', { mode: repeatMode }).catch(() => undefined)
+    if (currentIndex.current === -1) return
+    void serialized(() => rebuildTauriQueueInPlace())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repeatMode])
 
   const toggleShuffle = useCallback(
     () =>
@@ -727,13 +795,74 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
     setCurrentTitle(null)
   }, [finalizeCurrentPlay, status.volume])
 
+  // Full stop/re-enqueue/play rebuild onto playSequence[targetIndex] — the
+  // native counterpart to startWebTrack above. Shared by previous() (which
+  // always needs a real rebuild; queue_skip only moves forward) and by
+  // next() specifically under repeat-one, where Rust holds nothing behind
+  // the single looping track to skip to (see queue_skip's own doc comment
+  // in playback.rs). Truncates to just the target track under repeat-one,
+  // same as playTracksCore/rebuildTauriQueueInPlace, so the Sink never
+  // gets handed a track it would have to reorder away from later.
+  const jumpToIndexTauri = useCallback(
+    async (targetIndex: number) => {
+      const entries =
+        repeatModeRef.current === 'one'
+          ? playSequence.current.slice(targetIndex, targetIndex + 1)
+          : playSequence.current.slice(targetIndex)
+      await ensureResolved(entries)
+      const resolved = entries.filter((e) => trackInfo.current.has(e.recordingNodeId))
+      if (resolved.length === 0) return false
+
+      finalizeCurrentPlay()
+      await invoke('queue_stop')
+      for (const entry of resolved) {
+        const info = trackInfo.current.get(entry.recordingNodeId)!
+        await invoke('queue_enqueue', {
+          track: {
+            file_path: info.filePath,
+            recording_node_id: entry.recordingNodeId,
+            replaygain_track_gain: gainForMode(info, replaygainMode),
+          },
+        })
+      }
+      await invoke('queue_play')
+
+      currentIndex.current = targetIndex
+      const startEntry = resolved[0]
+      const startInfo = trackInfo.current.get(startEntry.recordingNodeId)!
+      setCurrentTitle(startEntry.title)
+      setUpNext(playSequence.current.slice(targetIndex + 1))
+      setStatus((s) => ({
+        ...s,
+        playing: true,
+        currentRecordingNodeId: startEntry.recordingNodeId,
+        currentFileId: startInfo.fileId,
+        currentDurationMs: startInfo.durationMs,
+      }))
+      return true
+    },
+    [ensureResolved, finalizeCurrentPlay, replaygainMode],
+  )
+
   const next = useCallback(
     () =>
       serialized(async () => {
-        if (IS_TAURI) await invoke('queue_skip')
-        else startWebTrack(currentIndex.current + 1)
+        if (!IS_TAURI) {
+          advanceWebTrack(currentIndex.current)
+          return
+        }
+        // repeat-one: Rust's Sink only ever holds the one looping track
+        // (reconcile_repeat in playback.rs), so queue_skip has nothing
+        // real behind it to advance to — rebuild onto the same index
+        // instead, which just restarts the current track.
+        if (repeatModeRef.current === 'one') {
+          const ok = await jumpToIndexTauri(currentIndex.current)
+          if (!ok) await stop()
+          return
+        }
+        await invoke('queue_skip')
       }),
-    [serialized, startWebTrack],
+    [serialized, advanceWebTrack, jumpToIndexTauri, stop],
   )
 
   const previous = useCallback(
@@ -747,39 +876,9 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track') {
           return
         }
 
-        const entries = playSequence.current.slice(targetIndex)
-        await ensureResolved(entries)
-        const resolved = entries.filter((e) => trackInfo.current.has(e.recordingNodeId))
-        if (resolved.length === 0) return
-
-        finalizeCurrentPlay()
-        await invoke('queue_stop')
-        for (const entry of resolved) {
-          const info = trackInfo.current.get(entry.recordingNodeId)!
-          await invoke('queue_enqueue', {
-            track: {
-              file_path: info.filePath,
-              recording_node_id: entry.recordingNodeId,
-              replaygain_track_gain: gainForMode(info, replaygainMode),
-            },
-          })
-        }
-        await invoke('queue_play')
-
-        currentIndex.current = targetIndex
-        const startEntry = resolved[0]
-        const startInfo = trackInfo.current.get(startEntry.recordingNodeId)!
-        setCurrentTitle(startEntry.title)
-        setUpNext(playSequence.current.slice(targetIndex + 1))
-        setStatus((s) => ({
-          ...s,
-          playing: true,
-          currentRecordingNodeId: startEntry.recordingNodeId,
-          currentFileId: startInfo.fileId,
-          currentDurationMs: startInfo.durationMs,
-        }))
+        await jumpToIndexTauri(targetIndex)
       }),
-    [ensureResolved, finalizeCurrentPlay, replaygainMode, startWebTrack, serialized],
+    [jumpToIndexTauri, startWebTrack, serialized],
   )
 
   const reorderQueue = useCallback(
