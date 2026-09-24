@@ -4,6 +4,7 @@ import { broadcast } from "../ws.js";
 import { isSelfWrite } from "../tagwrite/guard.js";
 import { markMissing, scanFile } from "./scanner.js";
 import { isAudioFile } from "./walk.js";
+import { CHOKIDAR_IGNORED } from "./junk.js";
 
 const activeWatchers = new Map<number, FSWatcher>();
 
@@ -22,7 +23,9 @@ export function watchLibraryRoot(db: Database.Database, libraryRootId: number, r
     // Filesystem-junk directories chokidar can't (and shouldn't) watch:
     // ext4's lost+found is root-only (real EACCES hit scanning /mnt/music
     // on this machine), the rest are the equivalent junk on other OSes/tools.
-    ignored: [/(^|[/\\])lost\+found($|[/\\])/, /(^|[/\\])\.Trash-\d+($|[/\\])/, /System Volume Information/],
+    // Same list as the fast-glob walker (see scan/walk.ts) — one shared
+    // source in scan/junk.ts so the two can't drift apart (issue #99).
+    ignored: CHOKIDAR_IGNORED,
   });
 
   // An unwatchable subdirectory (permissions, a broken symlink, races with
