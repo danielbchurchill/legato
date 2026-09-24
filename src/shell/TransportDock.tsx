@@ -1,8 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../ui/Icon'
-import type { PlaybackStatus } from '../playback/usePlayback'
+import type { PlaybackStatus, RepeatMode } from '../playback/usePlayback'
 import { Surface } from './Surface'
 import { SERVER_HOST } from '../config/serverHost'
+
+// D12 (docs/plans/05-listening-and-map.md): "Dock shows current mode; aria-
+// label states it in words" — spelled out here rather than left to the icon
+// alone, since off/all/one is a genuine tri-state a sighted user reads off
+// the badge/color but a screen reader has no equivalent shorthand for.
+const REPEAT_LABEL: Record<RepeatMode, string> = {
+  off: 'Repeat off',
+  all: 'Repeat all tracks',
+  one: 'Repeat current track',
+}
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -124,6 +134,11 @@ type TransportDockProps = {
   // instead of leaving the dock looking inert for however long the
   // in-flight one takes.
   queueBusy: boolean
+  // Off/all/one — a persisted player setting (unlike `shuffled` above,
+  // which is per-queue), so it lives in App.tsx's settings-backed state
+  // rather than usePlayback's own return value. See RepeatMode in
+  // usePlayback.ts.
+  repeatMode: RepeatMode
   onPause: () => void
   onResume: () => void
   onSeek: (ms: number) => void
@@ -131,12 +146,14 @@ type TransportDockProps = {
   onNext: () => void
   onPrevious: () => void
   onToggleShuffle: () => void
+  onCycleRepeat: () => void
 }
 
 export function TransportDock({
   status,
   shuffled,
   queueBusy,
+  repeatMode,
   onPause,
   onResume,
   onSeek,
@@ -144,6 +161,7 @@ export function TransportDock({
   onNext,
   onPrevious,
   onToggleShuffle,
+  onCycleRepeat,
 }: TransportDockProps) {
   return (
     <Surface
@@ -200,6 +218,30 @@ export function TransportDock({
               className="text-[var(--color-signal)] transition-opacity duration-150 hover:opacity-80 disabled:opacity-30"
             >
               <Icon name="fast-forward" size={24} />
+            </button>
+
+            {/* Same signal/muted on/off language as shuffle above; repeat-
+             * one additionally gets a small "1" badge, since color alone
+             * can't distinguish "repeat all" from "repeat one" the way it
+             * distinguishes "on" from "off" — see Icon.tsx's `repeat` note. */}
+            <button
+              type="button"
+              disabled={queueBusy}
+              onClick={onCycleRepeat}
+              aria-label={REPEAT_LABEL[repeatMode]}
+              className={`relative transition-opacity duration-150 hover:opacity-80 disabled:opacity-30 ${
+                repeatMode === 'off' ? 'text-[var(--color-muted)]' : 'text-[var(--color-signal)]'
+              }`}
+            >
+              <Icon name="repeat" size={24} />
+              {repeatMode === 'one' && (
+                <span
+                  aria-hidden="true"
+                  className="absolute -bottom-[4px] -right-[4px] font-[family-name:var(--font-mono)] text-[length:9px] leading-none text-[var(--color-signal)]"
+                >
+                  1
+                </span>
+              )}
             </button>
           </div>
 

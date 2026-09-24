@@ -24,13 +24,15 @@ import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
 import { useSettings } from './hooks/useSettings'
 import { useMapPresetHistory } from './hooks/useMapPresetHistory'
-import type { ReplayGainMode } from './playback/usePlayback'
+import type { ReplayGainMode, RepeatMode } from './playback/usePlayback'
 import { LeftPanelHeader } from './shell/LeftPanelHeader'
 import { RightPanelHeader } from './shell/RightPanelHeader'
 import { InspectorRail } from './shell/InspectorRail'
 import { InspectorPanel } from './shell/InspectorPanel'
 import { RightPanel } from './shell/RightPanel'
+import { ViewSwitch, type ViewMode } from './shell/ViewSwitch'
 import type { RailDestination } from './shell/rail'
+import { LibraryView } from './library/LibraryView'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -39,6 +41,14 @@ import type { RailDestination } from './shell/rail'
 
 const NODE_COUNT = 10000
 const EDGES_PER_NODE = 2 // ~20k edges: rough stand-in for artist/label/producer edge density
+
+// D12: off -> all -> one -> off. The dock's single repeat button cycles
+// through this rather than exposing three separate controls.
+const NEXT_REPEAT_MODE: Record<RepeatMode, RepeatMode> = {
+  off: 'all',
+  all: 'one',
+  one: 'off',
+}
 
 function buildGraph(): Graph {
   const graph = new Graph()
@@ -230,8 +240,22 @@ function MainApp() {
   // Cmd/Ctrl+Z below, so it has to live somewhere that outlives the panel
   // regardless.
   const mapPresets = useMapPresetHistory(settings, updateSettings)
+  // Issue #126, D11: the map/library switch persists like every other
+  // settings-backed toggle in the app (hoverDimEnabled, replaygainMode,
+  // etc.) rather than resetting to the map on every launch.
+  const viewMode = (settings.viewMode as ViewMode) || 'map'
+  // Lifted out of CollectionPanel's SearchField (which used to own this as
+  // local state) so the library view can filter against the exact same
+  // text — "shared search" per the issue means one query, not two search
+  // boxes that happen to agree by coincidence.
+  const [libraryQuery, setLibraryQuery] = useState('')
   const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
-  const playback = usePlayback(replaygainMode)
+  // D12: repeat is a persisted player setting (unlike shuffle, which lives
+  // entirely inside usePlayback's own playSequence/originalOrder), so it
+  // reads from the same settings store as replaygainMode rather than being
+  // hook-internal state.
+  const repeatMode = (settings.repeatMode as RepeatMode) || 'off'
+  const playback = usePlayback(replaygainMode, repeatMode)
   const canvasRef = useRef<CanvasHandle>(null)
   const collectionPanelRef = useRef<CollectionPanelHandle>(null)
 
@@ -417,34 +441,47 @@ function MainApp() {
 
   return (
     <AppShell>
-      <Canvas
-        key={rebuildEpoch}
-        ref={canvasRef}
-        selectedNodeId={selectedNodeId}
-        onSelectNode={(id) => {
-          setSelectedNodeId(id)
-          // Deselecting has to take the inspector with it — it is a view of
-          // the selected node, and there would be nothing behind it.
-          if (id == null) setInspectorOpen(false)
-        }}
-        onOpenInspector={() => setInspectorOpen(true)}
-        playback={playback}
-        dimOnHoverEnabled={dimOnHoverEnabled}
-        reducedMotionForced={reducedMotionForced}
-        showArtistArt={showArtistArt}
-        showReleaseArt={showReleaseArt}
-        showTrackArt={showTrackArt}
-        showCreditNodes={showCreditNodes}
-        nodeSizeMultipliers={nodeSizeMultipliers}
-        edgeThicknessMultiplier={edgeThicknessMultiplier}
-        edgeColorOverrides={edgeColorOverrides}
-        nodesLocked={nodesLocked}
-        forceCenterStrength={forceCenterStrength}
-        forceRepelStrength={forceRepelStrength}
-        forceLinkStrength={forceLinkStrength}
-        linkDistance={linkDistance}
-        onRestoreDefaults={mapPresets.restoreDefaults}
-      />
+      {viewMode === 'map' ? (
+        <Canvas
+          key={rebuildEpoch}
+          ref={canvasRef}
+          selectedNodeId={selectedNodeId}
+          onSelectNode={(id) => {
+            setSelectedNodeId(id)
+            // Deselecting has to take the inspector with it — it is a view of
+            // the selected node, and there would be nothing behind it.
+            if (id == null) setInspectorOpen(false)
+          }}
+          onOpenInspector={() => setInspectorOpen(true)}
+          playback={playback}
+          dimOnHoverEnabled={dimOnHoverEnabled}
+          reducedMotionForced={reducedMotionForced}
+          showArtistArt={showArtistArt}
+          showReleaseArt={showReleaseArt}
+          showTrackArt={showTrackArt}
+          showCreditNodes={showCreditNodes}
+          nodeSizeMultipliers={nodeSizeMultipliers}
+          edgeThicknessMultiplier={edgeThicknessMultiplier}
+          edgeColorOverrides={edgeColorOverrides}
+          nodesLocked={nodesLocked}
+          forceCenterStrength={forceCenterStrength}
+          forceRepelStrength={forceRepelStrength}
+          forceLinkStrength={forceLinkStrength}
+          linkDistance={linkDistance}
+          onRestoreDefaults={mapPresets.restoreDefaults}
+        />
+      ) : (
+        // Selecting a row here reuses the exact same selectAndFly the
+        // canvas's own node click uses — flyToNode on canvasRef is a no-op
+        // while Canvas is unmounted (the ref is null), so the selection
+        // itself carries over but the camera move is deferred rather than
+        // queued: switching back to the map does not re-fly to whatever was
+        // last picked here. Documented scope boundary, not a bug — see
+        // DESIGN.md "Library view".
+        <LibraryView query={libraryQuery} onSelectNode={selectAndFly} />
+      )}
+
+      <ViewSwitch value={viewMode} onChange={(mode) => void updateSettings({ viewMode: mode })} />
 
       <LeftPanelHeader
         expanded={activeRailDestination != null}
@@ -475,6 +512,8 @@ function MainApp() {
             onSelectNode={selectAndFly}
             onOpenMaintenance={() => setHygieneOpen(true)}
             playback={playback}
+            query={libraryQuery}
+            onQueryChange={setLibraryQuery}
           />
         </InspectorPanel>
       )}
@@ -517,6 +556,7 @@ function MainApp() {
           status={playback.status}
           shuffled={playback.shuffled}
           queueBusy={playback.queueBusy}
+          repeatMode={repeatMode}
           onPause={playback.pause}
           onResume={playback.resume}
           onSeek={playback.seek}
@@ -524,6 +564,7 @@ function MainApp() {
           onNext={playback.next}
           onPrevious={playback.previous}
           onToggleShuffle={playback.toggleShuffle}
+          onCycleRepeat={() => void updateSettings({ repeatMode: NEXT_REPEAT_MODE[repeatMode] })}
         />
       )}
 

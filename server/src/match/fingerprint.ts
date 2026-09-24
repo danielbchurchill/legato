@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { FPCALC_PATH } from "../mediaBinaries.js";
+import { runMediaTask } from "../media/queue.js";
 
 let fpcalcMissingWarned = false;
 
@@ -12,7 +13,16 @@ let fpcalcMissingWarned = false;
 // crash the scan if it's missing, same lesson as chokidar's lost+found
 // EACCES: an external tool's absence degrades a feature, it doesn't take
 // the server down.
+//
+// Issue #111: both callers (match/collapse.ts's tier 2 during a scan, and
+// the enrichment worker's fingerprint-fallback match) are background work,
+// never playback, so the whole spawn runs in the media queue's
+// "background" lane.
 export async function computeFingerprint(filePath: string): Promise<string | null> {
+  return runMediaTask("background", () => computeFingerprintNow(filePath));
+}
+
+function computeFingerprintNow(filePath: string): Promise<string | null> {
   return new Promise((resolve) => {
     const proc = spawn(FPCALC_PATH, ["-plain", filePath]);
     let stdout = "";

@@ -1,4 +1,4 @@
-import { homedir } from "node:os";
+import { cpus, homedir } from "node:os";
 import path from "node:path";
 
 // M-9: the first real secret this project has needed. CLAUDE.md's
@@ -47,6 +47,44 @@ export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 export const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 export const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
+
+// Issue #111: a shared limit on how many ffmpeg/fpcalc child processes this
+// server runs at once, across every call site that spawns one — playback
+// transcodes (stream/cache.ts, and index.ts's spike route), cover resizing
+// (cover/store.ts), waveform decode (waveform/decode.ts) and fingerprinting
+// (match/fingerprint.ts), including the enrichment worker's own use of the
+// latter two. media/queue.ts is what actually enforces it (and gives
+// playback priority over queued background work); this is just where the
+// number comes from, per CLAUDE.md's convention of documenting every env
+// var in this one file.
+//
+// Exists for docs/plans/01-server-distribution.md's Low-power hosts case: a
+// Synology "+" model's J4125-class CPU has 4 cores and 2-4GB of RAM, and a
+// fresh scan's fingerprinting/cover/waveform work must never leave nothing
+// for the track someone is actually listening to. Defaulting to
+// max(1, cores - 1) leaves one core free for the server and OS themselves
+// without needing a config change; override with LEGATO_MEDIA_CONCURRENCY
+// when that default doesn't fit — lower on something even weaker than a
+// J4125, higher on a many-core desktop where memory rather than CPU is the
+// real ceiling. An invalid value (non-numeric, zero, negative) is treated
+// the same as unset rather than silently wedging the queue shut.
+//
+// Exported as a function, same reasoning as mediaBinaries.ts's
+// resolveFfmpegPath/resolveFpcalcPath: cpuCount is a parameter rather than
+// a direct os.cpus() call so this is testable without mocking the OS.
+export function resolveMediaConcurrencyLimit(
+  env: NodeJS.ProcessEnv = process.env,
+  cpuCount: number = cpus().length,
+): number {
+  const raw = env.LEGATO_MEDIA_CONCURRENCY;
+  if (raw !== undefined) {
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed >= 1) return parsed;
+  }
+  return Math.max(1, cpuCount - 1);
+}
+
+export const MEDIA_CONCURRENCY_LIMIT = resolveMediaConcurrencyLimit();
 
 // The public base URL this server is reachable at, used to build the
 // redirect_uri both providers send the browser back to after login (e.g.
