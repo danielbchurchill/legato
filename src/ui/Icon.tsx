@@ -14,6 +14,7 @@ import panelLeftCollapse from '../assets/icons/panel-left-collapse.svg?raw'
 import pause from '../assets/icons/pause.svg?raw'
 import pencil from '../assets/icons/pencil.svg?raw'
 import play from '../assets/icons/play.svg?raw'
+import repeat from '../assets/icons/repeat.svg?raw'
 import reverse from '../assets/icons/reverse.svg?raw'
 import search from '../assets/icons/search.svg?raw'
 import sliders from '../assets/icons/sliders.svg?raw'
@@ -52,7 +53,15 @@ import volume from '../assets/icons/volume.svg?raw'
  * full details" button (NodeCard.tsx) used `pencil` for this, which reads
  * as edit rather than view; the click only opens the read-only Inspector
  * Panel, never an edit form (that's MetadataFields.tsx's `onEdit`, a
- * genuinely separate action that keeps `pencil`). */
+ * genuinely separate action that keeps `pencil`).
+ *
+ * `repeat` is proicons' "Arrow Sync" glyph (two arced arrows forming a
+ * loop) — same situation as `arrow-swap` above: proicons has no dedicated
+ * repeat/loop glyph in its 544-icon set either (checked the manifest), so
+ * this is the closest available stand-in, flagged rather than a clean
+ * match. TransportDock distinguishes repeat-one from repeat-all with a
+ * small "1" badge over the glyph rather than a second vendored icon,
+ * since proicons has nothing closer for that state either. */
 const GLYPHS = {
   add,
   'arrow-swap': arrowSwap,
@@ -70,6 +79,7 @@ const GLYPHS = {
   pause,
   pencil,
   play,
+  repeat,
   reverse,
   search,
   sliders,

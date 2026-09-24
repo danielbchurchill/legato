@@ -110,6 +110,7 @@ pub fn run() {
       playback::queue_stop,
       playback::queue_seek,
       playback::queue_skip,
+      playback::queue_set_repeat,
       playback::queue_status,
       playback::queue_set_volume,
       playback::list_audio_devices,
