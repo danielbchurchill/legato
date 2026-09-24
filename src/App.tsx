@@ -23,6 +23,7 @@ import { SERVER_HOST } from './config/serverHost'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
 import { useSettings } from './hooks/useSettings'
+import { useMapPresetHistory } from './hooks/useMapPresetHistory'
 import type { ReplayGainMode, RepeatMode } from './playback/usePlayback'
 import { LeftPanelHeader } from './shell/LeftPanelHeader'
 import { RightPanelHeader } from './shell/RightPanelHeader'
@@ -233,6 +234,12 @@ function MainApp() {
   // time.
   const lastRailDestinationRef = useRef<RailDestination>('search')
   const { settings, updateSettings } = useSettings()
+  // #127: held here rather than inside MusicMapSettings.tsx itself, which
+  // unmounts every time the rail switches to another destination — see
+  // useMapPresetHistory's own comment. Its undo also answers the window's
+  // Cmd/Ctrl+Z below, so it has to live somewhere that outlives the panel
+  // regardless.
+  const mapPresets = useMapPresetHistory(settings, updateSettings)
   // Issue #126, D11: the map/library switch persists like every other
   // settings-backed toggle in the app (hoverDimEnabled, replaygainMode,
   // etc.) rather than resetting to the map on every launch.
@@ -375,6 +382,23 @@ function MainApp() {
 
     function handleShortcut(e: KeyboardEvent) {
       if (inspectorOpen || hygieneOpen) return
+
+      // #127: the map's session undo. Checked before the Space/"/" guard
+      // below rather than sharing it — isTypingTarget also treats a focused
+      // <button> as "typing" (so Space doesn't fire its native click), which
+      // would otherwise swallow the exact "click a preset, immediately
+      // Cmd+Z it" gesture this shortcut exists for. Undo only yields to
+      // actual text editing.
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        const activeEl = document.activeElement as HTMLElement | null
+        const editingText = activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA' || activeEl?.isContentEditable === true
+        if (!editingText) {
+          e.preventDefault()
+          mapPresets.undo()
+        }
+        return
+      }
+
       if (isTypingTarget(document.activeElement)) return
 
       if (e.code === 'Space') {
@@ -391,7 +415,7 @@ function MainApp() {
     }
     window.addEventListener('keydown', handleShortcut)
     return () => window.removeEventListener('keydown', handleShortcut)
-  }, [inspectorOpen, hygieneOpen, playback])
+  }, [inspectorOpen, hygieneOpen, playback, mapPresets])
 
   useEffect(() => {
     fetch(`http://${SERVER_HOST}:8899/api/v1/library-roots`)
@@ -444,6 +468,7 @@ function MainApp() {
           forceRepelStrength={forceRepelStrength}
           forceLinkStrength={forceLinkStrength}
           linkDistance={linkDistance}
+          onRestoreDefaults={mapPresets.restoreDefaults}
         />
       ) : (
         // Selecting a row here reuses the exact same selectAndFly the
@@ -473,7 +498,7 @@ function MainApp() {
       {activeRailDestination && (
         <InspectorPanel
           active={activeRailDestination}
-          graphContent={<MusicMapSettings settings={settings} updateSettings={updateSettings} />}
+          graphContent={<MusicMapSettings settings={settings} updateSettings={updateSettings} mapPresets={mapPresets} />}
           settingsContent={
             <LegatoSettings settings={settings} updateSettings={updateSettings} onSetAudioDevice={playback.setAudioDevice} />
           }

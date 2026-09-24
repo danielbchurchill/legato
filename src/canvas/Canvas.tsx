@@ -453,6 +453,55 @@ function insetForShell(
   }
 }
 
+/* #127/H9: "the map spread out of view" recovery. A maxed-out repel slider
+ * (or, less directly, a dragged-far outlier that robustBBox above already
+ * knows to ignore) can push the graph's own mass entirely off screen — the
+ * canvas then looks empty, not lost, with nothing on it to click "recenter"
+ * on. rangesOverlap is the one genuinely pure piece of this (see
+ * mapPresets.spec.ts's sibling for the rest of #127's pure logic); the two
+ * below it need a live Sigma renderer for coordinate conversion and aren't
+ * worth mocking one for. */
+
+/** True when the two closed intervals share any point at all. */
+function rangesOverlap(a: [number, number], b: [number, number]): boolean {
+  return a[0] <= b[1] && b[0] <= a[1]
+}
+
+/** Screen-space rectangle, in this renderer's own viewport pixels, that a
+ * graph-space bbox projects to right now. Four corners, not two — camera
+ * angle is normally 0 here, but nothing about Sigma's camera model
+ * guarantees that stays true, and min/max over all four is correct either
+ * way. */
+function graphViewportRect(
+  renderer: Sigma,
+  bbox: { x: [number, number]; y: [number, number] },
+): { x: [number, number]; y: [number, number] } {
+  const corners = [
+    renderer.graphToViewport({ x: bbox.x[0], y: bbox.y[0] }),
+    renderer.graphToViewport({ x: bbox.x[1], y: bbox.y[0] }),
+    renderer.graphToViewport({ x: bbox.x[0], y: bbox.y[1] }),
+    renderer.graphToViewport({ x: bbox.x[1], y: bbox.y[1] }),
+  ]
+  const xs = corners.map((c) => c.x)
+  const ys = corners.map((c) => c.y)
+  return { x: [Math.min(...xs), Math.max(...xs)], y: [Math.min(...ys), Math.max(...ys)] }
+}
+
+/** True once the graph's own mass (robustBBox, not a stray outlier) has
+ * drifted entirely off screen — checked only on the simulation's own `end`
+ * event (see `end.outOfViewCheck` below), not every tick or every camera
+ * pan. Sorting every node's x/y for robustBBox on every animation frame
+ * would be real, needless cost, and "spread off screen" is a
+ * physics-settling condition, not a pan gesture — panning the camera away
+ * on purpose is a different thing and correctly doesn't trip this. */
+function graphOutOfView(renderer: Sigma, graph: Graph): boolean {
+  const bbox = robustBBox(graph)
+  if (!bbox) return false
+  const rect = graphViewportRect(renderer, bbox)
+  const dims = renderer.getDimensions()
+  return !rangesOverlap(rect.x, [0, dims.width]) || !rangesOverlap(rect.y, [0, dims.height])
+}
+
 /* Every node that resolves to art renders as that art, at every zoom level
  * and whatever its type — a track shows its album's cover exactly the way
  * that album does, rather than a colored dot standing in for one.
@@ -634,6 +683,11 @@ type Props = {
   forceRepelStrength: number
   forceLinkStrength: number
   linkDistance: number
+  /** #127/H9: "restore defaults" action offered by the out-of-view recovery
+   * banner below — the same balanced preset the Music Map settings panel's
+   * own restore-defaults button applies, threaded through from App.tsx's
+   * useMapPresetHistory rather than duplicated here. */
+  onRestoreDefaults?: () => void
 }
 
 export type CanvasHandle = {
@@ -666,6 +720,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     forceRepelStrength,
     forceLinkStrength,
     linkDistance,
+    onRestoreDefaults,
   },
   ref,
 ) {
@@ -783,6 +838,42 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // actually built one — a ref's identity never changes, so an effect keyed
   // on it would keep listening to a dead one.
   const [activeRenderer, setActiveRenderer] = useState<Sigma | null>(null)
+
+  // #127/H9: set only by the simulation's own `end.outOfViewCheck` listener
+  // below (never on every tick or every pan — see graphOutOfView's own
+  // comment for why), cleared by re-center/restore-defaults or by a fresh
+  // settle that lands back in view. Drives the recovery banner in the JSX
+  // below.
+  const [mapOutOfView, setMapOutOfView] = useState(false)
+
+  // Set by the mount effect's `end.initialFit` listener below and read back
+  // by reframeToRobustBBox itself (to interrupt an in-flight settle-refit
+  // before starting a new one) — a ref, not a local closure variable, so
+  // the recovery banner's "re-center" button can reach it from outside that
+  // effect.
+  const cancelSettleFitAnimRef = useRef<(() => void) | null>(null)
+
+  // #127/H9: shared by the settle-time initial refit (`end.initialFit`
+  // below) and the recovery banner's "re-center" button — same reframe
+  // either way, the only difference is what triggers it.
+  const reframeToRobustBBox = useCallback(() => {
+    const graph = graphRef.current
+    const renderer = rendererRef.current
+    if (!graph || !renderer) return
+    const bbox = robustBBox(graph)
+    if (!bbox) return
+    const target = insetForShell(renderer, bbox)
+    const from = renderer.getCustomBBox() ?? renderer.getBBox()
+    cancelSettleFitAnimRef.current?.()
+    cancelSettleFitAnimRef.current = animateBBox(
+      renderer,
+      from,
+      target,
+      SETTLE_REFIT_DURATION_MS,
+      osPrefersReducedMotion() || reducedMotionForcedRef.current,
+    )
+    setMapOutOfView(false)
+  }, [])
 
   // #23: shift+drag rectangle multiselect. The ref is what the renderer
   // effect's gesture handlers below actually read/write (mount-once effect,
@@ -939,21 +1030,31 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // renormalization across SETTLE_REFIT_DURATION_MS instead, so the end
     // framing is identical but arrives as one smooth reframe.
     let hasFitAfterSettle = false
-    let cancelSettleFitAnim: (() => void) | null = null
+    // True only for the one 'end' tick on which the line above just flipped
+    // — read and cleared by end.outOfViewCheck immediately below, so that
+    // listener doesn't grade this same settle against the stale
+    // pre-reframe customBBox reframeToRobustBBox hasn't animated to yet.
+    let justRanInitialFit = false
     sim.simulation.on('end.initialFit', () => {
       if (hasFitAfterSettle || graph.order === 0) return
       hasFitAfterSettle = true
-      const bbox = robustBBox(graph)
-      if (!bbox) return
-      const target = insetForShell(renderer, bbox)
-      const from = renderer.getCustomBBox() ?? renderer.getBBox()
-      cancelSettleFitAnim = animateBBox(
-        renderer,
-        from,
-        target,
-        SETTLE_REFIT_DURATION_MS,
-        osPrefersReducedMotion() || reducedMotionForcedRef.current,
-      )
+      justRanInitialFit = true
+      reframeToRobustBBox()
+    })
+
+    // #127/H9: "the map spread out of view" (see graphOutOfView's own
+    // comment above for why this only ever runs here, on settle, and never
+    // on a tick or a pan). Every settle after the first real one — a drag,
+    // a force-slider change, a resync — is a candidate; the first is
+    // skipped because end.initialFit (registered, and so run, just above)
+    // already has its own answer for it.
+    sim.simulation.on('end.outOfViewCheck', () => {
+      if (justRanInitialFit) {
+        justRanInitialFit = false
+        return
+      }
+      if (!hasFitAfterSettle || graph.order === 0) return
+      setMapOutOfView(graphOutOfView(renderer, graph))
     })
 
     // Hover/neighbor highlighting — dims everything not connected to the
@@ -1390,7 +1491,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     return () => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
       cancelDimAnim?.()
-      cancelSettleFitAnim?.()
+      cancelSettleFitAnimRef.current?.()
       sim.simulation.stop()
       simulationRef.current = null
       renderer.kill()
@@ -1540,6 +1641,34 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
           ) : (
             <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">nothing to show yet</p>
           )}
+        </div>
+      )}
+      {/* #127/H9: "the map spread out of view" — same empty-state shape as
+       * above (muted centered text, no illustration), two actions instead
+       * of one. Can't coexist with showEmptyState in practice (robustBBox
+       * returns null, so graphOutOfView is never true, on an empty graph)
+       * but the guard costs nothing and keeps that assumption from being
+       * load-bearing. */}
+      {mapOutOfView && !showEmptyState && (
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-[12px] text-center">
+          <p className="max-w-[420px] text-[length:var(--text-base)] text-[var(--color-muted)]">the map spread out of view</p>
+          <div className="pointer-events-auto flex gap-[16px]">
+            <Button onClick={reframeToRobustBBox}>re-center</Button>
+            <Button
+              onClick={() => {
+                onRestoreDefaults?.()
+                // Optimistic: the setting change itself only reheats the
+                // simulation, which resettles (and re-checks) some time
+                // later. Restoring balanced forces reliably pulls the graph
+                // back in over that window, so there's no reason to leave
+                // the banner up in the meantime — end.outOfViewCheck will
+                // put it right back if that assumption is ever wrong.
+                setMapOutOfView(false)
+              }}
+            >
+              restore defaults
+            </Button>
+          </div>
         </div>
       )}
     </div>
