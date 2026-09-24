@@ -155,6 +155,19 @@ pub struct QueueTrack {
   pub replaygain_track_gain: Option<f32>,
 }
 
+/// D12 (docs/plans/05-listening-and-map.md): off/all/one, a persisted
+/// player setting rather than per-queue state (unlike shuffle, which lives
+/// entirely in the frontend's playSequence — see usePlayback.ts). Lives
+/// outside `Session` in `PlaybackState`, same as volume/device_name, so it
+/// survives a queue_stop and applies to whatever gets enqueued next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepeatMode {
+  Off,
+  All,
+  One,
+}
+
 #[derive(Clone, Serialize)]
 pub struct PositionEvent {
   pub position_ms: u64,
@@ -184,6 +197,15 @@ struct Session {
   // is what lets the monitor thread turn "sink.len() decreased" into
   // "here's the recording_node_id that's now playing."
   queue: VecDeque<QueueTrack>,
+  // Every track ever enqueued this session, in original append order —
+  // unlike `queue`, this never shrinks as tracks finish. It's what
+  // repeat-all wraps back to at the end of the queue (reconcile_repeat
+  // below) and what queue_skip's own manual-skip wraparound reuses, so
+  // "the queue" repeat-all loops is exactly what was queued for this
+  // session, not some absolute start of a larger frontend-side history it
+  // has no way to know about (see usePlayback.ts's playSequence, which
+  // this module never sees past whatever's actually been enqueued).
+  full_order: Vec<QueueTrack>,
 }
 
 // cpal's CoreAudio backend (macOS only) stores its device property-change
@@ -212,6 +234,9 @@ pub struct PlaybackState {
   // used before device selection existed. Also lives outside Session so a
   // chosen device survives stop/restart the same way volume does.
   device_name: Arc<Mutex<Option<String>>>,
+  // See RepeatMode's own doc comment — outside Session for the same
+  // survives-a-stop reason as volume/device_name above.
+  repeat_mode: Arc<Mutex<RepeatMode>>,
 }
 
 impl PlaybackState {
@@ -220,6 +245,7 @@ impl PlaybackState {
       session: Arc::new(Mutex::new(None)),
       volume: Arc::new(Mutex::new(1.0)),
       device_name: Arc::new(Mutex::new(None)),
+      repeat_mode: Arc::new(Mutex::new(RepeatMode::Off)),
     }
   }
 }
@@ -228,12 +254,77 @@ fn gain_db(track: &QueueTrack) -> f32 {
   track.replaygain_track_gain.unwrap_or(0.0)
 }
 
+// Decodes and appends one track to a live sink — the shared tail end of
+// both a normal queue_enqueue call and the monitor thread's own gapless
+// repeat re-enqueue (reconcile_repeat below), so there's exactly one place
+// that turns a QueueTrack into a playing source.
+fn append_track(sink: &Sink, track: &QueueTrack) -> Result<(), String> {
+  let file = File::open(&track.file_path).map_err(|e| format!("failed to open {}: {e}", track.file_path))?;
+  // See NetworkAheadReader above: confirmed live over an NFS-mounted
+  // library that a plain File/BufReader pops mid-track, even with a large
+  // buffer, because decode's reads are still synchronous with the
+  // network. This background-prefetches instead.
+  let reader = NetworkAheadReader::new(file).map_err(|e| e.to_string())?;
+  let source = Decoder::new(reader).map_err(|e| e.to_string())?;
+  sink.append(source.amplify_decibel(gain_db(track)));
+  Ok(())
+}
+
+// Pure gapless-repeat scheduling core — given how many tracks have
+// actually finished playing since the last poll (a *natural* completion;
+// a manual queue_skip never goes through this, see its own comment) and
+// the current repeat mode, decides what needs to be re-appended to stay
+// gapless and updates `queue`'s own bookkeeping to match. Kept free of
+// Sink/file I/O specifically so it's testable without a real audio device
+// — same reasoning as gain_db above, see the tests module below.
+//
+// RepeatMode::One re-appends the just-finished track at the *back* of
+// `queue`/the sink rather than dropping it — because rodio's Sink is
+// strictly FIFO by append order, this only stays correct because
+// usePlayback.ts (the Tauri path) deliberately enqueues *only* the current
+// track while repeat-one is active, never the rest of the tail behind it
+// (see rebuildTauriQueueInPlace's comment there). If something else were
+// already queued behind the looping track in the sink, it would play next
+// instead of the loop — this function has no way to reorder what rodio has
+// already been handed, so the frontend's enqueue policy is what actually
+// keeps repeat-one's loop uninterrupted, not this reconciliation alone.
+//
+// RepeatMode::All only wraps once `queue` is empty after popping — i.e.
+// the track that just finished was the last thing enqueued — and re-
+// appends the whole of `full_order`, the original enqueued sequence, so
+// repeat-all loops "the queue" as this session was given it.
+fn reconcile_repeat(
+  queue: &mut VecDeque<QueueTrack>,
+  full_order: &[QueueTrack],
+  finished_count: usize,
+  repeat: RepeatMode,
+) -> Vec<QueueTrack> {
+  let mut to_append = Vec::new();
+  for _ in 0..finished_count {
+    let Some(finished) = queue.pop_front() else { break };
+    match repeat {
+      RepeatMode::One => {
+        queue.push_back(finished.clone());
+        to_append.push(finished);
+      }
+      RepeatMode::All if queue.is_empty() => {
+        for track in full_order {
+          queue.push_back(track.clone());
+          to_append.push(track.clone());
+        }
+      }
+      RepeatMode::All | RepeatMode::Off => {}
+    }
+  }
+  to_append
+}
+
 // Polls the sink's queue length to detect track boundaries — rodio has no
 // completion callback, so this is the mechanism behind playback://
 // track-changed. Exits once the session is torn down (queue_stop), rather
 // than polling forever after every stop — otherwise every play/stop cycle
 // would leak another thread.
-fn spawn_monitor(app: AppHandle, state: Arc<Mutex<Option<Session>>>) {
+fn spawn_monitor(app: AppHandle, state: Arc<Mutex<Option<Session>>>, repeat_mode: Arc<Mutex<RepeatMode>>) {
   std::thread::spawn(move || {
     let mut last_queue_len: usize = usize::MAX;
     loop {
@@ -244,8 +335,18 @@ fn spawn_monitor(app: AppHandle, state: Arc<Mutex<Option<Session>>>) {
       };
 
       let sink_len = session.sink.len();
-      while session.queue.len() > sink_len {
-        session.queue.pop_front();
+      let finished_count = session.queue.len().saturating_sub(sink_len);
+      if finished_count > 0 {
+        let repeat = *repeat_mode.lock().unwrap();
+        let to_append = reconcile_repeat(&mut session.queue, &session.full_order, finished_count, repeat);
+        for track in &to_append {
+          // Best-effort: a decode failure on the repeat path (the file
+          // went missing mid-session, say) just means the loop goes
+          // silent rather than panicking the monitor thread — same
+          // "surface it as an honest stop, not a crash" policy the rest
+          // of this module already follows.
+          let _ = append_track(&session.sink, track);
+        }
       }
 
       let position_ms = session.sink.get_pos().as_millis() as u64;
@@ -292,8 +393,8 @@ fn ensure_session<'a>(
     let stream = open_stream(&device_name)?;
     let sink = Sink::connect_new(stream.mixer());
     sink.set_volume(*state.volume.lock().unwrap());
-    *guard = Some(Session { _stream: stream, sink, queue: VecDeque::new() });
-    spawn_monitor(app.clone(), state.session.clone());
+    *guard = Some(Session { _stream: stream, sink, queue: VecDeque::new(), full_order: Vec::new() });
+    spawn_monitor(app.clone(), state.session.clone(), state.repeat_mode.clone());
   }
   Ok(guard)
 }
@@ -321,17 +422,20 @@ pub fn queue_enqueue(app: AppHandle, state: State<PlaybackState>, track: QueueTr
   let mut guard = ensure_session(&app, &state)?;
   let session = guard.as_mut().unwrap();
 
-  let file = File::open(&track.file_path).map_err(|e| format!("failed to open {}: {e}", track.file_path))?;
-  // See NetworkAheadReader above: confirmed live over an NFS-mounted
-  // library that a plain File/BufReader pops mid-track, even with a large
-  // buffer, because decode's reads are still synchronous with the
-  // network. This background-prefetches instead.
-  let reader = NetworkAheadReader::new(file).map_err(|e| e.to_string())?;
-  let source = Decoder::new(reader).map_err(|e| e.to_string())?;
-  let gain = gain_db(&track);
-
-  session.sink.append(source.amplify_decibel(gain));
+  append_track(&session.sink, &track)?;
+  session.full_order.push(track.clone());
   session.queue.push_back(track);
+  Ok(())
+}
+
+/// D12's persisted player setting (see RepeatMode's doc comment) — applies
+/// immediately to the monitor thread's own gapless reconciliation
+/// (reconcile_repeat) and to the next queue_skip. Setting this alone
+/// doesn't retroactively change what's already been enqueued into a live
+/// sink; usePlayback.ts pairs every mode change with a rebuild for that.
+#[tauri::command]
+pub fn queue_set_repeat(state: State<PlaybackState>, mode: RepeatMode) -> Result<(), String> {
+  *state.repeat_mode.lock().unwrap() = mode;
   Ok(())
 }
 
@@ -374,11 +478,27 @@ pub fn queue_seek(state: State<PlaybackState>, position_ms: u64) -> Result<(), S
 /// Skips the currently playing track. Gapless scheduling only guarantees
 /// zero-gap transitions at natural track boundaries — a manual skip is
 /// necessarily an audible cut, same as any player.
+///
+/// Under repeat-all, skipping past the last enqueued track wraps back to
+/// `full_order`'s start rather than emptying the queue — reusing the same
+/// wraparound data reconcile_repeat's natural-completion path already
+/// relies on, so a manual skip at the boundary behaves the same as letting
+/// the last track play out. Repeat-one intentionally gets no equivalent
+/// here: usePlayback.ts's next() special-cases that mode with its own
+/// rebuild rather than calling queue_skip at all, because Rust only ever
+/// holds the single looping track while repeat-one is active — this
+/// command has nothing real behind it to skip to in that case.
 #[tauri::command]
 pub fn queue_skip(state: State<PlaybackState>) -> Result<(), String> {
   if let Some(session) = state.session.lock().unwrap().as_mut() {
     session.sink.skip_one();
     session.queue.pop_front();
+    if session.queue.is_empty() && *state.repeat_mode.lock().unwrap() == RepeatMode::All {
+      for track in session.full_order.clone() {
+        append_track(&session.sink, &track)?;
+        session.queue.push_back(track);
+      }
+    }
   }
   Ok(())
 }
@@ -426,6 +546,114 @@ mod tests {
   fn gain_db_passes_through_the_tag_value() {
     let track = QueueTrack { file_path: String::new(), recording_node_id: 0, replaygain_track_gain: Some(-6.5) };
     assert_eq!(gain_db(&track), -6.5);
+  }
+
+  // file_path is irrelevant to reconcile_repeat — it's pure queue/id
+  // bookkeeping, never touches the filesystem — so an empty path plus a
+  // distinguishing id is enough to tell tracks apart by assertion.
+  fn track(id: i64) -> QueueTrack {
+    QueueTrack { file_path: String::new(), recording_node_id: id, replaygain_track_gain: None }
+  }
+
+  fn ids(tracks: &[QueueTrack]) -> Vec<i64> {
+    tracks.iter().map(|t| t.recording_node_id).collect()
+  }
+
+  #[test]
+  fn reconcile_repeat_off_just_drains_finished_tracks() {
+    let mut queue = VecDeque::from([track(1), track(2)]);
+    let full_order = [track(1), track(2)];
+
+    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::Off);
+
+    assert_eq!(ids(&Vec::from(queue)), vec![2]);
+    assert!(to_append.is_empty());
+  }
+
+  // The common repeat-one shape: usePlayback.ts only ever hands Rust the
+  // single looping track while repeat-one is active (see this module's own
+  // reconcile_repeat doc comment), so `queue` holds nothing else.
+  #[test]
+  fn reconcile_repeat_one_reappends_the_finished_track_gaplessly() {
+    let mut queue = VecDeque::from([track(7)]);
+    let full_order = [track(7)];
+
+    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::One);
+
+    assert_eq!(ids(&Vec::from(queue)), vec![7]);
+    assert_eq!(ids(&to_append), vec![7]);
+  }
+
+  // Documents the FIFO caveat reconcile_repeat's doc comment calls out:
+  // if something else were already sitting behind the looping track (which
+  // shouldn't happen via the real frontend policy, but this function alone
+  // can't enforce that), the repeated copy lands at the *back* of the
+  // queue, not ahead of what's already there — rodio's Sink is strictly
+  // append-order, so this reconciliation has no way to jump the line.
+  #[test]
+  fn reconcile_repeat_one_cannot_reorder_what_is_already_queued_behind_it() {
+    let mut queue = VecDeque::from([track(1), track(2)]);
+    let full_order = [track(1), track(2)];
+
+    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::One);
+
+    assert_eq!(ids(&Vec::from(queue)), vec![2, 1]);
+    assert_eq!(ids(&to_append), vec![1]);
+  }
+
+  #[test]
+  fn reconcile_repeat_all_wraps_to_the_start_once_the_queue_drains() {
+    let mut queue = VecDeque::from([track(3)]);
+    let full_order = [track(1), track(2), track(3)];
+
+    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::All);
+
+    assert_eq!(ids(&Vec::from(queue)), vec![1, 2, 3]);
+    assert_eq!(ids(&to_append), vec![1, 2, 3]);
+  }
+
+  #[test]
+  fn reconcile_repeat_all_does_nothing_while_tracks_remain_in_the_queue() {
+    let mut queue = VecDeque::from([track(2), track(3)]);
+    let full_order = [track(1), track(2), track(3)];
+
+    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::All);
+
+    assert_eq!(ids(&Vec::from(queue)), vec![3]);
+    assert!(to_append.is_empty());
+  }
+
+  // Two natural completions landing in the same 250ms poll (spawn_monitor
+  // missed a tick, or the deck's short enough that two tracks finished
+  // between polls) — repeat-one has to loop *each* one, not just the last.
+  #[test]
+  fn reconcile_repeat_one_handles_multiple_finishes_in_one_tick() {
+    let mut queue = VecDeque::from([track(9), track(9)]);
+    let full_order = [track(9)];
+
+    let to_append = reconcile_repeat(&mut queue, &full_order, 2, RepeatMode::One);
+
+    assert_eq!(ids(&Vec::from(queue)), vec![9, 9]);
+    assert_eq!(ids(&to_append), vec![9, 9]);
+  }
+
+  // An empty full_order (the degenerate "nothing was ever really enqueued"
+  // case) shouldn't panic — it just means there's nothing to wrap back to.
+  #[test]
+  fn reconcile_repeat_all_with_empty_full_order_wraps_to_nothing() {
+    let mut queue = VecDeque::from([track(1)]);
+    let full_order: [QueueTrack; 0] = [];
+
+    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::All);
+
+    assert!(queue.is_empty());
+    assert!(to_append.is_empty());
+  }
+
+  #[test]
+  fn playback_state_defaults_to_repeat_off() {
+    let state = PlaybackState::new();
+    assert_eq!(*state.repeat_mode.lock().unwrap(), RepeatMode::Off);
   }
 
   // Only enumeration — no stream is opened, so this is safe to run in a
