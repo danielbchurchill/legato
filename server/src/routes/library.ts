@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { resolveCoverForNode } from "../cover/extract.js";
 
@@ -97,7 +97,7 @@ export type TrackRow = {
 };
 
 function listAlbums(
-  db: Database.Database,
+  db: Database,
   { q, sort, dir, limit, offset }: { q: string | null; sort: AlbumSort; dir: "asc" | "desc"; limit: number; offset: number },
 ): { items: AlbumRow[]; total: number } {
   const where = q ? "WHERE (n.title LIKE ? ESCAPE '\\' OR artist.title LIKE ? ESCAPE '\\')" : "";
@@ -150,7 +150,7 @@ function listAlbums(
 }
 
 function listTracks(
-  db: Database.Database,
+  db: Database,
   { q, sort, dir, limit, offset }: { q: string | null; sort: TrackSort; dir: "asc" | "desc"; limit: number; offset: number },
 ): { items: TrackRow[]; total: number } {
   const where = q
@@ -198,7 +198,7 @@ function listTracks(
   return { items: rows, total };
 }
 
-export function libraryRoutes(db: Database.Database) {
+export function libraryRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Querystring: LibraryQuery }>("/library/albums", async (request) => {
       const sort = (request.query.sort ?? "title") as AlbumSort;

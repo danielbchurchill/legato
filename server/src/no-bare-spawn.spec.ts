@@ -11,7 +11,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import fg from "fast-glob";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 
 const BARE_SPAWN_PATTERN = /\bspawn(?:Sync)?\(\s*["'](?:ffmpeg|fpcalc)["']/;
 

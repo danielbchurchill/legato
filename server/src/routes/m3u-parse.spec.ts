@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { longestCommonPathPrefix, normalizeSeparators, parseM3U } from "./m3u-parse.js";
 
 describe("parseM3U", () => {

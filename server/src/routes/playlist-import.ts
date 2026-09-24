@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { broadcast } from "../ws.js";
 import { addTrackToPlaylist, createPlaylist, type PlaylistRow } from "./playlists.js";
@@ -72,7 +72,7 @@ export type ImportReport = {
 // Case-insensitive: the whole point of this importer is paths that
 // originated on a different OS, and NTFS/APFS are both case-insensitive by
 // default even though the library itself was very likely scanned on Linux.
-function findFileByPath(db: Database.Database, filePath: string): { recording_node_id: number } | undefined {
+function findFileByPath(db: Database, filePath: string): { recording_node_id: number } | undefined {
   return db.prepare("SELECT recording_node_id FROM files WHERE lower(file_path) = lower(?)").get(filePath) as
     | { recording_node_id: number }
     | undefined;
@@ -91,7 +91,7 @@ function applyRemap(normalizedPath: string, remap: PathRemap): string | null {
 }
 
 // True if this path (after an optional remap) resolves to a real file.
-function resolveByPath(db: Database.Database, rawPath: string, remap: PathRemap | null): number | null {
+function resolveByPath(db: Database, rawPath: string, remap: PathRemap | null): number | null {
   const normalized = normalizeSeparators(rawPath);
   const direct = findFileByPath(db, normalized);
   if (direct) return direct.recording_node_id;
@@ -117,7 +117,7 @@ type MetadataCandidate = { nodeId: number; durationMs: number | null };
 // isn't filtered in SQL: it needs the ±2s tolerance applied in JS anyway to
 // pick the closest candidate when more than one title+artist pair matches
 // (a live version and a studio version sharing a title, say).
-function findMetadataCandidates(db: Database.Database, artist: string, title: string): MetadataCandidate[] {
+function findMetadataCandidates(db: Database, artist: string, title: string): MetadataCandidate[] {
   return db
     .prepare(
       `SELECT DISTINCT n.id AS nodeId,
@@ -133,7 +133,7 @@ function findMetadataCandidates(db: Database.Database, artist: string, title: st
     .all(title, artist) as MetadataCandidate[];
 }
 
-function resolveByMetadata(db: Database.Database, artist: string, title: string, durationSeconds: number): number | null {
+function resolveByMetadata(db: Database, artist: string, title: string, durationSeconds: number): number | null {
   const targetMs = durationSeconds * 1000;
   let best: { nodeId: number; delta: number } | null = null;
   for (const candidate of findMetadataCandidates(db, artist, title)) {
@@ -167,7 +167,7 @@ function escapeLikeLiteral(value: string): string {
 // self-corrects for however deep the common prefix turned out to be,
 // including the top-level-root case the naive version handled by luck.
 function discoverReplacements(
-  db: Database.Database,
+  db: Database,
   unmatchedPaths: string[],
   commonPrefix: string,
 ): { libraryRootId: number; libraryRootPath: string; replacement: string }[] {
@@ -215,7 +215,7 @@ function discoverReplacements(
 // unmatched paths would then resolve — not just the one(s) it was derived
 // from. Only candidates that gain at least one match are worth surfacing;
 // sorted best-first so the UI's "one-click suggestion" is unambiguous.
-function suggestPrefixRemaps(db: Database.Database, unmatchedPaths: string[], commonPrefix: string): PrefixSuggestion[] {
+function suggestPrefixRemaps(db: Database, unmatchedPaths: string[], commonPrefix: string): PrefixSuggestion[] {
   return discoverReplacements(db, unmatchedPaths, commonPrefix)
     .map((candidate): PrefixSuggestion => {
       const remap: PathRemap = { from: commonPrefix, to: candidate.replacement };
@@ -235,7 +235,7 @@ function suggestPrefixRemaps(db: Database.Database, unmatchedPaths: string[], co
 // remap) without touching the database, so the UI can iterate on a remap
 // suggestion — or a hand-typed one — and see the match count update before
 // committing to anything.
-export function previewM3UImport(db: Database.Database, content: string, remap: PathRemap | null): ImportPreview {
+export function previewM3UImport(db: Database, content: string, remap: PathRemap | null): ImportPreview {
   const parsed = parseM3U(content);
   const unmatchedPaths: string[] = [];
   let matchedByPath = 0;
@@ -272,7 +272,7 @@ function reasonFor(entry: { extinfArtist: string | null; extinfTitle: string | n
 // whatever matched, and persists the full per-entry report — all in one
 // transaction, so a half-imported playlist with no report row never exists.
 export function importM3U(
-  db: Database.Database,
+  db: Database,
   filename: string,
   content: string,
   remap: PathRemap | null,
@@ -366,7 +366,7 @@ export function importM3U(
 // the POST /playlists/import response. Most playlists will only ever have
 // one, but nothing stops re-importing into the same playlist, so this
 // reads the latest rather than assuming exactly one row exists.
-export function getImportReport(db: Database.Database, playlistId: number): ImportReport | null {
+export function getImportReport(db: Database, playlistId: number): ImportReport | null {
   const importRow = db
     .prepare("SELECT id, source_filename, created_at FROM playlist_imports WHERE playlist_id = ? ORDER BY id DESC LIMIT 1")
     .get(playlistId) as { id: number; source_filename: string; created_at: string } | undefined;
@@ -406,7 +406,7 @@ export function getImportReport(db: Database.Database, playlistId: number): Impo
   };
 }
 
-export function playlistImportRoutes(db: Database.Database) {
+export function playlistImportRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.post<{ Body: { content?: string; remap?: PathRemap } }>("/playlists/import/preview", async (request, reply) => {
       const content = request.body?.content;
