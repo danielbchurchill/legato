@@ -1,9 +1,8 @@
-import { mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "./config.js";
+import { MIGRATIONS } from "./migrations/manifest.generated.js";
 import { type Database, openSqlite } from "./sqlite.js";
-
-const MIGRATIONS_DIR = path.join(import.meta.dirname, "migrations");
 
 function runMigrations(db: Database) {
   db.exec(`
@@ -20,15 +19,21 @@ function runMigrations(db: Database) {
       .map((row) => (row as { version: number }).version),
   );
 
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith(".sql"))
-    .sort();
-
-  for (const file of files) {
-    const version = Number.parseInt(file.split("_")[0], 10);
+  // MIGRATIONS reads every *.sql file's contents at import time via static
+  // `import … with { type: "text" }` — see manifest.generated.ts and
+  // scripts/generate-migrations-manifest.mjs — instead of the readdirSync/
+  // readFileSync disk scan this replaced. That scan only ever found
+  // anything because dev/test/`npm run start` all run against a real
+  // source tree; issue #102's compiled binary has none, so a disk read
+  // here would silently apply zero migrations against a brand-new data
+  // dir. If this array looks short (or db-inspector's migration count
+  // looks wrong), the manifest is stale — run
+  // `npm --prefix server run generate:migrations`, which check.yml also
+  // verifies on every push so a forgotten regen fails loudly in CI rather
+  // than shipping a binary that boots against an empty schema.
+  for (const { version, sql } of MIGRATIONS) {
     if (applied.has(version)) continue;
 
-    const sql = readFileSync(path.join(MIGRATIONS_DIR, file), "utf8");
     db.transaction(() => {
       db.exec(sql);
       db.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
