@@ -8,5 +8,5 @@ pages_build_output_dir = "dist"
 # real until you deploy for real.
 [[kv_namespaces]]
 binding = "WAITLIST_KV"
-id = "REPLACE_WITH_PRODUCTION_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_PREVIEW_KV_NAMESPACE_ID"
+id = "a11f8ee20d9348528c79cdeaa7b7e482"
+preview_id = "ee3e85498e8f4f8e858846957cdcf219"
