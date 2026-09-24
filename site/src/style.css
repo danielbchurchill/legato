@@ -421,14 +421,52 @@ section {
   }
 }
 
+/* ---- Ways in ----------------------------------------------------------- */
+
+.three-col {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+
+/* The per-card eyebrow names the install target; it sits under the icon, so
+   it needs less gap than the section-level eyebrow above an h2. */
+.three-col .eyebrow {
+  margin-bottom: 6px;
+}
+
+.ways-in-note {
+  max-width: 640px;
+  margin: 32px auto 0;
+  text-align: center;
+  font-size: 15px;
+  color: var(--color-muted-hi);
+}
+
+@media (max-width: 960px) {
+  .three-col {
+    grid-template-columns: 1fr;
+    max-width: 640px;
+  }
+}
+
 /* ---- Pricing ----------------------------------------------------------- */
 
 .pricing-grid {
   max-width: 1120px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 24px;
+}
+
+@media (max-width: 960px) {
+  .pricing-grid {
+    grid-template-columns: 1fr;
+    max-width: 640px;
+  }
 }
 
 .pricing-card h3 {
@@ -460,12 +498,6 @@ section {
   font-size: 15px;
   color: var(--color-muted-hi);
   padding: 8px 0;
-}
-
-@media (max-width: 720px) {
-  .pricing-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* ---- Status / waitlist panels ---------------------------------------- */

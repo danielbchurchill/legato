@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Legato — your music library, as a graph</title>
-  <meta name="description" content="Legato is a local-first music player that treats your library as a graph, not a list. Every recording, artist, and album gets its own wiki-style article. Free and local forever — pay only for remote access." />
+  <meta name="description" content="Legato is a local-first music player that treats your library as a graph, not a list. Every recording, artist, and album gets its own wiki-style article. Run it on a home server, on your Mac or PC, or start in a browser from your Spotify playlists. Free and local forever — pay only for remote access." />
 
   <meta property="og:title" content="Legato — your music library, as a graph" />
   <meta property="og:description" content="Every recording, artist, and album gets its own wiki-style article, dense with links to everything else you own. Browse by association, not by search." />
@@ -25,6 +25,7 @@
       <nav class="nav-links">
         <a href="#graph">Graph</a>
         <a href="#articles">Articles</a>
+        <a href="#ways-in">Ways in</a>
         <a href="#pricing">Pricing</a>
         <a href="#status">Status</a>
       </nav>
@@ -106,6 +107,66 @@
           a spreadsheet.
         </p>
       </article>
+      <article class="glass card">
+        <img class="card-icon" src="/icons/list.svg" alt="" width="24" height="24" />
+        <h3>A plain library when you want one</h3>
+        <p>
+          Some nights you just want the album. Next to the map sits an ordinary album grid and
+          track table, fast at thirty thousand albums, sharing the same search and selection.
+          Switch between them and nothing gets lost.
+        </p>
+      </article>
+      <article class="glass card">
+        <img class="card-icon" src="/icons/brightness.svg" alt="" width="24" height="24" />
+        <h3>Ink or paper</h3>
+        <p>
+          The dark theme you see here, plus a light one modelled on sheet music: warm off-white
+          paper and pen-ink black, with every colour checked for contrast. Pick one or let it
+          follow your system.
+        </p>
+      </article>
+    </section>
+
+    <section class="ways-in" id="ways-in">
+      <p class="eyebrow center">ways in</p>
+      <h2 class="center">Start wherever your music already lives</h2>
+      <div class="three-col">
+        <article class="glass card">
+          <img class="card-icon" src="/icons/database.svg" alt="" width="24" height="24" />
+          <p class="eyebrow">on a home server</p>
+          <h3>For the NAS in the closet</h3>
+          <p>
+            Docker, Synology Container Manager, Unraid, or a one-line install on Linux. First
+            boot shows a short claim code, and after that every device on your network opens
+            Legato in a browser, no desktop session required. Built to scan six-figure FLAC
+            libraries, with progress you can pause, resume, and trust.
+          </p>
+        </article>
+        <article class="glass card">
+          <img class="card-icon" src="/icons/laptop.svg" alt="" width="24" height="24" />
+          <p class="eyebrow">on your computer</p>
+          <h3>For the library on your laptop</h3>
+          <p>
+            A signed desktop app for Mac (Apple Silicon and Intel), Windows, and Linux. It finds
+            your music folders, plays gaplessly through native audio, and can keep serving your
+            library from the menu bar after you close the window, so your phone still reaches it.
+          </p>
+        </article>
+        <article class="glass card">
+          <img class="card-icon" src="/icons/globe.svg" alt="" width="24" height="24" />
+          <p class="eyebrow">in a browser</p>
+          <h3>For people who own no files at all</h3>
+          <p>
+            A free legato.fm account turns your Spotify playlists into a map of your taste. Play
+            tracks through a friend's Legato server when they invite you, or hand them off to
+            Spotify. Nothing to install, and running your own library stays an option for later.
+          </p>
+        </article>
+      </div>
+      <p class="ways-in-note">
+        On your phone, Legato installs from the browser at launch, with lock-screen controls.
+        Native mobile apps follow.
+      </p>
     </section>
 
     <section class="pricing" id="pricing">
@@ -123,11 +184,22 @@
           </ul>
         </article>
         <article class="glass card pricing-card">
+          <h3>legato.fm account</h3>
+          <p class="price"><span class="mono">$0</span></p>
+          <ul>
+            <li>Legato in any browser, nothing to install</li>
+            <li>Import your Spotify playlists as a map</li>
+            <li>Join friends' servers when they invite you</li>
+            <li>Optional — a home install never needs one</li>
+          </ul>
+        </article>
+        <article class="glass card pricing-card">
           <h3>Legato Relay</h3>
           <p class="price"><span class="mono">paid</span> · coming later</p>
           <ul>
             <li>An always-on bridge from your phone to your own home library</li>
             <li>Off-LAN access, Plex/Jellyfin-style</li>
+            <li>Lossless at home, sized to the connection when you're out</li>
             <li>Never stores your audio — it relays, it doesn't host</li>
             <li>The only thing Legato ever charges for</li>
           </ul>
@@ -141,9 +213,9 @@
         <h2>Legato isn't out yet.</h2>
         <p>
           The app is real and running against real libraries — every screenshot on this page is
-          a live scan, not a mockup. It isn't packaged for public download yet: we're finishing
-          the design pass and cross-platform builds before the first release. Join the waitlist
-          below to hear the moment that changes.
+          a live scan, not a mockup. It isn't packaged for public download yet. The beta opens in
+          three waves: home servers first, then the Mac and Windows desktop app, then the
+          browser and Spotify path. Join the waitlist below to hear when your wave opens.
         </p>
       </div>
     </section>
