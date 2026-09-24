@@ -124,7 +124,7 @@ export function TracksTable({ query, sort, dir, onSort, onSelectNode }: TracksTa
                     <button
                       type="button"
                       onClick={() => onSelectNode(track.id)}
-                      className="grid h-full w-full items-center gap-[var(--spacing-sm)] px-[var(--spacing-lg)] text-left transition-colors duration-150 hover:bg-white/8"
+                      className="grid h-full w-full items-center gap-[var(--spacing-sm)] px-[var(--spacing-lg)] text-left transition-colors duration-150 hover:bg-[var(--color-hover-wash)]"
                       style={{ gridTemplateColumns: GRID_TEMPLATE }}
                     >
                       <ScrollingText
@@ -150,7 +150,7 @@ export function TracksTable({ query, sort, dir, onSort, onSelectNode }: TracksTa
                       </span>
                     </button>
                   ) : (
-                    <div aria-hidden className="h-full w-full bg-white/4" />
+                    <div aria-hidden className="h-full w-full bg-[var(--color-placeholder)]" />
                   )}
                 </div>
               )

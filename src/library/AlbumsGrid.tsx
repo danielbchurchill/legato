@@ -143,7 +143,7 @@ export function AlbumsGrid({ query, sort, dir, onSelectNode }: AlbumsGridProps) 
                 return album ? (
                   <AlbumCell key={album.id} album={album} onSelectNode={onSelectNode} />
                 ) : (
-                  <div key={index} aria-hidden className="shrink-0 rounded-[var(--radius-control)] bg-white/6" style={{ width: CELL_WIDTH, height: CELL_WIDTH }} />
+                  <div key={index} aria-hidden className="shrink-0 rounded-[var(--radius-control)] bg-[var(--color-placeholder)]" style={{ width: CELL_WIDTH, height: CELL_WIDTH }} />
                 )
               })}
             </div>
