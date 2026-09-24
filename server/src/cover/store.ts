@@ -4,6 +4,7 @@ import { access, mkdir, readdir, readFile, rename, stat, unlink, writeFile } fro
 import path from "node:path";
 import { DATA_DIR } from "../config.js";
 import { FFMPEG_PATH } from "../mediaBinaries.js";
+import { runMediaTask } from "../media/queue.js";
 
 export type CoverSize = "thumb" | "full";
 
@@ -140,7 +141,10 @@ export async function storeCover(bytes: Buffer): Promise<string> {
     // from colliding on the temp name itself.
     const temp = `${target}.${randomUUID()}.tmp`;
     try {
-      await writeFile(temp, await resize(bytes, SIZES[size]));
+      // Issue #111: never playback — this runs during a scan, an
+      // enrichment job, or a manual upload, so it always takes the media
+      // queue's "background" lane.
+      await writeFile(temp, await runMediaTask("background", () => resize(bytes, SIZES[size])));
       await rename(temp, target);
     } catch (err) {
       // Leaving a stray .tmp behind would be a leak nothing sweeps — the
@@ -205,7 +209,11 @@ async function deriveSize(hash: string, size: CoverSize): Promise<Buffer | null>
 
   let derived: Buffer;
   try {
-    derived = await resize(await readFile(largest), SIZES[size]);
+    const largestBytes = await readFile(largest);
+    // Same "background" lane as storeCover above — this fires from
+    // readCover() serving a size that hasn't been derived yet, never from
+    // a playback path.
+    derived = await runMediaTask("background", () => resize(largestBytes, SIZES[size]));
   } catch {
     return null;
   }

@@ -6,6 +6,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { DATA_DIR } from "../config.js";
 import { FFMPEG_PATH } from "../mediaBinaries.js";
+import { runMediaTask } from "../media/queue.js";
 
 // Content-addressed by file_hash, same sharding as cover/store.ts and
 // waveform/store.ts. This is what makes /files/:id/stream Range-capable:
@@ -76,6 +77,11 @@ function transcodeToFile(sourcePath: string, targetTemp: string): Promise<void> 
 // served as if it were complete. Two concurrent misses for the same hash
 // race to transcode independently rather than being locked against each
 // other, same accepted tradeoff as storeCover's own comment on this.
+//
+// Issue #111: the only caller of this is GET /files/:id/stream — real
+// playback — so every transcode through here goes in the media queue's
+// "playback" lane, ahead of whatever background fingerprinting/cover/
+// waveform work a scan already has queued.
 export async function ensureCached(fileHash: string, sourcePath: string): Promise<string> {
   const target = cachePath(fileHash);
   if (await isCached(fileHash)) return target;
@@ -83,7 +89,7 @@ export async function ensureCached(fileHash: string, sourcePath: string): Promis
   await mkdir(path.dirname(target), { recursive: true });
   const temp = `${target}.${randomUUID()}.tmp`;
   try {
-    await transcodeToFile(sourcePath, temp);
+    await runMediaTask("playback", () => transcodeToFile(sourcePath, temp));
     await rename(temp, target);
   } catch (err) {
     await unlink(temp).catch(() => {});
