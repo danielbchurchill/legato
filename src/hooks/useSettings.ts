@@ -24,14 +24,38 @@ export function useSettings() {
       .catch(() => setLoaded(true))
   }, [])
 
+  // Issue #81: every settings-backed toggle/button in the app (repeat mode,
+  // view switch, map presets, the MusicMapSettings/LegatoSettings panels)
+  // funnels through this one function, and it used to wait on the full PUT
+  // round trip before `settings` ever changed. On localhost that's
+  // imperceptible, but against a real network hop (the standalone server on
+  // another machine, same as this app's own real-world macOS setup) it's
+  // long enough that a second impatient click reads the still-stale
+  // `settings` a caller closed over — e.g. onCycleRepeat computing
+  // NEXT_REPEAT_MODE[repeatMode] from the same pre-update mode twice in a
+  // row — so the button reads as needing several clicks to do one thing.
+  // Applying the partial immediately (same optimistic-then-persist idiom
+  // NodeTitleBlock's favourite heart already uses) fixes both: the caller's
+  // next render sees the new value right away, and the control itself
+  // reflects the change without waiting on the network. Rolled back to
+  // whatever `settings` held before if the request fails.
   const updateSettings = useCallback(async (partial: Settings) => {
-    const res = await fetch(`${API}/settings`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(partial),
+    let previous: Settings = {}
+    setSettings((current) => {
+      previous = current
+      return { ...current, ...partial }
     })
-    const updated = (await res.json()) as Settings
-    setSettings(updated)
+    try {
+      const res = await fetch(`${API}/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(partial),
+      })
+      const updated = (await res.json()) as Settings
+      setSettings(updated)
+    } catch {
+      setSettings(previous)
+    }
   }, [])
 
   return { settings, loaded, updateSettings }
