@@ -1,0 +1,88 @@
+name: release
+
+# Issue #102: publishes a real GitHub Release on every version tag push —
+# five bun-compiled server binaries (linux-x64-baseline, linux-arm64,
+# darwin-arm64, darwin-x64-baseline, windows-x64-baseline), each bundled
+# with a matching ffmpeg + fpcalc into its own archive, plus one
+# SHA256SUMS covering all of them. Everything builds on a single
+# ubuntu-latest runner via Bun's cross-compilation
+# (`bun build --compile --target=bun-<os>-<arch>`, see
+# server/scripts/compile.ts) rather than a platform build matrix —
+# unlike build.yml's real Tauri/native compiles, there's no per-OS
+# toolchain dependency here to force macOS/Windows runners, and those bill
+# against GitHub's included-minutes quota at 10x/2x the Linux rate (see
+# build.yml's own comment on this).
+#
+# Scope note: switching Tauri's embedded server over to this compiled
+# binary is issue #103, not this workflow — nothing here touches
+# src-tauri/ or changes how `npx tauri dev` runs, and this workflow only
+# ever runs on a real version tag push, never on an ordinary commit.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      # server/ runs on Bun (issue #100) — `bun build --compile` is what
+      # actually produces the five binaries below; Node above is only for
+      # `npm ci` (server/package-lock.json stays the dependency source of
+      # truth, same reasoning as check.yml) and this workflow's own
+      # plain-Node packaging scripts.
+      - name: install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+
+      - name: install server dependencies
+        run: npm --prefix server ci
+
+      # v1.2.3 -> 1.2.3 — legato-server --version and every archive/asset
+      # name below use this, not the raw tag.
+      - name: resolve release version from tag
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: compile all five server targets
+        run: npm --prefix server run compile
+        env:
+          LEGATO_RELEASE_VERSION: ${{ steps.version.outputs.value }}
+          LEGATO_RELEASE_GIT_SHA: ${{ github.sha }}
+
+      # Issue #102's named risk (docs/plans/01-server-distribution.md's
+      # Compile section): a compiled binary has no source tree, so a
+      # broken or stale embed (server/src/migrations/manifest.generated.ts)
+      # would boot clean and just silently have no schema. This is the
+      # release-time gate on top of check.yml's identical per-PR copy of
+      # the same check — see server/scripts/check-migration-boot.ts.
+      - name: migration boot check (compiled linux-x64-baseline binary, empty data dir)
+        run: npm --prefix server run check:migration-boot -- dist/linux-x64-baseline/legato-server
+
+      - name: fetch ffmpeg + fpcalc for all five targets
+        run: node scripts/fetch-release-media-binaries.mjs
+
+      - name: package per-target archives + SHA256SUMS
+        run: node scripts/package-release.mjs "${{ steps.version.outputs.value }}"
+
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist-release/*.tar.gz dist-release/*.zip dist-release/SHA256SUMS

@@ -27,6 +27,11 @@ src-tauri/binaries/*
 
 .claude/
 
+# `bun build --compile` (server/scripts/compile.ts, issue #102) leaves a
+# temp `.<hash>-<n>.bun-build` file next to wherever it's invoked from on
+# top of the real dist/ output above.
+*.bun-build
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

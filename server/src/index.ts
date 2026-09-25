@@ -40,10 +40,22 @@ import { authRoutes } from "./routes/auth.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { reconcileInterruptedScans } from "./scan/scanner.js";
 import { runDueJobs } from "./enrich/worker.js";
+import { GIT_SHA, VERSION } from "./version.js";
+
+// Checked before anything else touches disk (openDb below creates the data
+// dir and runs migrations) — `legato-server --version` should work without
+// needing a real LEGATO_DATA_DIR, the same way `--help`/`--version` work on
+// any other CLI tool. Plain `.includes()` rather than a real argv parser:
+// this is the only flag the binary takes.
+if (process.argv.includes("--version") || process.argv.includes("-v")) {
+  console.log(`legato-server ${VERSION} (${GIT_SHA})`);
+  process.exit(0);
+}
 
 const db = openDb();
 
 const app = Fastify({ logger: true });
+app.log.info(`legato-server ${VERSION} (${GIT_SHA})`);
 
 // The #1 support question this app generates on itself: standalone runs
 // (`npm --prefix server run dev` without LEGATO_DATA_DIR) silently open a

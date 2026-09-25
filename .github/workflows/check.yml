@@ -66,8 +66,38 @@ jobs:
       - name: install server dependencies
         run: npm --prefix server ci
 
+      # Issue #102: the compiled binary embeds every *.sql migration via a
+      # generated manifest of static imports (server/src/migrations/
+      # manifest.generated.ts) instead of a runtime directory scan, because
+      # `bun build --compile` can only embed a file it sees referenced
+      # through a real `import`. Regenerating and diffing here means a
+      # migration added without a matching `npm --prefix server run
+      # generate:migrations` fails this job loudly, instead of shipping a
+      # compiled binary that silently applies fewer migrations than exist.
+      - name: verify migrations manifest is up to date
+        run: |
+          npm --prefix server run generate:migrations
+          git diff --exit-code -- server/src/migrations/manifest.generated.ts || {
+            echo "::error::server/src/migrations/manifest.generated.ts is stale — run 'npm --prefix server run generate:migrations' and commit the result.";
+            exit 1;
+          }
+
       - name: server test suite
         run: npm --prefix server test
+
+      # Issue #102's named risk (docs/plans/01-server-distribution.md's
+      # Compile section): a compiled binary has no source tree, so a
+      # broken or stale embed would boot clean and just silently have no
+      # schema. This compiles one target (matching this runner, so no
+      # cross-compile download) and boots it against a brand-new empty
+      # data dir to prove migrations actually apply — see
+      # server/scripts/check-migration-boot.ts. release.yml runs the same
+      # check again at actual release time, against every target it ships.
+      - name: compile server (linux-x64-baseline) for the migration boot check
+        run: npm --prefix server run compile -- linux-x64-baseline
+
+      - name: migration boot check (compiled binary, empty data dir)
+        run: npm --prefix server run check:migration-boot -- dist/linux-x64-baseline/legato-server
 
       - name: install relay dependencies
         run: npm --prefix relay ci
