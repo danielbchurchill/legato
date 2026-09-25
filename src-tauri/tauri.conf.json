@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://127.0.0.1:5173",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "npm run build:sidecar -- --if-missing && npm run dev",
+    "beforeBuildCommand": "npm run build && npm run build:sidecar"
   },
   "app": {
     "windows": [
@@ -39,6 +39,7 @@
       "icons/icon.ico"
     ],
     "resources": ["binaries/"],
+    "externalBin": ["binaries/legato-server"],
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }
