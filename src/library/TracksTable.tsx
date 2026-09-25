@@ -65,7 +65,12 @@ function SortHeader({
  * AlbumsGrid's note on why that's a deliberate follow-up, not an oversight. */
 export function TracksTable({ query, sort, dir, onSort, onSelectNode }: TracksTableProps) {
   const parentRef = useRef<HTMLDivElement>(null)
-  const { rows, total, ensureRange } = useLibraryPage<TrackRow>('library/tracks', query, sort, dir)
+  const { rows, total, loading, waitVisible, waitLong, ensureRange } = useLibraryPage<TrackRow>(
+    'library/tracks',
+    query,
+    sort,
+    dir,
+  )
 
   const rowVirtualizer = useVirtualizer({
     count: total,
@@ -102,7 +107,23 @@ export function TracksTable({ query, sort, dir, onSort, onSelectNode }: TracksTa
         ))}
       </div>
 
-      {total === 0 && rows.length === 0 ? (
+      {loading ? (
+        // total === 0 while loading means "not known yet", not "empty" —
+        // see useLibraryPage's `loading` doc. Same MO-11 wait timing as
+        // AlbumsGrid: nothing under ~400ms, one non-looping colour shift
+        // past ~800ms.
+        <div className="flex flex-1 items-center justify-center">
+          {waitVisible && (
+            <p
+              className={`text-[length:var(--text-base)] transition-colors duration-[var(--motion-fast)] ${
+                waitLong ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)]'
+              }`}
+            >
+              loading tracks…
+            </p>
+          )}
+        </div>
+      ) : total === 0 ? (
         <div className="flex flex-1 items-center justify-center">
           <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
             {query ? `no tracks match "${query}"` : 'no tracks yet'}

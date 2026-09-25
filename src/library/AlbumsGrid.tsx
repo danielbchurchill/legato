@@ -86,7 +86,12 @@ function AlbumCell({ album, onSelectNode }: { album: AlbumRow; onSelectNode: (id
 export function AlbumsGrid({ query, sort, dir, onSelectNode }: AlbumsGridProps) {
   const parentRef = useRef<HTMLDivElement>(null)
   const [columnCount, setColumnCount] = useState(1)
-  const { rows, total, ensureRange } = useLibraryPage<AlbumRow>('library/albums', query, sort, dir)
+  const { rows, total, loading, waitVisible, waitLong, ensureRange } = useLibraryPage<AlbumRow>(
+    'library/albums',
+    query,
+    sort,
+    dir,
+  )
 
   useEffect(() => {
     const el = parentRef.current
@@ -115,7 +120,27 @@ export function AlbumsGrid({ query, sort, dir, onSelectNode }: AlbumsGridProps) 
     ensureRange(firstIndex * columnCount, Math.min(total - 1, (lastIndex + 1) * columnCount - 1))
   }, [firstIndex, lastIndex, columnCount, total, ensureRange])
 
-  if (total === 0 && rows.length === 0) {
+  if (loading) {
+    // total === 0 while loading means "not known yet", not "empty" — see
+    // useLibraryPage's `loading` doc. Nothing renders under ~400ms per
+    // DESIGN.md's indeterminate-progress rule; past ~800ms one non-looping
+    // colour shift (muted -> ink) says the wait is still real.
+    return (
+      <div className="flex h-full items-center justify-center">
+        {waitVisible && (
+          <p
+            className={`text-[length:var(--text-base)] transition-colors duration-[var(--motion-fast)] ${
+              waitLong ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)]'
+            }`}
+          >
+            loading albums…
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  if (total === 0) {
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
