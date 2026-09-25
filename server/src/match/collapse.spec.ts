@@ -156,6 +156,48 @@ describe("collapseFile — tier 3 (fuzzy)", () => {
 
     expect(fileState(fileB).match_source).toBe("unmatched");
   });
+
+  // Issue #173: the candidate lookup is an indexed equality query against
+  // normalized_title/normalized_artist (migration 0028), not a table scan
+  // re-normalizing every candidate's tags_raw in JS. Persisting those
+  // columns is what makes that indexed query possible.
+  it("persists its own normalized_title/normalized_artist so later files can find it via the index", async () => {
+    const fileA = insertProvisionalFile("/fake/a.flac", {
+      title: "Come  Together", // extra internal space — normalization collapses it
+      artist: "The Beatles",
+      durationMs: 262000,
+    });
+    await collapseFile(db, fileA);
+
+    const normalized = db
+      .prepare("SELECT normalized_title, normalized_artist FROM files WHERE id = ?")
+      .get(fileA) as { normalized_title: string; normalized_artist: string };
+    expect(normalized).toEqual({ normalized_title: "come together", normalized_artist: "the beatles" });
+  });
+
+  it("trusts the persisted normalized columns rather than re-deriving them from tags_raw", async () => {
+    const fileA = insertProvisionalFile("/fake/a.flac", {
+      title: "Come Together",
+      artist: "The Beatles",
+      durationMs: 262000,
+    });
+    await collapseFile(db, fileA);
+
+    // Corrupt the persisted index directly, leaving tags_raw (the old
+    // source of truth) untouched — proves the candidate lookup reads the
+    // indexed column, not tags_raw, since a JS-side re-normalize of
+    // tags_raw would still find this a match.
+    db.prepare("UPDATE files SET normalized_title = 'a totally different title' WHERE id = ?").run(fileA);
+
+    const fileB = insertProvisionalFile("/fake/b.flac", {
+      title: "Come Together",
+      artist: "The Beatles",
+      durationMs: 262000,
+    });
+    await collapseFile(db, fileB);
+
+    expect(fileState(fileB).match_source).toBe("unmatched");
+  });
 });
 
 describe("collapseFile — merge_overrides precedence", () => {
