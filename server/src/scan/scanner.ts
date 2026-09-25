@@ -469,13 +469,17 @@ async function runReadTagsStage(
       }
 
       cursor = row.seq + 1;
-      // A checkpoint write forces its progress event through regardless of
-      // the throttle gate — the two are coupled on purpose, so "the DB was
-      // just updated" and "a client could learn about it" happen together
-      // rather than a checkpoint silently outliving the next throttle window.
-      const checkpointed = cursor % CHECKPOINT_EVERY === 0;
-      if (checkpointed) persistCursor(db, job.id, "read_tags", cursor);
-      emit(cursor, checkpointed);
+      // Checkpointing (DB durability, bounding a resume's rework) and
+      // progress emission (a client's ~4/s throttled view) are deliberately
+      // NOT coupled — a checkpoint every CHECKPOINT_EVERY files can occur
+      // far more often than every PROGRESS_THROTTLE_MS at real-world
+      // throughput (confirmed on the ≥100k-file synthetic benchmark: 2000+
+      // files/sec meant a forced emit every ~25ms, an order of magnitude
+      // over the plan doc's "about 4/s"). emit() is still called every
+      // file, but un-forced — the gate itself decides whether real wall
+      // time has actually passed.
+      if (cursor % CHECKPOINT_EVERY === 0) persistCursor(db, job.id, "read_tags", cursor);
+      emit(cursor, false);
     }
   }
 
@@ -525,9 +529,10 @@ async function runFileStage(
       // gave up on — but still counted, so stageDone reaches filesTotal.
 
       cursor = row.seq + 1;
-      const checkpointed = cursor % CHECKPOINT_EVERY === 0;
-      if (checkpointed) persistCursor(db, job.id, stage, cursor);
-      emit(cursor, checkpointed);
+      // See runReadTagsStage's comment on why a checkpoint no longer forces
+      // its progress emission through the throttle gate.
+      if (cursor % CHECKPOINT_EVERY === 0) persistCursor(db, job.id, stage, cursor);
+      emit(cursor, false);
     }
   }
 
@@ -634,6 +639,12 @@ export async function executeScan(
   rootPath: string,
   onProgress?: (progress: ScanProgress) => void,
   mode: ScanMode = "full",
+  // Injectable, same pattern as rate.ts/throttle.ts — the throttle gate
+  // below decides every emit's fate off of this clock. Real scans never
+  // pass it; tests do, so a synthetic run that finishes in milliseconds of
+  // wall-clock time can still deterministically exercise the ~4/s gate
+  // instead of only ever seeing a stage's forced start/end emits.
+  nowFn: () => number = Date.now,
 ): Promise<void> {
   controlSignals.delete(jobId);
 
@@ -674,13 +685,13 @@ export async function executeScan(
       .prepare<{ count: number }>("SELECT COUNT(*) AS count FROM scan_run_files WHERE job_id = ?")
       .get(jobId) as { count: number };
 
-    const gate = createProgressGate(PROGRESS_THROTTLE_MS);
+    const gate = createProgressGate(PROGRESS_THROTTLE_MS, nowFn);
     const rateEstimator = new RateEstimator();
 
     function emitFor(stage: ScanStage, stageTotal: number | null) {
       return (done: number, force = false) => {
         if (!onProgress || !gate(force)) return;
-        const now = Date.now();
+        const now = nowFn();
         rateEstimator.sample(done, now);
         onProgress({
           jobId,

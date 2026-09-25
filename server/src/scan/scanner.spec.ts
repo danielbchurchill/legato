@@ -57,6 +57,19 @@ function toScannedPath(p: string): string {
   return p.replace(/\\/g, "/");
 }
 
+// executeScan's progress throttle gate (createProgressGate, PROGRESS_THROTTLE_MS)
+// no longer gets bypassed by a stage's periodic checkpoint — that coupling was a
+// real bug (a checkpoint every CHECKPOINT_EVERY files fired far more often than
+// every PROGRESS_THROTTLE_MS at real-world throughput, confirmed on a 100k-file
+// benchmark). So a test that needs to intercept onProgress mid-stage now has to
+// inject a clock that advances past the throttle interval on every single call,
+// same idea as rate.ts/throttle.ts's own injectable now() — this is the only way
+// this test's fast, sub-millisecond in-memory run can still see every emit.
+function fastForwardClock(): () => number {
+  let t = 0;
+  return () => (t += 1000);
+}
+
 let db: Database;
 let dir: string;
 let libraryRootId: number;
@@ -407,11 +420,19 @@ describe("executeScan stages", () => {
     for (let i = 0; i < total; i++) writeSilentWav(path.join(dir, `t${i}.wav`), 1);
 
     const jobId = createScanJob(db, libraryRootId, "full");
-    await executeScan(db, jobId, libraryRootId, dir, (progress) => {
-      if (progress.stage === "read_tags" && progress.stageDone === 50 && progress.stageDone < progress.stageTotal!) {
-        requestPauseScanJob(db, jobId);
-      }
-    });
+    await executeScan(
+      db,
+      jobId,
+      libraryRootId,
+      dir,
+      (progress) => {
+        if (progress.stage === "read_tags" && progress.stageDone === 50 && progress.stageDone < progress.stageTotal!) {
+          requestPauseScanJob(db, jobId);
+        }
+      },
+      "full",
+      fastForwardClock(),
+    );
 
     const paused = db.prepare("SELECT * FROM scan_jobs WHERE id = ?").get(jobId) as {
       status: string;
@@ -456,11 +477,19 @@ describe("executeScan stages", () => {
     for (let i = 0; i < total; i++) writeSilentWav(path.join(dir, `t${i}.wav`), 1);
 
     const jobId = createScanJob(db, libraryRootId, "full");
-    await executeScan(db, jobId, libraryRootId, dir, (progress) => {
-      if (progress.stage === "read_tags" && progress.stageDone === 50 && progress.stageDone < progress.stageTotal!) {
-        requestCancelScanJob(db, jobId);
-      }
-    });
+    await executeScan(
+      db,
+      jobId,
+      libraryRootId,
+      dir,
+      (progress) => {
+        if (progress.stage === "read_tags" && progress.stageDone === 50 && progress.stageDone < progress.stageTotal!) {
+          requestCancelScanJob(db, jobId);
+        }
+      },
+      "full",
+      fastForwardClock(),
+    );
 
     const job = db.prepare("SELECT * FROM scan_jobs WHERE id = ?").get(jobId) as {
       status: string;
@@ -487,11 +516,19 @@ describe("executeScan stages", () => {
     for (let i = 0; i < total; i++) writeSilentWav(path.join(dir, `t${i}.wav`), 1);
 
     const jobId = createScanJob(db, libraryRootId, "full");
-    await executeScan(db, jobId, libraryRootId, dir, (progress) => {
-      if (progress.stage === "read_tags" && progress.stageDone === 50 && progress.stageDone < progress.stageTotal!) {
-        requestPauseScanJob(db, jobId);
-      }
-    });
+    await executeScan(
+      db,
+      jobId,
+      libraryRootId,
+      dir,
+      (progress) => {
+        if (progress.stage === "read_tags" && progress.stageDone === 50 && progress.stageDone < progress.stageTotal!) {
+          requestPauseScanJob(db, jobId);
+        }
+      },
+      "full",
+      fastForwardClock(),
+    );
     expect((db.prepare("SELECT status FROM scan_jobs WHERE id = ?").get(jobId) as { status: string }).status).toBe(
       "paused",
     );
