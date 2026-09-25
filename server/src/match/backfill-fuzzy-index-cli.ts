@@ -1,11 +1,13 @@
 import { openDb } from "../db.js";
 import { backfillFuzzyIndex } from "./backfill-fuzzy-index.js";
 
-// One-off entry point: `npm --prefix server run backfill:fuzzy-index`.
+// Manual entry point: `npm --prefix server run backfill:fuzzy-index`.
 //
-// Only needed for a library scanned before migration 0028 landed — see
-// backfill-fuzzy-index.ts and 0028_fuzzy_match_index.sql for why a plain
-// re-scan doesn't reach already-unchanged files.
+// index.ts already runs this same backfill automatically on every server
+// start, so this script isn't required for a normal deployment — it's
+// here for a long-running server you'd rather not restart, or for
+// scripting/ops use. See backfill-fuzzy-index.ts and
+// 0028_fuzzy_match_index.sql for why the backfill exists at all.
 const db = openDb();
 
 const count = backfillFuzzyIndex(db);

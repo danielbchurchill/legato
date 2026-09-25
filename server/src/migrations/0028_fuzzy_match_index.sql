@@ -22,8 +22,13 @@
 -- so any file re-scanned (or scanned fresh) after this migration is
 -- self-healing. A library upgraded in place, whose files won't naturally
 -- get re-scanned (unchanged mtime/size short-circuits scanFile()), needs
--- `npm --prefix server run backfill:fuzzy-index` once — the same shape as
--- 0011_tag_columns.sql's backfill:tags and backfill:edges before it.
+-- its existing unmatched/fuzzy_pending rows backfilled instead —
+-- index.ts calls match/backfill-fuzzy-index.ts's backfillFuzzyIndex()
+-- once on every server start for exactly this reason (a compiled-binary
+-- deployment has no npm/server/ directory to run a CLI script from); a
+-- manual `npm --prefix server run backfill:fuzzy-index` remains available
+-- too, the same shape as 0011_tag_columns.sql's backfill:tags and
+-- backfill:edges before it.
 ALTER TABLE files ADD COLUMN normalized_title TEXT;
 ALTER TABLE files ADD COLUMN normalized_artist TEXT;
 

@@ -6,10 +6,15 @@ import { normalizeForFuzzyMatch, parseTagsRaw } from "./collapse.js";
 // same shape as backfill-edges.ts, and for the same structural reason:
 // tryFuzzyMatch only writes these columns from inside collapseFile()'s
 // per-file path, which a normal re-scan never reaches for a file whose
-// mtime/size haven't changed. A library scanned before this migration
-// landed needs this run once so its existing unmatched/fuzzy_pending
-// files become indexed fuzzy candidates immediately, rather than only as
-// they're individually touched by a future rescan.
+// mtime/size haven't changed. index.ts already calls this once on every
+// server start (cheap no-op once a library is caught up — the WHERE
+// clause only matches rows still missing their normalized columns), so a
+// library scanned before migration 0028 landed self-heals on its next
+// boot without any manual step. The compiled-binary/Tauri-sidecar
+// deployment (#102/#103) has no npm or server/ directory to run a CLI
+// script from, which is why this can't be a manual-only fix. The CLI
+// below is kept for a long-running server that shouldn't need a restart,
+// or for scripting/ops convenience.
 export function backfillFuzzyIndex(db: Database): number {
   const files = db
     .prepare(

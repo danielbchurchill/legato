@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { collapseFile } from "./collapse.js";
+import { backfillFuzzyIndex } from "./backfill-fuzzy-index.js";
 
 let db: Database;
 let libraryRootId: number;
@@ -197,6 +198,39 @@ describe("collapseFile — tier 3 (fuzzy)", () => {
     await collapseFile(db, fileB);
 
     expect(fileState(fileB).match_source).toBe("unmatched");
+  });
+
+  // Issue #173 follow-up: migration 0028 adds normalized_title/
+  // normalized_artist as NULL for rows that already existed, and an
+  // unchanged file never reaches tryFuzzyMatch again on its own (mtime/size
+  // short-circuits scanFile() in scanner.ts) to self-heal them. index.ts
+  // now calls backfillFuzzyIndex(db) once on every server start for exactly
+  // this file shape — a row left over from before the migration, or from
+  // before this file's own row existed at all.
+  it("finds a pre-existing file whose normalized columns were NULL, once the startup backfill has run", async () => {
+    const fileA = insertProvisionalFile("/fake/a.flac", {
+      title: "Come Together",
+      artist: "The Beatles",
+      durationMs: 262000,
+    });
+    // Simulates a row left over from before migration 0028: it was never
+    // collapsed through tier 3, so normalized_title/normalized_artist are
+    // still NULL even though it's sitting there as an 'unmatched' candidate.
+    expect(fileState(fileA).match_source).toBe("unmatched");
+
+    const backfilled = backfillFuzzyIndex(db);
+    expect(backfilled).toBe(1);
+
+    const fileB = insertProvisionalFile("/fake/b.flac", {
+      title: "come  together",
+      artist: "The Beatles",
+      durationMs: 262800,
+    });
+    await collapseFile(db, fileB);
+    const stateB = fileState(fileB);
+
+    expect(stateB.match_source).toBe("fuzzy_pending");
+    expect(stateB.fuzzy_candidate_node_id).toBe(fileState(fileA).recording_node_id);
   });
 });
 
