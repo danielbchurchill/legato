@@ -14,6 +14,13 @@
 // fetch is mocked with a real (if small) delay specifically so two
 // overlapping updateSettings calls have every opportunity to read each
 // other's stale state if nothing applies the update immediately.
+//
+// Follow-up coverage: the optimistic-apply fix above introduced its own
+// race — nothing stopped an OLDER call's response from overwriting state
+// after a NEWER call had already applied its own optimistic value (or, on
+// failure, rolling back to a stale `previous` instead of the last value the
+// server actually confirmed). The three tests below at the bottom of this
+// file target that follow-up specifically.
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { createElement } from 'react'
@@ -37,9 +44,9 @@ beforeEach(() => {
         const partial = JSON.parse((init.body as string) ?? '{}') as Settings
         await delay(FETCH_DELAY_MS)
         serverSettings = { ...serverSettings, ...partial }
-        return { json: async () => serverSettings } as Response
+        return { ok: true, json: async () => serverSettings } as Response
       }
-      return { json: async () => serverSettings } as Response
+      return { ok: true, json: async () => serverSettings } as Response
     }),
   )
 })
@@ -65,6 +72,21 @@ function renderSettingsHook() {
   })
 
   return { result, unmount: () => act(() => root.unmount()) }
+}
+
+// The initial GET in useSettings' mount effect resolves over a real
+// microtask chain with no artificial delay, so whether it's landed by a
+// given point is otherwise a race — usually fast enough to look done, but
+// not guaranteed. Any test that cares what the CONFIRMED baseline is (as
+// opposed to tests that already tolerate an unresolved mount, like the
+// `?? 'off'` reads below) needs to wait for it explicitly rather than
+// guessing with a fixed delay.
+async function waitForLoaded(result: { current: ReturnType<typeof useSettings> | null }) {
+  for (let i = 0; i < 20 && !result.current?.loaded; i++) {
+    await act(async () => {
+      await delay(1)
+    })
+  }
 }
 
 const NEXT_REPEAT_MODE: Record<string, string> = { off: 'all', all: 'one', one: 'off' }
@@ -117,7 +139,7 @@ describe('useSettings optimistic updates', () => {
     unmount()
   })
 
-  it('rolls back to the previous value when the request fails', async () => {
+  it('rolls back to the last confirmed value when the request fails', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (_url: string, init?: RequestInit) => {
@@ -125,7 +147,113 @@ describe('useSettings optimistic updates', () => {
           await delay(FETCH_DELAY_MS)
           throw new Error('network error')
         }
-        return { json: async () => serverSettings } as Response
+        return { ok: true, json: async () => serverSettings } as Response
+      }),
+    )
+
+    const { result, unmount } = renderSettingsHook()
+    // Deterministic on purpose: the mount GET (serverSettings' initial
+    // { repeatMode: 'off' }) is the confirmed baseline this test means to
+    // roll back to, so it has to have actually landed before the failing
+    // update fires, not just be given a fixed delay and hoped for.
+    await waitForLoaded(result)
+    expect(result.current!.settings.repeatMode).toBe('off')
+
+    await act(async () => {
+      await result.current!.updateSettings({ repeatMode: 'all' })
+    })
+
+    expect(result.current!.settings.repeatMode).toBe('off')
+
+    unmount()
+  })
+
+  it('never regresses to an earlier click\'s value when responses land out of order', async () => {
+    // Each PUT's snapshot is computed at CALL time (mirroring a real server
+    // that applies writes in the order they arrive), but the promises are
+    // resolved manually so the test controls the order RESPONSES land in,
+    // independent of send order — exactly what a reordering network can do.
+    const resolvers: Array<() => void> = []
+    let cumulative: Settings = { repeatMode: 'off' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          const partial = JSON.parse((init.body as string) ?? '{}') as Settings
+          cumulative = { ...cumulative, ...partial }
+          const snapshot = cumulative
+          return new Promise<Response>((resolve) => {
+            resolvers.push(() => resolve({ ok: true, json: async () => snapshot } as Response))
+          })
+        }
+        return { ok: true, json: async () => serverSettings } as Response
+      }),
+    )
+
+    const { result, unmount } = renderSettingsHook()
+    await act(async () => {
+      await delay(0)
+    })
+
+    act(() => {
+      void result.current!.updateSettings({ repeatMode: 'all' })
+    })
+    act(() => {
+      void result.current!.updateSettings({ repeatMode: 'one' })
+    })
+    act(() => {
+      void result.current!.updateSettings({ repeatMode: 'off' })
+    })
+
+    expect(resolvers).toHaveLength(3)
+
+    // Network reorders the responses: the third (most recent) click's
+    // response arrives first, then the second's, then the first's — the
+    // ordering that would make "last response to land wins" show an
+    // earlier click's value after the most recent one already landed.
+    await act(async () => {
+      resolvers[2]()
+      await delay(0)
+    })
+    expect(result.current!.settings.repeatMode).toBe('off')
+
+    await act(async () => {
+      resolvers[1]()
+      await delay(0)
+    })
+    expect(result.current!.settings.repeatMode).toBe('off')
+
+    await act(async () => {
+      resolvers[0]()
+      await delay(0)
+    })
+    expect(result.current!.settings.repeatMode).toBe('off')
+
+    unmount()
+  })
+
+  it('rolls back a failed newest request to the last server-confirmed state, not an unconfirmed optimistic one', async () => {
+    let call = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          call += 1
+          const partial = JSON.parse((init.body as string) ?? '{}') as Settings
+          if (call === 1) {
+            await delay(FETCH_DELAY_MS)
+            serverSettings = { ...serverSettings, ...partial }
+            return { ok: true, json: async () => serverSettings } as Response
+          }
+          if (call === 2) {
+            // Second call is left hanging — still unconfirmed when the
+            // third call below fails.
+            return new Promise<Response>(() => {})
+          }
+          await delay(FETCH_DELAY_MS)
+          throw new Error('network error')
+        }
+        return { ok: true, json: async () => serverSettings } as Response
       }),
     )
 
@@ -137,8 +265,49 @@ describe('useSettings optimistic updates', () => {
     await act(async () => {
       await result.current!.updateSettings({ repeatMode: 'all' })
     })
+    expect(result.current!.settings.repeatMode).toBe('all')
 
-    expect(result.current!.settings.repeatMode).toBeUndefined()
+    act(() => {
+      void result.current!.updateSettings({ repeatMode: 'one' })
+    })
+    expect(result.current!.settings.repeatMode).toBe('one')
+
+    await act(async () => {
+      await result.current!.updateSettings({ repeatMode: 'off' })
+    })
+
+    // Rolled back to 'all' — the last value the server actually
+    // confirmed — not 'one', which was only ever a local optimistic guess
+    // for a request that's still hanging.
+    expect(result.current!.settings.repeatMode).toBe('all')
+
+    unmount()
+  })
+
+  it('treats a non-ok response as a failure instead of storing its body as settings', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'PUT') {
+          await delay(FETCH_DELAY_MS)
+          return { ok: false, status: 500, json: async () => ({ error: 'boom' }) } as unknown as Response
+        }
+        return { ok: true, json: async () => serverSettings } as Response
+      }),
+    )
+
+    const { result, unmount } = renderSettingsHook()
+    await waitForLoaded(result)
+    expect(result.current!.settings.repeatMode).toBe('off')
+
+    await act(async () => {
+      await result.current!.updateSettings({ repeatMode: 'all' })
+    })
+
+    // Rolled back to the confirmed value, never left holding the error
+    // body as if it were Settings.
+    expect(result.current!.settings.repeatMode).toBe('off')
+    expect(result.current!.settings).not.toHaveProperty('error')
 
     unmount()
   })

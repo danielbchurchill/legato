@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { SERVER_HOST } from '../config/serverHost'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
@@ -13,11 +13,19 @@ export type Settings = Record<string, string>
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>({})
   const [loaded, setLoaded] = useState(false)
+  // The last value the server actually confirmed — distinct from `settings`,
+  // which may currently hold an unconfirmed optimistic guess. Rollback needs
+  // this, not `settings`, or it rolls back onto someone else's optimism.
+  const confirmedSettingsRef = useRef<Settings>({})
+  // Strictly increasing per-call sequence number. Lets a call recognize,
+  // once its own request resolves, whether it's still the most recent one.
+  const requestIdRef = useRef(0)
 
   useEffect(() => {
     fetch(`${API}/settings`)
       .then((r) => r.json())
       .then((s: Settings) => {
+        confirmedSettingsRef.current = s
         setSettings(s)
         setLoaded(true)
       })
@@ -34,27 +42,51 @@ export function useSettings() {
   // `settings` a caller closed over — e.g. onCycleRepeat computing
   // NEXT_REPEAT_MODE[repeatMode] from the same pre-update mode twice in a
   // row — so the button reads as needing several clicks to do one thing.
-  // Applying the partial immediately (same optimistic-then-persist idiom
-  // NodeTitleBlock's favourite heart already uses) fixes both: the caller's
-  // next render sees the new value right away, and the control itself
-  // reflects the change without waiting on the network. Rolled back to
-  // whatever `settings` held before if the request fails.
+  //
+  // The first fix for that (apply the partial immediately, persist in the
+  // background) introduced a burst-of-clicks regression of its own: every
+  // call raced every other one for the right to call setSettings(updated)
+  // once its own PUT resolved, with no regard for which call was actually
+  // most recent. Three quick clicks showed the optimistic +3 value, then
+  // visibly stepped BACKWARD to +1 as the first click's response landed,
+  // then +2, then +3 — and if the network delivered those three responses
+  // out of order, the button could settle on whichever response happened
+  // to arrive last rather than the one the user actually clicked last. The
+  // catch block had a matching bug: it rolled back to `previous`, the state
+  // captured at the moment its OWN request started, which silently threw
+  // away any optimistic updates from later clicks that had landed since.
+  //
+  // requestIdRef fixes both: only the response (success or failure) whose
+  // id still matches the ref when it resolves is allowed to touch state —
+  // every older, superseded response is simply dropped, so state only ever
+  // moves forward toward the most recently requested value, never backward
+  // toward a stale one. A failed newest request rolls back to
+  // confirmedSettingsRef — real last-known server state — rather than to
+  // whatever some other in-flight call's unconfirmed optimism happened to
+  // leave in `settings`. res.ok is checked explicitly too: an error
+  // response body has no reason to look like a Settings object, and used
+  // to get stored as if it were one.
   const updateSettings = useCallback(async (partial: Settings) => {
-    let previous: Settings = {}
-    setSettings((current) => {
-      previous = current
-      return { ...current, ...partial }
-    })
+    const requestId = ++requestIdRef.current
+    setSettings((current) => ({ ...current, ...partial }))
     try {
       const res = await fetch(`${API}/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(partial),
       })
+      if (!res.ok) {
+        throw new Error(`Failed to update settings: ${res.status}`)
+      }
       const updated = (await res.json()) as Settings
-      setSettings(updated)
+      if (requestIdRef.current === requestId) {
+        confirmedSettingsRef.current = updated
+        setSettings(updated)
+      }
     } catch {
-      setSettings(previous)
+      if (requestIdRef.current === requestId) {
+        setSettings(confirmedSettingsRef.current)
+      }
     }
   }, [])
 
