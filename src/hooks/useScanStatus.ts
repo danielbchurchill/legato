@@ -4,7 +4,10 @@ import { SERVER_HOST } from '../config/serverHost'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
-type ScanJob = { status: 'running' | 'done' | 'error'; error_message: string | null }
+type ScanJob = {
+  status: 'running' | 'paused' | 'canceled' | 'done' | 'error'
+  error_message: string | null
+}
 type ScanStatus = { scanning: boolean; error: string | null }
 
 // The canvas's "why is this empty" signal — DESIGN.md's empty-state
@@ -36,7 +39,11 @@ export function useScanStatus(): ScanStatus & { retry: () => void } {
 
   useEffect(checkLatest, [])
   useWsEvent(['scan:progress'], () => setStatus({ scanning: true, error: null }))
-  useWsEvent(['scan:done'], () => setStatus({ scanning: false, error: null }))
+  // Issue #123: a paused or canceled run also stops without ever reaching
+  // scan:done (that event means the pipeline actually finished) — without
+  // this, the canvas's "scan running, no nodes yet" empty state would stay
+  // stuck showing forever after a pause.
+  useWsEvent(['scan:done', 'scan:paused', 'scan:canceled'], () => setStatus({ scanning: false, error: null }))
   useWsEvent(['scan:error'], (payload) => {
     const p = payload as { error: string }
     setStatus({ scanning: false, error: p.error })

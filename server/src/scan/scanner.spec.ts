@@ -1,10 +1,24 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
-import { markMissing, rescanNode, runFullScan, runIncrementalScan, scanFile } from "./scanner.js";
+import {
+  createScanJob,
+  executeScan,
+  markMissing,
+  reconcileInterruptedScans,
+  requestCancelScanJob,
+  requestPauseScanJob,
+  rescanNode,
+  resumeScanJob,
+  runFullScan,
+  runIncrementalScan,
+  scanFile,
+  SCAN_STAGES,
+  type ScanProgress,
+} from "./scanner.js";
 
 // A minimal-but-valid 44-byte-header WAV (silence) — enough for
 // music-metadata to report format/duration without needing a real codec or
@@ -41,6 +55,19 @@ function writeSilentWav(filePath: string, seconds = 1, sampleRate = 8000) {
 // mismatch there.
 function toScannedPath(p: string): string {
   return p.replace(/\\/g, "/");
+}
+
+// executeScan's progress throttle gate (createProgressGate, PROGRESS_THROTTLE_MS)
+// no longer gets bypassed by a stage's periodic checkpoint — that coupling was a
+// real bug (a checkpoint every CHECKPOINT_EVERY files fired far more often than
+// every PROGRESS_THROTTLE_MS at real-world throughput, confirmed on a 100k-file
+// benchmark). So a test that needs to intercept onProgress mid-stage now has to
+// inject a clock that advances past the throttle interval on every single call,
+// same idea as rate.ts/throttle.ts's own injectable now() — this is the only way
+// this test's fast, sub-millisecond in-memory run can still see every emit.
+function fastForwardClock(): () => number {
+  let t = 0;
+  return () => (t += 1000);
 }
 
 let db: Database;
@@ -350,5 +377,227 @@ describe("runIncrementalScan", () => {
       .prepare("SELECT node_id FROM positions WHERE node_id = ? AND granularity = 'tracks'")
       .get(file.recording_node_id);
     expect(position).toBeTruthy();
+  });
+});
+
+// Issue #123 (D17): stages, ETA, and pause/resume/cancel that survive a
+// restart. CHECKPOINT_EVERY in scanner.ts is 50, so these tests write 55+
+// files where they need a guaranteed mid-stage checkpoint (and therefore a
+// forced, deterministic progress callback) to hook a pause off of, rather
+// than racing the wall-clock throttle gate.
+describe("executeScan stages", () => {
+  it("reports every stage after discover, in pipeline order, with back-compat filesScanned/filesTotal", async () => {
+    writeSilentWav(path.join(dir, "a.wav"));
+    writeSilentWav(path.join(dir, "b.wav"));
+    writeSilentWav(path.join(dir, "c.wav"));
+
+    const seenStages: string[] = [];
+    const progresses: ScanProgress[] = [];
+    await runFullScan(db, libraryRootId, dir, (progress) => {
+      progresses.push(progress);
+      if (seenStages[seenStages.length - 1] !== progress.stage) seenStages.push(progress.stage);
+    });
+
+    expect(seenStages).toEqual(SCAN_STAGES.filter((s) => s !== "discover"));
+    // Back-compat: filesScanned tracks 'read_tags' done-count, frozen at
+    // filesTotal for every stage after it — LibrarySetup.tsx and
+    // LegatoSettings.tsx read exactly these two fields unchanged.
+    for (const progress of progresses) {
+      expect(progress.filesTotal).toBe(3);
+      if (progress.stage === "read_tags") {
+        expect(progress.filesScanned).toBeLessThanOrEqual(3);
+      } else {
+        expect(progress.filesScanned).toBe(3);
+      }
+    }
+    // Finishes well under the 20s ETA gate — every event should still say
+    // "estimating..." (H1: no guess before the window has actually elapsed).
+    expect(progresses.every((p) => p.etaSeconds === null)).toBe(true);
+  });
+
+  it("pause persists stage/cursor mid-run and a later resume continues from exactly that checkpoint", async () => {
+    const total = 55; // > CHECKPOINT_EVERY, guarantees a mid-stage forced checkpoint
+    for (let i = 0; i < total; i++) writeSilentWav(path.join(dir, `t${i}.wav`), 1);
+
+    const jobId = createScanJob(db, libraryRootId, "full");
+    await executeScan(
+      db,
+      jobId,
+      libraryRootId,
+      dir,
+      (progress) => {
+        if (progress.stage === "read_tags" && progress.stageDone === 50 && progress.stageDone < progress.stageTotal!) {
+          requestPauseScanJob(db, jobId);
+        }
+      },
+      "full",
+      fastForwardClock(),
+    );
+
+    const paused = db.prepare("SELECT * FROM scan_jobs WHERE id = ?").get(jobId) as {
+      status: string;
+      stage: string;
+      cursor: number;
+    };
+    expect(paused.status).toBe("paused");
+    expect(paused.stage).toBe("read_tags");
+    expect(paused.cursor).toBe(50);
+
+    // The checkpoint itself: everything before the cursor is done, nothing
+    // at or past it has been touched yet.
+    const doneRows = db
+      .prepare("SELECT COUNT(*) AS n FROM scan_run_files WHERE job_id = ? AND seq < ? AND outcome IS NOT NULL")
+      .get(jobId, paused.cursor) as { n: number };
+    expect(doneRows.n).toBe(50);
+    const untouchedRows = db
+      .prepare("SELECT COUNT(*) AS n FROM scan_run_files WHERE job_id = ? AND seq >= ? AND outcome IS NOT NULL")
+      .get(jobId, paused.cursor) as { n: number };
+    expect(untouchedRows.n).toBe(0);
+
+    // "Restart" — resumeScanJob re-derives everything it needs (root path,
+    // stage, cursor) from the DB row alone, exactly as a freshly booted
+    // server process would after reconcileInterruptedScans left it paused.
+    await resumeScanJob(db, jobId);
+
+    const finished = db.prepare("SELECT * FROM scan_jobs WHERE id = ?").get(jobId) as {
+      status: string;
+      files_added: number;
+      files_scanned: number;
+    };
+    expect(finished.status).toBe("done");
+    expect(finished.files_added).toBe(total); // not double-counted by resuming
+    expect(finished.files_scanned).toBe(total);
+
+    const fileRows = db.prepare("SELECT COUNT(*) AS n FROM files").get() as { n: number };
+    expect(fileRows.n).toBe(total);
+  });
+
+  it("cancel while running stops the scan but keeps everything indexed so far", async () => {
+    const total = 55;
+    for (let i = 0; i < total; i++) writeSilentWav(path.join(dir, `t${i}.wav`), 1);
+
+    const jobId = createScanJob(db, libraryRootId, "full");
+    await executeScan(
+      db,
+      jobId,
+      libraryRootId,
+      dir,
+      (progress) => {
+        if (progress.stage === "read_tags" && progress.stageDone === 50 && progress.stageDone < progress.stageTotal!) {
+          requestCancelScanJob(db, jobId);
+        }
+      },
+      "full",
+      fastForwardClock(),
+    );
+
+    const job = db.prepare("SELECT * FROM scan_jobs WHERE id = ?").get(jobId) as {
+      status: string;
+      canceled_at: string | null;
+    };
+    expect(job.status).toBe("canceled");
+    expect(job.canceled_at).toBeTruthy();
+
+    // D17: cancel keeps indexed work — the 50 files already read_tags'd stay
+    // in the library, they just never finished match/collapse/enrich.
+    const fileRows = db.prepare("SELECT COUNT(*) AS n FROM files").get() as { n: number };
+    expect(fileRows.n).toBe(50);
+
+    // The checkpoint table itself is cleaned up on a genuinely finished run
+    // (done or canceled) — unlike a pause, there's nothing left to resume.
+    const scratchRows = db.prepare("SELECT COUNT(*) AS n FROM scan_run_files WHERE job_id = ?").get(jobId) as {
+      n: number;
+    };
+    expect(scratchRows.n).toBe(0);
+  });
+
+  it("cancelling a paused job finalizes it immediately — no live loop left to signal", async () => {
+    const total = 55; // > CHECKPOINT_EVERY, same technique as the pause/resume test above
+    for (let i = 0; i < total; i++) writeSilentWav(path.join(dir, `t${i}.wav`), 1);
+
+    const jobId = createScanJob(db, libraryRootId, "full");
+    await executeScan(
+      db,
+      jobId,
+      libraryRootId,
+      dir,
+      (progress) => {
+        if (progress.stage === "read_tags" && progress.stageDone === 50 && progress.stageDone < progress.stageTotal!) {
+          requestPauseScanJob(db, jobId);
+        }
+      },
+      "full",
+      fastForwardClock(),
+    );
+    expect((db.prepare("SELECT status FROM scan_jobs WHERE id = ?").get(jobId) as { status: string }).status).toBe(
+      "paused",
+    );
+
+    // Now there's genuinely no live loop for this job — requestCancelScanJob
+    // has to finalize it directly rather than signal a loop that doesn't exist.
+    const cancelResult = requestCancelScanJob(db, jobId);
+    expect(cancelResult).toEqual({ ok: true, finalizedNow: true });
+    const job = db.prepare("SELECT status FROM scan_jobs WHERE id = ?").get(jobId) as { status: string };
+    expect(job.status).toBe("canceled");
+  });
+
+  it("rejects pausing a job that isn't running, and resuming one that isn't paused", async () => {
+    writeSilentWav(path.join(dir, "a.wav"));
+    const jobId = await runFullScan(db, libraryRootId, dir);
+
+    expect(requestPauseScanJob(db, jobId)).toEqual({ ok: false, error: "cannot pause a job with status 'done'" });
+    await expect(resumeScanJob(db, jobId)).rejects.toThrow("cannot resume a job with status 'done'");
+  });
+
+  it("records a per-file error without stopping the rest of the scan", async () => {
+    // music-metadata doesn't throw on garbage bytes with an audio extension
+    // — it just reports hasAudio: false — so an unreadable file (the
+    // migration's own "a corrupt file, a permissions error" example) is
+    // what reliably reaches read_tags's catch block instead.
+    const badPath = path.join(dir, "corrupt.wav");
+    writeSilentWav(badPath);
+    chmodSync(badPath, 0o000);
+    writeSilentWav(path.join(dir, "good.wav"));
+
+    const jobId = await runFullScan(db, libraryRootId, dir);
+    chmodSync(badPath, 0o644); // restore so afterEach's rmSync can clean up unconditionally
+    const job = db.prepare("SELECT status, files_added FROM scan_jobs WHERE id = ?").get(jobId) as {
+      status: string;
+      files_added: number;
+    };
+    expect(job.status).toBe("done");
+    expect(job.files_added).toBe(1); // only the good file
+
+    const errors = db
+      .prepare("SELECT file_path, stage, reason FROM scan_file_errors WHERE job_id = ?")
+      .all(jobId) as { file_path: string; stage: string; reason: string }[];
+    expect(errors).toHaveLength(1);
+    expect(errors[0].file_path).toBe(toScannedPath(badPath));
+    expect(errors[0].stage).toBe("read_tags");
+    expect(errors[0].reason).toBeTruthy();
+  });
+});
+
+describe("reconcileInterruptedScans", () => {
+  it("flips a scan_jobs row stuck at 'running' (a crash, not a deliberate pause) to 'paused'", () => {
+    const jobId = createScanJob(db, libraryRootId, "full");
+    // createScanJob already leaves it 'running' — simulates the server
+    // dying mid-scan with no process left to finish it.
+    expect(reconcileInterruptedScans(db)).toBe(1);
+    const job = db.prepare("SELECT status, paused_at FROM scan_jobs WHERE id = ?").get(jobId) as {
+      status: string;
+      paused_at: string | null;
+    };
+    expect(job.status).toBe("paused");
+    expect(job.paused_at).toBeTruthy();
+  });
+
+  it("leaves a job that's actually paused, done, or canceled alone", async () => {
+    writeSilentWav(path.join(dir, "a.wav"));
+    const doneJobId = await runFullScan(db, libraryRootId, dir);
+    expect(reconcileInterruptedScans(db)).toBe(0);
+    expect((db.prepare("SELECT status FROM scan_jobs WHERE id = ?").get(doneJobId) as { status: string }).status).toBe(
+      "done",
+    );
   });
 });

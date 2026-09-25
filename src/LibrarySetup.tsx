@@ -57,8 +57,12 @@ export default function LibrarySetup({
 
   // A failed initial scan still leaves a real (if empty or partial) library
   // — DESIGN.md puts scan-failure handling on the canvas, not here, so this
-  // hands off either way rather than stranding the user on this screen.
-  useWsEvent(['scan:done', 'scan:error'], (payload) => {
+  // hands off either way rather than stranding the user on this screen. A
+  // pause or cancel (issue #123 — most likely here from a server restart
+  // mid-scan, since this screen has no pause control of its own) hands off
+  // the same way rather than leaving "scanning…" stuck forever with no
+  // scan:done ever coming.
+  useWsEvent(['scan:done', 'scan:error', 'scan:paused', 'scan:canceled'], (payload) => {
     const p = payload as { libraryRootId: number }
     if (scanningRoot && p.libraryRootId === scanningRoot.id) onLibraryReady()
   })
