@@ -23,6 +23,7 @@ import { SERVER_HOST } from './config/serverHost'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
 import { useSettings } from './hooks/useSettings'
+import { useTheme } from './hooks/useTheme'
 import { useMapPresetHistory } from './hooks/useMapPresetHistory'
 import type { ReplayGainMode, RepeatMode } from './playback/usePlayback'
 import { LeftPanelHeader } from './shell/LeftPanelHeader'
@@ -203,6 +204,13 @@ function DebugSpikes() {
 // LibrarySetup's own scope note (M0's job is just proving the folder-picker
 // round trip; the canvas taking over from there is M3's).
 function MainApp() {
+  // #136/D10: per-device, applies (and keeps applying — system-theme and
+  // Tauri window-theme changes) as a side effect of the hook itself. See
+  // useTheme.ts. resolvedTheme threads down to the two surfaces that still
+  // need to know which theme is active for a reason CSS tokens can't cover
+  // on their own — swapping an <img> wordmark source — everything else goes
+  // through var(--color-*) instead.
+  const { preference: themePreference, resolvedTheme, setPreference: setThemePreference } = useTheme()
   const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
   const [hygieneOpen, setHygieneOpen] = useState(false)
@@ -424,7 +432,7 @@ function MainApp() {
   }, [])
 
   if (hasLibrary === null) return <Centered>loading library…</Centered>
-  if (!hasLibrary) return <LibrarySetup onLibraryReady={() => setHasLibrary(true)} />
+  if (!hasLibrary) return <LibrarySetup onLibraryReady={() => setHasLibrary(true)} theme={resolvedTheme} />
 
   // #87: no more render-time override here — rightPanelExpanded (nudged by
   // the hasQueuedContent effect above, otherwise set only by the user's own
@@ -469,6 +477,7 @@ function MainApp() {
           forceLinkStrength={forceLinkStrength}
           linkDistance={linkDistance}
           onRestoreDefaults={mapPresets.restoreDefaults}
+          theme={resolvedTheme}
         />
       ) : (
         // Selecting a row here reuses the exact same selectAndFly the
@@ -487,6 +496,7 @@ function MainApp() {
         expanded={activeRailDestination != null}
         onCollapse={() => setActiveRailDestination(null)}
         onExpand={() => setActiveRailDestination(lastRailDestinationRef.current)}
+        theme={resolvedTheme}
       />
       <InspectorRail
         active={activeRailDestination}
@@ -500,7 +510,13 @@ function MainApp() {
           active={activeRailDestination}
           graphContent={<MusicMapSettings settings={settings} updateSettings={updateSettings} mapPresets={mapPresets} />}
           settingsContent={
-            <LegatoSettings settings={settings} updateSettings={updateSettings} onSetAudioDevice={playback.setAudioDevice} />
+            <LegatoSettings
+              settings={settings}
+              updateSettings={updateSettings}
+              onSetAudioDevice={playback.setAudioDevice}
+              themePreference={themePreference}
+              onSetThemePreference={setThemePreference}
+            />
           }
           tagsContent={<TagManager onSelectNode={selectAndFly} onEditNode={selectFlyAndEdit} />}
           databaseContent={<DatabaseInspector />}

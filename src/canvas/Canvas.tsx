@@ -13,6 +13,7 @@ import { NodeHoverPlate } from './NodeHoverPlate'
 import { NodePlayingHalo } from './NodePlayingHalo'
 import { SERVER_HOST } from '../config/serverHost'
 import type { usePlayback } from '../playback/usePlayback'
+import type { ResolvedTheme } from '../hooks/useTheme'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -29,7 +30,12 @@ const ART_SIZE = 22
  * "Nodes". */
 const SQUARE_COVER_TYPES = new Set(['release'])
 
-const NODE_COLOR: Record<string, string> = {
+/* Colored-dot fallback for a node with no cover art, one hue per domain
+ * type — mirrors tokens.css's --color-node-* block, which is the actual
+ * source of truth now (#136). Used only as resolveThemeColors' fallback, for
+ * a test environment or a moment before CSS has loaded — never read
+ * directly by nodeAttributes/syncGraph below. */
+const DEFAULT_NODE_COLOR: Record<string, string> = {
   recording: '#e8e8e8',
   artist: '#ff8a3d',
   release: '#4da3ff',
@@ -49,7 +55,7 @@ const NODE_SIZE: Record<string, number> = {
   credit: 4,
 }
 
-const EDGE_COLOR_FALLBACK = 'rgba(255,255,255,0.12)'
+const DEFAULT_EDGE_COLOR_FALLBACK = 'rgba(255,255,255,0.12)'
 
 /* G-6: 26 albums carry 103 same_artist edges (21 of those albums are one
  * of two artists), so each artist's catalogue forms a near-complete
@@ -87,9 +93,68 @@ const EDGE_WIDTH_AT_RATIO_1 = 0.5
  * does not composite a translucent rgba() the way CSS would, so the
  * previous rgba(255,255,255,0.06) rendered as solid white — hovering blew
  * the whole graph out to a bright flash instead of dimming it. Confirmed
- * live: swapping to an opaque dark hex fixes it outright. */
-const DIMMED_NODE_COLOR = '#20262a'
-const DIMMED_EDGE_COLOR = '#1b2023'
+ * live: swapping to an opaque dark hex fixes it outright. Both themes' real
+ * tokens keep this true (tokens.css's own comment on --color-node-dim /
+ * --color-edge-dim repeats the same constraint for the light override). */
+const DEFAULT_DIMMED_NODE_COLOR = '#20262a'
+const DEFAULT_DIMMED_EDGE_COLOR = '#1b2023'
+
+/* Every color sigma draws that tokens.css now themes (#136) — resolved once
+ * per theme change (resolveThemeColors below), cached in a ref, and read by
+ * the reducers on every frame rather than hitting getComputedStyle per node/
+ * edge. nodeAttributes/syncGraph/edgeBaseColor all take this as a plain
+ * argument instead of reaching for the DOM themselves, so they stay ordinary
+ * pure functions apart from this one seam. */
+type ThemeColors = {
+  node: Record<string, string>
+  /** The 7 curated per-type hues from edgeTypes.ts's EDGE_COLOR, resolved
+   * live — keyed the same way, so edgeBaseColor's lookup doesn't change
+   * shape, just its source. */
+  edgeType: Record<string, string>
+  edgeFallback: string
+  nodeDim: string
+  edgeDim: string
+  placeholder: string
+}
+
+const DEFAULT_THEME_COLORS: ThemeColors = {
+  node: DEFAULT_NODE_COLOR,
+  edgeType: EDGE_COLOR,
+  edgeFallback: DEFAULT_EDGE_COLOR_FALLBACK,
+  nodeDim: DEFAULT_DIMMED_NODE_COLOR,
+  edgeDim: DEFAULT_DIMMED_EDGE_COLOR,
+  placeholder: 'rgba(255,255,255,0.06)',
+}
+
+/** Sigma renders to WebGL and never sees CSS, so every color it draws has to
+ * be resolved to a concrete string up front. Reading getComputedStyle on
+ * document.documentElement picks up whichever theme tokens.css's
+ * `:root[data-theme]` block currently has active — this is the one function
+ * in the file that has to know that mechanism exists; everything downstream
+ * just takes the result as a plain lookup table. Falls back to the
+ * historical dark-mode literals if a property is somehow unset (a test
+ * environment with no real stylesheet loaded). */
+function resolveThemeColors(): ThemeColors {
+  if (typeof document === 'undefined') return DEFAULT_THEME_COLORS
+  const style = getComputedStyle(document.documentElement)
+  const read = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback
+  const node: Record<string, string> = {}
+  for (const type of Object.keys(DEFAULT_NODE_COLOR)) {
+    node[type] = read(`--color-node-${type}`, DEFAULT_NODE_COLOR[type])
+  }
+  const edgeType: Record<string, string> = {}
+  for (const type of Object.keys(EDGE_COLOR)) {
+    edgeType[type] = read(`--color-edge-${type.replace(/_/g, '-')}`, EDGE_COLOR[type])
+  }
+  return {
+    node,
+    edgeType,
+    edgeFallback: read('--color-edge-fallback', DEFAULT_EDGE_COLOR_FALLBACK),
+    nodeDim: read('--color-node-dim', DEFAULT_DIMMED_NODE_COLOR),
+    edgeDim: read('--color-edge-dim', DEFAULT_DIMMED_EDGE_COLOR),
+    placeholder: read('--color-placeholder', DEFAULT_THEME_COLORS.placeholder),
+  }
+}
 
 /* How wide a node should render once the camera has flown to it.
  *
@@ -259,9 +324,9 @@ function mixTowardDim(color: string, dim: string, t: number): string {
  * shared by syncGraph's creation-time paint and the edgeReducer's live
  * recompute below, so a color change made while looking at the canvas and a
  * freshly created edge never disagree about what "current" means. */
-function edgeBaseColor(type: string, overrides: Record<string, string>): string {
-  const raw = overrides[type] ?? EDGE_COLOR[type] ?? EDGE_COLOR_FALLBACK
-  return type === 'same_artist' ? mixTowardDim(raw, DIMMED_EDGE_COLOR, SAME_ARTIST_QUIET_MIX) : raw
+function edgeBaseColor(type: string, overrides: Record<string, string>, colors: ThemeColors): string {
+  const raw = overrides[type] ?? colors.edgeType[type] ?? colors.edgeFallback
+  return type === 'same_artist' ? mixTowardDim(raw, colors.edgeDim, SAME_ARTIST_QUIET_MIX) : raw
 }
 
 /* Atlas cell size, in texels, for one cover.
@@ -523,7 +588,7 @@ function graphOutOfView(renderer: Sigma, graph: Graph): boolean {
  * the live force simulation (src/canvas/forceSimulation.ts) from then on;
  * folding x/y into this object would let every resync stomp the
  * simulation's own live position back to stale server truth. */
-function nodeAttributes(node: GraphNode, showArt: boolean): Record<string, unknown> {
+function nodeAttributes(node: GraphNode, showArt: boolean, colors: ThemeColors): Record<string, unknown> {
   // Carried as its own attribute rather than re-derived from sigma's own
   // display `type` ('cover'/'coverSquare'/'circle') — nodeReducer needs the
   // *domain* type (src/canvas/nodeTypes.ts) to look up this node's own
@@ -548,7 +613,7 @@ function nodeAttributes(node: GraphNode, showArt: boolean): Record<string, unkno
   }
 
   const size = NODE_SIZE[node.type] ?? 3
-  const color = NODE_COLOR[node.type] ?? '#999'
+  const color = colors.node[node.type] ?? '#999'
   return { label: node.title, size, color, type: 'circle', square: false, origSize: size, nodeType: node.type }
 }
 
@@ -577,6 +642,7 @@ function syncGraph(
   edges: GraphEdge[],
   showArt: (type: string) => boolean,
   showCreditNodes: boolean,
+  colors: ThemeColors,
 ): void {
   const wantedNodes = new Map<string, GraphNode>()
   for (const node of nodes) {
@@ -596,7 +662,7 @@ function syncGraph(
     if (!wantedNodes.has(key)) graph.dropNode(key)
   })
   for (const [key, node] of wantedNodes) {
-    const attrs = nodeAttributes(node, showArt(node.type))
+    const attrs = nodeAttributes(node, showArt(node.type), colors)
     if (graph.hasNode(key)) {
       graph.mergeNodeAttributes(key, attrs) // never x/y — see nodeAttributes above
     } else {
@@ -623,7 +689,7 @@ function syncGraph(
     // below is what's actually authoritative on every draw, recomputed live
     // from `relType` so a color changed in the settings panel while looking
     // at the canvas doesn't need this edge re-created to show up.
-    graph.addEdgeWithKey(edgeKey, from, to, { size: 0.5, color: EDGE_COLOR[edge.type] ?? EDGE_COLOR_FALLBACK, relType: edge.type })
+    graph.addEdgeWithKey(edgeKey, from, to, { size: 0.5, color: colors.edgeType[edge.type] ?? colors.edgeFallback, relType: edge.type })
   }
 
   graph.forEachEdge((edgeKey) => {
@@ -688,6 +754,15 @@ type Props = {
    * own restore-defaults button applies, threaded through from App.tsx's
    * useMapPresetHistory rather than duplicated here. */
   onRestoreDefaults?: () => void
+  /** #136: sigma renders to WebGL and never sees CSS — every color it draws
+   * has to be resolved to a concrete string, so this is the one prop that
+   * tells the renderer-lifecycle effect's cached themeColorsRef to
+   * re-resolve and repaint. Same class of exception as LibrarySetup's and
+   * LeftPanelHeader's own theme prop (a real asset/value swap CSS can't
+   * reach), not a case of a component branching on theme itself — nothing
+   * here does `if (theme === 'light')`, it just re-reads whatever
+   * tokens.css's active `:root[data-theme]` block currently resolves to. */
+  theme: ResolvedTheme
 }
 
 export type CanvasHandle = {
@@ -721,6 +796,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     forceLinkStrength,
     linkDistance,
     onRestoreDefaults,
+    theme,
   },
   ref,
 ) {
@@ -805,6 +881,17 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     edgeColorOverridesRef.current = edgeColorOverrides
     rendererRef.current?.refresh()
   }, [nodeSizeMultipliers, edgeThicknessMultiplier, edgeColorOverrides])
+
+  // #136: same "ref read live by the reducers, refreshed on change" shape as
+  // the multipliers above. resolveThemeColors reads the DOM once here rather
+  // than per node/edge per frame — theme changes are rare (a click in
+  // Settings, or the OS firing prefers-color-scheme), so recomputing the
+  // whole palette on that instead of on every paint costs nothing real.
+  const themeColorsRef = useRef(resolveThemeColors())
+  useEffect(() => {
+    themeColorsRef.current = resolveThemeColors()
+    rendererRef.current?.refresh()
+  }, [theme])
 
   // Read by the drag handlers below, which are set up once inside the
   // renderer-lifecycle effect — a ref, not the prop, for the same reason as
@@ -1128,7 +1215,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       if (data.type === 'cover' || data.type === 'coverSquare') {
         const size = scaled.size as number
         if (dimProgress <= 0.5) return { ...scaled, size: size * (1 - dimProgress / 0.5) }
-        return { ...scaled, type: 'circle', square: false, color: DIMMED_NODE_COLOR, size: size * ((dimProgress - 0.5) / 0.5) }
+        return { ...scaled, type: 'circle', square: false, color: themeColorsRef.current.nodeDim, size: size * ((dimProgress - 0.5) / 0.5) }
       }
       // Every other type has no art to protect, so its color crossfades
       // toward the dim tone continuously. `square` is cleared alongside
@@ -1138,17 +1225,19 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         ...scaled,
         type: 'circle',
         square: false,
-        color: mixTowardDim(scaled.color, DIMMED_NODE_COLOR, dimProgress),
+        color: mixTowardDim(scaled.color, themeColorsRef.current.nodeDim, dimProgress),
       }
     })
     renderer.setSetting('edgeReducer', (edge, data) => {
       const size = EDGE_WIDTH_AT_RATIO_1 * edgeThicknessMultiplierRef.current * Math.sqrt(renderer.getCamera().ratio)
       const relType = data.relType as string | undefined
-      const baseColor = relType ? edgeBaseColor(relType, edgeColorOverridesRef.current) : (data.color as string)
+      const baseColor = relType
+        ? edgeBaseColor(relType, edgeColorOverridesRef.current, themeColorsRef.current)
+        : (data.color as string)
       if (dimProgress <= 0) return { ...data, size, color: baseColor }
       const [source, target] = graph.extremities(edge)
       if (source === hoveredNode || target === hoveredNode) return { ...data, size, color: baseColor }
-      return { ...data, size, color: mixTowardDim(baseColor, DIMMED_EDGE_COLOR, dimProgress) }
+      return { ...data, size, color: mixTowardDim(baseColor, themeColorsRef.current.edgeDim, dimProgress) }
     })
 
     renderer.on('enterNode', ({ node }) => {
@@ -1516,7 +1605,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     const hadNoNodes = graph.order === 0
     const showArt = (type: string) =>
       type === 'artist' ? showArtistArt : type === 'release' ? showReleaseArt : type === 'recording' ? showTrackArt : true
-    syncGraph(graph, nodes, edges, showArt, showCreditNodes)
+    syncGraph(graph, nodes, edges, showArt, showCreditNodes, themeColorsRef.current)
     onStatsRef.current?.({ nodes: graph.order, edges: graph.size })
 
     // Feeds the same post-sync graph state into the live simulation —
@@ -1587,7 +1676,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
          * not React state, since it has to track every pointer move. */}
         <div
           ref={marqueeRef}
-          className="absolute top-0 left-0 rounded-[4px] border border-[var(--color-hairline)] bg-white/6"
+          className="absolute top-0 left-0 rounded-[4px] border border-[var(--color-hairline)] bg-[var(--color-placeholder)]"
           style={{ visibility: 'hidden' }}
         />
         {/* The one visual sign a group of nodes is currently multiselected —

@@ -47,7 +47,7 @@ export function CoverArt({ nodeId, size, className = '', alt = '', style }: Cove
   if (src == null || failed) {
     // The no-art fallback doesn't fade (MO-10) — it isn't loading, it's the
     // answer.
-    return <div aria-hidden className={`bg-white/6 ${className}`} style={style} />
+    return <div aria-hidden className={`bg-[var(--color-placeholder)] ${className}`} style={style} />
   }
 
   return (

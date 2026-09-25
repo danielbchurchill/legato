@@ -38,6 +38,7 @@ import { lyricsRoutes } from "./routes/lyrics.js";
 import { tagManagerRoutes } from "./routes/tag-manager.js";
 import { authRoutes } from "./routes/auth.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
+import { reconcileInterruptedScans } from "./scan/scanner.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 
@@ -67,6 +68,16 @@ app.log.info(`legato-server ${VERSION} (${GIT_SHA})`);
     count: number;
   };
   app.log.info(`database: ${dbPath} (${fileCount} files)`);
+}
+
+// Issue #123 (D17): a scan_jobs row stuck at status='running' means the
+// server died mid-scan — nothing is actually running it. Reconciled to
+// 'paused' before anything else starts, so "pause survives a restart"
+// holds even for a restart nobody asked for, and a client that comes back
+// later sees a resumable job instead of one that looks alive forever.
+{
+  const reconciled = reconcileInterruptedScans(db);
+  if (reconciled > 0) app.log.info(`scan: reconciled ${reconciled} interrupted run(s) to paused`);
 }
 
 // Same one-line-diagnosis reasoning as the database log above: if a

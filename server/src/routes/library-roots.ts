@@ -3,8 +3,9 @@ import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { countLibraryRootContents, removeLibraryRootCascade } from "../library-roots.js";
 import { recompute } from "../recompute.js";
-import { createScanJob, executeScan } from "../scan/scanner.js";
-import { unwatchLibraryRoot, watchLibraryRoot } from "../scan/watcher.js";
+import { createScanJob } from "../scan/scanner.js";
+import { unwatchLibraryRoot } from "../scan/watcher.js";
+import { triggerBackgroundScan } from "./scan.js";
 import { broadcast } from "../ws.js";
 
 type LibraryRoot = {
@@ -41,17 +42,12 @@ export function libraryRootsRoutes(db: Database) {
         // added, not after a separate manual "now scan it" step — so the
         // initial scan kicks off automatically, in the background. The
         // response returns as soon as the row exists; the client polls
-        // GET /scan-jobs or listens on /ws for progress.
+        // GET /scan-jobs or listens on /ws for progress. Shares
+        // routes/scan.ts's own launch helper rather than duplicating it —
+        // that's what keeps the paused/canceled/done broadcast branching
+        // (issue #123) in exactly one place.
         const jobId = createScanJob(db, row.id);
-        executeScan(db, jobId, row.id, row.path, (progress) => broadcast("scan:progress", progress))
-          .then(() => {
-            watchLibraryRoot(db, row.id, row.path);
-            broadcast("scan:done", { jobId, libraryRootId: row.id });
-          })
-          .catch((err: unknown) => {
-            const message = err instanceof Error ? err.message : String(err);
-            broadcast("scan:error", { jobId, libraryRootId: row.id, error: message });
-          });
+        triggerBackgroundScan(db, { id: row.id, path: row.path, enabled: row.enabled }, jobId, "full");
 
         return row;
       },

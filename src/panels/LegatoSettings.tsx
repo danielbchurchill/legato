@@ -6,9 +6,11 @@ import { Button } from '../ui/Button'
 import { Toggle } from '../ui/Toggle'
 import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
+import type { ThemePreference } from '../hooks/useTheme'
 import type { ReplayGainMode } from '../playback/usePlayback'
 import { SERVER_HOST } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
+import { formatLongDuration } from '../ui/format'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
@@ -21,14 +23,61 @@ const API = `http://${SERVER_HOST}:8899/api/v1`
  * placeholder-only, as an open seam; this closes it by giving the real
  * content a home behind the rail's `sliders` destination instead. */
 
-type LibraryRoot = { id: number; path: string; label: string | null; enabled: number }
+// watch_status/watch_fallback_reason are issue #122's fields — the watcher
+// (server/src/scan/watcher.ts) writes them straight onto the row it
+// already owns, independent of #123's scan-job/status work landing
+// alongside this. 'fallback' means chokidar's watch either errored
+// (ENOSPC/EMFILE) or came close to fs.inotify.max_user_watches, and the
+// server has switched that root to periodic incremental rescans instead.
+type LibraryRoot = {
+  id: number
+  path: string
+  label: string | null
+  enabled: number
+  watch_status: 'watching' | 'fallback'
+  watch_fallback_reason: 'enospc' | 'emfile' | 'near_limit' | null
+}
+
+const WATCH_LIMIT_DOCS_URL = 'https://github.com/danielbchurchill/legato/blob/main/docs/watch-limit.md'
+type ScanStage = 'discover' | 'read_tags' | 'match' | 'collapse' | 'layout' | 'enrich_queued'
 type ScanProgress = {
   jobId: number
   libraryRootId: number
+  stage: ScanStage
+  stageDone: number
+  stageTotal: number | null
   filesScanned: number
   filesTotal: number
   filesAdded: number
   filesUpdated: number
+  rate: number | null
+  etaSeconds: number | null
+}
+// A run actively scanning (progress) vs. one a pause request stopped mid-way
+// — the same job id, kept visible with a resume affordance rather than
+// disappearing the way a genuinely finished run does (issue #123, D17).
+type RunningScan = { progress: ScanProgress; paused: boolean }
+type ScanFileError = { file_path: string; stage: string; reason: string }
+
+// docs/plans/04-library-and-scan.md's own wording for the pipeline, reused
+// verbatim as the stage list's labels.
+const SCAN_STAGE_LABELS: Record<ScanStage, string> = {
+  discover: 'discover',
+  read_tags: 'read tags',
+  match: 'match',
+  collapse: 'collapse',
+  layout: 'layout',
+  enrich_queued: 'enrich queued',
+}
+const SCAN_STAGES: ScanStage[] = ['discover', 'read_tags', 'match', 'collapse', 'layout', 'enrich_queued']
+
+// H1: "estimating…" rather than a guess — mirrors what RateEstimator itself
+// withholds server-side (server/src/scan/rate.ts) until a stage has run long
+// enough to trust.
+function formatEta(etaSeconds: number | null): string {
+  if (etaSeconds === null) return 'estimating…'
+  if (etaSeconds < 60) return 'less than a minute left'
+  return `${formatLongDuration(etaSeconds * 1000)} left`
 }
 
 const REPLAYGAIN_OPTIONS = [
@@ -36,6 +85,16 @@ const REPLAYGAIN_OPTIONS = [
   { value: 'album', label: 'album' },
   { value: 'off', label: 'off' },
 ] as const satisfies readonly { value: ReplayGainMode; label: string }[]
+
+// #136/D10: per-device, not per-account — see useTheme.ts. 'system' rather
+// than the resolved theme itself is the value this control edits, so
+// picking it doesn't need to know or care which way prefers-color-scheme
+// currently leans.
+const THEME_OPTIONS = [
+  { value: 'dark', label: 'dark' },
+  { value: 'light', label: 'light' },
+  { value: 'system', label: 'system' },
+] as const satisfies readonly { value: ThemePreference; label: string }[]
 
 /* A row-scale tab group — the settings-primitive family (Toggle/Slider) is
  * all binary or continuous; replaygain's three-way choice doesn't reduce to
@@ -182,13 +241,27 @@ type LegatoSettingsProps = {
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>
   onSetAudioDevice: (name: string | null) => Promise<void>
+  /** #136: deliberately not part of `settings` above — that's the
+   * server-backed, per-account store (useSettings.ts), and this preference
+   * is per-device (useTheme.ts, localStorage). Threaded down from App.tsx's
+   * own useTheme() call rather than this panel calling the hook a second
+   * time, so there's exactly one source of truth for the resolved theme. */
+  themePreference: ThemePreference
+  onSetThemePreference: (preference: ThemePreference) => void
 }
 
-export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: LegatoSettingsProps) {
+export function LegatoSettings({
+  settings,
+  updateSettings,
+  onSetAudioDevice,
+  themePreference,
+  onSetThemePreference,
+}: LegatoSettingsProps) {
   const [roots, setRoots] = useState<LibraryRoot[] | null>(null)
   const [confirmingRemoveId, setConfirmingRemoveId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [scanning, setScanning] = useState<Record<number, ScanProgress>>({})
+  const [scanning, setScanning] = useState<Record<number, RunningScan>>({})
+  const [scanErrors, setScanErrors] = useState<Record<number, ScanFileError[]>>({})
   const [devices, setDevices] = useState<string[] | null>(null)
   const [confirmingRebuild, setConfirmingRebuild] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
@@ -210,19 +283,58 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
     }
   }, [])
 
+  // Per-file problems the scan noticed and moved past rather than stopping
+  // for (H9) — fetched once a run stops (paused, canceled, done, or error),
+  // since scan_file_errors isn't itself broadcast live over the socket.
+  const loadScanErrors = (jobId: number, libraryRootId: number) => {
+    fetch(`${API}/scan-jobs/${jobId}`)
+      .then((r) => r.json())
+      .then((job: { errors: ScanFileError[] }) => {
+        if (job.errors?.length > 0) setScanErrors((s) => ({ ...s, [libraryRootId]: job.errors }))
+      })
+      .catch(() => undefined)
+  }
+
   useWsEvent(['scan:progress'], (payload) => {
     const p = payload as ScanProgress
-    setScanning((s) => ({ ...s, [p.libraryRootId]: p }))
+    setScanning((s) => ({ ...s, [p.libraryRootId]: { progress: p, paused: false } }))
+    // A fresh run's errors, if any, haven't happened yet — last run's list
+    // would otherwise sit there looking like it's about this one.
+    setScanErrors((s) => {
+      if (!(p.libraryRootId in s)) return s
+      const next = { ...s }
+      delete next[p.libraryRootId]
+      return next
+    })
   })
-  useWsEvent(['scan:done', 'scan:error'], (payload) => {
-    const p = payload as { libraryRootId: number }
+  useWsEvent(['scan:paused'], (payload) => {
+    const p = payload as { jobId: number; libraryRootId: number }
+    setScanning((s) => {
+      const existing = s[p.libraryRootId]
+      if (!existing) return s
+      return { ...s, [p.libraryRootId]: { ...existing, paused: true } }
+    })
+    loadScanErrors(p.jobId, p.libraryRootId)
+  })
+  useWsEvent(['scan:done', 'scan:error', 'scan:canceled'], (payload) => {
+    const p = payload as { jobId: number | null; libraryRootId: number }
     setScanning((s) => {
       const next = { ...s }
       delete next[p.libraryRootId]
       return next
     })
+    if (p.jobId != null) loadScanErrors(p.jobId, p.libraryRootId)
     loadRoots()
   })
+  // watch:status (issue #122) fires whenever a root's watcher falls back
+  // to polling, or comes back once it's re-watched — a plain "go refetch"
+  // is simpler than patching one row in place, and this only fires on a
+  // real state change, not on every tick of the fallback timer.
+  useWsEvent(['watch:status'], () => loadRoots())
+
+  const pauseScan = (jobId: number) => fetch(`${API}/scan-jobs/${jobId}/pause`, { method: 'POST' })
+  const resumeScan = (jobId: number) => fetch(`${API}/scan-jobs/${jobId}/resume`, { method: 'POST' })
+  const cancelScan = (jobId: number) => fetch(`${API}/scan-jobs/${jobId}/cancel`, { method: 'POST' })
 
   const addFolder = async () => {
     if (!IS_TAURI) return
@@ -256,6 +368,20 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
     })
   }
 
+  // Issue #122's manual "check for new music" — the same incremental mode
+  // (server/src/scan/scanner.ts) the fallback timer runs on its own every
+  // 30 minutes, just triggered on demand for whoever doesn't want to wait.
+  // Only offered while a root is actually in fallback: a live watcher
+  // already notices new files itself, so the button would have nothing to
+  // do for anyone not affected by this.
+  const checkForNewMusic = async (id: number) => {
+    await fetch(`${API}/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ libraryRootId: id, mode: 'incremental' }),
+    })
+  }
+
   // #46 — regenerates the whole graph's layout (fresh seed jitter, every
   // manually-placed node's pin cleared) without touching the library on
   // disk. The server broadcasts "layout:rebuilt" when it's done, which is
@@ -284,6 +410,12 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
 
   return (
     <div className="flex flex-col gap-[var(--spacing-sm)]">
+      <SettingsGroup title="appearance">
+        <SettingsRow label="theme">
+          <SegmentedControl options={THEME_OPTIONS} value={themePreference} onChange={onSetThemePreference} />
+        </SettingsRow>
+      </SettingsGroup>
+
       <SettingsGroup
         title="library"
         action={
@@ -304,7 +436,8 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
         ) : (
           <ul className="flex flex-col gap-[var(--spacing-sm)]">
             {roots.map((r) => {
-              const progress = scanning[r.id]
+              const run = scanning[r.id]
+              const errors = scanErrors[r.id]
               const confirming = confirmingRemoveId === r.id
               return (
                 <li key={r.id} className="flex flex-col gap-[var(--spacing-xs)]">
@@ -343,34 +476,137 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
                         <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-sm)] text-[var(--color-ink)]">
                           {r.label ?? r.path}
                         </p>
-                        {progress && (
-                          <div className="flex items-center gap-[var(--spacing-xs)] py-[2px]">
-                            <p className="shrink-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-                              {progress.filesScanned}/{progress.filesTotal}
+                        {run && (
+                          <div className="flex flex-col gap-[2px] py-[2px]">
+                            {/* Issue #123 (D17): discover → read tags → match →
+                             * collapse → layout → enrich queued, the current
+                             * stage in ink, everything else in control-color —
+                             * same active/inactive contrast SegmentedControl
+                             * above uses. */}
+                            <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                              {SCAN_STAGES.map((stage, i) => (
+                                <span key={stage}>
+                                  {i > 0 && ' → '}
+                                  <span
+                                    className={
+                                      stage === run.progress.stage ? 'text-[var(--color-ink)]' : undefined
+                                    }
+                                  >
+                                    {SCAN_STAGE_LABELS[stage]}
+                                  </span>
+                                </span>
+                              ))}
                             </p>
-                            {/* MO-11: determinate progress is data, not decoration — stepped
-                             * not eased, same as MusicMapSettings' peers respect for live data. */}
-                            <div className="h-[3px] flex-1 overflow-hidden rounded-full bg-[var(--color-divider)]">
-                              <div
-                                className="h-full rounded-full bg-[var(--color-signal)]"
-                                style={{
-                                  width: `${progress.filesTotal > 0 ? Math.min(100, (progress.filesScanned / progress.filesTotal) * 100) : 0}%`,
-                                }}
-                              />
+                            <div className="flex items-center gap-[var(--spacing-xs)]">
+                              <p className="shrink-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                                {run.progress.stageDone}
+                                {run.progress.stageTotal != null ? `/${run.progress.stageTotal}` : ''}
+                              </p>
+                              {/* MO-11: determinate progress is data, not decoration — stepped
+                               * not eased, same as MusicMapSettings' peers respect for live data. */}
+                              <div className="h-[3px] flex-1 overflow-hidden rounded-full bg-[var(--color-divider)]">
+                                <div
+                                  className="h-full rounded-full bg-[var(--color-signal)]"
+                                  style={{
+                                    width: `${
+                                      run.progress.stageTotal
+                                        ? Math.min(100, (run.progress.stageDone / run.progress.stageTotal) * 100)
+                                        : 0
+                                    }%`,
+                                  }}
+                                />
+                              </div>
                             </div>
+                            <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                              {run.paused
+                                ? 'paused'
+                                : run.progress.rate != null
+                                  ? `${Math.round(run.progress.rate)}/s · ${formatEta(run.progress.etaSeconds)}`
+                                  : formatEta(run.progress.etaSeconds)}
+                            </p>
                           </div>
+                        )}
+                        {/* Issue #122: no red/alert token exists in DESIGN.md's
+                         * palette on purpose (see Button.tsx's note on
+                         * `destructive`) — muted control-color text, same
+                         * shape as this group's own error paragraph below,
+                         * carries this the same way. */}
+                        {r.watch_status === 'fallback' && (
+                          <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                            Watching for changes isn't available on this system, so Legato checks every 30
+                            minutes.{' '}
+                            <a
+                              href={WATCH_LIMIT_DOCS_URL}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-muted-hi)]"
+                            >
+                              Raise the limit
+                            </a>
+                            .
+                          </p>
+                        )}
+                        {!run && errors && errors.length > 0 && (
+                          <details className="py-[2px]">
+                            {/* H9: per-file problems the scan moved past rather
+                             * than stopping for — named with a reason, not just
+                             * a count, once expanded. */}
+                            <summary className="cursor-pointer text-[length:var(--text-sm)] text-[color:var(--color-control)] hover:text-[var(--color-muted-hi)]">
+                              {errors.length} file{errors.length === 1 ? '' : 's'} couldn't be read
+                            </summary>
+                            <ul className="flex flex-col gap-[2px] pt-[2px]">
+                              {errors.map((e, i) => (
+                                <li key={i} className="wrap-anywhere text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                                  <span className="font-[family-name:var(--font-mono)]">{e.file_path}</span> —{' '}
+                                  {e.reason}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-[var(--spacing-sm)]">
-                        <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmingRemoveId(r.id)}
-                          aria-label={`Remove ${r.label ?? r.path}`}
-                          className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-                        >
-                          <Icon name="cancel" size={16} />
-                        </button>
+                        {run ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void (run.paused ? resumeScan(run.progress.jobId) : pauseScan(run.progress.jobId))
+                              }
+                              aria-label={
+                                run.paused
+                                  ? `Resume scanning ${r.label ?? r.path}`
+                                  : `Pause scanning ${r.label ?? r.path}`
+                              }
+                              className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                            >
+                              <Icon name={run.paused ? 'play' : 'pause'} size={16} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void cancelScan(run.progress.jobId)}
+                              aria-label={`Cancel scanning ${r.label ?? r.path}`}
+                              className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                            >
+                              <Icon name="cancel" size={16} />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            {r.watch_status === 'fallback' && (
+                              <Button onClick={() => void checkForNewMusic(r.id)}>check for new music</Button>
+                            )}
+                            <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmingRemoveId(r.id)}
+                              aria-label={`Remove ${r.label ?? r.path}`}
+                              className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                            >
+                              <Icon name="cancel" size={16} />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
