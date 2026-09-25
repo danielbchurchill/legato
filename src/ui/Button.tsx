@@ -23,7 +23,8 @@ type ButtonVariant = 'link' | 'destructive'
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   link: 'text-[var(--color-ink)] hover:text-[var(--color-muted-hi)]',
-  destructive: 'rounded-full border border-[var(--color-hairline)] px-[14px] py-[4px] text-[var(--color-ink)] hover:bg-white/8',
+  destructive:
+    'rounded-full border border-[var(--color-hairline)] px-[14px] py-[4px] text-[var(--color-ink)] hover:bg-[var(--color-hover-wash)]',
 }
 
 type ButtonProps = {

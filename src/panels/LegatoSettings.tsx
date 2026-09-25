@@ -6,6 +6,7 @@ import { Button } from '../ui/Button'
 import { Toggle } from '../ui/Toggle'
 import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
+import type { ThemePreference } from '../hooks/useTheme'
 import type { ReplayGainMode } from '../playback/usePlayback'
 import { SERVER_HOST } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
@@ -51,6 +52,16 @@ const REPLAYGAIN_OPTIONS = [
   { value: 'album', label: 'album' },
   { value: 'off', label: 'off' },
 ] as const satisfies readonly { value: ReplayGainMode; label: string }[]
+
+// #136/D10: per-device, not per-account — see useTheme.ts. 'system' rather
+// than the resolved theme itself is the value this control edits, so
+// picking it doesn't need to know or care which way prefers-color-scheme
+// currently leans.
+const THEME_OPTIONS = [
+  { value: 'dark', label: 'dark' },
+  { value: 'light', label: 'light' },
+  { value: 'system', label: 'system' },
+] as const satisfies readonly { value: ThemePreference; label: string }[]
 
 /* A row-scale tab group — the settings-primitive family (Toggle/Slider) is
  * all binary or continuous; replaygain's three-way choice doesn't reduce to
@@ -197,9 +208,22 @@ type LegatoSettingsProps = {
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>
   onSetAudioDevice: (name: string | null) => Promise<void>
+  /** #136: deliberately not part of `settings` above — that's the
+   * server-backed, per-account store (useSettings.ts), and this preference
+   * is per-device (useTheme.ts, localStorage). Threaded down from App.tsx's
+   * own useTheme() call rather than this panel calling the hook a second
+   * time, so there's exactly one source of truth for the resolved theme. */
+  themePreference: ThemePreference
+  onSetThemePreference: (preference: ThemePreference) => void
 }
 
-export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: LegatoSettingsProps) {
+export function LegatoSettings({
+  settings,
+  updateSettings,
+  onSetAudioDevice,
+  themePreference,
+  onSetThemePreference,
+}: LegatoSettingsProps) {
   const [roots, setRoots] = useState<LibraryRoot[] | null>(null)
   const [confirmingRemoveId, setConfirmingRemoveId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -318,6 +342,12 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
 
   return (
     <div className="flex flex-col gap-[var(--spacing-sm)]">
+      <SettingsGroup title="appearance">
+        <SettingsRow label="theme">
+          <SegmentedControl options={THEME_OPTIONS} value={themePreference} onChange={onSetThemePreference} />
+        </SettingsRow>
+      </SettingsGroup>
+
       <SettingsGroup
         title="library"
         action={
