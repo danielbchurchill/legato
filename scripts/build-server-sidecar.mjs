@@ -37,14 +37,20 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const SERVER_DIR = path.join(REPO_ROOT, "server");
 const OUT_DIR = path.join(REPO_ROOT, "src-tauri", "binaries");
 
-// Mirrors src-tauri/src/server_process.rs's TARGET_TRIPLE and
-// scripts/fetch-media-binaries.mjs's platform scope: macOS + Windows only,
-// per CLAUDE.md's M10 note that Linux desktop packaging isn't part of this
-// pass (Linux keeps relying on a system-installed server/toolchain).
+// Covers exactly the five release targets server/scripts/compile.ts's own
+// TARGETS map supports — every platform this repo can actually produce a
+// server binary for is mapped here, deliberately not a subset. Linux is
+// Daniel's main dev machine (the AIO, x64) and the Pi (arm64), so it's the
+// platform this sidecar matters most for, not an also-ran next to macOS and
+// Windows — see issue #103's follow-up. CLAUDE.md's M10 note only defers
+// macOS/Windows *packaging verification* to a future session; it never
+// scoped Linux out of the sidecar itself.
 const RUST_TRIPLE = {
   "darwin:arm64": "aarch64-apple-darwin",
   "darwin:x64": "x86_64-apple-darwin",
   "win32:x64": "x86_64-pc-windows-msvc",
+  "linux:x64": "x86_64-unknown-linux-gnu",
+  "linux:arm64": "aarch64-unknown-linux-gnu",
 };
 
 // Keys match server/scripts/compile.ts's TARGETS map.
@@ -52,14 +58,24 @@ const COMPILE_TARGET = {
   "aarch64-apple-darwin": "darwin-arm64",
   "x86_64-apple-darwin": "darwin-x64-baseline",
   "x86_64-pc-windows-msvc": "windows-x64-baseline",
+  "x86_64-unknown-linux-gnu": "linux-x64-baseline",
+  "aarch64-unknown-linux-gnu": "linux-arm64",
 };
 
 function hostTriple() {
   const key = `${process.platform}:${process.arch}`;
   const triple = RUST_TRIPLE[key];
   if (!triple) {
+    // RUST_TRIPLE already covers every target server/scripts/compile.ts
+    // knows how to build (see comment above) — a miss here means a genuinely
+    // unsupported platform, one no server binary could be compiled for
+    // either way. Failing fast with that explanation, before cargo ever
+    // runs, beats letting tauri-build's own build.rs fail later with an
+    // opaque "resource path ... doesn't exist": same outcome (`npx tauri
+    // dev` can't succeed on a platform with no server build), but this is
+    // the clearer place to learn why.
     throw new Error(
-      `no server sidecar target mapped for ${key} — this repo only packages the desktop app for macOS and Windows today (see CLAUDE.md's M10 note)`,
+      `no server sidecar target mapped for ${key} — server/scripts/compile.ts has no build for this platform either, so there's no binary this script could produce`,
     );
   }
   return triple;
