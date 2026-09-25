@@ -70,6 +70,7 @@ The beta includes all three (Daniel has testers lined up for each). The phases b
 - Each issue names its gap(s), its heuristics, and a **done when** list. Anything not in the **done when** list is out of scope for that issue.
 - Follow CLAUDE.md and DESIGN.md. Any UI work reads DESIGN.md first.
 - An issue with a *Depends on* line isn't ready until those issues are closed.
+- [waves.md](waves.md) sets which ready issues are worked on together, and [scripts/orchestration/worker-rules.md](../../scripts/orchestration/worker-rules.md) holds the rules every worker's spec includes.
 - New failure states follow H9: say what happened, why, and offer one action that fixes it. New long-running operations follow H1: stage, rate, and time remaining, where each is knowable.
 
 ## Issue map
