@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import {
   RELAY_AUTH_CALLBACK_BASE_URL,
@@ -170,7 +170,7 @@ function successPage(displayName: string | null): string {
 </html>`;
 }
 
-export function authRoutes(db: Database.Database) {
+export function authRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/auth/google", async (_request, reply) => {
       if (!isGoogleConfigured()) {

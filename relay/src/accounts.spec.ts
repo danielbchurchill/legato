@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { beforeEach, describe, expect, it } from "bun:test";
+import type { Database } from "./sqlite.js";
 import {
   createSession,
   deleteSession,
@@ -19,7 +19,7 @@ import { openDb } from "./db.js";
 // these functions, so testing the functions directly covers the logic
 // that actually matters.
 
-let db: Database.Database;
+let db: Database;
 
 beforeEach(() => {
   db = openDb(":memory:");

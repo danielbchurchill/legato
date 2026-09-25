@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { getUserBySessionToken, SESSION_COOKIE } from "../accounts.js";
 import { sanitizeHeaders } from "../headers.js";
@@ -28,7 +28,7 @@ import type { TunnelRegistry } from "../tunnel-registry.js";
 // account": getTunnel would just take a second argument then (which
 // paired server) — today it's a 1:1 account:tunnel map, see
 // tunnel-registry.ts.
-export function relayRoutes(registry: TunnelRegistry, db: Database.Database) {
+export function relayRoutes(registry: TunnelRegistry, db: Database) {
   return async function routes(app: FastifyInstance) {
     // Scoped to this plugin only — not the root app — so /auth/* and
     // /pair/* keep Fastify's normal JSON body parsing. Every byte of

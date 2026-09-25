@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type Database from "better-sqlite3";
+import type { Database } from "./sqlite.js";
 import { parseSqliteDatetime } from "./sqlite-datetime.js";
 
 // Relay-side account and session storage — see migrations/
@@ -31,7 +31,7 @@ export const SESSION_COOKIE = "relay_session";
 
 // One row per (provider, providerUserId) forever — the same account
 // signing in again is an UPSERT, not a new row.
-export function upsertUser(db: Database.Database, provider: Provider, profile: OAuthProfile): RelayUserRow {
+export function upsertUser(db: Database, provider: Provider, profile: OAuthProfile): RelayUserRow {
   db.prepare(
     `INSERT INTO relay_users (provider, provider_user_id, email, display_name, avatar_url)
      VALUES (?, ?, ?, ?, ?)
@@ -53,7 +53,7 @@ export function upsertUser(db: Database.Database, provider: Provider, profile: O
 // datetime math rather than a JS toISOString() string.
 const SESSION_TTL_SQL = "+30 days";
 
-export function createSession(db: Database.Database, userId: number): { token: string; expiresAt: Date } {
+export function createSession(db: Database, userId: number): { token: string; expiresAt: Date } {
   const token = randomBytes(32).toString("hex");
   const row = db
     .prepare(
@@ -65,7 +65,7 @@ export function createSession(db: Database.Database, userId: number): { token: s
   return { token, expiresAt: parseSqliteDatetime(row.expires_at) };
 }
 
-export function getUserBySessionToken(db: Database.Database, token: string): RelayUserRow | null {
+export function getUserBySessionToken(db: Database, token: string): RelayUserRow | null {
   const row = db
     .prepare(
       `SELECT u.* FROM relay_sessions s
@@ -76,7 +76,7 @@ export function getUserBySessionToken(db: Database.Database, token: string): Rel
   return row ?? null;
 }
 
-export function deleteSession(db: Database.Database, token: string): void {
+export function deleteSession(db: Database, token: string): void {
   db.prepare("DELETE FROM relay_sessions WHERE id = ?").run(token);
 }
 
