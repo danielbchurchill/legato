@@ -1,10 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
-import wordmarkSrc from './assets/brand/white-wordmark.svg'
+import whiteWordmarkSrc from './assets/brand/white-wordmark.svg'
+import blackWordmarkSrc from './assets/brand/black-wordmark.svg'
 import { useWsEvent } from './hooks/useWs'
 import { Button } from './ui/Button'
 import { SERVER_HOST } from './config/serverHost'
 import { IS_TAURI } from './config/runtime'
+import type { ResolvedTheme } from './hooks/useTheme'
 
 const API = `http://${SERVER_HOST}:8899/api/v1`
 
@@ -16,7 +18,16 @@ type ScanProgress = { libraryRootId: number; filesScanned: number; filesTotal: n
  * server-side (library-roots.ts's POST handler) — this just watches it
  * happen over the same scan:progress/scan:done events the settings screen
  * uses, then hands off to the canvas once real data exists to show. */
-export default function LibrarySetup({ onLibraryReady }: { onLibraryReady: () => void }) {
+export default function LibrarySetup({
+  onLibraryReady,
+  theme,
+}: {
+  onLibraryReady: () => void
+  /** #136: the wordmark is a real vendored SVG, not type — a color token
+   * can't swap it, so this is the one place LibrarySetup needs to know which
+   * theme is active, same reasoning as LeftPanelHeader's logomark. */
+  theme: ResolvedTheme
+}) {
   const [error, setError] = useState<string | null>(null)
   const [scanningRoot, setScanningRoot] = useState<LibraryRoot | null>(null)
   const [filesScanned, setFilesScanned] = useState(0)
@@ -80,7 +91,11 @@ export default function LibrarySetup({ onLibraryReady }: { onLibraryReady: () =>
 
   return (
     <Centered>
-      <img src={wordmarkSrc} alt="legato" className="h-[var(--text-wordmark)] w-auto select-none" />
+      <img
+        src={theme === 'light' ? blackWordmarkSrc : whiteWordmarkSrc}
+        alt="legato"
+        className="h-[var(--text-wordmark)] w-auto select-none"
+      />
 
       {scanningRoot ? (
         filesTotal > 0 ? (

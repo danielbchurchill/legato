@@ -7,7 +7,16 @@
  * Tailwind v4 CSS-first config — no tailwind.config.js. Names follow Tailwind's
  * @theme namespaces so they generate utilities: --color-* -> bg-canvas / text-muted,
  * --radius-* -> rounded-surface, and so on.
- */
+ *
+ * D10 / issue #136: two themes now, not one. This @theme block stays the dark
+ * default (unchanged values — "the dark theme stays exactly as it is",
+ * docs/plans/06-light-mode.md). The light ("paper") theme lives in the
+ * `:root[data-theme="light"]` block near the bottom of this file, overriding
+ * the same custom properties rather than introducing new ones — components
+ * read `var(--color-*)` either way and never branch on which theme is active.
+ * The paper values are the table Daniel signed off on in issue #104 (D10),
+ * copied verbatim; anything in that block NOT sourced from that table is
+ * called out inline as a derived extension, not an approved design value. */
 
 @theme {
   /* ---- Surfaces ------------------------------------------------------- */
@@ -38,6 +47,25 @@
    * 1px at 35% alpha standing in for a sub-pixel line — with a base value
    * that now tracks --color-muted's own shift (design v2, 2026-08-27). */
   --color-divider: rgb(100 100 100 / 0.35);
+
+  /* A quiet neutral wash — the no-art cover fallback (CoverArt.tsx,
+   * AlbumsGrid.tsx's skeleton grid), TracksTable.tsx's own unloaded-row
+   * skeleton (was a separate, near-identical `bg-white/4` — folded into this
+   * token rather than kept as a second one-off shade), and the canvas's
+   * shift-drag marquee fill (Canvas.tsx). Was a bare `bg-white/6` in most of
+   * these spots (#126's own placeholder, plus the marquee) until #136
+   * converted it: not part of the D10 table, same hairline-style white/
+   * near-black flip for the light override below. */
+  --color-placeholder: rgb(255 255 255 / 0.06);
+
+  /* The interactive hover wash for a control with no other hover treatment
+   * of its own — the destructive button, a highlighted search result row,
+   * a preset pill. Distinct token from --color-placeholder even though both
+   * start from the same base white: this one needs its own light-mode value
+   * tuned for contrast against a hovered *foreground* (ink or control text
+   * sitting on top of it), not against bare canvas. Was a bare `bg-white/8`
+   * in every one of these spots until #136 converted it. */
+  --color-hover-wash: rgb(255 255 255 / 0.08);
 
   /* ---- Text ----------------------------------------------------------- */
 
@@ -87,10 +115,36 @@
   /* Hover dimming for uninvolved nodes/edges. Must be opaque — sigma's WebGL
    * path renders a translucent rgba() as solid white rather than compositing
    * it, so these can never be alpha values no matter how tempting that reads
-   * next to --color-canvas. Canvas.tsx duplicates these as concrete hex
-   * (sigma never sees CSS); keep the two in sync by hand. */
+   * next to --color-canvas. Canvas.tsx reads these (and every --color-edge-*
+   * / --color-node-* token below) live via getComputedStyle rather than
+   * duplicating them as hardcoded hex — sigma still never sees CSS directly,
+   * but the resolved value now tracks whichever theme is active instead of
+   * needing hand-kept dark-only copies (#136). */
   --color-node-dim: #20262a;
   --color-edge-dim: #1b2023;
+
+  /* Uncurated edge types (performed_credit, mixed_by, member_of — see
+   * edgeTypes.ts) fall back to this rather than a curated hue. A translucent
+   * wash, not opaque — unlike node-dim/edge-dim above this is never mixed
+   * through mixTowardDim, so sigma's line program (not the WebGL node-image
+   * path) renders the alpha fine. */
+  --color-edge-fallback: rgb(255 255 255 / 0.12);
+
+  /* Colored-dot fallback for a node with no cover art (or art toggled off),
+   * one hue per domain type — see Canvas.tsx's NODE_COLOR. Not part of the
+   * D10 palette table Daniel signed off in issue #104 (that table covers
+   * canvas/surface/text/edge tokens only); these are today's existing
+   * dark-mode values, now named as tokens instead of inline literals per
+   * #136's "convert remaining inline colours" requirement. See the light
+   * override below for why several of these needed real light values, not
+   * just a token name. */
+  --color-node-recording: #e8e8e8;
+  --color-node-artist: #ff8a3d;
+  --color-node-release: #4da3ff;
+  --color-node-label: #c77dff;
+  --color-node-year: #5a5a5a;
+  --color-node-work: #ffd23f;
+  --color-node-credit: #4dd0a3;
 
   /* ---- Controls ------------------------------------------------------- */
 
@@ -225,6 +279,102 @@
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   /* Reserved for things reversible mid-flight, like a disclosure toggled twice. */
   --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Tells the platform which native chrome palette to draw — scrollbar
+ * thumbs/tracks, the default <select> popup, form control affordances —
+ * before Legato's own tokens ever enter the picture. `color-scheme` isn't a
+ * design token (not a --color-* custom property, nothing Tailwind's @theme
+ * would generate a utility from), so it lives here as a plain rule rather
+ * than inside the @theme block above. The light override sits alongside its
+ * own token overrides just below. */
+:root {
+  color-scheme: dark;
+}
+
+/* ---- Light theme ("paper") — D10, issue #136 -----------------------------
+ *
+ * "Sheet music in colour and contrast": warm paper that reads as engraving
+ * paper under daylight, not parchment, with pen-ink black text and
+ * staff-line-gray dividers (docs/plans/06-light-mode.md). Overrides the same
+ * custom properties the @theme block above defines — never new names, so
+ * every `bg-canvas`/`text-ink`/etc utility Tailwind generated from that block
+ * already works unchanged here. Applied via a `data-theme="light"` attribute
+ * on <html>, set before first paint by index.html's inline boot script (no
+ * dark flash) and kept live afterward by useTheme.ts.
+ *
+ * Values through --color-edge-collaborated-with below are the exact table
+ * Daniel signed off in issue #104 (D10) — every one already hits the
+ * required contrast (3:1 for lines, 4.5:1 wherever an edge colour is also
+ * used as text; ink/muted/muted-hi/control/signal all clear 4.5:1 against
+ * canvas, surface, and inset — see that issue's approval comment for the
+ * full per-pair table). Everything from --color-node-recording onward is
+ * NOT part of that table — #104's review only covered surface/text/edge
+ * tokens — and is instead a mechanical extension of the same technique
+ * (same hue, desaturated, lightness tuned to clear 3:1 against
+ * --color-canvas) applied to color literals #136 also had to convert to
+ * tokens. Flagged in the PR for design review; not Daniel-approved the way
+ * the rest of this block is. */
+:root[data-theme='light'] {
+  --color-canvas: #f6f4ef;
+  --color-inset: #ece9e2;
+  --color-surface: rgb(252 251 248 / 0.85);
+  --color-surface-flat: #fcfbf8;
+
+  --color-hairline: rgb(28 29 33 / 0.22);
+  --color-divider: rgb(138 135 130 / 0.5);
+
+  --color-ink: #1c1d21;
+  --color-muted: #6b6862;
+  --color-muted-hi: #46443f;
+  --color-control: #807c75;
+
+  --color-signal: #3a3b40;
+
+  --color-node-dim: #e4e1d9;
+  --color-edge-dim: #e9e6df;
+
+  --color-edge-performed-by: #a325d4;
+  --color-edge-appears-on: #1c6ea0;
+  --color-edge-released-in: #1e7915;
+  --color-edge-released-on: #c32270;
+  --color-edge-produced-by: #ac4b1e;
+  --color-edge-engineered-by: #636d13;
+  --color-edge-featured-artist: #157755;
+  --color-edge-same-artist: #5d52e0;
+  --color-edge-same-label: #c8233f;
+  --color-edge-collaborated-with: #b34420;
+
+  /* Derived, not from #104's table — see this block's own header comment. */
+  --color-edge-fallback: rgb(28 29 33 / 0.12);
+  --color-placeholder: rgb(28 29 33 / 0.06);
+  --color-hover-wash: rgb(28 29 33 / 0.08);
+
+  /* #e8e8e8 (dark's near-white "recording" dot) measures 1.11:1 against
+   * paper canvas — effectively invisible, not just low-contrast. Desaturated
+   * to a plain graphite rather than picking a new hue: this is the
+   * "everything else" dot color (nodeAttributes' NODE_COLOR fallback), so it
+   * reads as neutral chrome the same way it does against dark canvas. Same
+   * darken-for-paper approach as the approved edge table, tuned to clear
+   * 3:1 against --color-canvas (computed, see PR description): recording
+   * 3.23:1, artist 3.21:1, release 3.22:1, label 3.22:1, work 3.21:1, credit
+   * 3.23:1. --color-node-year is untouched: #5a5a5a already clears 6.27:1
+   * against paper unchanged. */
+  --color-node-recording: #888888;
+  --color-node-artist: #d36c28;
+  --color-node-release: #418bdb;
+  --color-node-label: #ae69e3;
+  --color-node-work: #a4851f;
+  --color-node-credit: #1d9a70;
+
+  /* Plan doc Step 1: "a softer, shorter, lower-alpha shadow than dark
+   * mode's" for frosted-paper glass. Dark mode's is
+   * `0 4px 4px rgb(0 0 0 / 0.25)` — halved the offset/blur and cut the alpha
+   * by more than half, same qualitative direction the plan doc calls for,
+   * not a measured value (no light-mode render exists to sample yet). */
+  --shadow-surface: 0 2px 3px rgb(0 0 0 / 0.1);
+
+  color-scheme: light;
 }
 
 /* The currently-playing halo's breathing glow (issue #85, NodePlayingHalo.tsx).

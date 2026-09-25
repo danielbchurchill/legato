@@ -80,7 +80,7 @@ function PresetPicker({ activePreset, onApplyPreset }: { activePreset: MapPreset
           type="button"
           aria-pressed={activePreset === id}
           onClick={() => onApplyPreset(id)}
-          className={`rounded-full border border-[var(--color-hairline)] px-[14px] py-[4px] text-[length:var(--text-sm)] text-[color:var(--color-control)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:bg-white/8 ${
+          className={`rounded-full border border-[var(--color-hairline)] px-[14px] py-[4px] text-[length:var(--text-sm)] text-[color:var(--color-control)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:bg-[var(--color-hover-wash)] ${
             activePreset === id ? 'ring-1 ring-[var(--color-ink)] ring-offset-2 ring-offset-[var(--color-canvas)]' : ''
           }`}
         >

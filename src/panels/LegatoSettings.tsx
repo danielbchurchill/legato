@@ -6,6 +6,7 @@ import { Button } from '../ui/Button'
 import { Toggle } from '../ui/Toggle'
 import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
+import type { ThemePreference } from '../hooks/useTheme'
 import type { ReplayGainMode } from '../playback/usePlayback'
 import { SERVER_HOST } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
@@ -22,7 +23,22 @@ const API = `http://${SERVER_HOST}:8899/api/v1`
  * placeholder-only, as an open seam; this closes it by giving the real
  * content a home behind the rail's `sliders` destination instead. */
 
-type LibraryRoot = { id: number; path: string; label: string | null; enabled: number }
+// watch_status/watch_fallback_reason are issue #122's fields — the watcher
+// (server/src/scan/watcher.ts) writes them straight onto the row it
+// already owns, independent of #123's scan-job/status work landing
+// alongside this. 'fallback' means chokidar's watch either errored
+// (ENOSPC/EMFILE) or came close to fs.inotify.max_user_watches, and the
+// server has switched that root to periodic incremental rescans instead.
+type LibraryRoot = {
+  id: number
+  path: string
+  label: string | null
+  enabled: number
+  watch_status: 'watching' | 'fallback'
+  watch_fallback_reason: 'enospc' | 'emfile' | 'near_limit' | null
+}
+
+const WATCH_LIMIT_DOCS_URL = 'https://github.com/danielbchurchill/legato/blob/main/docs/watch-limit.md'
 type ScanStage = 'discover' | 'read_tags' | 'match' | 'collapse' | 'layout' | 'enrich_queued'
 type ScanProgress = {
   jobId: number
@@ -69,6 +85,16 @@ const REPLAYGAIN_OPTIONS = [
   { value: 'album', label: 'album' },
   { value: 'off', label: 'off' },
 ] as const satisfies readonly { value: ReplayGainMode; label: string }[]
+
+// #136/D10: per-device, not per-account — see useTheme.ts. 'system' rather
+// than the resolved theme itself is the value this control edits, so
+// picking it doesn't need to know or care which way prefers-color-scheme
+// currently leans.
+const THEME_OPTIONS = [
+  { value: 'dark', label: 'dark' },
+  { value: 'light', label: 'light' },
+  { value: 'system', label: 'system' },
+] as const satisfies readonly { value: ThemePreference; label: string }[]
 
 /* A row-scale tab group — the settings-primitive family (Toggle/Slider) is
  * all binary or continuous; replaygain's three-way choice doesn't reduce to
@@ -215,9 +241,22 @@ type LegatoSettingsProps = {
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>
   onSetAudioDevice: (name: string | null) => Promise<void>
+  /** #136: deliberately not part of `settings` above — that's the
+   * server-backed, per-account store (useSettings.ts), and this preference
+   * is per-device (useTheme.ts, localStorage). Threaded down from App.tsx's
+   * own useTheme() call rather than this panel calling the hook a second
+   * time, so there's exactly one source of truth for the resolved theme. */
+  themePreference: ThemePreference
+  onSetThemePreference: (preference: ThemePreference) => void
 }
 
-export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: LegatoSettingsProps) {
+export function LegatoSettings({
+  settings,
+  updateSettings,
+  onSetAudioDevice,
+  themePreference,
+  onSetThemePreference,
+}: LegatoSettingsProps) {
   const [roots, setRoots] = useState<LibraryRoot[] | null>(null)
   const [confirmingRemoveId, setConfirmingRemoveId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -287,6 +326,11 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
     if (p.jobId != null) loadScanErrors(p.jobId, p.libraryRootId)
     loadRoots()
   })
+  // watch:status (issue #122) fires whenever a root's watcher falls back
+  // to polling, or comes back once it's re-watched — a plain "go refetch"
+  // is simpler than patching one row in place, and this only fires on a
+  // real state change, not on every tick of the fallback timer.
+  useWsEvent(['watch:status'], () => loadRoots())
 
   const pauseScan = (jobId: number) => fetch(`${API}/scan-jobs/${jobId}/pause`, { method: 'POST' })
   const resumeScan = (jobId: number) => fetch(`${API}/scan-jobs/${jobId}/resume`, { method: 'POST' })
@@ -324,6 +368,20 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
     })
   }
 
+  // Issue #122's manual "check for new music" — the same incremental mode
+  // (server/src/scan/scanner.ts) the fallback timer runs on its own every
+  // 30 minutes, just triggered on demand for whoever doesn't want to wait.
+  // Only offered while a root is actually in fallback: a live watcher
+  // already notices new files itself, so the button would have nothing to
+  // do for anyone not affected by this.
+  const checkForNewMusic = async (id: number) => {
+    await fetch(`${API}/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ libraryRootId: id, mode: 'incremental' }),
+    })
+  }
+
   // #46 — regenerates the whole graph's layout (fresh seed jitter, every
   // manually-placed node's pin cleared) without touching the library on
   // disk. The server broadcasts "layout:rebuilt" when it's done, which is
@@ -352,6 +410,12 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
 
   return (
     <div className="flex flex-col gap-[var(--spacing-sm)]">
+      <SettingsGroup title="appearance">
+        <SettingsRow label="theme">
+          <SegmentedControl options={THEME_OPTIONS} value={themePreference} onChange={onSetThemePreference} />
+        </SettingsRow>
+      </SettingsGroup>
+
       <SettingsGroup
         title="library"
         action={
@@ -462,6 +526,26 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
                             </p>
                           </div>
                         )}
+                        {/* Issue #122: no red/alert token exists in DESIGN.md's
+                         * palette on purpose (see Button.tsx's note on
+                         * `destructive`) — muted control-color text, same
+                         * shape as this group's own error paragraph below,
+                         * carries this the same way. */}
+                        {r.watch_status === 'fallback' && (
+                          <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                            Watching for changes isn't available on this system, so Legato checks every 30
+                            minutes.{' '}
+                            <a
+                              href={WATCH_LIMIT_DOCS_URL}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-muted-hi)]"
+                            >
+                              Raise the limit
+                            </a>
+                            .
+                          </p>
+                        )}
                         {!run && errors && errors.length > 0 && (
                           <details className="py-[2px]">
                             {/* H9: per-file problems the scan moved past rather
@@ -509,6 +593,9 @@ export function LegatoSettings({ settings, updateSettings, onSetAudioDevice }: L
                           </>
                         ) : (
                           <>
+                            {r.watch_status === 'fallback' && (
+                              <Button onClick={() => void checkForNewMusic(r.id)}>check for new music</Button>
+                            )}
                             <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
                             <button
                               type="button"

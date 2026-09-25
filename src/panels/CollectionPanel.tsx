@@ -195,7 +195,7 @@ const SearchField = forwardRef<SearchFieldHandle, SearchFieldProps>(function Sea
                   <div
                     onPointerEnter={() => setHighlighted(i)}
                     className={`grid w-full grid-cols-[1fr_auto_auto_auto] items-center gap-[10px] rounded-[calc(var(--radius-surface)/2)] px-[8px] py-[6px] transition-colors duration-150 ${
-                      i === highlighted ? 'bg-white/8' : ''
+                      i === highlighted ? 'bg-[var(--color-hover-wash)]' : ''
                     }`}
                   >
                     <button type="button" onClick={() => choose(result)} className="min-w-0 text-left text-[var(--color-ink)]">
