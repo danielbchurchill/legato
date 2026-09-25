@@ -13,6 +13,14 @@ Everything below is config that has been reviewed and (where possible)
 built locally, not a deploy that has actually succeeded end to end. Treat
 the first real run of these steps as the actual test of this setup.
 
+As of the Bun migration (issue #101), `docker build .` and a local
+`docker run` against a throwaway data dir both succeed — the image boots,
+`GET /health` returns `{"status":"ok"}`, and `RELAY_DATA_DIR` gets a real
+`relay.db` (WAL mode, migrations applied). `fly deploy` itself has not been
+run; that, and confirming the deployed machine passes the same checks
+against the real `legato-relay` app, is still the actual test of this
+runbook end to end.
+
 ## 1. Create the app
 
 ```
@@ -90,3 +98,10 @@ should never show zero.
 - `RELAY_DATA_DIR` is set in `fly.toml` and read by `relay/src/config.ts` —
   `relay/src/db.ts` stores the relay's SQLite database (accounts, sessions,
   pairing codes, tunnel credentials) at `$RELAY_DATA_DIR/relay.db`.
+- The runtime image is `oven/bun:1.4.2-slim`, not a Node image — `relay/`
+  runs on Bun (issue #101), the same adapter pattern `server/` uses
+  (`relay/src/sqlite.ts` wraps `bun:sqlite`). Dependencies still install
+  via `npm ci` in a separate `node:24.19.0-slim` build stage, since
+  `package-lock.json` stays the source of truth for exact versions and
+  Debian's own `npm` apt package drags in an unrelated dependency tree;
+  only the runtime stage and `CMD` (`bun src/index.ts`) changed.
