@@ -28,6 +28,8 @@ import m0022_playlists from "./0022_playlists.sql" with { type: "text" };
 import m0023_scan_mode from "./0023_scan_mode.sql" with { type: "text" };
 import m0024_artist_member_jobs from "./0024_artist_member_jobs.sql" with { type: "text" };
 import m0025_playlist_imports from "./0025_playlist_imports.sql" with { type: "text" };
+import m0026_watch_status from "./0026_watch_status.sql" with { type: "text" };
+import m0027_scan_stages from "./0027_scan_stages.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -61,4 +63,6 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 23, file: "0023_scan_mode.sql", sql: m0023_scan_mode },
   { version: 24, file: "0024_artist_member_jobs.sql", sql: m0024_artist_member_jobs },
   { version: 25, file: "0025_playlist_imports.sql", sql: m0025_playlist_imports },
+  { version: 26, file: "0026_watch_status.sql", sql: m0026_watch_status },
+  { version: 27, file: "0027_scan_stages.sql", sql: m0027_scan_stages },
 ];
