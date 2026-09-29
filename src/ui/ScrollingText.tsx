@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react'
+import { overflowPx, revealTitle } from './overflow'
 import { usePrefersReducedMotion } from './usePrefersReducedMotion'
 
 /* DESIGN.md Motion says "nothing animates on a loop" — decoration doesn't
@@ -44,10 +45,6 @@ const RETURN_PX_PER_MS = 90 / 1000
 const RETURN_MIN_MS = 500
 const RETURN_MAX_MS = 3500
 
-// Sub-pixel layout rounding shouldn't be enough to trigger a scroll that
-// moves nothing a viewer could ever perceive.
-const MIN_OVERFLOW_PX = 1
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
 }
@@ -74,8 +71,7 @@ export function ScrollingText({ text, className = '' }: ScrollingTextProps) {
     if (!container || !span) return
 
     const measure = () => {
-      const overflow = Math.ceil(span.getBoundingClientRect().width - container.clientWidth)
-      setDistance(overflow > MIN_OVERFLOW_PX ? overflow : 0)
+      setDistance(overflowPx(span.getBoundingClientRect().width, container.clientWidth))
     }
     measure()
 
@@ -163,6 +159,11 @@ export function ScrollingText({ text, className = '' }: ScrollingTextProps) {
     <p
       ref={containerRef}
       className={`${className} overflow-hidden whitespace-nowrap ${settled ? 'text-ellipsis' : ''}`}
+      // The marquee is off under reduced motion and never starts without a
+      // pointer; the title is the reveal that works in both (issue #86). Set
+      // from the measured overflow, not `canScroll`, so reduced motion is
+      // exactly the case that still gets it.
+      title={revealTitle(text, distance)}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}
