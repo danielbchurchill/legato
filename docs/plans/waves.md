@@ -6,7 +6,7 @@ Each wave's workers run at the same time, each in its own worktree off `main`, f
 
 Update this file when a wave merges or the plan changes. The workers don't edit `docs/plans/`, so it stays the coordinator's.
 
-_Last updated 2026-09-29, `main` at `dfccedf`._
+_Last updated 2026-09-29, `main` at `245307d`._
 
 ## Done
 
@@ -14,11 +14,16 @@ _Last updated 2026-09-29, `main` at `dfccedf`._
 |---|---|---|
 | 1 and earlier | #98, #99, #100, #104, #111, #124, #125, #126, #127 | Merged before this file existed |
 | 2 | #102 compiled server, #122 watch-limit fallback, #123 scan stages, #136 light mode | #169, #168, #171, #170 |
+| 3 | #101 relay on Bun, #103 Tauri sidecar, #174 manifest drift test, #173 fuzzy-match index, #172 library cold start, #81 icon button clicks | #177, #180, #176, #182, #178, #181 |
 
-Still owed from wave 2, by Daniel rather than a worker:
+Still owed, by Daniel rather than a worker:
 
-- #102: the linux-x64 real-hardware smoke test. The steps are in PR #169's body.
+- #102: the linux-x64 real-hardware smoke test of the *compiled* binary. The steps are in PR #169's body. The AIO has run `npx tauri dev`, which runs the server from source, so that doesn't count.
 - #123: a scan measurement on the real library. The worker measured a synthetic 100k-file tree only.
+- #101: the relay's OAuth secrets (`relay/DEPLOY.md` step 3). The relay is live on Fly and `/health` passes, but `/auth/*` and `/pair/*` return 503 until the secrets are set.
+- #103: optionally, a packaged Linux build (`npx tauri build`) run with Node and Bun off PATH. The Mac's packaged run and the AIO's dev run both pass.
+
+Wave 3 found six follow-ups, filed as #184–#189 and scheduled below. It also found #179, now in wave 4.
 
 ## Migration numbers
 
@@ -28,55 +33,51 @@ The two parallel workers in wave 2 both picked `0026`. Migration numbers are now
 |---|---|
 | 0026 | #122 (merged) |
 | 0027 | #123 (merged) |
-| 0028 | #173 |
+| 0028 | #173 (merged) |
 | 0029 | #112 |
+| 0030 | #189, if its fix needs an index or column |
 
 Give the next free number to any other issue that turns out to need storage, and note it here.
 
-## Wave 3: foundations and the three bugs found in wave 2
-
-Every issue here can start now.
-
-| Issue | Branch | Work | Depends on | Notes |
-|---|---|---|---|---|
-| #101 | `feature/relay-bun-101` | Move the relay to Bun | #100 ✓ | Starts the identity chain: #114, then #115, #117, #137, #139, #143, #145. **Merged** as PR #177. Deployed to Fly on 2026-09-29, and `legato-relay.fly.dev/health` passes. The OAuth secrets (DEPLOY.md step 3) aren't set yet |
-| #103 | `feature/tauri-sidecar-103` | Tauri runs the compiled server as a sidecar | #102 ✓ | Blocks #129 and #130. Only touches `src-tauri/` |
-| #174 | `feature/manifest-drift-test-174` | Fail the tests when the migrations manifest is stale | #102 ✓ | One spec file |
-| #173 | `feature/fuzzy-match-index-173` | Index the fuzzy-match tier | #123 ✓ | Uses migration 0028. Re-run the synthetic 100k-file benchmark and report before and after |
-| #172 | `fix/library-cold-start-172` | Fetch page 0 before sizing the list | none | Only touches `src/library/` |
-| #81 | `fix/icon-button-clicks-81` | Icon buttons need several clicks | none | The issue body is empty, so the worker writes a repro first and posts it before fixing |
-
 ## Wave 4: phase 1 foundations
 
-All of these are ready now. They wait for wave 3 to keep the number of workers manageable (Sonnet workers pause on usage limits) and to keep them out of each other's files.
+Wave 3 is merged, so this is the current wave. It starts in two steps, so no two workers rewrite the same files:
 
-| Issue | Work | Depends on | Held back because |
+1. **Start now:** #179, #105, #120, #86, #110, #187.
+2. **Once #179 has merged:** #112 and #116.
+
+| Issue | Work | Depends on | Notes |
 |---|---|---|---|
-| #112 | Local owner account | none | Touches the same server boot and routes as #116, so the two go in together once wave 3 is merged. Blocks #113, #114, #121, #143. Uses migration 0029 |
-| #116 | Serve the web client from the home server | #102 ✓ | Same as #112. Also owns embedding the web client in the compiled binary, which #102 deferred |
-| #105 | Docker image and compose file | #102 ✓ | Capacity. Blocks #106, #107, #151 |
-| #120 | Quality ladder (Opus/AAC tiers) | none | Capacity. Only touches the stream route |
-| #86 | Inspector panel content fits its width | none | Touches the same panels as #81 |
-| #110 | Update-available notice | #102 ✓ | Capacity. Small |
-| #179 | Make the server port configurable in the frontend | none | Found by the #172 worker in wave 3. Rewrites the API/WS base in about 25 files across `src/`, including the panels #81 is editing. Start it first in this wave. #116 then rebases onto it, so #116 changes only `serverHost.ts` instead of sweeping the same 25 files again. Any new frontend code in #86 and #110 imports the shared base from `serverHost.ts` |
+| #179 | Make the server port configurable in the frontend | none | Found by the #172 worker in wave 3. Rewrites the API/WS base in about 25 files across `src/`. #116 then rebases onto it, so #116 changes only `serverHost.ts` instead of sweeping the same 25 files again. Any new frontend code in #86 and #110 imports the shared base from `serverHost.ts` |
+| #112 | Local owner account | none | Step 2. Touches the same server boot and routes as #116, so the two go in together. Blocks #113, #114, #121, #143. Uses migration 0029 |
+| #116 | Serve the web client from the home server | #102 ✓ | Step 2. Waits for #179, for the reason in #179's row. Also owns embedding the web client in the compiled binary, which #102 deferred |
+| #105 | Docker image and compose file | #102 ✓ | Blocks #106, #107, #151 |
+| #120 | Quality ladder (Opus/AAC tiers) | none | Only touches the stream route. #185 builds on its result, so #185 waits for it |
+| #86 | Inspector panel content fits its width | none | Held from wave 3 because it touches the same panels as #81. #179 also edits those panels, but only their API base line, so a rebase is trivial |
+| #110 | Update-available notice | #102 ✓ | Small |
+| #187 | Sidecar build checks for Bun first | #103 ✓ | Found on the AIO in wave 3. Only touches `scripts/build-server-sidecar.mjs` and a CLAUDE.md line |
 
 ## Wave 5 and later
 
 These open up as their dependencies merge.
 
 - **Wave 5:**
-  - #114 (identity provider; needs #112 and #101)
+  - #114 (identity provider; needs #112 and #101 ✓)
   - #113, #121 (both need #112)
   - #128 (installable web app; needs #116)
   - #106, #107 (Synology guide and Unraid template; need #105)
   - #108, #109 (install script, Homebrew tap)
+  - #184 then #186, **one worker, one after the other**. Both edit `src/playback/usePlayback.ts`. #184 surfaces native playback errors; #186 puts `queue_set_repeat` under `serialized()`. Held until wave 5 because #179 rewrites `usePlayback.ts`'s API base in wave 4
+  - #189 (collapse/layout/enrich_queued scaling; needs #173 ✓). Server scan code only. Uses migration 0030 if it needs one. Held back for capacity
+  - #188 (`build.yml` sidecar build). Held back because it can't be verified on GitHub until the Actions billing problem is fixed. Its local check still means something, so it goes in once there's capacity
+  - #130 (tray and keep-serving; #103 ✓ has merged, so it's ready)
 - **Wave 6:**
   - #115, #137, #143, #145 (all need #114)
   - #117 (connect screen; needs #116 and #114)
-  - #130 (tray and keep-serving; needs #103)
+  - #185 (native client falls back to the server stream; needs #184 and #120). **Before it starts, the coordinator adds a section to [03-connection-and-streaming.md](03-connection-and-streaming.md)** settling how `playback.rs` reads an HTTP stream, what gapless and seek mean over it, and how it relates to #120's ladder. Write that section during wave 5
 - **Wave 7:**
   - #118, #119 (both need #117)
-  - #139 (hosted accounts; needs #114 and #101)
+  - #139 (hosted accounts; needs #114 and #101 ✓)
   - #133 (Apple Music import; needs #132)
 - **Phase 2 issues with no dependencies**, to fill gaps from wave 5 on: #132, #134, #135 (tag write-back for MP4 and MP3), and #131 (media keys, which needs checking on a real machine).
 - **Phase 3 issues with no dependencies:** #147 and #148 come after the phase 1 identity work.
@@ -85,7 +86,7 @@ These open up as their dependencies merge.
 ## Needs Daniel, not a worker
 
 - **#141:** Daniel submits the Spotify extended-quota application. A worker can draft `docs/plans/spotify-terms.md` first so it's ready. Approval takes time, so start early.
-- **#129:** signing needs Daniel's Apple Developer ID and Azure Trusted Signing credentials. It's also blocked on #103.
+- **#129:** signing needs Daniel's Apple Developer ID and Azure Trusted Signing credentials. Its #103 blocker has merged. It also needs #188, since signing happens in the same `build.yml` run.
 - **#138:** a worker writes the Paddle vs Lemon Squeezy comparison; Daniel chooses the provider. It's also blocked on #114.
 
 GitHub Actions is blocked by a billing problem, so PR checks show red whatever the code does. Until that's fixed, the local checks in the worker rules are the only real signal.

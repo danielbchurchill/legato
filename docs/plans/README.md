@@ -88,6 +88,9 @@ Labels: `phase:*`, `area:*`, `sev:2|3|4`. Every issue links back to its section 
 | #102 | Compile the server to a single binary for five targets, with a release workflow | 4 |
 | #103 | Run the compiled server as a Tauri sidecar instead of npm | 4 |
 | #104 | Design the light-mode "paper" palette in Figma | 3 |
+| #179 | Make the server port configurable in the frontend | 2 |
+| #187 | Sidecar build checks for Bun first and says how to install it | 2 |
+| #188 | `build.yml` installs Bun and server deps for the sidecar build | 3 |
 
 ### Phase 1 · Rowan · tracking #153
 
@@ -117,6 +120,10 @@ Labels: `phase:*`, `area:*`, `sev:2|3|4`. Every issue links back to its section 
 | #126 | Library view: album grid and track table | 3 |
 | #127 | Map presets, plain-language labels, undo, restore defaults | 3 |
 | #128 | Installable web app: manifest, shell-only service worker, Media Session | 2 |
+| #184 | Show an error when native playback can't open a file | 3 |
+| #185 | Native client falls back to the server stream when a file isn't reachable | 3 |
+| #186 | Run `queue_set_repeat` through `serialized()` | 2 |
+| #189 | Collapse, layout and enrich_queued scan stages scale linearly | 3 |
 
 ### Phase 2 · Priya · tracking #154
 
