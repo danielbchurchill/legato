@@ -289,6 +289,10 @@ export function authRoutes(db: Database, options: { limiter?: SignInLimiter } = 
         ownerExists: hasOwner,
         setupCodeRequired: !hasOwner && setupCodeRequired(request),
         user: request.authUser ? publicUser(request.authUser) : null,
+        // Lets a Google/GitHub user from before 0029 find their way in from
+        // the sign-in screen, since the settings panel that used to hold
+        // these buttons is behind the gate now.
+        oauth: { google: isGoogleConfigured(), github: isGithubConfigured() },
       };
     });
 

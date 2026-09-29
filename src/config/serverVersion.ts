@@ -7,4 +7,4 @@
 // Schema version rather than release version on purpose: a client needs
 // the server's data model, and the migration number is the one thing that
 // moves exactly when that changes, on every install channel alike.
-export const MIN_SERVER_SCHEMA_VERSION = 28
+export const MIN_SERVER_SCHEMA_VERSION = 29
