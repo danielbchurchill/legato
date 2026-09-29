@@ -4,12 +4,10 @@ import { SectionHeader } from '../ui/DataRow'
 import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
 import { useWsEvent } from '../hooks/useWs'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 import { PlayNodeButton } from './PlayNodeButton'
 import { AddToPlaylistButton } from './AddToPlaylistButton'
 import type { usePlayback } from '../playback/usePlayback'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* The search rail destination's panel content: the search field, with its
  * results rendered inline underneath it, and a condensed maintenance

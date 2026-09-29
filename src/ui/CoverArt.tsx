@@ -1,7 +1,5 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
-import { SERVER_HOST } from '../config/serverHost'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
+import { API_BASE as API } from '../config/serverHost'
 
 /* Album art from the cover cache. Square-cornered everywhere in a panel —
  * artwork is reproduced, not restyled (DESIGN.md "Radius").

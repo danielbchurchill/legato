@@ -9,10 +9,8 @@ import { Tooltip } from '../ui/Tooltip'
 import { useMountFade } from '../ui/useMountFade'
 import { formatDuration, formatLongDuration, NO_VALUE } from '../ui/format'
 import { useNodeAnchor, type NodeAnchor } from './useNodeAnchor'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 import type { usePlayback } from '../playback/usePlayback'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* Figma frame 31:246 ("Selected"). The node you clicked, opened in place on
  * the canvas: its cover at 255px with a title block and three metadata rows

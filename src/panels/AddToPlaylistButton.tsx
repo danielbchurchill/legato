@@ -2,9 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../ui/Icon'
 import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
-import { SERVER_HOST } from '../config/serverHost'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
+import { API_BASE as API } from '../config/serverHost'
 
 type PlaylistListItem = { id: number; name: string; track_count: number }
 

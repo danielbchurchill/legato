@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { SERVER_HOST } from '../config/serverHost'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
+import { API_BASE as API } from '../config/serverHost'
 
 // The generic key-value store server/src/routes/settings.ts exposes —
 // every value is a plain string (the enrichment toggle is '1'/'0' rather

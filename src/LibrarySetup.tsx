@@ -4,11 +4,9 @@ import whiteWordmarkSrc from './assets/brand/white-wordmark.svg'
 import blackWordmarkSrc from './assets/brand/black-wordmark.svg'
 import { useWsEvent } from './hooks/useWs'
 import { Button } from './ui/Button'
-import { SERVER_HOST } from './config/serverHost'
+import { API_BASE as API } from './config/serverHost'
 import { IS_TAURI } from './config/runtime'
 import type { ResolvedTheme } from './hooks/useTheme'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 type LibraryRoot = { id: number; path: string; label: string | null }
 type ScanProgress = { libraryRootId: number; filesScanned: number; filesTotal: number }

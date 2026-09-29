@@ -19,7 +19,7 @@ import { DatabaseInspector } from './panels/DatabaseInspector'
 import { TagManager } from './panels/TagManager'
 import { Favourites } from './panels/Favourites'
 import { Playlists } from './panels/Playlists'
-import { SERVER_HOST } from './config/serverHost'
+import { API_BASE } from './config/serverHost'
 import { NowPlayingPanel } from './panels/NowPlayingPanel'
 import { NodeInspector } from './panels/NodeInspector'
 import { useSettings } from './hooks/useSettings'
@@ -426,7 +426,7 @@ function MainApp() {
   }, [inspectorOpen, hygieneOpen, playback, mapPresets])
 
   useEffect(() => {
-    fetch(`http://${SERVER_HOST}:8899/api/v1/library-roots`)
+    fetch(`${API_BASE}/library-roots`)
       .then((r) => r.json())
       .then((roots: unknown[]) => setHasLibrary(roots.length > 0))
   }, [])

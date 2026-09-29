@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 import type { SortDir } from './types'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 // One fetch covers this many rows. DOM virtualization (AlbumsGrid,
 // TracksTable) only solves half of "smooth at 30k albums" — it keeps the

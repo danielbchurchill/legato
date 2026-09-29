@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ScrollingText } from '../ui/ScrollingText'
-import { SERVER_HOST } from '../config/serverHost'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
+import { API_BASE as API } from '../config/serverHost'
 
 /* Tag Manager rail destination: proactive, library-wide browsing of "which
  * tracks are missing X," plus the two actions issue #65 found missing —

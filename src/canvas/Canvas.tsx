@@ -11,11 +11,9 @@ import { Button } from '../ui/Button'
 import { NodeCard, NODE_CARD_COVER_CENTER_X, NODE_CARD_WIDTH_PX } from './NodeCard'
 import { NodeHoverPlate } from './NodeHoverPlate'
 import { NodePlayingHalo } from './NodePlayingHalo'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* Node sizing. Sigma sizes are in its own units, not pixels — 22 renders at
  * roughly the mockup's 44px cover at the default camera. Nodes without art

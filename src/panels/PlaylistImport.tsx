@@ -2,9 +2,7 @@ import { useState } from 'react'
 import { Button } from '../ui/Button'
 import { DataRow, SectionHeader } from '../ui/DataRow'
 import { Disclosure } from '../ui/Disclosure'
-import { SERVER_HOST } from '../config/serverHost'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
+import { API_BASE as API } from '../config/serverHost'
 
 /* #124: M3U/M3U8 import. Reads the file with the browser's own File API
  * (readable even inside the Tauri webview — no Rust IPC needed for a plain
