@@ -11,7 +11,7 @@ orca orchestration worker-start \
   --spec "$SPEC" --task-title "#<N> <short title>" \
   --worktree new-top-level --repo id:6cc695d6-6ff0-4017-a144-92d55ace4551 \
   --name <branch> --base-branch main \
-  --agent claude --model sonnet --setup run --json
+  --agent claude --model opus --setup run --json
 ```
 
 The spec is `Legato issue #<N>: <title>.` plus an issue-specific paragraph, then the rules below. Before pasting the rules, replace `<N>`, and replace `<SERVER_PORT>` and `<VITE_PORT>` with the worker's port slot: the wave's first worker gets 8901/5181, the second 8902/5182, and so on. Never hand out 8899, 5173, 5174 or 5175. Those belong to Daniel's own `npx tauri dev`, Airship and the site's dev server. The issue-specific paragraph covers the target files, the change, constraints (especially which parallel worker touches nearby files), and acceptance. Orca prefixes branch names with `danielbchurchill/`.
@@ -34,7 +34,7 @@ HOW TO WORK (applies to every Legato worker):
 - Don't start the app against the Raspberry Pi server, and never trigger scans, tag writes, or any other mutating request against a real library. Tests use `openDb(":memory:")` and fixtures; a standalone server run gets a throwaway `LEGATO_DATA_DIR` under your worktree or /tmp.
 - GitHub Actions is blocked by a billing problem, so PR checks will show red no matter what. Local checks are the source of truth.
 - Verify before the PR with `npm run check:all` from the repo root, whatever you changed. It runs the server tests, vitest, build, lint, the sidecar build (skipped if already built) and `cargo test`, in that order. Everything must pass. If something was already failing on main, prove it (run it on main) and say so in the PR.
-- Commits follow CLAUDE.md's Git section: one logical change each, a subject that tells the story, WHY in the body. End every commit message with: Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+- Commits follow CLAUDE.md's Git section: one logical change each, a subject that tells the story, WHY in the body. End every commit message with: Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 - When you're finished, `git fetch origin && git rebase origin/main`, re-run the checks, push, and open a PR with `gh pr create`. The PR body must contain "Closes #<N>" only if you checked every "Done when" item yourself, on the platform the issue is about. If an item needs a machine or window you can't reach (the native Tauri window, real Linux hardware, a live deploy), write "Refs #<N>" instead, and add a section for Daniel with the exact steps to check the rest. The PR body must also explain the reasoning, testing and edge cases considered, citing files and line numbers. End it with: 🤖 Generated with [Claude Code](https://claude.com/claude-code). Never merge the PR.
 - If the issue and plan doc leave a real decision open, ask the coordinator with your preamble's ask command. Don't guess, and don't open a local question prompt.
 - Orca rejects a worker_done or heartbeat that is missing any of its IDs. Every `orca orchestration send` of type worker_done or heartbeat must pass --to, --task-id, --dispatch-id and --dispatch-capability exactly as your preamble gives them (worker_done also needs --outcome). If the send's JSON reply says it was rejected, read the reason, fix every missing field at once, and resend.
@@ -50,4 +50,5 @@ HOW TO WORK (applies to every Legato worker):
 - **The unattended-upgrade rule** was added after wave 3. The #173 worker's first upgrade path was a manual `npm run backfill:fuzzy-index`, which a packaged install or the Pi's compiled binary can't run.
 - **The "Refs, not Closes" rule** was added after wave 3. #181 would have auto-closed #81, whose native-window buttons nobody had checked yet.
 - **`check:all`** was added after wave 3. With Actions down, workers each chose their own subset of checks. It also runs the sidecar build before `cargo test`, because `tauri-build` fails when the `externalBin` sidecar is missing (#103).
+- **Opus is the default worker model** since wave 4. Wave 3's Sonnet workers needed a coordinator follow-up on three of six PRs: #103 left Linux out, #173 relied on a manual upgrade step, and #181's optimistic update could step backwards. Pass `--model sonnet` only for a deliberately small, mechanical issue.
 - **The "don't touch docs/plans/" rule** keeps the plan docs and this wave plan owned by the coordinator. Each worker's PR then contains only its own issue's work.
