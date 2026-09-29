@@ -87,7 +87,7 @@ function FactGroup({ groupType, items, onSelectNode }: { groupType: string; item
         aria-expanded={open}
         className="flex w-full items-center justify-between gap-[8px] py-[1px] text-left text-[length:var(--text-base)] text-[var(--color-ink)] hover:text-[var(--color-muted-hi)]"
       >
-        <span className="truncate">
+        <span className="truncate" title={`${verb} — ${items.length} others`}>
           {verb} — {items.length} others
         </span>
         <Icon
@@ -149,6 +149,7 @@ export function ReleasesList({ node, onSelectNode }: { node: NodeDetail; onSelec
               type="button"
               onClick={() => onSelectNode(release.id)}
               className={`truncate py-[2px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] ${linkClass}`}
+              title={release.title}
             >
               {release.title}
             </button>
@@ -297,7 +298,10 @@ function AddEdgeForm({ nodeId, onAdded }: { nodeId: number; onAdded: () => void 
     <div className="mt-[8px] flex flex-col gap-[8px] rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-inset)] p-[12px]">
       {target ? (
         <div className="flex items-center justify-between gap-[8px]">
-          <span className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+          <span
+            className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]"
+            title={`${target.title} (${target.type})`}
+          >
             → {target.title} <span className="text-[var(--color-muted)]">({target.type})</span>
           </span>
           <button
@@ -324,6 +328,7 @@ function AddEdgeForm({ nodeId, onAdded }: { nodeId: number; onAdded: () => void 
                     type="button"
                     onClick={() => setTarget(r)}
                     className="block w-full truncate py-[2px] text-left font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] hover:text-[var(--color-muted-hi)]"
+                    title={`${r.title} (${r.type})`}
                   >
                     {r.title} <span className="text-[var(--color-muted)]">({r.type})</span>
                   </button>
