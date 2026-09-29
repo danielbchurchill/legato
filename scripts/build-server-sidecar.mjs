@@ -29,6 +29,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, copyFile, mkdir } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -62,6 +63,52 @@ const COMPILE_TARGET = {
   "aarch64-unknown-linux-gnu": "linux-arm64",
 };
 
+// The Bun release the server is built and tested against — the same version
+// .github/workflows/check.yml and release.yml pin via setup-bun. Bump all
+// three together.
+const BUN_VERSION = "1.4.2";
+
+// `npm --prefix server run compile` shells out to `bun`, and when it's missing
+// the only thing that surfaces is the shell's own `sh: 1: bun: not found`
+// (issue #187, first hit on the AIO) — nothing about why a desktop build
+// needs Bun, which version, or where to get it. Checking up front turns that
+// into an error someone can act on. A different version only warns: a
+// nearby Bun usually compiles fine, and refusing to build over a patch
+// release would be worse than the mismatch itself.
+function checkBun() {
+  const onWindows = process.platform === "win32";
+  const installCommand = onWindows
+    ? `iex "& {$(irm https://bun.sh/install.ps1)} -Version ${BUN_VERSION}"   (in PowerShell)`
+    : `curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"`;
+
+  const probe = spawnSync("bun", ["--version"], { encoding: "utf8" });
+  if (probe.error || probe.status !== 0) {
+    const bunHome = path.join(os.homedir(), ".bun", "bin");
+    const pathHint = onWindows
+      ? `add ${bunHome} to your user PATH (System Properties → Environment Variables), then open a new terminal`
+      : `export PATH="${bunHome}:$PATH"   (and add that line to your shell profile)`;
+    // The official installer drops Bun in ~/.bun/bin and only *offers* to edit
+    // the shell profile, so "installed but not on PATH" is the likeliest case
+    // on a machine that has built the server before — say so first when true.
+    const alreadyInstalled = existsSync(path.join(bunHome, onWindows ? "bun.exe" : "bun"));
+    const lines = [
+      `the server sidecar needs Bun ${BUN_VERSION} to compile, and \`bun --version\` failed (${probe.error ? probe.error.code : `exit ${probe.status}`}).`,
+      alreadyInstalled
+        ? `Bun is already installed at ${bunHome} but isn't on PATH — add it:\n    ${pathHint}`
+        : `Install it with:\n    ${installCommand}\n  If Bun is already installed under ${bunHome}, it just needs adding to PATH:\n    ${pathHint}`,
+      `Then re-run the build.`,
+    ];
+    throw new Error(lines.join("\n  "));
+  }
+
+  const found = probe.stdout.trim();
+  if (found !== BUN_VERSION) {
+    console.warn(
+      `warning: found Bun ${found}, but the server is built and tested against ${BUN_VERSION} — continuing, but if the compile misbehaves, install the pinned version:\n    ${installCommand}`,
+    );
+  }
+}
+
 function hostTriple() {
   const key = `${process.platform}:${process.arch}`;
   const triple = RUST_TRIPLE[key];
@@ -92,6 +139,11 @@ async function main() {
     console.log(`sidecar already built at ${path.relative(REPO_ROOT, dest)} — skipping (delete it, or omit --if-missing, to force a rebuild)`);
     return;
   }
+
+  // After the --if-missing skip on purpose: `npx tauri dev` on a machine that
+  // already has the sidecar shouldn't start needing Bun on PATH just to
+  // confirm a file exists.
+  checkBun();
 
   console.log(`building legato-server sidecar for ${triple} (server compile target: ${compileTarget})`);
   const result = spawnSync("npm", ["--prefix", "server", "run", "compile", "--", compileTarget], {
