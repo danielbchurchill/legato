@@ -36,7 +36,7 @@ Legato is a two-theme app now (D10, issue #136): dark, and a paper light mode. D
 | `--color-ink` | `#fefefe` | Values |
 | `--color-signal` | `#D9D9D9` | Waveform bars, page dots |
 | `--color-muted` | `#646464` | Labels, dividers, inactive states |
-| `--color-control` | `#646464` *(v2)* | Toggle/slider/radio/swatch chrome, resting state |
+| `--color-control` | `#646464` *(v2)* | Switch/slider/checkbox/radio chrome, resting state |
 
 ### Paper (light mode, D10)
 
@@ -228,7 +228,7 @@ Geometry, all in tokens.css: `--rail-width` (50px, fixed — an icon strip has n
 
 ### v2: panels without a frame
 
-Database Inspector, Favourites, and Tag Manager (`src/panels/DatabaseInspector.tsx`, `Favourites.tsx`, `TagManager.tsx`) shipped ahead of Figma: the rail carries a real icon for each — confirmed pixel-identical against the vendored SVGs, `database`/`heart`/`tag` for nodes `34:332`/`34:326`/`34:328` (Search frame; the same three icons repeat at `58:74`/`58:76`/`58:78` in Music Map and `55:220`/`55:222`/`55:224` in Panel Collapse) — but no frame anywhere in the file shows what selecting one looks like. The Inspector Panel content Figma actually draws only covers two of the six destinations: `search`'s own field-plus-results layout, and `graph`'s nodes/links/forces settings (`58:85`–`58:220`, folded into "v2: settings primitives" above).
+Database Inspector, Favourites, and Tag Manager (`src/panels/DatabaseInspector.tsx`, `Favourites.tsx`, `TagManager.tsx`) shipped ahead of Figma: the rail carries a real icon for each — confirmed pixel-identical against the vendored SVGs, `database`/`heart`/`tag` for nodes `34:332`/`34:326`/`34:328` (Search frame; the same three icons repeat at `58:74`/`58:76`/`58:78` in Music Map and `55:220`/`55:222`/`55:224` in Panel Collapse) — but no frame anywhere in the file shows what selecting one looks like. The Inspector Panel content Figma actually draws only covers two of the six destinations: `search`'s own field-plus-results layout, and `graph`'s nodes/links/forces settings (`58:85`–`58:220`, folded into "The gpui-kit control set" below).
 
 So there's nothing to check these three panels' layouts against pixel-for-pixel — only whether they reused the system correctly. They do: both Database Inspector (an operational/schema view) and Favourites (a recency-ordered list) are library data, not control chrome, so they correctly reach for `DataRow`/`SectionHeader` and the panel rhythm (33px rows, mono ink values) rather than the settings-primitives scale that would apply if they were settings. One inconsistency found in this pass and fixed: Tag Manager's row title rendered as the shared `Button`'s underlined `link` variant — the shape this file reserves for actions with real consequence — when every sibling "click a title to fly to this node" affordance elsewhere (Favourites' own row, the collection panel's maintenance preview and similarity thumbnails, search results) uses a plain hover-color-shift button with no underline. Brought in line with its siblings; the underline was the odd one out, not them.
 
@@ -236,7 +236,7 @@ So there's nothing to check these three panels' layouts against pixel-for-pixel 
 
 "Panel collapsed (v2)" above says the toggle pill and transport dock are unaffected by either side's collapse state — true, and still true after this pass, but incomplete standing on its own: it reads as "the dock is the v1 dock," and that's no longer a safe assumption to leave in place. All three v2 frames (Search `37:653`, Music Map `58:8`, Panel Collapse `55:154`) draw the same replacement for the bottom control, consistently, not as a one-off sketch: 355 × 50, `--radius-control` (15px) rather than `--radius-surface`, holding a waveform, a divider, then plain pause/heart/volume glyphs — no numeric elapsed/duration readout, no volume slider. `TransportDock.tsx` still ships the v1 shape (514 × 121, full glass, both of those) and hasn't been touched by this pass.
 
-Not implemented here, deliberately. Adopting the smaller control means deciding what a bare volume icon actually does with no slider next to it — a popover, click-to-mute, something else — and Figma doesn't say. Guessing that mechanic is exactly the class of undecided interaction this file already says to leave alone until a real need forces the question (see "Controls" → "v2: settings primitives"), and unlike a settings control, getting it wrong here means shipping a real loss of functionality (no way to set a specific volume) on a guess rather than an undecided hover state. Flagged for Daniel rather than picked.
+The dock's shape is still not implemented. **Its volume mechanic was decided on 2026-09-29, with the gpui-kit port:** the volume glyph opens a Popover holding a vertical Slider, with the value as a percentage in the thumb's tooltip. The glyph swaps to `volume-mute` at zero, so the state reads without opening anything. That answers the question that was blocking the bare-glyph design, with no loss of a specific volume setting, and it's already in the v1 dock (`TransportDock.tsx`) in place of the 64px native range input. The rest of the redesign (355 × 50, no elapsed/duration readout) is still open.
 
 The Search frame's Inspector Panel has one more unreconciled piece, smaller: its populated-query state draws a `top hits` header (node `58:295`) and a `suggested tracks` header (`58:344`) under the search field, in place of today's single inline results list (`CollectionPanel.tsx`'s `SearchField` — issue #83 moved this back from a floating popover it briefly was, since the popover read as its own mini modal over the Inspector Panel rather than content living in it). Neither header has any rows drawn under it in the mockup — label only, nothing to build against — so this is left as-is rather than guessing at a two-section split Figma hasn't actually specified content for.
 
@@ -343,7 +343,7 @@ Storage: a type → hex override map, most naturally in the existing `settings` 
 
 No Figma frame exists for any of this yet — same footing as "v2: panels without a frame" above (Database Inspector, Favourites, Tag Manager): the system gets reused correctly rather than matched pixel-for-pixel against a mockup that doesn't exist. Concretely, that means:
 
-- **The map/library pill reuses the retired `GraphToggle.tsx`'s exact recipe** — a `Surface` pill, tabs differing by color alone (muted → ink for the active one, `--color-muted-hi` on hover), Rubik at `--text-base`. Repositioned from that component's old fixed `top-[69px]` (measured for the single titlebar v1 had) to `top-[calc(var(--header-height)+var(--spacing-lg))]`, so it clears both v2 headers regardless of window width instead of assuming a specific one's height.
+- **The map/library pill reuses the retired `GraphToggle.tsx`'s `Surface` pill**, holding Tabs' segmented variant (`bare`) since the gpui-kit port: a raised thumb slides to the active view, whose label is ink, and the other steps from control to `--color-muted-hi` on hover. Rubik at `--text-base`. Repositioned from that component's old fixed `top-[69px]` (measured for the single titlebar v1 had) to `top-[calc(var(--header-height)+var(--spacing-lg))]`, so it clears both v2 headers regardless of window width instead of assuming a specific one's height.
 - **Title and artist, wherever the library view shows both, are both Sometype Mono `--color-ink` — no muted label.** This is `NodeHoverPlate.tsx`'s existing precedent (its own comment: "a title and an artist are both data. There is no label here to be muted."), not a new call: a grep for any existing muted-colored mono line in the codebase before writing `AlbumsGrid.tsx` turned up nothing, so there was no competing convention to reconcile against. Position (title first, artist under it) carries the meaning DataRow's label column would otherwise carry.
 - **`TracksTable.tsx`'s column headers are Rubik, muted → ink for the active sort column** (the one Rubik-labels/mono-values split DataRow already formalizes, just laid out as a table header row instead of a label/value grid) — with a `chevron-up`/`chevron-down` marking direction, clicking the active column again flips it. `AlbumsGrid.tsx` has no column headers to click (a grid of cells, not a table), so it gets an equivalent row of sort options above the grid instead, same active/muted/chevron language.
 - **Row height and geometry are reasoned from existing tokens, not measured from a frame.** `TracksTable.tsx` reuses `--spacing-row` (33px) directly — it's already defined as "the vertical pitch of a label/value row," and a table row is exactly that. `AlbumsGrid.tsx`'s cell width (160px) and the `leading-[24px]` its two text lines use have no token to reuse (there's no existing "library grid cell" anywhere else in the app), so they're named constants in the component itself, commented with which existing rhythm they mirror, rather than new entries in `tokens.css` — that file's own header states every value there is "measured from the Figma mockup," which none of this is.
@@ -369,7 +369,7 @@ Every glyph is 24 × 24, `fill="none"`, `stroke="currentColor"`, `stroke-width="
 
 Never hand-draw an icon or inline a `<path>`. If a needed glyph is missing, pull it from proicons; if proicons does not have it, that is a design decision, not an implementation one.
 
-Icons in use: `search`, `cancel`, `chevron-down`, `pencil`, `info`, `pause`, `play`, `volume`, `map`, `database`, `heart`, `tag`, `sliders`, `panel-left-collapse` (the last five vendored for v2's rail and panel-collapse icon — see "The shell (v2)"), `eye` (proicons' actual "Eye" glyph, vendored for the selected-node card's "open full details" button — see "Controls").
+Icons in use: `search`, `cancel`, `chevron-down`, `pencil`, `info`, `pause`, `play`, `volume`, `map`, `database`, `heart`, `tag`, `sliders`, `panel-left-collapse` (the last five vendored for v2's rail and panel-collapse icon — see "The shell (v2)"), `eye` (proicons' actual "Eye" glyph, vendored for the selected-node card's "open full details" button — see "Controls"), and `checkmark`, `subtract`, `spinner`, `volume-mute` for the gpui-kit controls (checkbox marks, Select's selected option, NumberInput's decrement, the Spinner's arc, the muted dock).
 
 **On/off state has no filled-glyph convention to reach for.** proicons ships no filled or solid variant for any of its 544 icons, `heart` included — checked directly, not assumed. So the favourites heart's "on" state (`NodeTitleBlock.tsx`, `Favourites.tsx`'s row) isn't a second vendored glyph; `Icon.tsx`'s `filled` prop swaps the same path's `fill="none"` for `fill="currentColor"` at render time. This is the one exception to "every glyph is stroke-only" above, and it's a render-time transform of the existing vendored path, not a hand-drawn one — the thing this section actually rules out.
 
@@ -394,19 +394,52 @@ Underline used to be the only button affordance in the app (C-3) — "retry", "r
 
 Both variants share the toggle pill's rounding language (`rounded-full`, no new radius token) and MO-1's motion tokens (`--motion-fast`, `--ease-out`) rather than a literal duration.
 
-### v2: settings primitives
+### The gpui-kit control set (2026-09-29)
 
-New controls first appearing in the Music Map settings panel — none of them existed in `src/ui/` before v2. They share one geometry: an indicator (knob or swatch), `--spacing-xs` (5px) below it, a `--text-sm` (12px) Rubik label in `--color-control`, the whole group centered in its column. Same rounding language as the buttons above — `rounded-full` for anything circular, no dedicated radius token.
+Every interactive primitive in `src/ui/` is now a hand port of [gpui-kit](https://github.com/longbridge/gpui-kit) (Longbridge's GPUI component library, Apache-2.0), drawn in Legato's palette and type. gpui-kit is Rust on GPUI and can't run inside this React webview, so nothing is imported: each component was rebuilt from gpui-kit's source, keeping its geometry, states, motion and keyboard behaviour. Each file's header comment cites the gpui-kit file it came from.
 
-| Control | Geometry | Notes |
+**The rule for conflicts: gpui-kit wins on how a control behaves and is shaped, and Legato keeps its fonts and colours.** Where gpui-kit reaches for its own theme tokens, the mapping is fixed:
+
+| gpui-kit token | Legato token | Note |
 |---|---|---|
-| **Toggle** | 20 × 10px pill track, 10px circular knob, both `--color-control` | Knob sits left (off) or right (on); track border and knob fill are the same resting color, so state reads from knob position, not from a color change |
-| **Slider** | 3px pill track spanning the available width, 10px circular thumb, both `--color-control`; numeric readout (`1.00`) in `--text-sm` Rubik `--color-control` to the right | The readout is a live control value, not library data — see "The one rule (v2)" above for why it's Rubik, not mono |
-| **Color swatch** | 15px square, no radius — confirmed via Figma dev-mode, not rounded despite first impression from the screenshot | The per-type edge-color picker — see "Edge palette" → "v2: user-colorable types". Shows all 7 curated types at once, not a fixed 4 |
+| `primary` (checked/on/filled) | `--color-ink` | Legato has no accent colour, on purpose. Ink is already "genuinely active state" (see "The one rule") |
+| `primary_foreground` (a mark on a filled control) | `--color-canvas` | A switch thumb and a checkmark are cut out of the fill |
+| `switch` / `input` (resting control) | `--color-control` | |
+| `ring` (focus) | `--color-ring` → `--color-muted-hi` | An alias, not a new hex, so the paper theme follows automatically |
+| `popover` surface | The glass recipe | Every popup (tooltip, popover, listbox, dialog, toast) is glass |
+| `muted` fill / hover | `--color-hover-wash` | |
 
-A **radio dot** primitive (10px circle, `--color-control`) existed briefly for the "default view" granularity preference — retired 2026-08-29 along with the three tab-switched granularities themselves (`src/shell/GraphToggle.tsx`, `src/ui/RadioGroup.tsx`) once there was only one combined graph and nothing left to prefer a default view of.
+The **focus ring** is gpui-kit's everywhere: 3px of `--color-ring` at 50%, hugging the control's own corners. It replaces MO-2's 1px hairline outline, and it's still in `index.css`'s single unlayered rule. A control whose ring belongs on one part of it sets `data-focus-ring="part"` and marks that part with `.focus-ring-part`: the switch's track (not track and label together), the slider's thumb, the checkbox's box. Text fields put it on their well with `.focus-ring-well`.
 
-None of these have a defined hover/active/focus treatment yet — the mockup is static, same caveat Motion already states for the rest of the app. Don't invent one speculatively; add it here once a real interaction needs it.
+| Control | File | Geometry and behaviour |
+|---|---|---|
+| **Switch** | `Switch.tsx` | Replaces v2's 20 × 10 Toggle. 28×16 / **36×20** / 44×24 tracks, 12/16/20 thumbs, 2px inset (1px transparent border + 1px padding, so the focus tint has a line to colour). Off is a `--color-control` track, on is `--color-ink`, and the thumb is `--color-canvas` either way. The thumb travels on `--ease-spring`. Disabled fades only the track, to 50%. Optional clickable label on either side |
+| **Slider** | `Slider.tsx`, `sliderMath.ts` | 6px track of ink at 20% (40% while pressed), selected span in full ink. 16px thumb: a 1px ink-50% rim around a canvas core, with a 3px ring growing out on hover, drag and keyboard focus. The value shows in a **tooltip on the thumb** while it's hovered, dragged or focused, replacing v2's always-on readout. Range (two thumbs that never cross), vertical, logarithmic scale, `reverse` fill. Keys: arrows one step, Page Up/Down ten, Home/End the ends. Pointer is captured for drags. `onCommit` fires on release |
+| **Checkbox** | `Checkbox.tsx` | 14 / **16** / 20px box, `--radius-small` (gpui-kit's 4px cap, so a checked box never reads as a radio). Checked and indeterminate fill with ink and cut the mark (`checkmark` / `subtract`) out in canvas. The mark fades on `--ease-spring-control` |
+| **RadioGroup** | `Radio.tsx` | 16px ring, 8px ink dot scaling in. The group is one tab stop and arrow keys move the selection itself, wrapping and skipping disabled options |
+| **Select** | `Select.tsx`, `Listbox.tsx` | Replaces the native `<select>`, whose popup was OS chrome. Inset well (`--color-inset`, hairline, `--radius-control`, no shadow), 32px tall. Glass listbox at least as wide as the trigger, selected option in ink with a checkmark. Keys: WAI-ARIA select-only combobox, including type-ahead |
+| **Combobox** | `Combobox.tsx` | A Select you type into to filter (case-insensitive substring). Same well and listbox. Focus stays in the input via `aria-activedescendant` |
+| **NumberInput** | `NumberInput.tsx` | Replaces `<input type="number">`. Minus/plus buttons around a text field that parses on Enter or blur, clamps, snaps to step, and reverts non-numbers rather than erasing them. Up/Down step (Shift for ten). `well` or `bare` appearance; `bare` is MetadataFields' inline bpm edit |
+| **Tabs** | `Tabs.tsx` | `segmented`: an inset well with a raised `--color-surface-flat` thumb sliding to the active option (the theme and replaygain choices, and the map/library switch as `bare` inside its own glass pill). `underline`: a 2px ink rule sliding under the active label (library albums/tracks). The indicator slides on `--ease-spring`. Active label is ink. Keys: automatic activation, arrows wrap, Home/End |
+| **ToggleGroup** | `ToggleGroup.tsx` | Hairline pills, `aria-pressed`, single or multiple. Pressed = hover wash + ink text, which replaces the ColorSwatch ring the Music Map preset pills used to borrow. A single group can have nothing pressed ("custom") |
+| **Tooltip** | `Tooltip.tsx`, `floating.ts` | Now at control-chrome scale: `--text-sm`, 8/2px padding. Optional shortcut in a muted Kbd. Slides `--distance-short` out of its trigger as it fades, on `--ease-enter`. **Flips** to the opposite side when its preferred side has no room. Keeps the 400ms dwell, TooltipGroup's hot skip, and C-82's dismiss-on-pointerdown. Keyboard focus shows it; a click's own focus doesn't. `TooltipBubble` is the floating half alone, which the slider uses |
+| **Popover** | `Popover.tsx` | Now generic: any trigger, any content. Portaled and positioned by `floating.ts` (so no panel's `overflow-x-hidden` can crop it, which retires #86's width cap), focus moves in on open and back on close, Escape or an outside press closes it. `InfoPopover` is C-1's original (i) shape |
+| **Dialog / AlertDialog** | `Dialog.tsx` | Glass surface over a `--color-canvas` 60% wash (never black; the graph stays visible). Focus trap, focus restore, Escape closes. The overlay closes a Dialog but never an AlertDialog. Enters rising `--distance-medium` over `--motion-base`. AlertDialog's initial focus is **cancel**, and a no-undo confirm uses Button's `destructive` pill. Removing a library folder and rebuilding the map now confirm in one, where they used to swap a sentence into the row |
+| **Toast** | `Toast.tsx`, `toastContext.ts` | `useToast().show({ title, description?, action?, duration? })`. Glass, `--radius-control`, stacked top right under the header, newest on top. Five seconds by default, paused while the pointer is over the stack. No per-kind colours, because the palette has no semantic hues. `role="status"`. First use: the map rebuild's outcome |
+| **Kbd** | `Kbd.tsx` | Keycap: hairline, `--radius-small`, 20px minimum width, Rubik `--text-sm` ink. `muted` is the borderless form used inside a tooltip. The shortcuts list uses it |
+| **Progress / ProgressCircle** | `Progress.tsx` | Ink-20% track with ink fill, 4/6/**8**/10px. Indeterminate sweeps a 40% segment. See Motion's progress exception for when each applies. The scan row's stage bar is the `xs` form, and it sweeps when its stage has no total yet instead of sitting at a fake 0% |
+| **Skeleton / Shimmer / Spinner** | `Skeleton.tsx`, `Spinner.tsx` | See Motion, "Loops, since the gpui-kit port" |
+| **ScrollArea** | `ScrollArea.tsx` | Overlay scrollbar on both side panels. 6px thumb (8px under the pointer or while dragged), inset 4px, at least 48px long, square-ended, `--color-control` stepping to `--color-muted-hi`. Appears on scroll and fades two seconds after the last activity. Vertical only, since every panel pins x closed (#86) |
+
+`Button` (link / destructive) and `ColorSwatch` are unchanged. gpui-kit's button variants were not adopted: the consequence-based split above is a Legato decision that gpui-kit's primary/secondary/ghost set doesn't map onto.
+
+**What this overrode in v2's settings primitives**, for the record:
+- The Toggle's rule that state reads from knob position alone, with one resting colour. The track colour changes now. At a glance across a settings panel, the old toggle made every setting look off.
+- The Toggle's and Slider's 10px chrome (knob, thumb, 3px track). gpui-kit's sizes are roughly double. The settings rows still sit on the `--spacing-sm` pitch.
+- The slider's always-visible Rubik readout. It's the thumb's tooltip now, still Rubik, still a control value rather than library data.
+- "None of these have a defined hover/active/focus treatment yet." Every control has gpui-kit's now.
+
+The radio-dot primitive retired on 2026-08-29 has a successor in `Radio.tsx`, though nothing uses a radio group yet.
 
 ---
 
@@ -417,20 +450,27 @@ The mockup is static, so this is a stated position rather than a measurement, an
 - No page transitions, no loading screens, no scroll-triggered reveals, no parallax.
 - State changes that need to feel physical — panel pagination, up-next expanding, camera moves to a searched node — get a short ease, 120–200ms.
 - The graph's own motion (pan, zoom, drag) is direct manipulation and must never be animated or eased. It tracks the input exactly.
-- Nothing animates on a loop. No pulsing, no shimmer, no breathing.
+- Nothing animates on a loop *as decoration*. The loops that exist are each a bounded exception below, and each stands for something actually happening.
 
 ### Tokens
 
-Four durations and two curves; every transition in the app draws from this table, in `src/styles/tokens.css`'s `@theme` block.
+Every transition in the app draws from this table, in `src/styles/tokens.css`. Since the gpui-kit port (2026-09-29), the durations and curves are gpui-kit's `MotionTokens` defaults. Legato's earlier 90ms instant and 140ms fast were replaced, and `--ease-out` was already gpui-kit's `easing_move` to the digit.
 
 | Token | Value | Use |
 |---|---|---|
-| `--motion-instant` | 90ms | Press receipt. Below this, a response reads as instantaneous — reserved for acknowledging a click before the real work (often a Rust IPC round trip) has finished. |
-| `--motion-fast` | 140ms | Hover, colour, small state change. |
+| `--motion-instant` | 0ms | Press receipt. gpui-kit's `duration_instant`: an acknowledgement that has to be immediate shouldn't wait on a transition at all. |
+| `--motion-fast` | 120ms | Hover, colour, small state change, a popup's enter. |
 | `--motion-base` | 180ms | Pagination, disclosure, modal entry. |
+| `--motion-slow` | 280ms | Larger surfaces arriving (a toast). |
 | `--motion-exit` | 120ms | Leaving. Faster than arriving — on the way out the user has already decided; a slow exit is just waiting. |
+| `--motion-spring` / `--ease-spring` | 280ms / `linear(…)` | gpui-kit's `spring_move` (280ms period, damping 0.85), sampled into a CSS `linear()` curve, its ~0.6% overshoot included. Control geometry: a switch thumb's travel, a tab indicator's slide. A CSS transition retargets from the live value, so a second toggle mid-travel reverses from where the thumb is, as a real spring does. |
+| `--motion-spring-control` / `--ease-spring-control` | 210ms / `linear(…)` | gpui-kit's `spring_control` (180ms period, critically damped). Small reveals: a checkmark fading in, a radio dot scaling up. |
 | `--ease-out` | `cubic-bezier(0.2, 0, 0, 1)` | The default. Starts at full speed and decelerates into place — a response to input, not an approach to it. Tailwind's built-in `ease-out` is close but not this; this token is the one to reach for. |
 | `--ease-inout` | `cubic-bezier(0.4, 0, 0.2, 1)` | Reserved for things genuinely reversible mid-flight, like a disclosure toggled twice quickly. |
+| `--ease-enter` / `--ease-exit` | `(0.16, 1, 0.3, 1)` / `(0.4, 0, 1, 1)` | gpui-kit's popup curves. A tooltip, popover, listbox, dialog or toast arrives on a steep deceleration and leaves on an acceleration. |
+| `--distance-short` / `--distance-medium` | 4px / 8px | How far a popup travels as it fades in. A tooltip or popover slides the short distance out of its trigger; a dialog rises the medium one. A transform, so reduced motion drops it and keeps the fade. |
+
+The spring durations are the settle times at gpui-kit's own tolerances, which is why they aren't round. An engine without `linear()` falls back to `--ease-out` via an `@supports` block rather than losing the transition.
 
 **Acknowledge under 100ms, finish under 400ms.** Below roughly 100ms a response reads as instantaneous; past about 400ms attention starts to leave the task. Every control acknowledges the press immediately, even when the real work behind it hasn't returned yet.
 
@@ -450,7 +490,7 @@ A blanket `*{transition:none}` reset is the wrong reflex — it strips the feedb
 
 - **Determinate progress is data, not decoration.** A scan knows its file count; the enrichment queue knows its remaining jobs. Render the real value — a count, a bar that fills to a number — never a loop standing in for one.
 - **Indeterminate and short shows nothing.** Under roughly 400ms, a spinner shown just to prove the wait happened costs more attention than the wait itself. Say nothing and let the result land.
-- **Indeterminate and long gets one state change, not a loop.** Past roughly 800ms, silence starts to read as broken. Change something once — a label from muted to ink, a single sweep that completes and stops — and hold it there. The change earns its place by telling the user work is happening; it does not need to keep telling them.
+- **Indeterminate and long gets a signal that work is happening.** Past roughly 800ms, silence starts to read as broken. This used to mean one state change and no loop; since the gpui-kit port, a Shimmer on the label, a Spinner beside the control, or an indeterminate Progress sweep are all allowed (see "Loops, since the gpui-kit port" below). Use one, next to whatever started the work, never several.
 
 This is the same attention curve as "Acknowledge under 100ms, finish under 400ms" above, applied to work whose true length isn't known in advance.
 
@@ -463,6 +503,17 @@ Same principle, a different kind of "not decoration." A marquee that scrolls a t
 - **Reduced motion means the exception doesn't apply.** `usePrefersReducedMotion()` (`src/ui/usePrefersReducedMotion.ts` — the same hook `Disclosure.tsx` already uses) forces the plain static ellipsis, same as every other truncated field in the app.
 
 **Nothing is truncated without a static way to read it (issue #86).** The marquee is one reveal, not the only one. It is off under reduced motion and never starts without a pointer. So every truncated field also carries a native `title` with its full text. `ScrollingText` sets it only while the text measurably overflows (`src/ui/overflow.ts`), so a value that fits never gets a tooltip that just repeats it. The few bare `truncate` spans left in the panels set it directly. Prose — a reason, a sentence, a description — wraps rather than truncates. Panel scrollers pin `overflow-x-hidden` as a backstop against a horizontal scrollbar, but that is not how content fits. Anything with an intrinsic width inside a flex row (a range input, a long unbroken word) still has to be allowed to shrink (`min-w-0`) or break (`wrap-anywhere`). Otherwise the backstop quietly crops it.
+
+### Loops, since the gpui-kit port
+
+Relaxed on 2026-09-29 at Daniel's direction, so that gpui-kit's loading primitives could come in with the rest. The same bounds as the other exceptions apply: each loop stands for something the user is waiting on, and each freezes on a readable frame under reduced motion (index.css's global rule zeroes animation duration), never disappearing.
+
+- **Skeleton** (`--motion-skeleton`, 2s): a `--color-placeholder` block the shape of what's loading, breathing between full and half opacity. Opacity only, never a travelling gradient, so a grid of them doesn't read as motion sweeping the page. It's what the library view's unloaded covers and rows, and Legato Settings' loading states, show now.
+- **Shimmer** (same period): an ink band travelling through a label that says work is under way ("rebuilding…"). For the label, never a value. Its rest frame is the plain text in its own colour.
+- **Spinner** (`--motion-spinner`, 800ms): proicons' own spinner arc, rotating. The progress rules below still decide when one belongs: never for a wait under ~400ms, never where a real count exists.
+- **Indeterminate Progress** (`--motion-progress`, 1s): gpui-kit's sweep, for work with a real bar slot but no known total yet.
+
+What's still out: loops as mood. Nothing pulses to draw the eye, and nothing breathes when idle.
 
 ### A third bounded exception: the currently-playing halo
 
@@ -508,7 +559,8 @@ Issue #87 revised this once more: that collapsed idle column had grown its own q
 3. **Rubik is UI, Mono is metadata from a disk file.** *(v2)* Library data — raw tag or derived stat — is mono ink; the app's own interactive state (a slider readout, a toggle's on/off) is Rubik control-color. No exceptions.
 4. **Artwork is reproduced, not styled.** Square in panels, circular in the graph, never tinted or filtered.
 5. **Panels stay translucent.** Blur may degrade to `--color-surface-flat`; opacity may not go to 1.
-6. **Two sizes, not a ramp.** *(v2)* 16px for every panel label and value; 12px only for control chrome (settings labels, slider/toggle readouts). Reach for weight before inventing a third size.
+6. **Two sizes, not a ramp.** *(v2)* 16px for every panel label and value; 12px only for control chrome (settings labels, slider/toggle readouts, tooltips). Reach for weight before inventing a third size.
+7. **Controls come from `src/ui/`, and they're gpui-kit's.** *(2026-09-29)* A new interactive control is a port of the matching gpui-kit component in Legato's tokens, never a native form control (`<select>`, `<input type="range">`, `<input type="number">`) and never a one-off. See "The gpui-kit control set".
 
 ---
 
