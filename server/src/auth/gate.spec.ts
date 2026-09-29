@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
+import { directorySource, webClientRoutes } from "../routes/web-client.js";
 import { isPublicRoute, redactCredentials } from "./gate.js";
 import { buildTestApp, createOwnerForTest, LOCAL_PAGE, type RegisteredRoute } from "./test-app.js";
 
@@ -68,7 +72,7 @@ describe("public routes", () => {
   });
 
   it("returns 401, not 404, for an unmatched URL under an API prefix", async () => {
-    for (const url of ["/api/v1/no-such-route", "/api/v2/stats", "/stream/x.flac", "/tracks"]) {
+    for (const url of ["/api/v1/no-such-route", "/api/v2/stats", "/covers/abc", "/stream/x.flac", "/tracks"]) {
       const res = await app.inject({ method: "GET", url });
       expect(res.statusCode).toBe(401);
     }
@@ -82,17 +86,27 @@ describe("public routes", () => {
 
 // #116 serves the built client at / with an SPA fallback. The sign-in
 // screen itself is one of those pages, so it can't sit behind sign-in.
+// Registered the way index.ts does it: after the gate, outside
+// registerRoutes(), with #116's real wildcard route and a throwaway dist/.
 describe("the web client's own pages", () => {
+  let distDir: string;
+
   beforeEach(async () => {
+    distDir = mkdtempSync(path.join(tmpdir(), "legato-gate-dist-"));
+    mkdirSync(path.join(distDir, "assets"));
+    writeFileSync(path.join(distDir, "index.html"), "<!doctype html><html><head></head><body></body></html>");
+    writeFileSync(path.join(distDir, "assets", "index-abc123.js"), "console.log(1)");
     await app.close();
     ({ app } = await buildTestApp(db));
-    app.setNotFoundHandler((_request, reply) => reply.type("text/html").send("<!doctype html>"));
+    await app.register(webClientRoutes(directorySource(distDir)));
     await app.ready();
   });
 
+  afterEach(() => rmSync(distDir, { recursive: true, force: true }));
+
   it("serves GET / and a deep link without credentials", async () => {
     for (const url of ["/", "/library/artists/42", "/assets/index-abc123.js"]) {
-      const res = await app.inject({ method: "GET", url });
+      const res = await app.inject({ method: "GET", url, headers: { accept: "text/html" } });
       expect(res.statusCode).toBe(200);
     }
   });
