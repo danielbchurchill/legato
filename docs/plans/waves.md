@@ -6,7 +6,7 @@ Each wave's workers run at the same time, each in its own worktree off `main`, f
 
 Update this file when a wave merges or the plan changes. The workers don't edit `docs/plans/`, so it stays the coordinator's.
 
-_Last updated 2026-09-25, `main` at `c2a03e4`._
+_Last updated 2026-09-29, `main` at `dfccedf`._
 
 ## Done
 
@@ -39,7 +39,7 @@ Every issue here can start now.
 
 | Issue | Branch | Work | Depends on | Notes |
 |---|---|---|---|---|
-| #101 | `feature/relay-bun-101` | Move the relay to Bun | #100 ✓ | Starts the identity chain: #114, then #115, #117, #137, #139, #143, #145 |
+| #101 | `feature/relay-bun-101` | Move the relay to Bun | #100 ✓ | Starts the identity chain: #114, then #115, #117, #137, #139, #143, #145. **Merged** as PR #177. Deployed to Fly on 2026-09-29, and `legato-relay.fly.dev/health` passes. The OAuth secrets (DEPLOY.md step 3) aren't set yet |
 | #103 | `feature/tauri-sidecar-103` | Tauri runs the compiled server as a sidecar | #102 ✓ | Blocks #129 and #130. Only touches `src-tauri/` |
 | #174 | `feature/manifest-drift-test-174` | Fail the tests when the migrations manifest is stale | #102 ✓ | One spec file |
 | #173 | `feature/fuzzy-match-index-173` | Index the fuzzy-match tier | #123 ✓ | Uses migration 0028. Re-run the synthetic 100k-file benchmark and report before and after |
@@ -58,6 +58,7 @@ All of these are ready now. They wait for wave 3 to keep the number of workers m
 | #120 | Quality ladder (Opus/AAC tiers) | none | Capacity. Only touches the stream route |
 | #86 | Inspector panel content fits its width | none | Touches the same panels as #81 |
 | #110 | Update-available notice | #102 ✓ | Capacity. Small |
+| #179 | Make the server port configurable in the frontend | none | Found by the #172 worker in wave 3. Rewrites the API/WS base in about 25 files across `src/`, including the panels #81 is editing. Start it first in this wave. #116 then rebases onto it, so #116 changes only `serverHost.ts` instead of sweeping the same 25 files again. Any new frontend code in #86 and #110 imports the shared base from `serverHost.ts` |
 
 ## Wave 5 and later
 
