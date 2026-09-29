@@ -8,6 +8,7 @@ import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
 import type { ReplayGainMode } from '../playback/usePlayback'
+import { signOut } from '../auth/useAuth'
 import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
 import { formatLongDuration } from '../ui/format'
@@ -144,41 +145,28 @@ function ShortcutRow({ action, keys }: { action: string; keys: string }) {
 
 type AccountUser = {
   id: number
-  provider: 'google' | 'github'
+  provider: 'local' | 'google' | 'github'
+  role: 'owner' | 'legacy'
   email: string | null
   displayName: string | null
   avatarUrl: string | null
 }
-type MeResponse = { user: AccountUser | null; configured: { google: boolean; github: boolean } }
+type MeResponse = { user: AccountUser | null }
 
-// Rough OAuth account provisioning (server/src/routes/auth.ts) — this is
-// provisioning plumbing, not a login wall: every other panel in the app
-// works identically whether or not anyone has ever signed in here.
-// "Sign in with..." opens the provider flow in its own window rather than
-// navigating this one away, since there's no fixed frontend origin the
-// server's callback page could redirect back into (Vite dev port, a Tauri
-// bundle, a future remote client). Refreshing on window focus is how this
-// panel notices a sign-in completed in that other window.
+// Who this client is signed in as (issue #112). Everything in the app is
+// behind the owner gate now (App.tsx's OwnerGated), so this panel is only
+// ever seen signed in; the sign-in forms, including the Google/GitHub
+// buttons for accounts from before the owner existed, live on the gate
+// screen itself (src/auth/OwnerGate.tsx).
 function AccountGroup() {
   const [me, setMe] = useState<MeResponse | null>(null)
 
-  const loadMe = () => {
-    fetch(`${API}/auth/me`, { credentials: 'include' })
+  useEffect(() => {
+    fetch(`${API}/auth/me`)
       .then((r) => r.json())
       .then(setMe)
-      .catch(() => setMe({ user: null, configured: { google: false, github: false } }))
-  }
-
-  useEffect(() => {
-    loadMe()
-    window.addEventListener('focus', loadMe)
-    return () => window.removeEventListener('focus', loadMe)
+      .catch(() => setMe({ user: null }))
   }, [])
-
-  const signOut = async () => {
-    await fetch(`${API}/auth/logout`, { method: 'POST', credentials: 'include' })
-    loadMe()
-  }
 
   if (me === null) {
     return (
@@ -188,51 +176,23 @@ function AccountGroup() {
     )
   }
 
-  if (me.user) {
-    const { user } = me
-    return (
-      <SettingsGroup title="account">
-        <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
-          <div className="flex min-w-0 items-center gap-[var(--spacing-sm)]">
-            {user.avatarUrl && <img src={user.avatarUrl} alt="" className="h-[24px] w-[24px] shrink-0 rounded-full" />}
-            <div className="min-w-0">
-              <p
-                className="truncate text-[length:var(--text-sm)] text-[var(--color-ink)]"
-                title={user.displayName ?? user.email ?? undefined}
-              >
-                {user.displayName ?? user.email ?? 'signed in'}
-              </p>
-              <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-                signed in with {user.provider}
-              </p>
-            </div>
-          </div>
-          <Button onClick={() => void signOut()}>sign out</Button>
-        </div>
-      </SettingsGroup>
-    )
-  }
-
-  if (!me.configured.google && !me.configured.github) {
-    return (
-      <SettingsGroup title="account">
-        <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-          OAuth isn't configured on this server.
-        </p>
-      </SettingsGroup>
-    )
-  }
-
+  const { user } = me
+  const name = user?.displayName ?? user?.email ?? (user?.role === 'owner' ? 'owner' : 'signed in')
   return (
     <SettingsGroup title="account">
-      <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">not signed in</p>
-      <div className="flex items-center gap-[var(--spacing-sm)]">
-        {me.configured.google && (
-          <Button onClick={() => window.open(`${API}/auth/google`, '_blank')}>sign in with google</Button>
-        )}
-        {me.configured.github && (
-          <Button onClick={() => window.open(`${API}/auth/github`, '_blank')}>sign in with github</Button>
-        )}
+      <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
+        <div className="flex min-w-0 items-center gap-[var(--spacing-sm)]">
+          {user?.avatarUrl && <img src={user.avatarUrl} alt="" className="h-[24px] w-[24px] shrink-0 rounded-full" />}
+          <div className="min-w-0">
+            <p className="truncate text-[length:var(--text-sm)] text-[var(--color-ink)]" title={name}>
+              {name}
+            </p>
+            <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+              {user?.role === 'owner' ? "this server's owner" : `signed in with ${user?.provider ?? 'unknown'}`}
+            </p>
+          </div>
+        </div>
+        <Button onClick={() => void signOut()}>sign out</Button>
       </div>
     </SettingsGroup>
   )

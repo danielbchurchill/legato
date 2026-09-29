@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import PlaybackSpike from './PlaybackSpike'
@@ -35,6 +35,9 @@ import { RightPanel } from './shell/RightPanel'
 import { ViewSwitch, type ViewMode } from './shell/ViewSwitch'
 import type { RailDestination } from './shell/rail'
 import { LibraryView } from './library/LibraryView'
+import { useAuth } from './auth/useAuth'
+import { OwnerGate } from './auth/OwnerGate'
+import { Button } from './ui/Button'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -627,10 +630,41 @@ export default function App() {
     return <Centered>{everConnected ? 'lost connection to legato-server…' : 'starting legato-server…'}</Centered>
   }
 
+  const app = debug ? <DebugSpikes /> : <MainApp />
   return (
     <>
-      {debug ? <DebugSpikes /> : <MainApp />}
+      {/* A server older than migration 0029 has no owner gate and no
+       * /auth/status to ask, so it runs ungated exactly as before,
+       * with the notice saying to update it. */}
+      {server?.outOfDate ? app : <OwnerGated>{app}</OwnerGated>}
       <ServerUpdateNotice server={server} />
     </>
   )
+}
+
+// Issue #112: nothing past this point renders until the server has an
+// owner and this client holds a session for them.
+function OwnerGated({ children }: { children: ReactNode }) {
+  const { state, refresh, acceptSession } = useAuth()
+  const { resolvedTheme } = useTheme()
+
+  switch (state.kind) {
+    case 'checking':
+      return <Centered>checking sign-in…</Centered>
+    case 'unreachable':
+      return (
+        <Centered>
+          <p className="max-w-[420px] text-[var(--color-muted)]">
+            The server is running but didn't answer the sign-in check ({state.message}).
+          </p>
+          <Button onClick={() => void refresh()}>try again</Button>
+        </Centered>
+      )
+    case 'needs-owner':
+      return <OwnerGate mode="create-owner" status={state.status} theme={resolvedTheme} onSession={acceptSession} />
+    case 'needs-sign-in':
+      return <OwnerGate mode="sign-in" status={state.status} theme={resolvedTheme} onSession={acceptSession} />
+    case 'signed-in':
+      return children
+  }
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { API_BASE as API } from '../config/serverHost'
+import { withMediaTicket } from '../auth/session'
 import { IS_TAURI } from '../config/runtime'
 
 type ResolvedTrack = {
@@ -326,7 +327,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         startedAt: new Date().toISOString(),
         lastPositionMs: 0,
       }
-      audio.src = `${API}/files/${info.fileId}/stream`
+      audio.src = withMediaTicket(`${API}/files/${info.fileId}/stream`)
       // A missing/unreadable source file or a format ffmpeg can't
       // transcode surfaces here as a rejected play() (confirmed live:
       // NotSupportedError against a file the server's own ffmpeg spawn

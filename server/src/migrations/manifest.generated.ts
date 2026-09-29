@@ -31,6 +31,7 @@ import m0025_playlist_imports from "./0025_playlist_imports.sql" with { type: "t
 import m0026_watch_status from "./0026_watch_status.sql" with { type: "text" };
 import m0027_scan_stages from "./0027_scan_stages.sql" with { type: "text" };
 import m0028_fuzzy_match_index from "./0028_fuzzy_match_index.sql" with { type: "text" };
+import m0029_local_owner from "./0029_local_owner.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -67,4 +68,5 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 26, file: "0026_watch_status.sql", sql: m0026_watch_status },
   { version: 27, file: "0027_scan_stages.sql", sql: m0027_scan_stages },
   { version: 28, file: "0028_fuzzy_match_index.sql", sql: m0028_fuzzy_match_index },
+  { version: 29, file: "0029_local_owner.sql", sql: m0029_local_owner },
 ];

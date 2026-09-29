@@ -12,6 +12,7 @@ import { NodeCard, NODE_CARD_COVER_CENTER_X, NODE_CARD_WIDTH_PX } from './NodeCa
 import { NodeHoverPlate } from './NodeHoverPlate'
 import { NodePlayingHalo } from './NodePlayingHalo'
 import { API_BASE as API } from '../config/serverHost'
+import { withMediaTicket } from '../auth/session'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
 
@@ -603,7 +604,7 @@ function nodeAttributes(node: GraphNode, showArt: boolean, colors: ThemeColors):
       // `type` inside defaultDrawNodeHover: the hover layer only sees display
       // data, and the ring has to match the shape it's drawn around.
       square,
-      image: `${API}/covers/${node.cover_hash}?size=thumb`,
+      image: withMediaTicket(`${API}/covers/${node.cover_hash}?size=thumb`),
       color: '#ffffff',
       origSize: ART_SIZE,
       nodeType: node.type,

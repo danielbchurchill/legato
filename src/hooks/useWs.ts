@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { WS_BASE } from '../config/serverHost'
+import { withMediaTicket } from '../auth/session'
 
 const WS_URL = `${WS_BASE}/ws`
 
@@ -16,7 +17,9 @@ export function useWsEvent(eventNames: string[], onEvent: (payload?: unknown) =>
 
   useEffect(() => {
     const names = namesKey.split(',')
-    const ws = new WebSocket(WS_URL)
+    // The upgrade request can't carry a header, so the media ticket rides
+    // in the URL (issue #112).
+    const ws = new WebSocket(withMediaTicket(WS_URL))
     ws.onmessage = (msg) => {
       try {
         const { event, payload } = JSON.parse(msg.data as string)
