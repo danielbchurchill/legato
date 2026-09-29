@@ -12,6 +12,7 @@ import { deriveLocalEdges } from "../match/edges.js";
 import { RateEstimator } from "./rate.js";
 import { createProgressGate } from "./throttle.js";
 import { parseTags } from "./tags.js";
+import { checkLibraryRoot, type CheckOptions } from "./reachability.js";
 import { walkLibraryRoot } from "./walk.js";
 
 const HASH_PREFIX_BYTES = 64 * 1024;
@@ -545,15 +546,16 @@ async function runFileStage(
 // per file — so 'layout' has no real cursor of its own; 0/1 stands in for
 // not-started/done, same as everywhere else in this pipeline uses cursor
 // for "how far through this stage".
-function runLayoutStage(
+async function runLayoutStage(
   db: Database,
   job: ScanJobRow,
   startCursor: number,
   mode: ScanMode,
   libraryRootId: number,
+  guardRoot: (options: CheckOptions) => Promise<boolean>,
   onMissing: (count: number) => void,
   emit: (done: number, force?: boolean) => void,
-): StageOutcome {
+): Promise<StageOutcome | "unreachable"> {
   if (startCursor >= 1) return "completed";
 
   const signal = controlSignals.get(job.id);
@@ -571,6 +573,11 @@ function runLayoutStage(
         (r) => r.file_path,
       ),
     );
+    // Issue #192: checked again here, not just after discover, because a
+    // resumed job skips discover entirely and a drive can drop in the
+    // hours between a pause and its resume. Everything the sweep is about
+    // to mark missing is decided by this one answer.
+    if (!(await guardRoot({ audioFilesFound: seen.size }))) return "unreachable";
     const existingPaths = db
       .prepare<{ file_path: string }>(
         "SELECT file_path FROM files WHERE library_root_id = ? AND missing_since IS NULL",
@@ -654,9 +661,38 @@ export async function executeScan(
   let filesScanned = job.files_scanned;
   let filesMissing = job.files_missing;
 
+  // Issue #192: a root that isn't reachable ends the run here, as an
+  // error carrying the H9 message, instead of letting a walk that found
+  // nothing (the drive is gone, not the music) reach the missing-file
+  // sweep. Nothing past this point writes anything, so stopping is safe
+  // at every call site, and the run's scan_run_files go the same way a
+  // cancel's do.
+  const guardRoot = async (options: CheckOptions): Promise<boolean> => {
+    const result = await checkLibraryRoot(db, libraryRootId, rootPath, options);
+    if (result.reachable) return true;
+    db.prepare(
+      "UPDATE scan_jobs SET status = 'error', error_message = ?, finished_at = datetime('now') WHERE id = ?",
+    ).run(result.message, jobId);
+    cleanupScanRunFiles(db, jobId);
+    controlSignals.delete(jobId);
+    return false;
+  };
+
   try {
+    // Before the walk, stat-level checks only: a hard-mounted NFS share
+    // with its server gone would otherwise hang the walk itself, and the
+    // check has a timeout where fast-glob has none.
+    if (!(await guardRoot({ skipEmptyCheck: true }))) return;
+
     if (job.stage === "discover") {
       const paths = await walkLibraryRoot(rootPath);
+
+      // After it, before anything is read or written: an empty walk over a
+      // root the DB still has live files under is the drive, not the music.
+      // Incremental mode gets this too even though it has no sweep — the
+      // same unmounted mount point would otherwise have whatever happens to
+      // sit in the bare directory underneath read in as new library files.
+      if (!(await guardRoot({ audioFilesFound: paths.length }))) return;
 
       let pathsToScan = paths;
       if (mode === "incremental") {
@@ -764,18 +800,21 @@ export async function executeScan(
           emitFor("collapse", filesTotal),
         );
       } else if (stage === "layout") {
-        outcome = runLayoutStage(
+        const layoutOutcome = await runLayoutStage(
           db,
           job,
           startCursor,
           mode,
           libraryRootId,
+          guardRoot,
           (missing) => {
             filesMissing = missing;
             db.prepare("UPDATE scan_jobs SET files_missing = ? WHERE id = ?").run(filesMissing, jobId);
           },
           emitFor("layout", 1),
         );
+        if (layoutOutcome === "unreachable") return;
+        outcome = layoutOutcome;
       } else {
         outcome = await runFileStage(
           db,
