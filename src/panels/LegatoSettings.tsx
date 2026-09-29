@@ -3,7 +3,14 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import { Icon } from '../ui/Icon'
 import { Button } from '../ui/Button'
-import { Toggle } from '../ui/Toggle'
+import { Switch } from '../ui/Switch'
+import { Tabs } from '../ui/Tabs'
+import { Select } from '../ui/Select'
+import { Kbd } from '../ui/Kbd'
+import { Progress } from '../ui/Progress'
+import { Skeleton, Shimmer } from '../ui/Skeleton'
+import { AlertDialog } from '../ui/Dialog'
+import { useToast } from '../ui/toastContext'
 import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
@@ -14,7 +21,7 @@ import { IS_TAURI } from '../config/runtime'
 import { formatLongDuration } from '../ui/format'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 
-/* The Legato settings panel — DESIGN.md's "v2: settings primitives",
+/* The Legato settings panel — DESIGN.md's "The gpui-kit control set",
  * restyled onto the same GroupHeader/SettingsRow geometry MusicMapSettings.tsx
  * uses. Mounted by App.tsx into InspectorPanel's 'settings' rail destination,
  * replacing the old settings-gear modal (src/settings/SettingsView.tsx) —
@@ -95,50 +102,14 @@ const THEME_OPTIONS = [
   { value: 'system', label: 'system' },
 ] as const satisfies readonly { value: ThemePreference; label: string }[]
 
-/* A row-scale tab group — the settings-primitive family (Toggle/Slider) is
- * all binary or continuous; replaygain's three-way choice doesn't reduce to
- * either, so this borrows the old modal's tablist shape but at the same
- * --text-sm/--color-control scale as everything else in a SettingsRow. */
-function SegmentedControl<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: readonly { value: T; label: string }[]
-  value: T
-  onChange: (value: T) => void
-}) {
-  return (
-    <div role="tablist" className="flex gap-[var(--spacing-sm)]">
-      {options.map((opt) => {
-        const active = opt.value === value
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => onChange(opt.value)}
-            className={`text-[length:var(--text-sm)] transition-colors duration-150 ${
-              active ? 'text-[var(--color-ink)]' : 'text-[var(--color-control)] hover:text-[var(--color-muted-hi)]'
-            }`}
-          >
-            {opt.label}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-// Same shape as MusicMapSettings.tsx's DataRow-adjacent rows: real data
-// (a keybinding) gets Rubik ink, not mono — it's the answer to the row's own
-// question rather than a value describing something else.
+// A keybinding is the answer to the row's own question, so it's ink — in a
+// Kbd keycap since the gpui-kit port, still Rubik rather than mono: it's the
+// app's own UI, not data off a disk file.
 function ShortcutRow({ action, keys }: { action: string; keys: string }) {
   return (
     <div className="flex items-center justify-between">
       <span className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{action}</span>
-      <span className="text-[length:var(--text-sm)] text-[var(--color-ink)]">{keys}</span>
+      <Kbd>{keys}</Kbd>
     </div>
   )
 }
@@ -171,7 +142,7 @@ function AccountGroup() {
   if (me === null) {
     return (
       <SettingsGroup title="account">
-        <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">loading…</p>
+        <Skeleton className="h-[12px] w-[140px] rounded-full" />
       </SettingsGroup>
     )
   }
@@ -220,12 +191,14 @@ export function LegatoSettings({
 }: LegatoSettingsProps) {
   const [roots, setRoots] = useState<LibraryRoot[] | null>(null)
   const [confirmingRemoveId, setConfirmingRemoveId] = useState<number | null>(null)
+  const removingRoot = roots?.find((r) => r.id === confirmingRemoveId) ?? null
   const [error, setError] = useState<string | null>(null)
   const [scanning, setScanning] = useState<Record<number, RunningScan>>({})
   const [scanErrors, setScanErrors] = useState<Record<number, ScanFileError[]>>({})
   const [devices, setDevices] = useState<string[] | null>(null)
   const [confirmingRebuild, setConfirmingRebuild] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
+  const toast = useToast()
 
   const loadRoots = () => {
     fetch(`${API}/library-roots`)
@@ -350,11 +323,23 @@ export function LegatoSettings({
   // just fires the request and clears the local "in progress" state once
   // the response comes back, same division of labor rescanRoot above
   // already has with scan:done.
+  //
+  // The outcome is a toast (gpui-kit port): the button's own "rebuilding…"
+  // shimmer says the work is under way, but once it stops there was nothing
+  // saying whether it worked — the canvas remounting behind a panel reads
+  // the same as nothing happening.
   const rebuildMap = async () => {
     setConfirmingRebuild(false)
     setRebuilding(true)
     try {
-      await fetch(`${API}/layout/rebuild`, { method: 'POST' })
+      const res = await fetch(`${API}/layout/rebuild`, { method: 'POST' })
+      toast.show(
+        res.ok
+          ? { title: 'map rebuilt', description: 'every node has a fresh place on the canvas.' }
+          : { title: "couldn't rebuild the map", description: `legato-server answered ${res.status}.` },
+      )
+    } catch {
+      toast.show({ title: "couldn't rebuild the map", description: "couldn't reach legato-server." })
     } finally {
       setRebuilding(false)
     }
@@ -373,7 +358,7 @@ export function LegatoSettings({
     <div className="flex flex-col gap-[var(--spacing-sm)]">
       <SettingsGroup title="appearance">
         <SettingsRow label="theme">
-          <SegmentedControl options={THEME_OPTIONS} value={themePreference} onChange={onSetThemePreference} />
+          <Tabs label="theme" options={THEME_OPTIONS} value={themePreference} onChange={onSetThemePreference} />
         </SettingsRow>
       </SettingsGroup>
 
@@ -391,7 +376,10 @@ export function LegatoSettings({
           </p>
         )}
         {roots === null ? (
-          <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">loading…</p>
+          <div className="flex flex-col gap-[var(--spacing-sm)]" aria-label="loading library folders">
+            <Skeleton className="h-[12px] w-[200px] rounded-full" />
+            <Skeleton className="h-[12px] w-[160px] rounded-full" />
+          </div>
         ) : roots.length === 0 ? (
           <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">no folders configured</p>
         ) : (
@@ -399,184 +387,152 @@ export function LegatoSettings({
             {roots.map((r) => {
               const run = scanning[r.id]
               const errors = scanErrors[r.id]
-              const confirming = confirmingRemoveId === r.id
               return (
                 <li key={r.id} className="flex flex-col gap-[var(--spacing-xs)]">
-                  {confirming ? (
-                    <>
-                      {/* #86: the non-confirming row below (r.label ?? r.path,
-                       * same fallback) truncates to one line on purpose — this
-                       * sentence is meant to wrap instead, but a real
-                       * filesystem path or a user-typed label can still be one
-                       * unbroken run with nowhere to break, e.g. a Windows
-                       * path's backslashes carry no browser line-break
-                       * opportunity the way "/" does. wrap-anywhere only
-                       * kicks in once normal wrapping runs out of room, so
-                       * "Legato stops watching it" still breaks at spaces
-                       * first. */}
-                      <p className="wrap-anywhere text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-                        Remove {r.label ?? r.path}? Legato stops watching it — already-scanned tracks stay in your
-                        library.
+                  <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
+                    <div className="min-w-0">
+                      {/* The full path, not the label, in the title: a
+                       * label is the short name the user chose, the path is
+                       * what's actually cut off and what you'd need to read. */}
+                      <p
+                        className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-sm)] text-[var(--color-ink)]"
+                        title={r.path}
+                      >
+                        {r.label ?? r.path}
                       </p>
-                      <div className="flex items-center gap-[var(--spacing-sm)]">
-                        <Button variant="destructive" onClick={() => void removeRoot(r.id)}>
-                          remove
-                        </Button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirmingRemoveId(null)}
-                          className="text-[length:var(--text-sm)] text-[color:var(--color-control)] hover:text-[var(--color-muted-hi)]"
-                        >
-                          cancel
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
-                      <div className="min-w-0">
-                        {/* The full path, not the label, in the title: a
-                         * label is the short name the user chose, the path is
-                         * what's actually cut off and what you'd need to read. */}
-                        <p
-                          className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-sm)] text-[var(--color-ink)]"
-                          title={r.path}
-                        >
-                          {r.label ?? r.path}
-                        </p>
-                        {run && (
-                          <div className="flex flex-col gap-[2px] py-[2px]">
-                            {/* Issue #123 (D17): discover → read tags → match →
-                             * collapse → layout → enrich queued, the current
-                             * stage in ink, everything else in control-color —
-                             * same active/inactive contrast SegmentedControl
-                             * above uses. */}
-                            <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-                              {SCAN_STAGES.map((stage, i) => (
-                                <span key={stage}>
-                                  {i > 0 && ' → '}
-                                  <span
-                                    className={
-                                      stage === run.progress.stage ? 'text-[var(--color-ink)]' : undefined
-                                    }
-                                  >
-                                    {SCAN_STAGE_LABELS[stage]}
-                                  </span>
-                                </span>
-                              ))}
-                            </p>
-                            <div className="flex items-center gap-[var(--spacing-xs)]">
-                              <p className="shrink-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-                                {run.progress.stageDone}
-                                {run.progress.stageTotal != null ? `/${run.progress.stageTotal}` : ''}
-                              </p>
-                              {/* MO-11: determinate progress is data, not decoration — stepped
-                               * not eased, same as MusicMapSettings' peers respect for live data. */}
-                              <div className="h-[3px] flex-1 overflow-hidden rounded-full bg-[var(--color-divider)]">
-                                <div
-                                  className="h-full rounded-full bg-[var(--color-signal)]"
-                                  style={{
-                                    width: `${
-                                      run.progress.stageTotal
-                                        ? Math.min(100, (run.progress.stageDone / run.progress.stageTotal) * 100)
-                                        : 0
-                                    }%`,
-                                  }}
-                                />
-                              </div>
-                            </div>
-                            <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-                              {run.paused
-                                ? 'paused'
-                                : run.progress.rate != null
-                                  ? `${Math.round(run.progress.rate)}/s · ${formatEta(run.progress.etaSeconds)}`
-                                  : formatEta(run.progress.etaSeconds)}
-                            </p>
-                          </div>
-                        )}
-                        {/* Issue #122: no red/alert token exists in DESIGN.md's
-                         * palette on purpose (see Button.tsx's note on
-                         * `destructive`) — muted control-color text, same
-                         * shape as this group's own error paragraph below,
-                         * carries this the same way. */}
-                        {r.watch_status === 'fallback' && (
+                      {run && (
+                        <div className="flex flex-col gap-[2px] py-[2px]">
+                          {/* Issue #123 (D17): discover → read tags → match →
+                           * collapse → layout → enrich queued, the current
+                           * stage in ink, everything else in control-color —
+                           * same active/inactive contrast the theme and
+                           * replaygain Tabs above use. */}
                           <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-                            Watching for changes isn't available on this system, so Legato checks every 30
-                            minutes.{' '}
-                            <a
-                              href={WATCH_LIMIT_DOCS_URL}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-muted-hi)]"
-                            >
-                              Raise the limit
-                            </a>
-                            .
+                            {SCAN_STAGES.map((stage, i) => (
+                              <span key={stage}>
+                                {i > 0 && ' → '}
+                                <span
+                                  className={
+                                    stage === run.progress.stage ? 'text-[var(--color-ink)]' : undefined
+                                  }
+                                >
+                                  {SCAN_STAGE_LABELS[stage]}
+                                </span>
+                              </span>
+                            ))}
                           </p>
-                        )}
-                        {!run && errors && errors.length > 0 && (
-                          <details className="py-[2px]">
-                            {/* H9: per-file problems the scan moved past rather
-                             * than stopping for — named with a reason, not just
-                             * a count, once expanded. */}
-                            <summary className="cursor-pointer text-[length:var(--text-sm)] text-[color:var(--color-control)] hover:text-[var(--color-muted-hi)]">
-                              {errors.length} file{errors.length === 1 ? '' : 's'} couldn't be read
-                            </summary>
-                            <ul className="flex flex-col gap-[2px] pt-[2px]">
-                              {errors.map((e, i) => (
-                                <li key={i} className="wrap-anywhere text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-                                  <span className="font-[family-name:var(--font-mono)]">{e.file_path}</span> —{' '}
-                                  {e.reason}
-                                </li>
-                              ))}
-                            </ul>
-                          </details>
-                        )}
-                      </div>
-                      <div className="flex shrink-0 items-center gap-[var(--spacing-sm)]">
-                        {run ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void (run.paused ? resumeScan(run.progress.jobId) : pauseScan(run.progress.jobId))
+                          <div className="flex items-center gap-[var(--spacing-xs)]">
+                            <p className="shrink-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                              {run.progress.stageDone}
+                              {run.progress.stageTotal != null ? `/${run.progress.stageTotal}` : ''}
+                            </p>
+                            {/* MO-11: determinate progress is data, not decoration.
+                             * A stage with no total yet (discovery walking the
+                             * tree) is honestly indeterminate, so it sweeps
+                             * rather than sitting at a fake 0%. */}
+                            <Progress
+                              size="xs"
+                              label={`${SCAN_STAGE_LABELS[run.progress.stage]} progress`}
+                              value={
+                                run.progress.stageTotal
+                                  ? (run.progress.stageDone / run.progress.stageTotal) * 100
+                                  : undefined
                               }
-                              aria-label={
-                                run.paused
-                                  ? `Resume scanning ${r.label ?? r.path}`
-                                  : `Pause scanning ${r.label ?? r.path}`
-                              }
-                              className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-                            >
-                              <Icon name={run.paused ? 'play' : 'pause'} size={16} />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void cancelScan(run.progress.jobId)}
-                              aria-label={`Cancel scanning ${r.label ?? r.path}`}
-                              className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-                            >
-                              <Icon name="cancel" size={16} />
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            {r.watch_status === 'fallback' && (
-                              <Button onClick={() => void checkForNewMusic(r.id)}>check for new music</Button>
-                            )}
-                            <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmingRemoveId(r.id)}
-                              aria-label={`Remove ${r.label ?? r.path}`}
-                              className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-                            >
-                              <Icon name="cancel" size={16} />
-                            </button>
-                          </>
-                        )}
-                      </div>
+                              className="flex-1"
+                            />
+                          </div>
+                          <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                            {run.paused
+                              ? 'paused'
+                              : run.progress.rate != null
+                                ? `${Math.round(run.progress.rate)}/s · ${formatEta(run.progress.etaSeconds)}`
+                                : formatEta(run.progress.etaSeconds)}
+                          </p>
+                        </div>
+                      )}
+                      {/* Issue #122: no red/alert token exists in DESIGN.md's
+                       * palette on purpose (see Button.tsx's note on
+                       * `destructive`) — muted control-color text, same
+                       * shape as this group's own error paragraph below,
+                       * carries this the same way. */}
+                      {r.watch_status === 'fallback' && (
+                        <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                          Watching for changes isn't available on this system, so Legato checks every 30
+                          minutes.{' '}
+                          <a
+                            href={WATCH_LIMIT_DOCS_URL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-muted-hi)]"
+                          >
+                            Raise the limit
+                          </a>
+                          .
+                        </p>
+                      )}
+                      {!run && errors && errors.length > 0 && (
+                        <details className="py-[2px]">
+                          {/* H9: per-file problems the scan moved past rather
+                           * than stopping for — named with a reason, not just
+                           * a count, once expanded. */}
+                          <summary className="cursor-pointer text-[length:var(--text-sm)] text-[color:var(--color-control)] hover:text-[var(--color-muted-hi)]">
+                            {errors.length} file{errors.length === 1 ? '' : 's'} couldn't be read
+                          </summary>
+                          <ul className="flex flex-col gap-[2px] pt-[2px]">
+                            {errors.map((e, i) => (
+                              <li key={i} className="wrap-anywhere text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                                <span className="font-[family-name:var(--font-mono)]">{e.file_path}</span> —{' '}
+                                {e.reason}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
                     </div>
-                  )}
+                    <div className="flex shrink-0 items-center gap-[var(--spacing-sm)]">
+                      {run ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void (run.paused ? resumeScan(run.progress.jobId) : pauseScan(run.progress.jobId))
+                            }
+                            aria-label={
+                              run.paused
+                                ? `Resume scanning ${r.label ?? r.path}`
+                                : `Pause scanning ${r.label ?? r.path}`
+                            }
+                            className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                          >
+                            <Icon name={run.paused ? 'play' : 'pause'} size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void cancelScan(run.progress.jobId)}
+                            aria-label={`Cancel scanning ${r.label ?? r.path}`}
+                            className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                          >
+                            <Icon name="cancel" size={16} />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {r.watch_status === 'fallback' && (
+                            <Button onClick={() => void checkForNewMusic(r.id)}>check for new music</Button>
+                          )}
+                          <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmingRemoveId(r.id)}
+                            aria-label={`Remove ${r.label ?? r.path}`}
+                            className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                          >
+                            <Icon name="cancel" size={16} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </li>
               )
             })}
@@ -585,21 +541,42 @@ export function LegatoSettings({
         {/* DESIGN.md's error-state rule is deliberately quiet — Rubik muted,
          * one sentence — not a red/alert color the tokens don't define. */}
         {error && <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{error}</p>}
+        {/* Was an inline sentence swapped into the folder's own row; an
+         * AlertDialog since the gpui-kit port — removing a watched folder is
+         * the kind of question gpui-kit asks in one. The sentence is
+         * unchanged. wrap-anywhere is #86's: a path can be one unbroken run
+         * (a Windows path's backslashes offer no break), and it only kicks
+         * in once normal wrapping at spaces runs out of room. */}
+        <AlertDialog
+          open={removingRoot != null}
+          onCancel={() => setConfirmingRemoveId(null)}
+          onConfirm={() => removingRoot && void removeRoot(removingRoot.id)}
+          title="remove folder"
+          description={
+            <p className="wrap-anywhere">
+              Remove {removingRoot?.label ?? removingRoot?.path}? Legato stops watching it — already-scanned tracks
+              stay in your library.
+            </p>
+          }
+          confirmLabel="remove"
+          destructive
+        />
       </SettingsGroup>
 
       <SettingsGroup title="enrichment">
         <SettingsRow label="lookup">
-          <Toggle
+          <Switch
             checked={enrichmentEnabled}
             onChange={(v) => void updateSettings({ enrichmentEnabled: v ? 'true' : 'false' })}
-            label="look up MusicBrainz metadata and cover art automatically"
+            accessibilityLabel="look up MusicBrainz metadata and cover art automatically"
           />
         </SettingsRow>
       </SettingsGroup>
 
       <SettingsGroup title="playback">
         <SettingsRow label="gain">
-          <SegmentedControl
+          <Tabs
+            label="replaygain"
             options={REPLAYGAIN_OPTIONS}
             value={replaygainMode}
             onChange={(v) => void updateSettings({ replaygainMode: v })}
@@ -607,22 +584,17 @@ export function LegatoSettings({
         </SettingsRow>
         <SettingsRow label="device">
           {IS_TAURI ? (
-            <select
+            <Select
+              label="audio output device"
+              monospace
               value={audioDevice}
-              onChange={(e) => {
-                const name = e.target.value || null
+              options={[{ value: '', label: 'system default' }, ...(devices ?? []).map((d) => ({ value: d, label: d }))]}
+              onChange={(value) => {
+                const name = value || null
                 void updateSettings({ audioDevice: name ?? '' })
                 void onSetAudioDevice(name)
               }}
-              className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-sm)] text-[var(--color-ink)] outline-none [&>option]:bg-[var(--color-canvas)]"
-            >
-              <option value="">system default</option>
-              {(devices ?? []).map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
+            />
           ) : (
             <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
               Audio device selection is only available in the desktop app.
@@ -633,44 +605,36 @@ export function LegatoSettings({
 
       <SettingsGroup title="canvas">
         <SettingsRow label="hover">
-          <Toggle
+          <Switch
             checked={hoverDimEnabled}
             onChange={(v) => void updateSettings({ hoverDimEnabled: v ? 'true' : 'false' })}
-            label="dim other nodes on hover"
+            accessibilityLabel="dim other nodes on hover"
           />
         </SettingsRow>
         <SettingsRow label="motion">
-          <Toggle
+          <Switch
             checked={reducedMotionForced}
             onChange={(v) => void updateSettings({ reducedMotionForced: v ? 'true' : 'false' })}
-            label="reduce motion, regardless of system setting"
+            accessibilityLabel="reduce motion, regardless of system setting"
           />
         </SettingsRow>
         <SettingsRow label="layout" align="start">
-          {confirmingRebuild ? (
-            <div className="flex flex-col gap-[var(--spacing-xs)]">
-              <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-                Rebuild the map? Every node gets freshly placed, including anywhere you've dragged one — that
-                placement is gone. Your library on disk is untouched.
-              </p>
-              <div className="flex items-center gap-[var(--spacing-sm)]">
-                <Button variant="destructive" onClick={() => void rebuildMap()}>
-                  rebuild
-                </Button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmingRebuild(false)}
-                  className="text-[length:var(--text-sm)] text-[color:var(--color-control)] hover:text-[var(--color-muted-hi)]"
-                >
-                  cancel
-                </button>
-              </div>
-            </div>
-          ) : (
-            <Button onClick={() => setConfirmingRebuild(true)} disabled={rebuilding}>
-              {rebuilding ? 'rebuilding…' : 'rebuild map'}
-            </Button>
-          )}
+          {/* The rebuild confirmation was an inline paragraph in this row;
+           * an AlertDialog since the gpui-kit port, same sentence. While it
+           * runs, the label shimmers — an indeterminate, often multi-second
+           * wait (DESIGN.md Motion, "Indeterminate and long"). */}
+          <Button onClick={() => setConfirmingRebuild(true)} disabled={rebuilding}>
+            {rebuilding ? <Shimmer>rebuilding…</Shimmer> : 'rebuild map'}
+          </Button>
+          <AlertDialog
+            open={confirmingRebuild}
+            onCancel={() => setConfirmingRebuild(false)}
+            onConfirm={() => void rebuildMap()}
+            title="rebuild the map"
+            description="Every node gets freshly placed, including anywhere you've dragged one — that placement is gone. Your library on disk is untouched."
+            confirmLabel="rebuild"
+            destructive
+          />
         </SettingsRow>
       </SettingsGroup>
 

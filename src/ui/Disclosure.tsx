@@ -7,7 +7,7 @@ import { usePrefersReducedMotion } from './usePrefersReducedMotion'
  * rotates between states rather than two glyphs swapped. Content height
  * animates via a CSS grid-rows trick (0fr <-> 1fr) instead of measuring in
  * JS. --motion-base is the token tokens.css's own comment already names
- * for "disclosure". See DESIGN.md "Controls" -> "v2: settings primitives"
+ * for "disclosure". See DESIGN.md "Controls" -> "The gpui-kit control set"
  * and the Now Playing panel restructure this drives.
  *
  * The chevron's rotation rides Tailwind's transition-transform utility, so

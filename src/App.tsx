@@ -5,6 +5,7 @@ import PlaybackSpike from './PlaybackSpike'
 import LibrarySetup, { Centered } from './LibrarySetup'
 import { useServerReady } from './hooks/useServerReady'
 import { ServerUpdateNotice } from './shell/ServerUpdateNotice'
+import { ToastProvider } from './ui/Toast'
 import { useWsEvent } from './hooks/useWs'
 import Canvas, { type CanvasHandle } from './canvas/Canvas'
 import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
@@ -632,13 +633,13 @@ export default function App() {
 
   const app = debug ? <DebugSpikes /> : <MainApp />
   return (
-    <>
+    <ToastProvider>
       {/* A server older than migration 0029 has no owner gate and no
        * /auth/status to ask, so it runs ungated exactly as before,
        * with the notice saying to update it. */}
       {server?.outOfDate ? app : <OwnerGated>{app}</OwnerGated>}
       <ServerUpdateNotice server={server} />
-    </>
+    </ToastProvider>
   )
 }
 

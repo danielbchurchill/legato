@@ -1,11 +1,12 @@
-import { Icon } from '../ui/Icon'
+import { Tabs } from '../ui/Tabs'
 import { Surface } from './Surface'
 
 /* The map/library switch (issue #126, D11 — see DESIGN.md "Library view").
- * Same recipe as the retired GraphToggle (a Surface pill, tabs differing by
- * color alone, muted -> ink for the active one): DESIGN.md's active-state
- * rule ("--color-ink ... reserved for values and for genuinely active
- * state") applies here exactly as it did there.
+ * Still the retired GraphToggle's Surface pill; what sits in it is Tabs'
+ * segmented variant since the gpui-kit port — a raised thumb sliding to the
+ * active view, with arrow keys that work — `bare`, since the glass pill is
+ * already the well. The active label is still ink and the other muted-to-
+ * control, DESIGN.md's active-state rule unchanged.
  *
  * Centered under the headers rather than GraphToggle's old fixed 69px (that
  * number was measured against the single continuous titlebar this app no
@@ -16,10 +17,10 @@ import { Surface } from './Surface'
 
 export type ViewMode = 'map' | 'library'
 
-const VIEWS: { id: ViewMode; label: string; icon: 'map' | 'list' }[] = [
-  { id: 'map', label: 'map', icon: 'map' },
-  { id: 'library', label: 'library', icon: 'list' },
-]
+const VIEWS = [
+  { value: 'map', label: 'map', icon: 'map' },
+  { value: 'library', label: 'library', icon: 'list' },
+] as const satisfies readonly { value: ViewMode; label: string; icon: 'map' | 'list' }[]
 
 type ViewSwitchProps = {
   value: ViewMode
@@ -32,25 +33,8 @@ export function ViewSwitch({ value, onChange }: ViewSwitchProps) {
       className="absolute top-[calc(var(--header-height)+var(--spacing-lg))] left-1/2 h-[41px] -translate-x-1/2 overflow-hidden"
       style={{ zIndex: 10 }}
     >
-      <div role="tablist" className="flex h-full items-center gap-[var(--spacing-lg)] px-[var(--spacing-lg)]">
-        {VIEWS.map((view) => {
-          const active = view.id === value
-          return (
-            <button
-              key={view.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => onChange(view.id)}
-              className={`flex items-center gap-[var(--spacing-xs)] text-[length:var(--text-base)] leading-none transition-colors duration-[var(--motion-fast)] ${
-                active ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'
-              }`}
-            >
-              <Icon name={view.icon} size={18} />
-              {view.label}
-            </button>
-          )
-        })}
+      <div className="flex h-full items-center px-[3px]">
+        <Tabs label="view" variant="segmented" bare size="base" options={VIEWS} value={value} onChange={onChange} />
       </div>
     </Surface>
   )

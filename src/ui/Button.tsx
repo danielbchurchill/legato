@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ReactNode, Ref } from 'react'
 
 /* Two control shapes (C-3). Every button in the app used to be underlined
  * text regardless of what it did — "approve — write to file", the one
@@ -34,11 +34,14 @@ type ButtonProps = {
   disabled?: boolean
   className?: string
   children: ReactNode
+  /** AlertDialog points its initial focus at its cancel button. */
+  ref?: Ref<HTMLButtonElement>
 }
 
-export function Button({ variant = 'link', type = 'button', onClick, disabled, className = '', children }: ButtonProps) {
+export function Button({ variant = 'link', type = 'button', onClick, disabled, className = '', children, ref }: ButtonProps) {
   return (
     <button
+      ref={ref}
       type={type}
       onClick={onClick}
       disabled={disabled}

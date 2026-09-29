@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 
 /* Shared layout primitives for the app's settings surfaces — Music Map
  * settings (MusicMapSettings.tsx) and Legato settings (LegatoSettings.tsx).
- * See DESIGN.md "Controls" -> "v2: settings primitives": every group is a
+ * See DESIGN.md "Controls" -> "The gpui-kit control set": every group is a
  * muted --text-base title over a stack of --text-sm label/control rows. */
 
 export function GroupHeader({ title, action }: { title: string; action?: ReactNode }) {

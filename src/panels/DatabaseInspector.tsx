@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { DataRow, SectionHeader } from '../ui/DataRow'
-import { Popover } from '../ui/Popover'
+import { InfoPopover } from '../ui/Popover'
 import { useWsEvent } from '../hooks/useWs'
 import { formatBytes, formatDurationHours } from './format'
 import { API_BASE as API } from '../config/serverHost'
@@ -45,10 +45,10 @@ function OverviewBlock() {
       <SectionHeader
         title="overview"
         action={
-          <Popover label="About these stats">
+          <InfoPopover label="About these stats">
             Top artist/album/track are based on real play history — 50% of a track&rsquo;s duration or 4 minutes
             listened, whichever comes first.
-          </Popover>
+          </InfoPopover>
         }
       />
       <div className="mt-[8px]">

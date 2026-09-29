@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { ScrollArea } from '../ui/ScrollArea'
 import { Surface } from './Surface'
 import type { RailDestination } from './rail'
 
@@ -83,14 +84,16 @@ export function InspectorPanel({
        * a panel every one of these rail destinations shares one instance
        * of. Pinning x closed is what makes "never a scrollbar" actually
        * true rather than "true until the next panel content someone adds
-       * doesn't wrap or truncate correctly." */}
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
+       * doesn't wrap or truncate correctly." ScrollArea (the gpui-kit port's
+       * overlay scrollbar) pins it on its own viewport for exactly this
+       * reason. */}
+      <ScrollArea className="flex-1" contentClassName="px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
         {content ?? (
           <p className="pt-[40px] text-center text-[length:var(--text-base)] text-[var(--color-muted)]">
             {PLACEHOLDER_LABEL[active]}
           </p>
         )}
-      </div>
+      </ScrollArea>
     </Surface>
   )
 }
