@@ -9,13 +9,14 @@ primary_region = "iad"
 
 [env]
   RELAY_PORT = "8901"
-  # Convention matches server/'s LEGATO_DATA_DIR (see repo CLAUDE.md) — the
-  # relay-accounts workstream's db.ts should read this same var when it adds
-  # its SQLite database, rather than hardcoding a path.
+  # Convention matches server/'s LEGATO_DATA_DIR (see repo CLAUDE.md).
+  # relay/src/config.ts reads it, and relay/src/db.ts keeps the relay's
+  # SQLite database at $RELAY_DATA_DIR/relay.db.
   RELAY_DATA_DIR = "/data"
 
-# Persistent storage for RELAY_DATA_DIR — currently unused by the app itself,
-# reserved for the SQLite database the relay-accounts workstream is adding.
+# Persistent storage for RELAY_DATA_DIR. relay.db lives here: accounts,
+# sessions, pairing codes and tunnel credentials. Without this mount, every
+# deploy would wipe every paired home server's credential.
 [[mounts]]
   source = "relay_data"
   destination = "/data"
