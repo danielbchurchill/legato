@@ -37,6 +37,7 @@ import { waveformRoutes } from "./routes/waveform.js";
 import { lyricsRoutes } from "./routes/lyrics.js";
 import { tagManagerRoutes } from "./routes/tag-manager.js";
 import { authRoutes } from "./routes/auth.js";
+import { webClientRoutes } from "./routes/web-client.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { reconcileInterruptedScans } from "./scan/scanner.js";
 import { backfillFuzzyIndex } from "./match/backfill-fuzzy-index.js";
@@ -167,6 +168,7 @@ await app.register(waveformRoutes(db), { prefix: "/api/v1" });
 await app.register(lyricsRoutes(db), { prefix: "/api/v1" });
 await app.register(tagManagerRoutes(db), { prefix: "/api/v1" });
 await app.register(authRoutes(db), { prefix: "/api/v1" });
+await app.register(webClientRoutes());
 
 // Resume watching every already-configured root across restarts — a root
 // added in a previous session shouldn't need a manual re-scan to notice
