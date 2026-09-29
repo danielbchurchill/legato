@@ -39,6 +39,7 @@ import { tagManagerRoutes } from "./routes/tag-manager.js";
 import { authRoutes } from "./routes/auth.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { reconcileInterruptedScans } from "./scan/scanner.js";
+import { backfillFuzzyIndex } from "./match/backfill-fuzzy-index.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 
@@ -78,6 +79,21 @@ app.log.info(`legato-server ${VERSION} (${GIT_SHA})`);
 {
   const reconciled = reconcileInterruptedScans(db);
   if (reconciled > 0) app.log.info(`scan: reconciled ${reconciled} interrupted run(s) to paused`);
+}
+
+// Issue #173 follow-up: migration 0028 adds normalized_title/normalized_artist
+// as NULL for rows that already existed, and an unchanged file never reaches
+// tryFuzzyMatch again to self-heal them (mtime/size short-circuits scanFile()
+// in scanner.ts) — so an in-place upgrade would silently lose fuzzy matching
+// for its whole pre-existing unmatched/fuzzy_pending pool. Since #102/#103
+// the server ships as a compiled binary the Tauri shell spawns as a sidecar,
+// with no npm or server/ directory on the end user's machine, so this can't
+// be a manual CLI step; it has to happen here, on every start. Cheap once a
+// library is caught up — the query only matches rows still missing their
+// normalized columns, which is none of them after the first run.
+{
+  const fuzzyIndexed = backfillFuzzyIndex(db);
+  if (fuzzyIndexed > 0) app.log.info(`match: backfilled fuzzy-match index columns for ${fuzzyIndexed} file(s)`);
 }
 
 // Same one-line-diagnosis reasoning as the database log above: if a

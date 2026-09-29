@@ -33,9 +33,21 @@ export async function backfillTagColumns(
 
   const progress: TagBackfillProgress = { filesConsidered: 0, filesUpdated: 0, failures: 0 };
 
+  // tags_raw is rewritten below from a fresh disk read, but normalized_title/
+  // normalized_artist (migration 0028) are match/collapse.ts's own derived
+  // columns, not this tool's — recomputing them here would need to know
+  // which match_source values tryFuzzyMatch actually indexes (see
+  // backfillFuzzyIndex), duplicating logic this file has no other reason to
+  // know about. Nulling them out instead just marks them stale; the startup
+  // backfill (index.ts, on every server start) repopulates any row still
+  // eligible as a fuzzy candidate, the same as it does for a library upgraded
+  // in place after migration 0028 first landed. A title/artist change here
+  // is invisible to fuzzy matching only until the next restart, same
+  // tradeoff as running this manual tool at all.
   const update = db.prepare(
     `UPDATE files SET
-       track_no = ?, disc_no = ?, release_date = ?, bpm = ?, label = ?, release_type = ?, genre = ?, tags_raw = ?
+       track_no = ?, disc_no = ?, release_date = ?, bpm = ?, label = ?, release_type = ?, genre = ?, tags_raw = ?,
+       normalized_title = NULL, normalized_artist = NULL
      WHERE id = ?`,
   );
 

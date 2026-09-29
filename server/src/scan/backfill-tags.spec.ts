@@ -108,4 +108,34 @@ describe("backfillTagColumns", () => {
     const progress = await backfillTagColumns(db);
     expect(progress).toEqual({ filesConsidered: 1, filesUpdated: 0, failures: 1 });
   });
+
+  it("clears normalized_title/normalized_artist so they don't go stale against the freshly-rewritten tags_raw", async () => {
+    // Issue #173 follow-up: this tool rewrites tags_raw from a fresh disk
+    // read, but normalized_title/normalized_artist (migration 0028) are
+    // match/collapse.ts's derived columns — left untouched, a retitled file
+    // would keep matching fuzzy candidates under its old title forever.
+    // Nulling them out here marks them stale so the startup backfill
+    // (backfillFuzzyIndex, called from index.ts on every server start)
+    // repopulates them from the new tags_raw.
+    const filePath = path.join(dir, "track.flac");
+    execFileSync(
+      "ffmpeg",
+      ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-metadata", "title=New Title", filePath],
+      { stdio: "ignore" },
+    );
+    const fileId = insertFile(filePath, {
+      normalized_title: "stale old title",
+      normalized_artist: "stale old artist",
+      match_source: "unmatched",
+    });
+
+    const progress = await backfillTagColumns(db);
+    expect(progress).toEqual({ filesConsidered: 1, filesUpdated: 1, failures: 0 });
+
+    const row = db.prepare("SELECT normalized_title, normalized_artist FROM files WHERE id = ?").get(fileId) as {
+      normalized_title: string | null;
+      normalized_artist: string | null;
+    };
+    expect(row).toEqual({ normalized_title: null, normalized_artist: null });
+  });
 });

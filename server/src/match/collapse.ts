@@ -18,7 +18,7 @@ type ParsedTags = {
 
 const FUZZY_DURATION_TOLERANCE_MS = 2000;
 
-function parseTagsRaw(tagsRaw: string | null): ParsedTags | null {
+export function parseTagsRaw(tagsRaw: string | null): ParsedTags | null {
   if (!tagsRaw) return null;
   try {
     return JSON.parse(tagsRaw) as ParsedTags;
@@ -27,7 +27,7 @@ function parseTagsRaw(tagsRaw: string | null): ParsedTags | null {
   }
 }
 
-function normalizeForFuzzyMatch(value: string): string {
+export function normalizeForFuzzyMatch(value: string): string {
   return value
     .toLowerCase()
     .normalize("NFKD")
@@ -150,12 +150,30 @@ async function tryAcoustidMatch(db: Database, file: FileRow): Promise<boolean> {
 // Tier 3 — fuzzy artist+title+duration among still-unmatched files. Low
 // confidence: flags a candidate but never merges silently — confirmation
 // happens via POST /api/v1/merge-overrides against GET /merge-suggestions.
+//
+// normalized_title/normalized_artist (see migration 0028) turn the
+// candidate lookup into an indexed equality query instead of a table scan
+// that re-normalizes every still-unmatched file's tags_raw in JS on every
+// call — the O(n) subquery behind #123's benchmark measuring the match
+// stage as quadratic in file count (PR #171). This file persists its own
+// normalized columns here, every call, rather than relying on scanner.ts
+// to have written them at tag-read time: collapseFile() is the one place
+// every file — freshly scanned, rescanned, or inserted directly by a test
+// — passes through before it could ever be selected as someone else's
+// candidate, so writing it here keeps the index self-healing without
+// needing every caller to duplicate the normalization.
 function tryFuzzyMatch(db: Database, file: FileRow): boolean {
   const tags = parseTagsRaw(file.tags_raw);
   if (!tags?.title || !tags?.artist) return false;
 
   const normTitle = normalizeForFuzzyMatch(tags.title);
   const normArtist = normalizeForFuzzyMatch(tags.artist);
+
+  db.prepare("UPDATE files SET normalized_title = ?, normalized_artist = ? WHERE id = ?").run(
+    normTitle,
+    normArtist,
+    file.id,
+  );
 
   const candidates = db
     .prepare(
@@ -164,15 +182,15 @@ function tryFuzzyMatch(db: Database, file: FileRow): boolean {
        JOIN nodes n ON n.id = f.recording_node_id
        WHERE n.type = 'recording' AND n.mbid IS NULL
          AND f.match_source IN ('unmatched', 'fuzzy_pending')
-         AND f.id != ?`,
+         AND f.id != ?
+         AND f.normalized_title = ?
+         AND f.normalized_artist = ?`,
     )
-    .all(file.id) as { file_id: number; recording_node_id: number; tags_raw: string | null }[];
+    .all(file.id, normTitle, normArtist) as { file_id: number; recording_node_id: number; tags_raw: string | null }[];
 
   for (const candidate of candidates) {
     const candidateTags = parseTagsRaw(candidate.tags_raw);
     if (!candidateTags?.title || !candidateTags?.artist) continue;
-    if (normalizeForFuzzyMatch(candidateTags.title) !== normTitle) continue;
-    if (normalizeForFuzzyMatch(candidateTags.artist) !== normArtist) continue;
     if (tags.durationMs != null && candidateTags.durationMs != null) {
       if (Math.abs(tags.durationMs - candidateTags.durationMs) > FUZZY_DURATION_TOLERANCE_MS) continue;
     }

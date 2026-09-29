@@ -30,6 +30,7 @@ import m0024_artist_member_jobs from "./0024_artist_member_jobs.sql" with { type
 import m0025_playlist_imports from "./0025_playlist_imports.sql" with { type: "text" };
 import m0026_watch_status from "./0026_watch_status.sql" with { type: "text" };
 import m0027_scan_stages from "./0027_scan_stages.sql" with { type: "text" };
+import m0028_fuzzy_match_index from "./0028_fuzzy_match_index.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -65,4 +66,5 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 25, file: "0025_playlist_imports.sql", sql: m0025_playlist_imports },
   { version: 26, file: "0026_watch_status.sql", sql: m0026_watch_status },
   { version: 27, file: "0027_scan_stages.sql", sql: m0027_scan_stages },
+  { version: 28, file: "0028_fuzzy_match_index.sql", sql: m0028_fuzzy_match_index },
 ];

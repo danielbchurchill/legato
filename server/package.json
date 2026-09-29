@@ -10,6 +10,7 @@
     "backfill:covers": "bun src/cover/backfill-cli.ts",
     "backfill:tags": "bun src/scan/backfill-tags-cli.ts",
     "backfill:edges": "bun src/match/backfill-edges-cli.ts",
+    "backfill:fuzzy-index": "bun src/match/backfill-fuzzy-index-cli.ts",
     "backfill:waveforms": "bun src/waveform/backfill-cli.ts",
     "sweep:caches": "bun src/maintenance/sweep-caches-cli.ts",
     "generate:migrations": "node scripts/generate-migrations-manifest.mjs",

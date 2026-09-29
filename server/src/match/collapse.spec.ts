@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { collapseFile } from "./collapse.js";
+import { backfillFuzzyIndex } from "./backfill-fuzzy-index.js";
 
 let db: Database;
 let libraryRootId: number;
@@ -155,6 +156,81 @@ describe("collapseFile — tier 3 (fuzzy)", () => {
     await collapseFile(db, fileB);
 
     expect(fileState(fileB).match_source).toBe("unmatched");
+  });
+
+  // Issue #173: the candidate lookup is an indexed equality query against
+  // normalized_title/normalized_artist (migration 0028), not a table scan
+  // re-normalizing every candidate's tags_raw in JS. Persisting those
+  // columns is what makes that indexed query possible.
+  it("persists its own normalized_title/normalized_artist so later files can find it via the index", async () => {
+    const fileA = insertProvisionalFile("/fake/a.flac", {
+      title: "Come  Together", // extra internal space — normalization collapses it
+      artist: "The Beatles",
+      durationMs: 262000,
+    });
+    await collapseFile(db, fileA);
+
+    const normalized = db
+      .prepare("SELECT normalized_title, normalized_artist FROM files WHERE id = ?")
+      .get(fileA) as { normalized_title: string; normalized_artist: string };
+    expect(normalized).toEqual({ normalized_title: "come together", normalized_artist: "the beatles" });
+  });
+
+  it("trusts the persisted normalized columns rather than re-deriving them from tags_raw", async () => {
+    const fileA = insertProvisionalFile("/fake/a.flac", {
+      title: "Come Together",
+      artist: "The Beatles",
+      durationMs: 262000,
+    });
+    await collapseFile(db, fileA);
+
+    // Corrupt the persisted index directly, leaving tags_raw (the old
+    // source of truth) untouched — proves the candidate lookup reads the
+    // indexed column, not tags_raw, since a JS-side re-normalize of
+    // tags_raw would still find this a match.
+    db.prepare("UPDATE files SET normalized_title = 'a totally different title' WHERE id = ?").run(fileA);
+
+    const fileB = insertProvisionalFile("/fake/b.flac", {
+      title: "Come Together",
+      artist: "The Beatles",
+      durationMs: 262000,
+    });
+    await collapseFile(db, fileB);
+
+    expect(fileState(fileB).match_source).toBe("unmatched");
+  });
+
+  // Issue #173 follow-up: migration 0028 adds normalized_title/
+  // normalized_artist as NULL for rows that already existed, and an
+  // unchanged file never reaches tryFuzzyMatch again on its own (mtime/size
+  // short-circuits scanFile() in scanner.ts) to self-heal them. index.ts
+  // now calls backfillFuzzyIndex(db) once on every server start for exactly
+  // this file shape — a row left over from before the migration, or from
+  // before this file's own row existed at all.
+  it("finds a pre-existing file whose normalized columns were NULL, once the startup backfill has run", async () => {
+    const fileA = insertProvisionalFile("/fake/a.flac", {
+      title: "Come Together",
+      artist: "The Beatles",
+      durationMs: 262000,
+    });
+    // Simulates a row left over from before migration 0028: it was never
+    // collapsed through tier 3, so normalized_title/normalized_artist are
+    // still NULL even though it's sitting there as an 'unmatched' candidate.
+    expect(fileState(fileA).match_source).toBe("unmatched");
+
+    const backfilled = backfillFuzzyIndex(db);
+    expect(backfilled).toBe(1);
+
+    const fileB = insertProvisionalFile("/fake/b.flac", {
+      title: "come  together",
+      artist: "The Beatles",
+      durationMs: 262800,
+    });
+    await collapseFile(db, fileB);
+    const stateB = fileState(fileB);
+
+    expect(stateB.match_source).toBe("fuzzy_pending");
+    expect(stateB.fuzzy_candidate_node_id).toBe(fileState(fileA).recording_node_id);
   });
 });
 
