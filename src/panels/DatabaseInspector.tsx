@@ -3,9 +3,7 @@ import { DataRow, SectionHeader } from '../ui/DataRow'
 import { Popover } from '../ui/Popover'
 import { useWsEvent } from '../hooks/useWs'
 import { formatBytes, formatDurationHours } from './format'
-import { SERVER_HOST } from '../config/serverHost'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
+import { API_BASE as API } from '../config/serverHost'
 
 /* The Database Inspector. OverviewBlock (issue #83: moved here from
  * CollectionPanel.tsx, now this panel's top element) answers "what's in my

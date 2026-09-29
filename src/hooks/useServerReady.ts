@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE } from '../config/serverHost'
 
-const HEALTH_URL = `http://${SERVER_HOST}:8899/api/v1/health`
+const HEALTH_URL = `${API_BASE}/health`
 const STARTUP_POLL_INTERVAL_MS = 300
 const HEARTBEAT_INTERVAL_MS = 3000
 // A single missed heartbeat is noise (a GC pause, a slow tick) — only a

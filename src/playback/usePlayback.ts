@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 type ResolvedTrack = {
   recordingNodeId: number

@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
-import { SERVER_HOST } from '../config/serverHost'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
+import { API_BASE as API } from '../config/serverHost'
 
 /* How long to wait for a burst of enrichment events to stop before refetching
  * the graph. Longer than the enrichment queue's own ~1/sec spacing, so a

@@ -8,12 +8,10 @@ import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
 import type { ReplayGainMode } from '../playback/usePlayback'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
 import { formatLongDuration } from '../ui/format'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* The Legato settings panel — DESIGN.md's "v2: settings primitives",
  * restyled onto the same GroupHeader/SettingsRow geometry MusicMapSettings.tsx
