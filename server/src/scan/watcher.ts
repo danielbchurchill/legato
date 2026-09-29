@@ -1,3 +1,4 @@
+import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
 import type { Database } from "../sqlite.js";
 import { broadcast } from "../ws.js";
@@ -5,6 +6,13 @@ import { isSelfWrite } from "../tagwrite/guard.js";
 import { markMissing, runIncrementalScan, scanFile } from "./scanner.js";
 import { isAudioFile } from "./walk.js";
 import { CHOKIDAR_IGNORED } from "./junk.js";
+import {
+  checkLibraryRoot,
+  forgetRoot,
+  getRootReachability,
+  markRootPending,
+  type ReachabilityDeps,
+} from "./reachability.js";
 import {
   isNearWatchLimit,
   isWatchExhaustionError,
@@ -23,6 +31,36 @@ const activeWatchers = new Map<number, FSWatcher>();
 const fallbackTimers = new Map<number, ReturnType<typeof setInterval>>();
 
 const DEFAULT_FALLBACK_MINUTES = 30;
+
+// Issue #192: 'unlink' events are held for a moment and handled as a
+// batch, because one unlink can't tell a deleted file from a drive that
+// just went away — only the batch, next to the root it came from, can.
+// Measured against a real unmount (an HFS+ disk image detached under a
+// live chokidar 5 watch, on macOS): every folder's 'unlinkDir' and every
+// file's 'unlink' landed inside ~100ms of each other, the mount-point
+// directory still present and empty. The window is a quiet period, reset
+// by each new unlink, so a longer burst over a bigger tree stays one
+// batch however long it runs.
+const UNLINK_BURST_WINDOW_MS = 1000;
+
+// A batch covering at least this share of the root's live files is
+// treated as "the whole root" and only acted on once the root is shown to
+// still hold music. An outage produces 100% in one batch (see above); half
+// leaves room for a burst that somehow splits across two windows, while
+// sitting far above any real deletion — removing an album from a library
+// of any size is a fraction of a percent. Guessing high is cheap: the
+// check behind it stops at the first audio file it finds, so a real mass
+// deletion from a reachable root still goes through, just verified first.
+const UNLINK_BURST_FRACTION = 0.5;
+
+type UnlinkBatch = { paths: Set<string>; timer: ReturnType<typeof setTimeout> | null };
+const unlinkBatches = new Map<number, UnlinkBatch>();
+
+function clearUnlinkBatch(libraryRootId: number): void {
+  const batch = unlinkBatches.get(libraryRootId);
+  if (batch?.timer) clearTimeout(batch.timer);
+  unlinkBatches.delete(libraryRootId);
+}
 
 // docs/plans/04-library-and-scan.md calls the interval "configurable" —
 // this reads the same generic key/value settings table every other
@@ -123,6 +161,8 @@ function checkWatchLimit(
 type WatchLibraryRootDeps = {
   watch?: typeof chokidar.watch;
   maxUserWatches?: () => number | null;
+  unlinkBurstWindowMs?: number;
+  reachability?: ReachabilityDeps;
 };
 
 // Started once a library root's initial full scan completes. Reacts to a
@@ -206,18 +246,99 @@ export function watchLibraryRoot(
     }
   };
 
-  watcher.on("add", handleChange);
+  const burstWindowMs = deps.unlinkBurstWindowMs ?? UNLINK_BURST_WINDOW_MS;
+
+  // Every flush checks the root at the stat level (exists, still mounted),
+  // which is what catches a drive dropping mid-burst however small the
+  // batch. Only a batch big enough to be "the whole root" also pays for the
+  // is-there-any-music-left probe. A batch the root passes is marked
+  // missing file by file, exactly as the handler did one event at a time
+  // before; one it fails marks nothing.
+  const flushUnlinks = async () => {
+    const batch = unlinkBatches.get(libraryRootId);
+    unlinkBatches.delete(libraryRootId);
+    if (!activeWatchers.has(libraryRootId) && !fallbackTimers.has(libraryRootId)) return; // torn down meanwhile
+    const paths = batch ? [...batch.paths] : [];
+
+    const { n: live } = db
+      .prepare<{ n: number }>("SELECT COUNT(*) AS n FROM files WHERE library_root_id = ? AND missing_since IS NULL")
+      .get(libraryRootId) as { n: number };
+    const coversRoot = paths.length > 0 && paths.length >= live * UNLINK_BURST_FRACTION;
+    const wasUnreachable = getRootReachability(libraryRootId)?.reachable === false;
+
+    const result = await checkLibraryRoot(
+      db,
+      libraryRootId,
+      rootPath,
+      { skipEmptyCheck: !coversRoot && !wasUnreachable },
+      deps.reachability,
+    );
+    if (!result.reachable) {
+      console.warn(`[watcher] library root ${libraryRootId}: ${result.message}`);
+      broadcast("scan:error", { libraryRootId, error: result.message });
+      return;
+    }
+    for (const filePath of paths) {
+      markMissing(db, filePath);
+      broadcast("scan:file", { libraryRootId, filePath, outcome: "missing" });
+    }
+  };
+
+  const scheduleFlush = (filePath?: string) => {
+    let batch = unlinkBatches.get(libraryRootId);
+    if (!batch) {
+      batch = { paths: new Set(), timer: null };
+      unlinkBatches.set(libraryRootId, batch);
+    }
+    if (filePath) batch.paths.add(filePath);
+    if (batch.timer) clearTimeout(batch.timer);
+    batch.timer = setTimeout(() => {
+      flushUnlinks().catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        broadcast("scan:error", { libraryRootId, error: message });
+      });
+    }, burstWindowMs);
+    batch.timer.unref?.();
+  };
+
+  watcher.on("add", (filePath) => {
+    // Music reappearing under a root flagged unreachable is the drive
+    // coming back (the same reattach test saw 'addDir'/'add' for
+    // everything) — re-check so /health stops reporting it disconnected
+    // without waiting for the next scan.
+    if (getRootReachability(libraryRootId)?.reachable === false) scheduleFlush();
+    return handleChange(filePath);
+  });
   watcher.on("change", handleChange);
   watcher.on("unlink", (filePath) => {
     if (!isAudioFile(filePath)) return;
-    markMissing(db, filePath);
-    broadcast("scan:file", { libraryRootId, filePath, outcome: "missing" });
+    scheduleFlush(filePath);
+  });
+  // The root itself going away. On macOS chokidar 5 goes silent instead
+  // (confirmed: deleting the watched root emits nothing until the path
+  // reappears), so this only fires where the platform reports it — the
+  // next flush or scan catches the rest.
+  watcher.on("unlinkDir", (dirPath) => {
+    if (path.resolve(dirPath) === path.resolve(rootPath)) scheduleFlush();
   });
 
   activeWatchers.set(libraryRootId, watcher);
+
+  // Seeds /health at boot (index.ts starts a watcher for every enabled
+  // root), so a drive that was already gone before the server started is
+  // reported as such, not as "not checked yet" until someone scans.
+  markRootPending(libraryRootId, rootPath);
+  checkLibraryRoot(db, libraryRootId, rootPath, {}, deps.reachability)
+    .then(() => {
+      // Removed while the check was in flight: don't leave it in /health.
+      if (!activeWatchers.has(libraryRootId) && !fallbackTimers.has(libraryRootId)) forgetRoot(libraryRootId);
+    })
+    .catch(() => undefined);
 }
 
 export function unwatchLibraryRoot(libraryRootId: number): void {
+  clearUnlinkBatch(libraryRootId);
+  forgetRoot(libraryRootId);
   const watcher = activeWatchers.get(libraryRootId);
   if (watcher) {
     void watcher.close();
