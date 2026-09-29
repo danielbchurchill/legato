@@ -9,34 +9,10 @@ import { openDb } from "./db.js";
 import { PORT, DATA_DIR } from "./config.js";
 import { FFMPEG_PATH, FPCALC_PATH } from "./mediaBinaries.js";
 import { acquireMediaSlot } from "./media/queue.js";
-import { healthRoutes } from "./routes/health.js";
-import { settingsRoutes } from "./routes/settings.js";
-import { libraryRootsRoutes } from "./routes/library-roots.js";
-import { scanRoutes } from "./routes/scan.js";
-import { nodesRoutes } from "./routes/nodes.js";
-import { libraryRoutes } from "./routes/library.js";
-import { mergeOverridesRoutes } from "./routes/merge-overrides.js";
-import { favouritesRoutes } from "./routes/favourites.js";
-import { playlistsRoutes } from "./routes/playlists.js";
-import { playlistImportRoutes } from "./routes/playlist-import.js";
-import { layoutRoutes } from "./routes/layout.js";
-import { edgesRoutes } from "./routes/edges.js";
-import { searchRoutes } from "./routes/search.js";
-import { wsRoutes } from "./routes/ws.js";
-import { enrichRoutes } from "./routes/enrich.js";
-import { filesRoutes } from "./routes/files.js";
-import { queueRoutes } from "./routes/queue.js";
-import { hygieneRoutes } from "./routes/hygiene.js";
-import { tagWritesRoutes } from "./routes/tag-writes.js";
-import { coverRoutes } from "./routes/cover.js";
-import { playsRoutes } from "./routes/plays.js";
-import { statsRoutes } from "./routes/stats.js";
-import { dbInspectorRoutes } from "./routes/db-inspector.js";
-import { similarityRoutes } from "./routes/similarity.js";
-import { waveformRoutes } from "./routes/waveform.js";
-import { lyricsRoutes } from "./routes/lyrics.js";
-import { tagManagerRoutes } from "./routes/tag-manager.js";
-import { authRoutes } from "./routes/auth.js";
+import { installAuthGate, redactCredentials } from "./auth/gate.js";
+import { registerRoutes } from "./routes/register.js";
+import { setupCode } from "./auth/setupCode.js";
+import { ownerExists } from "./auth/owner.js";
 import { webClientRoutes } from "./routes/web-client.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { reconcileInterruptedScans } from "./scan/scanner.js";
@@ -54,7 +30,22 @@ if (process.argv.includes("--version") || process.argv.includes("-v")) {
   process.exit(0);
 }
 
-const app = Fastify({ logger: true });
+// Fastify's default request serializer, except the URL: media tickets
+// (issue #112, auth/gate.ts) ride in query strings, and every cover
+// thumbnail would otherwise write a working credential into the log.
+const app = Fastify({
+  logger: {
+    serializers: {
+      req: (request) => ({
+        method: request.method,
+        url: redactCredentials(request.url),
+        host: request.host,
+        remoteAddress: request.ip,
+        remotePort: request.socket?.remotePort,
+      }),
+    },
+  },
+});
 app.log.info(`legato-server ${VERSION} (${GIT_SHA})`);
 
 // The logger comes up before openDb() so the pre-migration backup line
@@ -80,6 +71,19 @@ try {
     count: number;
   };
   app.log.info(`database: ${dbPath} (${fileCount} files)`);
+}
+
+// Issue #112: until an owner exists, every route but /health refuses to
+// answer, and anyone creating the owner from another machine (the Mac
+// talking to the Pi, a browser on the LAN) has to type this code. Warn
+// level so it stands out among the startup lines in journalctl or docker
+// logs. Logged on every start until an owner exists; #113 adds a /setup
+// page that shows it too.
+if (!ownerExists(db)) {
+  app.log.warn(
+    `No owner account yet — setup code ${setupCode()}. Open Legato and create the owner for this server; ` +
+      "from another machine it asks for this code.",
+  );
 }
 
 // Issue #123 (D17): a scan_jobs row stuck at status='running' means the
@@ -140,34 +144,16 @@ app.addContentTypeParser(
   (_request, body, done) => done(null, body),
 );
 
-await app.register(healthRoutes(db), { prefix: "/api/v1" });
-await app.register(settingsRoutes(db), { prefix: "/api/v1" });
-await app.register(libraryRootsRoutes(db), { prefix: "/api/v1" });
-await app.register(scanRoutes(db), { prefix: "/api/v1" });
-await app.register(nodesRoutes(db), { prefix: "/api/v1" });
-await app.register(libraryRoutes(db), { prefix: "/api/v1" });
-await app.register(mergeOverridesRoutes(db), { prefix: "/api/v1" });
-await app.register(favouritesRoutes(db), { prefix: "/api/v1" });
-await app.register(playlistsRoutes(db), { prefix: "/api/v1" });
-await app.register(playlistImportRoutes(db), { prefix: "/api/v1" });
-await app.register(layoutRoutes(db), { prefix: "/api/v1" });
-await app.register(edgesRoutes(db), { prefix: "/api/v1" });
-await app.register(searchRoutes(db), { prefix: "/api/v1" });
-await app.register(wsRoutes(), { prefix: "/api/v1" });
-await app.register(enrichRoutes(db), { prefix: "/api/v1" });
-await app.register(filesRoutes(db), { prefix: "/api/v1" });
-await app.register(queueRoutes(db), { prefix: "/api/v1" });
-await app.register(hygieneRoutes(db), { prefix: "/api/v1" });
-await app.register(tagWritesRoutes(db), { prefix: "/api/v1" });
-await app.register(coverRoutes(db), { prefix: "/api/v1" });
-await app.register(playsRoutes(db), { prefix: "/api/v1" });
-await app.register(statsRoutes(db), { prefix: "/api/v1" });
-await app.register(dbInspectorRoutes(db), { prefix: "/api/v1" });
-await app.register(similarityRoutes(db), { prefix: "/api/v1" });
-await app.register(waveformRoutes(db), { prefix: "/api/v1" });
-await app.register(lyricsRoutes(db), { prefix: "/api/v1" });
-await app.register(tagManagerRoutes(db), { prefix: "/api/v1" });
-await app.register(authRoutes(db), { prefix: "/api/v1" });
+// Issue #112: the owner gate goes on before any route exists, so every
+// route registered after it (registerRoutes below, and anything added
+// straight to `app` later in this file) is behind it. auth/gate.ts has the
+// rules.
+installAuthGate(app, db);
+await registerRoutes(app, db);
+
+// #116's web client and its SPA fallback. Registered after the gate like
+// everything else; auth/gate.ts lets plain GET/HEAD outside the API
+// prefixes through, so the sign-in screen loads before anyone is signed in.
 await app.register(webClientRoutes());
 
 // Resume watching every already-configured root across restarts — a root
