@@ -13,6 +13,18 @@ import { broadcast } from "../ws.js";
 
 type LibraryRootRow = { id: number; path: string; enabled: number };
 
+// executeScan records its own failures on the job row rather than
+// throwing — an unreachable library root (issue #192) is the one that
+// matters, carrying the H9 message the client shows. Reported as an
+// error, not 'done', and without starting the watcher on a root that
+// isn't there.
+function reportErroredScan(db: Database, root: LibraryRootRow, jobId: number) {
+  const { error_message } = db.prepare("SELECT error_message FROM scan_jobs WHERE id = ?").get(jobId) as {
+    error_message: string | null;
+  };
+  broadcast("scan:error", { jobId, libraryRootId: root.id, error: error_message ?? "scan failed" });
+}
+
 // executeScan (issue #123) no longer always runs to completion — it can
 // also stop early because a pause or cancel was requested mid-run, in
 // which case it returns normally rather than throwing. The three outcomes
@@ -27,6 +39,8 @@ function runInBackground(db: Database, root: LibraryRootRow, jobId: number, mode
         broadcast("scan:paused", { jobId, libraryRootId: root.id });
       } else if (status === "canceled") {
         broadcast("scan:canceled", { jobId, libraryRootId: root.id });
+      } else if (status === "error") {
+        reportErroredScan(db, root, jobId);
       } else {
         watchLibraryRoot(db, root.id, root.path);
         broadcast("scan:done", { jobId, libraryRootId: root.id });
@@ -50,6 +64,8 @@ function resumeInBackground(db: Database, root: LibraryRootRow, jobId: number) {
         broadcast("scan:paused", { jobId, libraryRootId: root.id });
       } else if (status === "canceled") {
         broadcast("scan:canceled", { jobId, libraryRootId: root.id });
+      } else if (status === "error") {
+        reportErroredScan(db, root, jobId);
       } else {
         watchLibraryRoot(db, root.id, root.path);
         broadcast("scan:done", { jobId, libraryRootId: root.id });
