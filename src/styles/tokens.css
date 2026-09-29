@@ -94,6 +94,14 @@
    * --color-canvas. See DESIGN.md "Controls". */
   --color-control: #646464;
 
+  /* gpui-kit's focus ring. Its own `ring` token is a mid neutral (neutral-500
+   * in dark, neutral-400 in light), which is --color-muted-hi's job here
+   * already, so this aliases rather than adds a hex. The ring itself is
+   * drawn at 50% of this, 3px wide — gpui-kit's FOCUS_RING_OPACITY. Aliasing
+   * through var() means the paper theme's own --color-muted-hi carries it
+   * with no light override of its own. */
+  --color-ring: var(--color-muted-hi);
+
   /* ---- Graph ---------------------------------------------------------- */
 
   /* Edge color encodes relationship type. One family: identical saturation and
@@ -194,6 +202,13 @@
    * rather than float on it. */
   --radius-control: 15px;
 
+  /* gpui-kit's small-control corner: a checkbox caps at 4px whatever the
+   * theme radius is (checkbox.rs: `theme.radius.min(px(4.))`) — rounder and
+   * a checked box reads as a radio — and a Kbd keycap takes half the theme
+   * radius, which lands within a pixel of the same value. The one
+   * square-ish shape in the control set. */
+  --radius-small: 4px;
+
   /* P-8: panel width is measured at the mockup's 1440px reference only —
    * floated as a literal pixel, a real 2560px window becomes a narrow
    * ribbon with a lot of empty canvas next to it. Daniel's call: panels
@@ -263,10 +278,46 @@
    * this is every duration and curve in the app, so nothing gets a literal.
    */
 
-  --motion-instant: 90ms; /* press receipt; must read as immediate  */
-  --motion-fast: 140ms; /* hover, colour, small state change      */
+  /* gpui-kit adoption (2026-09-29): durations and curves are gpui-kit's
+   * MotionTokens defaults (crates/component/src/theme/motion.rs), not
+   * Legato's earlier 90/140 pair. Instant is genuinely zero now — a press
+   * receipt that has to be immediate shouldn't wait on a transition at
+   * all — and fast came down 140 -> 120. See DESIGN.md "Motion". */
+  --motion-instant: 0ms; /* press receipt; must read as immediate  */
+  --motion-fast: 120ms; /* hover, colour, small state change      */
   --motion-base: 180ms; /* pagination, disclosure, modal entry    */
+  --motion-slow: 280ms; /* larger surfaces arriving (dialog, toast) */
   --motion-exit: 120ms; /* leaving is faster than arriving        */
+
+  /* gpui-kit drives control geometry (a switch thumb's travel, a slider's
+   * fill) with a real spring rather than a timed curve. CSS has no spring,
+   * so these are gpui-kit's two springs sampled into linear() curves —
+   * spring_move (280ms period, damping 0.85, its ~0.6% overshoot kept) and
+   * spring_control (180ms period, critically damped). A CSS transition
+   * retargets from wherever the property currently is, so toggling a switch
+   * twice mid-travel reverses from the thumb's live position exactly as
+   * gpui-kit's spring does. The durations are the settle times at
+   * gpui-kit's own epsilons, which is why they aren't round numbers. The
+   * curves themselves live in the @supports block below this @theme: an
+   * engine without linear() would otherwise throw the whole declaration
+   * away and fall back to `ease`, so --ease-out stands in until then. */
+  --motion-spring: 280ms;
+  --motion-spring-control: 210ms;
+  --ease-spring: var(--ease-out);
+  --ease-spring-control: var(--ease-out);
+
+  /* The loops DESIGN.md's Motion section allows since the gpui-kit port:
+   * a skeleton's opacity breath, a spinner's turn, indeterminate progress
+   * sweeping its track. gpui-kit's own periods. */
+  --motion-skeleton: 2000ms;
+  --motion-spinner: 800ms;
+  --motion-progress: 1000ms;
+
+  /* gpui-kit's distance tokens (0.25rem / 0.5rem): how far a popup travels
+   * as it fades in — a tooltip slides this far down from its trigger, a
+   * dialog rises this far into place. */
+  --distance-short: 4px;
+  --distance-medium: 8px;
 
   /* The one loop duration in the app — see NodePlayingHalo.tsx and
    * DESIGN.md Motion's "the currently-playing halo" exception. Not grouped
@@ -275,10 +326,24 @@
    * is actually happening. */
   --motion-pulse: 1800ms;
 
-  /* Response to input: starts at full speed, decelerates into place. */
+  /* Response to input: starts at full speed, decelerates into place. Also
+   * gpui-kit's easing_move, to the digit — the one curve both systems
+   * already agreed on. */
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
   /* Reserved for things reversible mid-flight, like a disclosure toggled twice. */
   --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+  /* gpui-kit's easing_enter / easing_exit: a popup arrives on a steep
+   * deceleration and leaves on an acceleration, so it's gone before it's
+   * noticed going. */
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --ease-spring: linear(0, 0.062, 0.198, 0.357, 0.51, 0.643, 0.751, 0.834, 0.895, 0.938, 0.967, 0.985, 0.997, 1.003, 1.005, 1.006, 1);
+    --ease-spring-control: linear(0, 0.079, 0.237, 0.405, 0.553, 0.673, 0.766, 0.835, 0.885, 0.92, 0.945, 0.963, 0.975, 0.983, 0.989, 0.992, 1);
+  }
 }
 
 /* Tells the platform which native chrome palette to draw — scrollbar
@@ -396,5 +461,54 @@
   }
   50% {
     opacity: 1;
+  }
+}
+
+/* The gpui-kit port's loops (DESIGN.md Motion, "Loops, since the gpui-kit
+ * port"). All four fall under index.css's global reduced-motion rule the
+ * same way node-halo-pulse does — animation-duration zeroed, one iteration
+ * — so each freezes on a readable frame instead of vanishing: a skeleton at
+ * full opacity, a spinner's arc at rest, the progress sweep parked at its
+ * start, shimmer text at its plain fill.
+ *
+ * skeleton-pulse is gpui-kit's Skeleton: opacity between full and half over
+ * --motion-skeleton, never a moving gradient — a placeholder that breathes
+ * rather than one that sweeps, so a grid of them doesn't read as motion
+ * across the page. */
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Indeterminate progress: a 40%-wide segment enters from off the track's
+ * left edge and leaves off its right, gpui-kit's progress.rs sweep. */
+@keyframes progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+/* Shimmer.tsx: a lighter band travels across text clipped to a gradient —
+ * gpui-kit's text shimmer, for a label saying work is under way. */
+@keyframes shimmer-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
   }
 }

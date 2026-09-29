@@ -100,6 +100,15 @@
   }
 }
 
+/* Custom scrollbars (ScrollArea.tsx) hide the native one on their own
+ * viewport. Both spellings, since WebKitGTK only honours the pseudo-element. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
 /* MO-2: zero :active and zero :focus-visible styles existed anywhere in the
  * app — clicking a control produced no acknowledgment until whatever it
  * triggered finished, and the app was unusable by keyboard with no visible
@@ -122,11 +131,43 @@
   transition-duration: var(--motion-fast);
   transition-timing-function: var(--ease-out);
 }
-:is(button, [role='button'], [role='slider'], [tabindex]:not([tabindex='-1'])):active {
+/* Slider thumbs are left out of the press dim: gpui-kit acknowledges a
+ * press on a thumb with its ring (Slider.tsx), and a thumb fading to 70%
+ * for the whole length of a drag read as disabled rather than held. */
+:is(button, [role='button'], [tabindex]:not([tabindex='-1'])):not([role='slider']):active {
   transition-duration: 0ms;
   opacity: 0.7;
 }
-:is(button, [role='button'], [role='slider'], [tabindex]:not([tabindex='-1'])):focus-visible {
-  outline: 1px solid var(--color-hairline);
-  outline-offset: 3px;
+/* gpui-kit's focus ring (styled.rs `focus_style`), replacing MO-2's 1px
+ * hairline outline: 3px of --color-ring at 50%, hugging the element's own
+ * corners — outline follows border-radius in every engine this app runs on.
+ *
+ * A control whose focusable root isn't the shape a ring should hug (a
+ * switch, whose ring belongs on the track rather than around track and
+ * label together; a slider, whose ring belongs on the thumb) opts out with
+ * data-focus-ring="part" and draws the same ring on that part itself, via
+ * the .focus-ring-part class below. The opt-out has to live in this
+ * selector: this rule is unlayered, so no utility class could ever beat it. */
+:is(button, [role='button'], [role='slider'], [tabindex]:not([tabindex='-1'])):not(
+    [data-focus-ring='part']
+  ):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--color-ring) 50%, transparent);
+  outline-offset: 0;
+}
+[data-focus-ring='part']:focus-visible {
+  outline: none;
+}
+[data-focus-ring='part']:focus-visible .focus-ring-part {
+  outline: 3px solid color-mix(in srgb, var(--color-ring) 50%, transparent);
+  outline-offset: 0;
+}
+
+/* A text field's ring belongs on its well, not the bare <input> inside it —
+ * the well is the shape the eye reads as the control (Combobox,
+ * NumberInput, the search field). Text inputs always match :focus-visible
+ * once focused, pointer or not, which is the right call for a field: a
+ * caret alone is easy to lose. */
+.focus-ring-well:focus-within {
+  outline: 3px solid color-mix(in srgb, var(--color-ring) 50%, transparent);
+  outline-offset: 0;
 }
