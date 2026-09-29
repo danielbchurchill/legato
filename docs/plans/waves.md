@@ -6,7 +6,7 @@ Each wave's workers run at the same time, each in its own worktree off `main`, f
 
 Update this file when a wave merges or the plan changes. The workers don't edit `docs/plans/`, so it stays the coordinator's.
 
-_Last updated 2026-09-29, `main` at `23bfde4`._
+_Last updated 2026-09-29, `main` at `eebf44d`._
 
 ## Done
 
@@ -15,6 +15,7 @@ _Last updated 2026-09-29, `main` at `23bfde4`._
 | 1 and earlier | #98, #99, #100, #104, #111, #124, #125, #126, #127 | Merged before this file existed |
 | 2 | #102 compiled server, #122 watch-limit fallback, #123 scan stages, #136 light mode | #169, #168, #171, #170 |
 | 3 | #101 relay on Bun, #103 Tauri sidecar, #174 manifest drift test, #173 fuzzy-match index, #172 library cold start, #81 icon button clicks | #177, #180, #176, #182, #178, #181 |
+| 4 | #179 server port, #191 DB backup before migrating, #192 unreachable-root guard, #105 Docker image, #86 inspector width, #187 sidecar Bun check, then #193 version in `/health`, #116 web client served by the server, #112 local owner account | #199, #197, #201, #200, #202, #196, #203, #204, #205 |
 
 Still owed, by Daniel rather than a worker:
 
@@ -22,6 +23,8 @@ Still owed, by Daniel rather than a worker:
 - #123: a scan measurement on the real library. The worker measured a synthetic 100k-file tree only.
 - #101: the relay's OAuth secrets (`relay/DEPLOY.md` step 3). The relay is live on Fly and `/health` passes, but `/auth/*` and `/pair/*` return 503 until the secrets are set.
 - #103: optionally, a packaged Linux build (`npx tauri build`) run with Node and Bun off PATH. The Mac's packaged run and the AIO's dev run both pass.
+
+Wave 4's PRs say "Refs", not "Closes", for every issue except #193, per the worker rules: each has one check a worker couldn't reach (the native Tauri window, Linux hardware, the Pi, or a live push). The issues stay open until Daniel runs the steps in each PR. **Deploying #112 to the Pi breaks `~/pi-status`'s `/stats` poll until the kiosk sends a bearer token**; PR #205 has the curl.
 
 Wave 3 found six follow-ups, filed as #184–#189 and scheduled below. It also found #179, now in wave 4. A review of the session's failures added four safeguards, #191–#194, and a drive-recovery item on #108.
 
@@ -34,14 +37,14 @@ The two parallel workers in wave 2 both picked `0026`. Migration numbers are now
 | 0026 | #122 (merged) |
 | 0027 | #123 (merged) |
 | 0028 | #173 (merged) |
-| 0029 | #112 |
+| 0029 | #112 (merged) |
 | 0030 | #189, if its fix needs an index or column |
 
 Give the next free number to any other issue that turns out to need storage, and note it here.
 
-## Wave 4: phase 1 foundations
+## Wave 4: phase 1 foundations (merged)
 
-Wave 3 is merged, so this is the current wave. It starts in two steps, so no two workers rewrite the same files:
+Merged 2026-09-29, all on Opus workers. Wave 5 is next. It starts in two steps, so no two workers rewrite the same files:
 
 1. **Start now:** #179, #191, #192, #105, #86, #187.
 2. **Once #179 has merged:** #112, #116 and #193.
