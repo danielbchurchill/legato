@@ -1,0 +1,32 @@
+# Legato server, Docker install (issue #105). See docker.md next to this
+# file for the walkthrough. The short version:
+#
+#   LEGATO_MUSIC_DIR=/path/to/your/music docker compose up -d
+#
+# then open http://<this machine>:8899 and add /music as a library folder.
+services:
+  legato:
+    image: ghcr.io/danielbchurchill/legato-server:latest
+    restart: unless-stopped
+    environment:
+      # The host user that owns your music. `id <user>` on the host prints
+      # both numbers. The server runs as this user, never as root.
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+    ports:
+      - "${LEGATO_HOST_PORT:-8899}:8899"
+    volumes:
+      # Database, cover art and waveform cache. A named volume so it
+      # survives `docker compose down` and image upgrades.
+      - legato-data:/data
+      # Your library, read-only. Legato only ever reads audio files unless
+      # you turn on tag write-back, which needs this to be read-write. See
+      # "Tag write-back" in docker.md before removing :ro.
+      #
+      # The :? makes compose stop with that message when the variable is
+      # unset. Otherwise Docker would create an empty, root-owned folder at
+      # the fallback path and Legato would scan nothing.
+      - "${LEGATO_MUSIC_DIR:?set LEGATO_MUSIC_DIR to your music folder, or replace this line with the path}:/music:ro"
+
+volumes:
+  legato-data:
