@@ -254,7 +254,7 @@ describe("GET /api/v1/health", () => {
       message: `library drive at ${dir} isn't reachable; files weren't marked missing (${dir} isn't mounted)`,
     });
     const app = Fastify();
-    await app.register(healthRoutes(), { prefix: "/api/v1" });
+    await app.register(healthRoutes(db), { prefix: "/api/v1" });
 
     const res = await app.inject({ method: "GET", url: "/api/v1/health" });
 

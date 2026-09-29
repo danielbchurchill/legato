@@ -139,7 +139,7 @@ app.addContentTypeParser(
   (_request, body, done) => done(null, body),
 );
 
-await app.register(healthRoutes(), { prefix: "/api/v1" });
+await app.register(healthRoutes(db), { prefix: "/api/v1" });
 await app.register(settingsRoutes(db), { prefix: "/api/v1" });
 await app.register(libraryRootsRoutes(db), { prefix: "/api/v1" });
 await app.register(scanRoutes(db), { prefix: "/api/v1" });
