@@ -12,6 +12,11 @@ const API = `http://${SERVER_HOST}:8899/api/v1`
 // after the very first page lands) and fills a sparse array as the
 // virtualizer's own visible range asks for it, applying the same
 // "load only what's on screen" idea to the network instead of just the DOM.
+//
+// Page 0 is fetched by this hook itself, not left for the virtualizer's own
+// `ensureRange` to ask for — a virtualizer sizes its scroll range from
+// `total`, which starts at 0, so with nothing fetched yet it always asks for
+// zero rows and `total` would never learn otherwise (issue #172).
 const PAGE_SIZE = 150
 
 // Pulled out of the fetch callback below and exported so the one bit of
@@ -37,6 +42,18 @@ export type LibraryPage<Row> = {
    * can size a virtualizer immediately without waiting on every row. */
   rows: (Row | undefined)[]
   total: number
+  /** True until page 0 has returned for the current entity/query/sort/dir —
+   * before that, `total === 0` means "not known yet", not "empty", so
+   * callers must not render an empty state off it alone. */
+  loading: boolean
+  /** DESIGN.md's indeterminate-progress rule (see useLyrics.ts/LibrarySetup.tsx
+   * for the same pattern elsewhere): under ~400ms a loading state shown just
+   * to prove the wait happened costs more attention than the wait itself, so
+   * callers should render nothing until this flips. */
+  waitVisible: boolean
+  /** Past ~800ms silence reads as broken — one non-looping state change
+   * (e.g. a label going from muted to ink), not a spinner. */
+  waitLong: boolean
   /** Call with the currently visible index range (inclusive); loads
    * whichever pages that range touches and haven't been requested yet. */
   ensureRange: (startIndex: number, endIndex: number) => void
@@ -53,6 +70,7 @@ export function useLibraryPage<Row>(
 ): LibraryPage<Row> {
   const [rows, setRows] = useState<(Row | undefined)[]>([])
   const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
   const loadedPages = useRef<Set<number>>(new Set())
   // Bumped on every filter/sort change so a page fetch that was already in
   // flight when the user typed the next character lands as a no-op instead
@@ -64,6 +82,7 @@ export function useLibraryPage<Row>(
     loadedPages.current = new Set()
     setRows([])
     setTotal(0)
+    setLoading(true)
   }, [entity, query, sort, dir])
 
   const loadPage = useCallback(
@@ -82,17 +101,29 @@ export function useLibraryPage<Row>(
           if (gen !== generation.current) return
           setTotal(data.total)
           setRows((prev) => mergePage(prev, data.total, offset, data.items))
+          if (pageIndex === 0) setLoading(false)
         })
         .catch(() => {
           // Left un-loaded rather than latched as permanently missing — the
           // row keeps rendering its loading placeholder, and scrolling away
           // and back tries the fetch again instead of leaving a hole a
-          // manual refresh is the only way out of.
+          // manual refresh is the only way out of. Page 0 specifically is
+          // never retried by a scroll, so `loading` is left true rather than
+          // false — a stuck loading state is a truer picture of a real fetch
+          // failure than snapping to the empty state ("no albums yet") would
+          // be for a library that's actually full.
           loadedPages.current.delete(pageIndex)
         })
     },
     [entity, query, sort, dir],
   )
+
+  // Sizes the virtualizer from `total` immediately instead of waiting on it
+  // to ask for a range first — see this file's header comment for why that
+  // wait was a deadlock (issue #172).
+  useEffect(() => {
+    loadPage(0)
+  }, [loadPage])
 
   const ensureRange = useCallback(
     (startIndex: number, endIndex: number) => {
@@ -103,5 +134,24 @@ export function useLibraryPage<Row>(
     [loadPage],
   )
 
-  return { rows, total, ensureRange }
+  // Same MO-11 wait timing as useLyrics.ts/LibrarySetup.tsx: nothing for the
+  // first ~400ms (most local fetches never reach it), one non-looping change
+  // past ~800ms.
+  const [waitVisible, setWaitVisible] = useState(false)
+  const [waitLong, setWaitLong] = useState(false)
+  useEffect(() => {
+    if (!loading) {
+      setWaitVisible(false)
+      setWaitLong(false)
+      return
+    }
+    const shortTimer = setTimeout(() => setWaitVisible(true), 400)
+    const longTimer = setTimeout(() => setWaitLong(true), 800)
+    return () => {
+      clearTimeout(shortTimer)
+      clearTimeout(longTimer)
+    }
+  }, [loading])
+
+  return { rows, total, loading, waitVisible, waitLong, ensureRange }
 }
