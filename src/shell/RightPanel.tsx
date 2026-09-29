@@ -70,7 +70,12 @@ export function RightPanel({ expanded, collapsedNodeId, onExpand, children }: Ri
       <h2 className="shrink-0 pt-[21px] pb-[10px] text-center text-[length:var(--text-base)] font-normal text-[var(--color-muted)]">
         now playing
       </h2>
-      <div className="min-h-0 flex-1 overflow-y-auto px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
+      {/* overflow-x-hidden for the same reason as InspectorPanel's scroller:
+       * a lone overflow-y-auto computes overflow-x to auto as well, so
+       * anything that spilled past this column would surface as a
+       * horizontal scrollbar (issue #86). The left panel got this in #95;
+       * this one never did. */}
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
         {children}
       </div>
     </Surface>
