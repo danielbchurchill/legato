@@ -53,10 +53,20 @@ if (process.argv.includes("--version") || process.argv.includes("-v")) {
   process.exit(0);
 }
 
-const db = openDb();
-
 const app = Fastify({ logger: true });
 app.log.info(`legato-server ${VERSION} (${GIT_SHA})`);
+
+// The logger comes up before openDb() so the pre-migration backup line
+// (issue #191) lands with the rest of startup, and so a backup that can't
+// be written ends in one readable fatal line rather than a stack trace.
+// openDb() has already refused to migrate by the time it throws.
+let db: ReturnType<typeof openDb>;
+try {
+  db = openDb(undefined, { log: (message) => app.log.info(message) });
+} catch (err) {
+  app.log.fatal(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
 
 // The #1 support question this app generates on itself: standalone runs
 // (`npm --prefix server run dev` without LEGATO_DATA_DIR) silently open a

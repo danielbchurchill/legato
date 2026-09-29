@@ -1,10 +1,31 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, statSync, statfsSync } from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "./config.js";
 import { MIGRATIONS } from "./migrations/manifest.generated.js";
 import { type Database, openSqlite } from "./sqlite.js";
 
-function runMigrations(db: Database) {
+// How many pre-migration backups survive in <data dir>/backups. Three covers
+// "the last upgrade went wrong" and "the one before that went wrong too, and
+// nobody noticed until now" without letting a Pi that updates weekly fill
+// its SD card with copies of a database that can run to hundreds of MB.
+export const BACKUPS_KEPT = 3;
+
+// legato-v<highest applied>-<UTC timestamp>.db. The timestamp is ISO 8601
+// with the separators stripped (20260929T142233.123Z) so names sort in time
+// order as plain strings and carry no ':' for Windows to choke on.
+// Milliseconds are kept because VACUUM INTO refuses to overwrite an
+// existing file — two starts inside the same second would otherwise fail
+// the second backup, and with it the migration.
+const BACKUP_NAME = /^legato-v\d+-(\d{8}T\d{6}\.\d{3}Z)\.db$/;
+
+export type OpenDbOptions = {
+  // Where the "backed up before migrating" line goes. index.ts passes the
+  // Fastify logger so it lands next to the other startup lines; the CLI
+  // tools that also call openDb() fall back to plain stdout.
+  log?: (message: string) => void;
+};
+
+function readAppliedVersions(db: Database): Set<number> {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -12,12 +33,98 @@ function runMigrations(db: Database) {
     )
   `);
 
-  const applied = new Set(
+  return new Set(
     db
       .prepare("SELECT version FROM schema_migrations")
       .all()
       .map((row) => (row as { version: number }).version),
   );
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// Issue #191: migrations run in place on every start, and a packaged app,
+// the Pi's compiled binary or a Docker container upgrades with nobody at a
+// terminal to copy legato.db first. This is that copy, taken automatically.
+//
+// VACUUM INTO rather than copying the file: the live DB is in WAL mode, so
+// legato.db alone can be missing committed pages still sitting in -wal, and
+// copying the pair by hand while the connection is open isn't guaranteed
+// consistent. VACUUM INTO writes one self-contained, already-checkpointed
+// file from inside SQLite — restoring it is a single copy, no -wal/-shm.
+//
+// Only legato.db is backed up. The rest of the data dir (covers/,
+// waveforms/) is gigabytes of cache the server rebuilds on its own, and
+// copying it on every upgrade would be exactly the disk-full failure this
+// is meant to protect against.
+function backupBeforeMigrating(
+  db: Database,
+  dbPath: string,
+  highestApplied: number,
+  log: (message: string) => void,
+): void {
+  const backupsDir = path.join(path.dirname(dbPath), "backups");
+  const timestamp = new Date().toISOString().replace(/[-:]/g, "");
+  const backupPath = path.join(backupsDir, `legato-v${highestApplied}-${timestamp}.db`);
+
+  // page_count already includes pages still in the WAL, so this is what
+  // VACUUM INTO will write at most (less, once free pages are dropped).
+  const { page_count: pageCount } = db.prepare("PRAGMA page_count").get() as { page_count: number };
+  const { page_size: pageSize } = db.prepare("PRAGMA page_size").get() as { page_size: number };
+  const bytesNeeded = pageCount * pageSize;
+
+  let bytesFree: number | undefined;
+  try {
+    mkdirSync(backupsDir, { recursive: true });
+    const fsStats = statfsSync(backupsDir);
+    bytesFree = fsStats.bavail * fsStats.bsize;
+    if (bytesFree < bytesNeeded) {
+      throw new Error(`not enough free space on the disk holding ${backupsDir}`);
+    }
+    // Bound parameters aren't allowed in VACUUM INTO's filename on every
+    // SQLite build, so the path goes in as a quoted literal instead.
+    db.exec(`VACUUM INTO '${backupPath.replaceAll("'", "''")}'`);
+  } catch (err) {
+    // H9: say what failed, where, and what it would take to fix it — the
+    // person reading this is looking at a server that refused to start.
+    const cause = err instanceof Error ? err.message : String(err);
+    const space =
+      bytesFree === undefined
+        ? `needs about ${formatMegabytes(bytesNeeded)} free`
+        : `needs about ${formatMegabytes(bytesNeeded)} free, ${formatMegabytes(bytesFree)} available`;
+    throw new Error(
+      `Couldn't back up the database before migrating it, so no migrations were applied and ` +
+        `${dbPath} is unchanged. Tried to write ${backupPath} (${space}): ${cause}. ` +
+        `Free up space or make ${backupsDir} writable, then restart the server.`,
+      { cause: err },
+    );
+  }
+
+  log(`database: backed up to ${backupPath} (${formatMegabytes(statSync(backupPath).size)}) before migrating`);
+
+  // Pruned only after the new backup exists, so a failed write never costs
+  // an old one. Anything in backups/ that doesn't match BACKUP_NAME (a copy
+  // Daniel made by hand, say) is left alone.
+  const backups = readdirSync(backupsDir)
+    .map((name) => ({ name, timestamp: BACKUP_NAME.exec(name)?.[1] }))
+    .filter((entry): entry is { name: string; timestamp: string } => entry.timestamp !== undefined)
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  for (const { name } of backups.slice(BACKUPS_KEPT)) {
+    rmSync(path.join(backupsDir, name));
+  }
+}
+
+// dbPath defaults to the real on-disk DB; tests pass ":memory:" (or a temp
+// file) to get the same schema/migrations against an isolated database.
+export function openDb(dbPath: string = path.join(DATA_DIR, "legato.db"), options: OpenDbOptions = {}): Database {
+  if (dbPath !== ":memory:") mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = openSqlite(dbPath);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
+
+  const applied = readAppliedVersions(db);
 
   // MIGRATIONS reads every *.sql file's contents at import time via static
   // `import … with { type: "text" }` — see manifest.generated.ts and
@@ -31,23 +138,26 @@ function runMigrations(db: Database) {
   // `npm --prefix server run generate:migrations`, which check.yml also
   // verifies on every push so a forgotten regen fails loudly in CI rather
   // than shipping a binary that boots against an empty schema.
-  for (const { version, sql } of MIGRATIONS) {
-    if (applied.has(version)) continue;
+  const pending = MIGRATIONS.filter(({ version }) => !applied.has(version));
 
+  // A brand-new DB (nothing applied yet) is skipped: it holds no data, so a
+  // backup would be an empty file taking up one of the three slots, and
+  // pushing out a real one on a machine that was reset and rebuilt.
+  if (pending.length > 0 && applied.size > 0 && dbPath !== ":memory:") {
+    try {
+      backupBeforeMigrating(db, dbPath, Math.max(...applied), options.log ?? console.log);
+    } catch (err) {
+      db.close();
+      throw err;
+    }
+  }
+
+  for (const { version, sql } of pending) {
     db.transaction(() => {
       db.exec(sql);
       db.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
     })();
   }
-}
 
-// dbPath defaults to the real on-disk DB; tests pass ":memory:" (or a temp
-// file) to get the same schema/migrations against an isolated database.
-export function openDb(dbPath: string = path.join(DATA_DIR, "legato.db")): Database {
-  if (dbPath !== ":memory:") mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = openSqlite(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
-  runMigrations(db);
   return db;
 }
