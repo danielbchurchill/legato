@@ -2,11 +2,9 @@ import { useEffect, useState } from 'react'
 import { Icon } from '../ui/Icon'
 import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 import { AddToPlaylistButton } from './AddToPlaylistButton'
 import type { NodeDetail } from './useNodeDetail'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* P-7: the mockup's title block is three centred lines — title, album,
  * artist — not two left-aligned lines joined by an em dash. Non-recording

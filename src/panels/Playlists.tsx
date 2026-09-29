@@ -7,11 +7,9 @@ import { Tooltip } from '../ui/Tooltip'
 import { Button } from '../ui/Button'
 import { Disclosure } from '../ui/Disclosure'
 import { formatDuration } from '../ui/format'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 import type { usePlayback } from '../playback/usePlayback'
 import { ImportReportView, PlaylistImport, type ImportEntryResult } from './PlaylistImport'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* The Playlists rail destination: a flat list of named playlists (mirrors
  * Favourites.tsx's own top-level shape) that opens into a per-playlist

@@ -4,12 +4,10 @@ import { Icon } from '../ui/Icon'
 import { CoverArt } from '../ui/CoverArt'
 import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 import { PlayNodeButton } from './PlayNodeButton'
 import { AddToPlaylistButton } from './AddToPlaylistButton'
 import type { usePlayback } from '../playback/usePlayback'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* The Favourites rail destination: a flat, recency-ordered list of every
  * node the heart in NodeTitleBlock.tsx has been clicked on. Deliberately not

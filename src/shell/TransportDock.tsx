@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../ui/Icon'
 import type { PlaybackStatus, RepeatMode } from '../playback/usePlayback'
 import { Surface } from './Surface'
-import { SERVER_HOST } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 
 // D12 (docs/plans/05-listening-and-map.md): "Dock shows current mode; aria-
 // label states it in words" — spelled out here rather than left to the icon
@@ -13,8 +13,6 @@ const REPEAT_LABEL: Record<RepeatMode, string> = {
   all: 'Repeat all tracks',
   one: 'Repeat current track',
 }
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
 
 /* The transport, docked to the window's bottom edge.
  *

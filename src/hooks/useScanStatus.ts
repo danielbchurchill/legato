@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useWsEvent } from './useWs'
-import { SERVER_HOST } from '../config/serverHost'
-
-const API = `http://${SERVER_HOST}:8899/api/v1`
+import { API_BASE as API } from '../config/serverHost'
 
 type ScanJob = {
   status: 'running' | 'paused' | 'canceled' | 'done' | 'error'
