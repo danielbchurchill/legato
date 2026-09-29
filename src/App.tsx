@@ -4,6 +4,7 @@ import Sigma from 'sigma'
 import PlaybackSpike from './PlaybackSpike'
 import LibrarySetup, { Centered } from './LibrarySetup'
 import { useServerReady } from './hooks/useServerReady'
+import { ServerUpdateNotice } from './shell/ServerUpdateNotice'
 import { useWsEvent } from './hooks/useWs'
 import Canvas, { type CanvasHandle } from './canvas/Canvas'
 import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
@@ -619,12 +620,17 @@ function MainApp() {
 }
 
 export default function App() {
-  const { ready, everConnected } = useServerReady()
+  const { ready, everConnected, server } = useServerReady()
   const debug = new URLSearchParams(window.location.search).has('debug')
 
   if (!ready) {
     return <Centered>{everConnected ? 'lost connection to legato-server…' : 'starting legato-server…'}</Centered>
   }
 
-  return debug ? <DebugSpikes /> : <MainApp />
+  return (
+    <>
+      {debug ? <DebugSpikes /> : <MainApp />}
+      <ServerUpdateNotice server={server} />
+    </>
+  )
 }

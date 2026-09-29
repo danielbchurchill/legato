@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { API_BASE } from '../config/serverHost'
+import { MIN_SERVER_SCHEMA_VERSION } from '../config/serverVersion'
 
 const HEALTH_URL = `${API_BASE}/health`
 const STARTUP_POLL_INTERVAL_MS = 300
@@ -15,6 +16,46 @@ export type ServerStatus = {
    * starting up" apart from "was running, now unreachable": different
    * messages for a different problem. */
   everConnected: boolean
+  /** What the last successful health check said about the server's build.
+   * Null until the first one lands. */
+  server: ServerVersion | null
+}
+
+export type ServerVersion = {
+  /** Null on a server older than #193, which doesn't report these. */
+  version: string | null
+  gitSha: string | null
+  schemaVersion: number | null
+  /** Below MIN_SERVER_SCHEMA_VERSION, or too old to say — both mean the
+   * same thing to someone reading the notice: update the server. */
+  outOfDate: boolean
+}
+
+// Reads the version fields out of a /health body (shape documented in
+// server/src/routes/health.ts). Anything missing or the wrong type counts
+// as absent rather than as an error: a pre-#193 server answers
+// `{"status":"ok"}` and is perfectly reachable, just out of date.
+export function readServerVersion(body: unknown, minSchemaVersion: number = MIN_SERVER_SCHEMA_VERSION): ServerVersion {
+  const fields = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {}
+  const version = typeof fields.version === 'string' ? fields.version : null
+  const gitSha = typeof fields.gitSha === 'string' ? fields.gitSha : null
+  const schemaVersion = typeof fields.schemaVersion === 'number' ? fields.schemaVersion : null
+  return {
+    version,
+    gitSha,
+    schemaVersion,
+    outOfDate: schemaVersion === null || schemaVersion < minSchemaVersion,
+  }
+}
+
+function sameServerVersion(a: ServerVersion | null, b: ServerVersion): boolean {
+  return (
+    a !== null &&
+    a.version === b.version &&
+    a.gitSha === b.gitSha &&
+    a.schemaVersion === b.schemaVersion &&
+    a.outOfDate === b.outOfDate
+  )
 }
 
 // The server is embedded and spawned by the Tauri shell (see
@@ -27,6 +68,7 @@ export type ServerStatus = {
 export function useServerReady(): ServerStatus {
   const [ready, setReady] = useState(false)
   const [everConnected, setEverConnected] = useState(false)
+  const [server, setServer] = useState<ServerVersion | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -37,10 +79,18 @@ export function useServerReady(): ServerStatus {
       try {
         const res = await fetch(HEALTH_URL)
         if (!res.ok) throw new Error(`health check returned ${res.status}`)
+        // A body that won't parse still came from a server that answered,
+        // so it reads as "too old to say" rather than as an outage.
+        const next = readServerVersion(await res.json().catch(() => null))
         consecutiveFailures = 0
         if (!cancelled) {
           setReady(true)
           setEverConnected(true)
+          // Re-checked on every heartbeat, so a server updated and
+          // restarted underneath a running client clears the notice. Keeps
+          // the previous object when nothing changed, so a 3-second
+          // heartbeat doesn't re-render the whole app each time.
+          setServer((prev) => (sameServerVersion(prev, next) ? prev : next))
         }
       } catch {
         consecutiveFailures++
@@ -60,5 +110,5 @@ export function useServerReady(): ServerStatus {
     }
   }, [])
 
-  return { ready, everConnected }
+  return { ready, everConnected, server }
 }
