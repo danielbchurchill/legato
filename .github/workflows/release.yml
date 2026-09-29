@@ -145,6 +145,9 @@ jobs:
         with:
           context: server
           file: server/Dockerfile
+          # The web client's sources, for the Dockerfile's web stage (#116).
+          build-contexts: |
+            client=.
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

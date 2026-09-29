@@ -7,9 +7,12 @@
 #
 # Lives in server/ with server/ as the build context, the same shape as
 # relay/Dockerfile: the image is the server and nothing else, so the context
-# stays small and needs no repo-wide .dockerignore. Build it from the repo
-# root with:
-#   docker buildx build --platform linux/amd64,linux/arm64 server
+# stays small and needs no repo-wide .dockerignore. The web client the
+# server serves at / (issue #116) lives outside server/, so it comes in
+# through a second, named context, `client`, pointed at the repo root. Only
+# the files the web stage below COPYs are ever read from it, so root and
+# server node_modules never get sent. Build it from the repo root with:
+#   docker buildx build --platform linux/amd64,linux/arm64 --build-context client=. server
 
 # --- build: always runs on the builder's own architecture ($BUILDPLATFORM)
 # and cross-compiles to the image's ($TARGETARCH) through Bun's --target.
@@ -22,6 +25,29 @@
 # oven/bun hands an arm64 builder an x64 Bun it can't execute.
 FROM --platform=$BUILDPLATFORM oven/bun:1.4.2-slim AS bun
 
+# Stands in for the `client` context when a build doesn't pass one, so
+# leaving off --build-context stops the build with the fix instead of a bare
+# "package.json: not found". A --build-context client=... replaces this
+# stage outright, and it never runs.
+FROM --platform=$BUILDPLATFORM node:24.19.0-slim AS client
+RUN echo "server/Dockerfile needs the repo root as a second build context for the web client: add --build-context client=. (run from the repo root)" >&2 \
+    && exit 1
+
+# --- web: the frontend, built once on the builder's own architecture. The
+# output is plain HTML/JS/CSS, the same for every image architecture, so
+# this never runs under QEMU. It gets its own stage because the build stage
+# below only has server/'s dependencies.
+FROM --platform=$BUILDPLATFORM node:24.19.0-slim AS web
+WORKDIR /web
+# patches/ because the root postinstall runs patch-package.
+COPY --from=client package.json package-lock.json ./
+COPY --from=client patches ./patches
+RUN npm ci
+COPY --from=client index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json ./
+COPY --from=client public ./public
+COPY --from=client src ./src
+RUN npm run build
+
 FROM --platform=$BUILDPLATFORM node:24.19.0-slim AS build
 # npm ci because server/package-lock.json is the dependency source of truth
 # (`bun install` would ignore it). Bun because server/scripts/compile.ts is
@@ -32,6 +58,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+COPY --from=web /web/dist /web-dist
 
 ARG TARGETARCH
 # Passed by .github/workflows/release.yml. Left empty, compile.ts falls back
@@ -46,7 +73,7 @@ RUN case "$TARGETARCH" in \
       arm64) target=linux-arm64 ;; \
       *) echo "no legato-server compile target for TARGETARCH=$TARGETARCH (expected amd64 or arm64)" >&2; exit 1 ;; \
     esac \
-    && LEGATO_RELEASE_VERSION="$LEGATO_VERSION" LEGATO_RELEASE_GIT_SHA="$LEGATO_GIT_SHA" \
+    && LEGATO_RELEASE_VERSION="$LEGATO_VERSION" LEGATO_RELEASE_GIT_SHA="$LEGATO_GIT_SHA" LEGATO_WEB_DIST=/web-dist \
        npm run compile -- "$target" \
     && cp "dist/$target/legato-server" /legato-server
 

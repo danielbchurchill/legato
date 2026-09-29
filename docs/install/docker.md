@@ -74,7 +74,7 @@ docker compose start
 From a checkout of the repo:
 
 ```sh
-docker buildx build --platform linux/amd64,linux/arm64 -t legato-server server
+docker buildx build --platform linux/amd64,linux/arm64 --build-context client=. -t legato-server server
 ```
 
 `server/Dockerfile` explains each stage.
