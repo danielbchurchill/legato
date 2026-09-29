@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { Database } from "./sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
@@ -33,7 +33,7 @@ async function authAttempt(wsUrl: string, secret: string | undefined): Promise<{
 }
 
 describe("tunnel auth handshake", () => {
-  let db: Database.Database;
+  let db: Database;
   let app: FastifyInstance | undefined;
 
   beforeEach(() => {

@@ -1,22 +1,21 @@
 # syntax=docker/dockerfile:1
 
 # --- deps: installed in its own stage so a source-only change doesn't
-# invalidate this layer's cache ---
+# invalidate this layer's cache. Stays on a plain Node image rather than
+# Bun's for this one step: better-sqlite3's node-gyp compile step is gone
+# (issue #101 moved the relay onto bun:sqlite, built into the Bun runtime),
+# so nothing here needs a compiler toolchain, but package-lock.json is
+# still the source of truth for exact versions — `bun install` would
+# ignore it and generate its own bun.lock instead. Debian's own `npm`
+# package pulls in an unrelated (and huge) apt dependency tree, so
+# node:slim's bundled npm is the cheaper way to run `npm ci`.
 FROM node:24.19.0-slim AS deps
 WORKDIR /app
-# better-sqlite3 (added alongside the relay's account/pairing system) compiles
-# a native addon via node-gyp at install time — a plain slim image has no
-# compiler toolchain, so npm ci fails without these. Deliberately not in the
-# runtime stage below: only the already-compiled node_modules gets copied
-# forward, so the runtime image stays free of the build toolchain's bulk.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ \
-    && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
 
 # --- runtime ---
-FROM node:24.19.0-slim AS runtime
+FROM oven/bun:1.4.2-slim AS runtime
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./
@@ -24,7 +23,6 @@ COPY src ./src
 
 EXPOSE 8901
 
-# No compile step: package.json's "start" script runs src/index.ts directly
-# via tsx, the same convention server/'s embedded deployment already uses
-# (see repo CLAUDE.md).
-CMD ["npm", "start"]
+# No compile step: Bun executes TypeScript directly, no separate transpile
+# step, matching package.json's "start" script (bun src/index.ts).
+CMD ["bun", "src/index.ts"]

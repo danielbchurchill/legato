@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type Database from "better-sqlite3";
+import type { Database } from "./sqlite.js";
 import { parseSqliteDatetime } from "./sqlite-datetime.js";
 
 // The pairing-code -> tunnel-credential handoff — see migrations/
@@ -20,7 +20,7 @@ export interface PairingCodeMinted {
   expiresAt: Date;
 }
 
-export function mintPairingCode(db: Database.Database, relayUserId: number): PairingCodeMinted {
+export function mintPairingCode(db: Database, relayUserId: number): PairingCodeMinted {
   const code = randomBytes(8).toString("hex");
   const row = db
     .prepare(
@@ -37,7 +37,7 @@ export interface TunnelCredentialMinted {
   expiresAt: Date;
 }
 
-export function mintTunnelCredential(db: Database.Database, relayUserId: number): TunnelCredentialMinted {
+export function mintTunnelCredential(db: Database, relayUserId: number): TunnelCredentialMinted {
   const token = randomBytes(32).toString("hex");
   const row = db
     .prepare(
@@ -56,7 +56,7 @@ export type RedeemResult =
 // A transaction so two near-simultaneous redemptions of the same code
 // can't both pass the used_at check and each mint their own credential —
 // the UPDATE below only ever succeeds in "spending" the code once.
-export function redeemPairingCode(db: Database.Database, code: string): RedeemResult {
+export function redeemPairingCode(db: Database, code: string): RedeemResult {
   return db.transaction((): RedeemResult => {
     const row = db
       .prepare(
@@ -80,7 +80,7 @@ export function redeemPairingCode(db: Database.Database, code: string): RedeemRe
 // is a high-entropy random token (32 bytes) looked up by exact match,
 // the same reasoning that already makes session tokens safe to look up
 // this way rather than timing-compare against every stored value.
-export function getRelayUserIdByCredential(db: Database.Database, token: string): number | null {
+export function getRelayUserIdByCredential(db: Database, token: string): number | null {
   const row = db
     .prepare(`SELECT relay_user_id FROM tunnel_credentials WHERE token = ? AND expires_at > datetime('now')`)
     .get(token) as { relay_user_id: number } | undefined;

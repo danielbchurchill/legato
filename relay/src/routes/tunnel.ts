@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { getRelayUserIdByCredential } from "../pairing.js";
@@ -14,7 +14,7 @@ const AUTH_TIMEOUT_MS = 5000;
 // single global RELAY_SHARED_SECRET. Multiple home servers, each owned
 // by a different relay account, can be authenticated and connected at
 // once — see tunnel-registry.ts, now a map keyed by relay_user_id.
-export function tunnelRoutes(registry: TunnelRegistry, db: Database.Database) {
+export function tunnelRoutes(registry: TunnelRegistry, db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/tunnel", { websocket: true }, (socket: WebSocket) => {
       let authenticated = false;

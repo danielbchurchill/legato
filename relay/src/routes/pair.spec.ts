@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { createSession, upsertUser } from "../accounts.js";
 import { buildApp } from "../app.js";
@@ -10,7 +10,7 @@ async function listenApp(app: FastifyInstance): Promise<string> {
   return app.listen({ port: 0, host: "127.0.0.1" });
 }
 
-function signIn(db: Database.Database): { userId: number; cookieHeader: string } {
+function signIn(db: Database): { userId: number; cookieHeader: string } {
   const user = upsertUser(db, "google", {
     providerUserId: "pair-test-user",
     email: null,
@@ -22,7 +22,7 @@ function signIn(db: Database.Database): { userId: number; cookieHeader: string }
 }
 
 describe("POST /pair/start", () => {
-  let db: Database.Database;
+  let db: Database;
   let app: FastifyInstance | undefined;
 
   beforeEach(() => {
@@ -57,7 +57,7 @@ describe("POST /pair/start", () => {
 });
 
 describe("POST /pair/exchange", () => {
-  let db: Database.Database;
+  let db: Database;
   let app: FastifyInstance | undefined;
 
   beforeEach(() => {

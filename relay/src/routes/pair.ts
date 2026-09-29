@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { getUserBySessionToken, SESSION_COOKIE } from "../accounts.js";
 import { mintPairingCode, redeemPairingCode } from "../pairing.js";
@@ -14,7 +14,7 @@ import { mintPairingCode, redeemPairingCode } from "../pairing.js";
 // present — the single-use code is what authorizes that call, the same
 // way an OAuth device-authorization-grant code does. See routes/relay.ts's
 // header comment for the matching design decision on the /relay/* side.
-export function pairRoutes(db: Database.Database) {
+export function pairRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.post("/pair/start", async (request, reply) => {
       const token = request.cookies[SESSION_COOKIE];

@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { Database } from "./sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { upsertUser, createSession } from "./accounts.js";
 import { buildApp } from "./app.js";
@@ -21,7 +21,7 @@ async function listenApp(app: FastifyInstance): Promise<{ httpUrl: string; wsUrl
 // tests its own upsertUser/createSession without a live round trip) and
 // hand back a Cookie header any fetch() call below can reuse.
 let signInCounter = 0;
-function signIn(db: Database.Database): { userId: number; cookieHeader: string } {
+function signIn(db: Database): { userId: number; cookieHeader: string } {
   signInCounter += 1;
   const user = upsertUser(db, "google", {
     providerUserId: `test-user-${signInCounter}`,
@@ -34,7 +34,7 @@ function signIn(db: Database.Database): { userId: number; cookieHeader: string }
 }
 
 describe("relay HTTP forwarding", () => {
-  let db: Database.Database | undefined;
+  let db: Database | undefined;
   let app: FastifyInstance | undefined;
   let homeServer: FakeHomeServerHandle | undefined;
   let fixture: FixtureServerHandle | undefined;

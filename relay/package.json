@@ -4,26 +4,19 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "test": "vitest run"
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "test": "bun test"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
     "@fastify/websocket": "^11.3.0",
-    "better-sqlite3": "^13.0.3",
     "fastify": "^5.12.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0",
+    "@types/bun": "^1.4.2",
     "@types/node": "^24.13.3",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.23.12",
-    "typescript": "~6.0.2",
-    "vitest": "^4.1.10"
-  },
-  "allowScripts": {
-    "esbuild@0.28.2": true,
-    "better-sqlite3@13.0.3": true
+    "typescript": "~6.0.2"
   }
 }
