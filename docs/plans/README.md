@@ -91,6 +91,8 @@ Labels: `phase:*`, `area:*`, `sev:2|3|4`. Every issue links back to its section 
 | #179 | Make the server port configurable in the frontend | 2 |
 | #187 | Sidecar build checks for Bun first and says how to install it | 2 |
 | #188 | `build.yml` installs Bun and server deps for the sidecar build | 3 |
+| #191 | Back up the database automatically before applying migrations | 4 |
+| #194 | One-command deploy of the compiled server to a standalone host | 2 |
 
 ### Phase 1 · Rowan · tracking #153
 
@@ -124,6 +126,8 @@ Labels: `phase:*`, `area:*`, `sev:2|3|4`. Every issue links back to its section 
 | #185 | Native client falls back to the server stream when a file isn't reachable | 3 |
 | #186 | Run `queue_set_repeat` through `serialized()` | 2 |
 | #189 | Collapse, layout and enrich_queued scan stages scale linearly | 3 |
+| #192 | Don't mark the whole library missing when its drive or mount isn't reachable | 4 |
+| #193 | Report server version in /health and warn when the client needs a newer server | 3 |
 
 ### Phase 2 · Priya · tracking #154
 

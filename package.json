@@ -16,7 +16,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "fetch:media-binaries": "node scripts/fetch-media-binaries.mjs",
-    "build:sidecar": "node scripts/build-server-sidecar.mjs"
+    "build:sidecar": "node scripts/build-server-sidecar.mjs",
+    "check:all": "npm --prefix server test && npx vitest run && npm run build && npm run lint && npm run build:sidecar -- --if-missing && cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@fontsource-variable/rubik": "^5.3.0",
