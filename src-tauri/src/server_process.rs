@@ -20,13 +20,39 @@ const TARGET_TRIPLE: &str = "x86_64-apple-darwin";
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 const TARGET_TRIPLE: &str = "x86_64-pc-windows-msvc";
 
-fn server_dir() -> PathBuf {
-  // Dev-time only: resolved relative to this crate's manifest dir, which is
-  // stable regardless of the process's runtime CWD. This spawns the
-  // server's existing npm scripts directly rather than assuming a compiled
-  // single-file binary — bundling a real Tauri sidecar/externalBin for
-  // distribution is M10's job (see the MVP roadmap's packaging spike note).
+// Dev-time only (`tauri::is_dev()` gates every call site): resolved
+// relative to this crate's manifest dir, which is stable regardless of the
+// process's runtime CWD. `npx tauri dev` has no bundled sidecar to run, so
+// it spawns the server straight from source instead — see spawn() below
+// and issue #103.
+fn server_source_dir() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../server")
+}
+
+// Locates the compiled server binary Tauri's bundler places next to the
+// app's own executable at package time (tauri.conf.json's
+// bundle.externalBin, resolved from src-tauri/binaries/legato-server-
+// <target-triple> — see scripts/build-server-sidecar.mjs, which compiles
+// it via #102's `bun build --compile` and wires into
+// build.beforeBuildCommand). The bundler strips the target-triple suffix
+// back off on copy (confirmed against tauri-bundler's copy_binaries), so
+// at runtime this just looks for a plain "legato-server" beside whatever
+// binary is currently running — true on every platform Tauri bundles a
+// sidecar for, not just macOS/Windows, so this has no target_os cfg gate.
+fn resolve_sidecar_binary(app: &AppHandle) -> Result<PathBuf, String> {
+  let binary_name = format!("legato-server{}", std::env::consts::EXE_SUFFIX);
+  let current_exe = tauri::process::current_binary(&app.env())
+    .map_err(|e| format!("failed to resolve the running app's own binary path: {e}"))?;
+  let dir = current_exe
+    .parent()
+    .ok_or_else(|| format!("running binary {current_exe:?} has no parent directory"))?;
+  let sidecar = dir.join(&binary_name);
+  if !sidecar.exists() {
+    return Err(format!(
+      "expected the {binary_name} sidecar next to the app binary at {sidecar:?}, but it isn't there — was this app packaged with `tauri build` (not a bare `cargo build`)?"
+    ));
+  }
+  Ok(sidecar)
 }
 
 // Resolves a bundled ffmpeg/fpcalc binary from Tauri's packaged resources
@@ -63,10 +89,17 @@ pub fn spawn(app: &AppHandle) -> Result<Child, String> {
 
   log::info!("[server] spawning legato-server, data dir = {data_dir:?}");
 
-  let mut cmd = Command::new("npm");
+  let mut cmd = if tauri::is_dev() {
+    let mut c = Command::new("npm");
+    c.args(["run", "start"]).current_dir(server_source_dir());
+    c
+  } else {
+    let sidecar = resolve_sidecar_binary(app)?;
+    log::info!("[server] using bundled sidecar: {sidecar:?}");
+    Command::new(sidecar)
+  };
+
   cmd
-    .args(["run", "start"])
-    .current_dir(server_dir())
     .env("LEGATO_DATA_DIR", &data_dir)
     .env("LEGATO_PORT", SERVER_PORT.to_string());
 
@@ -79,21 +112,28 @@ pub fn spawn(app: &AppHandle) -> Result<Child, String> {
     cmd.env("LEGATO_FPCALC_PATH", fpcalc_path);
   }
 
-  // `npm run start` forks through a shell into tsx into a second node
-  // process (npm -> sh -> tsx -> node) — killing just the direct Child
-  // leaves the actual listening process orphaned and still bound to the
-  // port. Put the whole tree in its own process group (pgid == this pid)
-  // so it can be torn down as one unit on exit. Unix-only; Windows needs a
-  // job-object equivalent, tracked as M10 cross-platform work.
+  // In dev, `npm run start` forks through a shell into a second bun
+  // process (npm -> sh -> bun) — killing just the direct Child leaves the
+  // actual listening process orphaned and still bound to the port. In a
+  // packaged build it's one process, but that process still forks its own
+  // ffmpeg children for transcodes, which inherit whatever process group
+  // it's in. Either way, put the whole tree in its own process group
+  // (pgid == this pid) so it can be torn down as one unit on exit.
+  // Unix-only; Windows needs a job-object equivalent, tracked as M10
+  // cross-platform work.
   #[cfg(unix)]
   {
     use std::os::unix::process::CommandExt;
     cmd.process_group(0);
   }
 
-  cmd
-    .spawn()
-    .map_err(|e| format!("failed to spawn legato-server (is npm on PATH?): {e}"))
+  cmd.spawn().map_err(|e| {
+    if tauri::is_dev() {
+      format!("failed to spawn legato-server via npm (is npm on PATH?): {e}")
+    } else {
+      format!("failed to spawn legato-server sidecar: {e}")
+    }
+  })
 }
 
 /// `tauri::RunEvent::Exit` only fires on a Tauri-driven graceful shutdown
@@ -118,9 +158,10 @@ pub fn kill(state: &ServerProcess) {
 
       #[cfg(unix)]
       {
-        // SIGTERM the whole process group first (npm/sh/tsx/node all share
-        // it, see spawn() above), then fall back to SIGKILL if anything's
-        // still alive after a short grace period.
+        // SIGTERM the whole process group first (the server and any
+        // ffmpeg children it spawns all share it, see spawn() above), then
+        // fall back to SIGKILL if anything's still alive after a short
+        // grace period.
         let pgid = child.id() as i32;
         let _ = Command::new("kill").args(["-TERM", "--", &format!("-{pgid}")]).status();
         std::thread::sleep(std::time::Duration::from_millis(500));
