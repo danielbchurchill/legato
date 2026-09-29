@@ -86,14 +86,26 @@ export function ImportReportView({ sourceFilename, entries }: { sourceFilename: 
         <div className="pt-[16px]">
           <Disclosure title={`missing tracks (${missing.length})`}>
             <div>
-              {missing.map((entry) => (
-                <div key={entry.position} className="border-b border-[var(--color-divider)] py-[10px] last:border-b-0">
-                  <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
-                    {entry.extinfArtist && entry.extinfTitle ? `${entry.extinfArtist} — ${entry.extinfTitle}` : entry.rawPath}
-                  </p>
-                  <p className="truncate text-[length:var(--text-base)] text-[var(--color-muted)]">{entry.reason}</p>
-                </div>
-              ))}
+              {missing.map((entry) => {
+                const label =
+                  entry.extinfArtist && entry.extinfTitle ? `${entry.extinfArtist} — ${entry.extinfTitle}` : entry.rawPath
+                return (
+                  <div key={entry.position} className="border-b border-[var(--color-divider)] py-[10px] last:border-b-0">
+                    {/* The title always carries the raw path: when the row
+                     * shows artist — title instead, the path is the other
+                     * half of what you'd need to find the file (#86). */}
+                    <p
+                      className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]"
+                      title={label === entry.rawPath ? label : `${label}\n${entry.rawPath}`}
+                    >
+                      {label}
+                    </p>
+                    {/* The reason is a sentence, and a sentence wraps rather
+                     * than truncating — nothing in it is cut off to fit. */}
+                    <p className="wrap-break-word text-[length:var(--text-base)] text-[var(--color-muted)]">{entry.reason}</p>
+                  </div>
+                )
+              })}
             </div>
           </Disclosure>
         </div>
@@ -229,7 +241,10 @@ export function PlaylistImport({
                         key={`${suggestion.libraryRootId}-${suggestion.replacement}`}
                         className="flex items-center justify-between gap-[12px] border-b border-[var(--color-divider)] py-[10px] last:border-b-0"
                       >
-                        <span className="min-w-0 truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]">
+                        <span
+                          className="min-w-0 truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)]"
+                          title={`${preview.commonPrefix} → ${suggestion.replacement}`}
+                        >
                           {preview.commonPrefix} → {suggestion.replacement}
                         </span>
                         <div className="flex shrink-0 items-center gap-[12px]">

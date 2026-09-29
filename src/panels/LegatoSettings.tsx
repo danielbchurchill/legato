@@ -196,7 +196,10 @@ function AccountGroup() {
           <div className="flex min-w-0 items-center gap-[var(--spacing-sm)]">
             {user.avatarUrl && <img src={user.avatarUrl} alt="" className="h-[24px] w-[24px] shrink-0 rounded-full" />}
             <div className="min-w-0">
-              <p className="truncate text-[length:var(--text-sm)] text-[var(--color-ink)]">
+              <p
+                className="truncate text-[length:var(--text-sm)] text-[var(--color-ink)]"
+                title={user.displayName ?? user.email ?? undefined}
+              >
                 {user.displayName ?? user.email ?? 'signed in'}
               </p>
               <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
@@ -471,7 +474,13 @@ export function LegatoSettings({
                   ) : (
                     <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
                       <div className="min-w-0">
-                        <p className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-sm)] text-[var(--color-ink)]">
+                        {/* The full path, not the label, in the title: a
+                         * label is the short name the user chose, the path is
+                         * what's actually cut off and what you'd need to read. */}
+                        <p
+                          className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-sm)] text-[var(--color-ink)]"
+                          title={r.path}
+                        >
                           {r.label ?? r.path}
                         </p>
                         {run && (

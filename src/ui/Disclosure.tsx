@@ -57,7 +57,9 @@ export function Disclosure({ title, defaultOpen = false, open: openProp, onOpenC
               open ? '' : '-rotate-90'
             }`}
           />
-          <span className="truncate text-[length:var(--text-base)] text-[var(--color-muted)]">{title}</span>
+          <span className="truncate text-[length:var(--text-base)] text-[var(--color-muted)]" title={title}>
+            {title}
+          </span>
         </button>
         {action}
       </div>
