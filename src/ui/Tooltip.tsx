@@ -1,43 +1,36 @@
-import { useLayoutEffect, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { useMountFade } from './useMountFade'
 import { useTooltipGroup } from './TooltipGroup'
+import { enterOffset, useAnchoredPosition, type Placement } from './floating'
+import { usePrefersReducedMotion } from './usePrefersReducedMotion'
+import { Kbd } from './Kbd'
 
 /* C-1: native title= tooltips render as OS chrome — wrong typeface, wrong
  * colors, roughly a second of delay, positioned by the window manager,
  * unstylable. One glass tooltip instead, on the same recipe as every other
  * raised surface (DESIGN.md "Glass"): --color-surface, hairline border,
- * --radius-surface, Rubik at --text-base.
+ * --radius-surface.
  *
- * A short dwell before showing, and a fade rather than a snap, so sweeping
- * the pointer across a row of icons doesn't flash a tooltip per icon —
- * the same "distinguish holding still from passing over" reasoning as the
- * graph's own hover dwell (MO-6). aria-label is what actually carries the
- * accessible name; this is a purely visual affordance layered on top.
+ * gpui-kit port (2026-09-29) — its tooltip.rs, drawn in Legato's glass:
+ *  - Control-chrome scale: --text-sm, 8px/2px padding, where it used to be a
+ *    16px panel label on 10px/4px. A tooltip is chrome about a control, the
+ *    exact register --text-sm exists for.
+ *  - An optional keyboard shortcut, right-aligned in muted Kbd.
+ *  - Arrives sliding --distance-short out of its trigger as it fades
+ *    (gpui-kit's enter transition), over --motion-fast on --ease-enter.
+ *    The slide is a transform, so reduced motion drops it and keeps the
+ *    fade (DESIGN.md "Reduced motion means less movement, not less
+ *    feedback").
+ *  - Opens on its preferred side and flips when that side has no room,
+ *    rather than clamping over its own trigger (floating.ts).
  *
- * Two refinements on top of that base behavior:
- *  - Portaled + viewport-fixed collision avoidance: the box renders through
- *    a portal into document.body rather than as a normal DOM child of the
- *    trigger, so it never inherits a stacking context from an ancestor
- *    (InspectorRail and InspectorPanel are both z-10 positioned siblings —
- *    without the portal, the box's own z-30 only wins comparisons *inside*
- *    InspectorRail's local stacking context, never against InspectorPanel's
- *    z-10 at the parent level). Positioned via getBoundingClientRect() in
- *    fixed viewport coordinates and clamped against both the horizontal and
- *    vertical viewport edges (see the useLayoutEffect below) — the rail's
- *    icons run down the full window height, so a bottom icon's tooltip needs
- *    the same edge protection top-to-bottom that a wide header row already
- *    needed left-to-right. Re-measured on scroll/resize so a tooltip open in
- *    a scrollable panel (Playlists, Favourites, NowPlayingPanel, ...) stays
- *    glued to its trigger rather than a stale fixed position.
- *  - "Hot" group dwell-skip: wrapping a row of triggers in TooltipGroup
- *    (TooltipGroup.tsx) lets a sibling's tooltip appear immediately if the
- *    previous one in the group was dismissed within the dwell window,
- *    rather than every icon paying the full 400ms from cold. */
+ * Kept from before: the 400ms dwell, so sweeping the pointer across a row
+ * of icons doesn't flash a tooltip per icon; TooltipGroup's "hot" skip of
+ * that dwell for a sibling; dismiss on pointerdown (C-82, below); aria-label
+ * on the trigger carrying the accessible name, with this purely visual. */
 
 const DWELL_MS = 400
-const EDGE_MARGIN = 8
-const GAP_PX = 6
 
 type TooltipProps = {
   label: string
@@ -45,15 +38,62 @@ type TooltipProps = {
   /** The label is data (a URL, a path) rather than UI copy — Sometype Mono
    * instead of the default Rubik. See DESIGN.md "The one rule". */
   monospace?: boolean
+  placement?: Placement
+  /** A keyboard shortcut for the action, e.g. "space" or "/". */
+  shortcut?: string
 }
 
-export function Tooltip({ label, children, monospace = false }: TooltipProps) {
+/* The floating half on its own, for a caller that owns when it shows —
+ * Slider's value bubble opens on thumb hover, drag or focus rather than on
+ * a dwell. */
+export function TooltipBubble({
+  open,
+  anchorRef,
+  label,
+  placement = 'bottom',
+  monospace = false,
+  shortcut,
+  trackDeps = [],
+}: {
+  open: boolean
+  anchorRef: RefObject<HTMLElement | null>
+  label: ReactNode
+  placement?: Placement
+  monospace?: boolean
+  shortcut?: string
+  /** Re-measure when these change — Slider passes its value, since the
+   * thumb moves under a stationary bubble while dragging. */
+  trackDeps?: readonly unknown[]
+}) {
+  const boxRef = useRef<HTMLSpanElement>(null)
+  const shown = useMountFade(open)
+  const reduced = usePrefersReducedMotion()
+  const position = useAnchoredPosition({ open, anchorRef, floatingRef: boxRef, placement, deps: [label, ...trackDeps] })
+
+  if (!open) return null
+  return createPortal(
+    <span
+      ref={boxRef}
+      role="tooltip"
+      className={`pointer-events-none fixed z-40 flex items-center gap-[var(--spacing-sm)] rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] px-[8px] py-[2px] text-[length:var(--text-sm)] whitespace-nowrap text-[var(--color-ink)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--ease-enter)] ${monospace ? 'font-[family-name:var(--font-mono)]' : ''}`}
+      style={{
+        opacity: shown ? 1 : 0,
+        transform: shown || reduced ? 'none' : enterOffset(position.placement),
+        top: `${position.top}px`,
+        left: `${position.left}px`,
+      }}
+    >
+      {label}
+      {shortcut && <Kbd muted>{shortcut}</Kbd>}
+    </span>,
+    document.body,
+  )
+}
+
+export function Tooltip({ label, children, monospace = false, placement = 'bottom', shortcut }: TooltipProps) {
   const [mounted, setMounted] = useState(false)
-  const shown = useMountFade(mounted)
   const dwellRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wrapRef = useRef<HTMLSpanElement>(null)
-  const boxRef = useRef<HTMLSpanElement>(null)
-  const [coords, setCoords] = useState({ top: 0, left: 0 })
   const group = useTooltipGroup()
 
   const clearDwell = () => {
@@ -83,45 +123,6 @@ export function Tooltip({ label, children, monospace = false }: TooltipProps) {
 
   useEffect(() => clearDwell, [])
 
-  // Collision avoidance: derived fresh from the trigger's rect and the box's
-  // own size every time, in fixed viewport coordinates — the box is portaled
-  // to document.body, so there is no ancestor offset to account for, just
-  // the trigger's own position and the window's edges. useLayoutEffect (not
-  // useEffect) so the position lands before the browser paints. Re-measured
-  // on scroll/resize while mounted so a tooltip open inside a scrollable
-  // panel tracks its trigger instead of drifting once the panel scrolls.
-  useLayoutEffect(() => {
-    if (!mounted) return
-    const wrap = wrapRef.current
-    const box = boxRef.current
-    if (wrap == null || box == null) return
-
-    const measure = () => {
-      const wrapRect = wrap.getBoundingClientRect()
-      const boxRect = box.getBoundingClientRect()
-
-      const naturalLeft = wrapRect.left + wrapRect.width / 2 - boxRect.width / 2
-      const minLeft = EDGE_MARGIN
-      const maxLeft = window.innerWidth - EDGE_MARGIN - boxRect.width
-      const left = Math.min(Math.max(naturalLeft, minLeft), maxLeft)
-
-      const naturalTop = wrapRect.bottom + GAP_PX
-      const minTop = EDGE_MARGIN
-      const maxTop = window.innerHeight - EDGE_MARGIN - boxRect.height
-      const top = Math.min(Math.max(naturalTop, minTop), maxTop)
-
-      setCoords({ top, left })
-    }
-
-    measure()
-    window.addEventListener('scroll', measure, true)
-    window.addEventListener('resize', measure)
-    return () => {
-      window.removeEventListener('scroll', measure, true)
-      window.removeEventListener('resize', measure)
-    }
-  }, [mounted, label])
-
   return (
     <span
       ref={wrapRef}
@@ -142,22 +143,23 @@ export function Tooltip({ label, children, monospace = false }: TooltipProps) {
       // outright instead of chasing it through every list that reorders or
       // shrinks on click.
       onPointerDown={hide}
-      onFocus={scheduleShow}
+      // Keyboard focus only, gpui-kit's rule: a click also focuses its
+      // button, and the pointerdown dismissal above would otherwise be
+      // undone 400ms later by that same click's focus.
+      onFocus={(e) => {
+        if ((e.target as HTMLElement).matches(':focus-visible')) scheduleShow()
+      }}
       onBlur={hide}
     >
       {children}
-      {mounted &&
-        createPortal(
-          <span
-            ref={boxRef}
-            role="tooltip"
-            className={`pointer-events-none fixed z-30 rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] px-[10px] py-[4px] text-[length:var(--text-base)] whitespace-nowrap text-[var(--color-ink)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-opacity duration-[var(--motion-fast)] ease-[var(--ease-out)] ${monospace ? 'font-[family-name:var(--font-mono)]' : ''}`}
-            style={{ opacity: shown ? 1 : 0, top: `${coords.top}px`, left: `${coords.left}px` }}
-          >
-            {label}
-          </span>,
-          document.body,
-        )}
+      <TooltipBubble
+        open={mounted}
+        anchorRef={wrapRef}
+        label={label}
+        placement={placement}
+        monospace={monospace}
+        shortcut={shortcut}
+      />
     </span>
   )
 }

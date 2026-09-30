@@ -1,6 +1,7 @@
 import add from '../assets/icons/add.svg?raw'
 import arrowSwap from '../assets/icons/arrow-swap.svg?raw'
 import cancel from '../assets/icons/cancel.svg?raw'
+import checkmark from '../assets/icons/checkmark.svg?raw'
 import chevronDown from '../assets/icons/chevron-down.svg?raw'
 import chevronUp from '../assets/icons/chevron-up.svg?raw'
 import database from '../assets/icons/database.svg?raw'
@@ -18,8 +19,11 @@ import repeat from '../assets/icons/repeat.svg?raw'
 import reverse from '../assets/icons/reverse.svg?raw'
 import search from '../assets/icons/search.svg?raw'
 import sliders from '../assets/icons/sliders.svg?raw'
+import spinner from '../assets/icons/spinner.svg?raw'
+import subtract from '../assets/icons/subtract.svg?raw'
 import tag from '../assets/icons/tag.svg?raw'
 import volume from '../assets/icons/volume.svg?raw'
+import volumeMute from '../assets/icons/volume-mute.svg?raw'
 
 /* Icons are proicons (github.com/ProCode-Software/proicons), vendored as real
  * SVG rather than redrawn. Every glyph is a 24x24 currentColor stroke at 1.5
@@ -61,11 +65,19 @@ import volume from '../assets/icons/volume.svg?raw'
  * this is the closest available stand-in, flagged rather than a clean
  * match. TransportDock distinguishes repeat-one from repeat-all with a
  * small "1" badge over the glyph rather than a second vendored icon,
- * since proicons has nothing closer for that state either. */
+ * since proicons has nothing closer for that state either.
+ *
+ * `checkmark`, `subtract`, `spinner` and `volume-mute` arrived with the
+ * gpui-kit controls port (DESIGN.md "Controls"): the checkbox's checked and
+ * indeterminate marks, Select's selected-option mark, NumberInput's
+ * decrement (its increment reuses `add`), the Spinner's quarter-open arc
+ * (proicons' own "Spinner" glyph, rotated by Spinner.tsx, never redrawn),
+ * and the transport's muted-volume state. */
 const GLYPHS = {
   add,
   'arrow-swap': arrowSwap,
   cancel,
+  checkmark,
   'chevron-down': chevronDown,
   'chevron-up': chevronUp,
   database,
@@ -83,8 +95,11 @@ const GLYPHS = {
   reverse,
   search,
   sliders,
+  spinner,
+  subtract,
   tag,
   volume,
+  'volume-mute': volumeMute,
 } as const
 
 export type IconName = keyof typeof GLYPHS

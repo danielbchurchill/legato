@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Icon } from '../ui/Icon'
+import { Tabs } from '../ui/Tabs'
 import { AlbumsGrid } from './AlbumsGrid'
 import { TracksTable } from './TracksTable'
 import { ALBUM_SORT_OPTIONS, type AlbumSort, type SortDir, type TrackSort } from './types'
@@ -18,35 +19,17 @@ import { ALBUM_SORT_OPTIONS, type AlbumSort, type SortDir, type TrackSort } from
 
 type LibraryEntity = 'albums' | 'tracks'
 
-const ENTITIES: { id: LibraryEntity; label: string }[] = [
-  { id: 'albums', label: 'albums' },
-  { id: 'tracks', label: 'tracks' },
-]
+const ENTITIES = [
+  { value: 'albums', label: 'albums' },
+  { value: 'tracks', label: 'tracks' },
+] as const satisfies readonly { value: LibraryEntity; label: string }[]
 
 const HEADER_ROW_HEIGHT = 33 // --spacing-row, same rhythm TracksTable's own column headers use
 
+// Tabs' underline variant since the gpui-kit port: the same muted -> ink
+// labels as before, with a sliding rule under the active one and arrow keys.
 function EntitySwitch({ value, onChange }: { value: LibraryEntity; onChange: (value: LibraryEntity) => void }) {
-  return (
-    <div role="tablist" className="flex items-center gap-[var(--spacing-lg)]">
-      {ENTITIES.map((entityOption) => {
-        const active = entityOption.id === value
-        return (
-          <button
-            key={entityOption.id}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => onChange(entityOption.id)}
-            className={`text-[length:var(--text-base)] leading-[24px] transition-colors duration-[var(--motion-fast)] ${
-              active ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'
-            }`}
-          >
-            {entityOption.label}
-          </button>
-        )
-      })}
-    </div>
-  )
+  return <Tabs label="library layout" variant="underline" size="base" options={ENTITIES} value={value} onChange={onChange} />
 }
 
 // AlbumsGrid has no column headers to sort from (a grid of cells, not a

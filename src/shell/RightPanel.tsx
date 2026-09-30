@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { ScrollArea } from '../ui/ScrollArea'
 import { Surface } from './Surface'
 import { NowPlayingCollapsed } from '../panels/NowPlayingCollapsed'
 
@@ -75,9 +76,9 @@ export function RightPanel({ expanded, collapsedNodeId, onExpand, children }: Ri
        * anything that spilled past this column would surface as a
        * horizontal scrollbar (issue #86). The left panel got this in #95;
        * this one never did. */}
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
+      <ScrollArea className="flex-1" contentClassName="px-[var(--spacing-panel)] pb-[var(--spacing-panel)]">
         {children}
-      </div>
+      </ScrollArea>
     </Surface>
   )
 }

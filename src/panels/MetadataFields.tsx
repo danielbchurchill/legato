@@ -3,6 +3,7 @@ import { Icon } from '../ui/Icon'
 import { DataRow, SectionHeader } from '../ui/DataRow'
 import { Button } from '../ui/Button'
 import { Tooltip } from '../ui/Tooltip'
+import { NumberInput } from '../ui/NumberInput'
 import { formatDuration } from '../ui/format'
 import type { FileRow, NodeDetail } from './useNodeDetail'
 import type { MetadataEditingState } from './useMetadataEditing'
@@ -90,11 +91,14 @@ export function MetadataRows({
           <DataRow
             label="bpm"
             value={
-              <input
-                type="number"
-                value={draft.bpm ?? ''}
-                onChange={(e) => updateDraft({ bpm: e.target.value ? Number(e.target.value) : undefined })}
-                className="w-full bg-transparent font-[family-name:var(--font-mono)] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none"
+              <NumberInput
+                label="bpm"
+                appearance="bare"
+                monospace
+                textSize="base"
+                min={0}
+                value={draft.bpm ?? null}
+                onChange={(bpm) => updateDraft({ bpm: bpm ?? undefined })}
               />
             }
           />

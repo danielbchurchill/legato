@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { Toggle } from '../ui/Toggle'
+import { Switch } from '../ui/Switch'
+import { Checkbox } from '../ui/Checkbox'
+import { ToggleGroup } from '../ui/ToggleGroup'
 import { Slider } from '../ui/Slider'
 import { ColorSwatch } from '../ui/ColorSwatch'
 import { Button } from '../ui/Button'
@@ -15,7 +17,7 @@ import type { Settings } from '../hooks/useSettings'
 import type { MapPresetHistory } from '../hooks/useMapPresetHistory'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 
-/* The Music Map settings panel — DESIGN.md's "v2: settings primitives" and
+/* The Music Map settings panel — DESIGN.md's "The gpui-kit control set" and
  * "Edge palette" -> "v2: user-colorable types". Mounted by App.tsx into
  * InspectorPanel's 'graph' rail destination.
  *
@@ -58,36 +60,19 @@ const NODE_TYPE_IMAGE_TOGGLES: { key: string; label: string }[] = [
   { key: 'showImagesTracks', label: 'tracks' },
 ]
 
-function LabeledToggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <div className="flex flex-col items-center gap-[var(--spacing-xs)]">
-      <Toggle checked={checked} onChange={onChange} label={label} />
-      <span className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{label}</span>
-    </div>
-  )
-}
-
-/* #127/D19: the three preset pills. Selection reuses ColorSwatch's own
- * ring-1/ring-offset treatment (see that file) rather than inventing a
- * second "this is the selected one" language — no pill selected at all
+/* #127/D19: the three preset pills — a single-choice ToggleGroup since the
+ * gpui-kit port (pressed = hover wash + ink, see ToggleGroup.tsx), where
+ * they used to borrow ColorSwatch's ring. No pill pressed at all still
  * means "custom", once a slider's been dragged off every named point. */
 function PresetPicker({ activePreset, onApplyPreset }: { activePreset: MapPresetId | null; onApplyPreset: (id: MapPresetId) => void }) {
   return (
-    <div className="flex flex-wrap gap-[var(--spacing-sm)]">
-      {MAP_PRESET_IDS.map((id) => (
-        <button
-          key={id}
-          type="button"
-          aria-pressed={activePreset === id}
-          onClick={() => onApplyPreset(id)}
-          className={`rounded-full border border-[var(--color-hairline)] px-[14px] py-[4px] text-[length:var(--text-sm)] text-[color:var(--color-control)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] hover:bg-[var(--color-hover-wash)] ${
-            activePreset === id ? 'ring-1 ring-[var(--color-ink)] ring-offset-2 ring-offset-[var(--color-canvas)]' : ''
-          }`}
-        >
-          {MAP_PRESET_LABELS[id]}
-        </button>
-      ))}
-    </div>
+    <ToggleGroup
+      type="single"
+      label="layout preset"
+      value={activePreset}
+      onChange={onApplyPreset}
+      options={MAP_PRESET_IDS.map((id) => ({ value: id, label: MAP_PRESET_LABELS[id] }))}
+    />
   )
 }
 
@@ -214,17 +199,17 @@ export function MusicMapSettings({ settings, updateSettings, mapPresets }: Music
 
       <SettingsGroup title="nodes">
         <SettingsRow label="lock">
-          <Toggle
+          <Switch
             checked={nodesLocked}
             onChange={(v) => void updateSettings({ nodePositionsLocked: v ? 'true' : 'false' })}
-            label="lock node positions"
+            accessibilityLabel="lock node positions"
           />
         </SettingsRow>
         <SettingsRow label="producers">
-          <Toggle
+          <Switch
             checked={showCreditNodes}
             onChange={(v) => void updateSettings({ showCreditNodes: v ? 'true' : 'false' })}
-            label="show producer nodes"
+            accessibilityLabel="show producer nodes"
           />
         </SettingsRow>
         <SettingsRow label="size" align="start">
@@ -243,12 +228,16 @@ export function MusicMapSettings({ settings, updateSettings, mapPresets }: Music
             ))}
           </div>
         </SettingsRow>
-        <SettingsRow label="images">
-          <div className="flex items-center gap-[var(--spacing-lg)]">
+        {/* Three independent on/offs for one question ("which node types
+         * show their art?") — a row of checkboxes since the gpui-kit port,
+         * where they were three switches each captioned from below. */}
+        <SettingsRow label="images" align="start">
+          <div className="flex flex-wrap items-center gap-x-[var(--spacing-lg)] gap-y-[var(--spacing-sm)]">
             {NODE_TYPE_IMAGE_TOGGLES.map(({ key, label }) => (
-              <LabeledToggle
+              <Checkbox
                 key={key}
                 label={label}
+                accessibilityLabel={`show images for ${label}`}
                 checked={settings[key] !== 'false'}
                 onChange={(v) => void updateSettings({ [key]: v ? 'true' : 'false' })}
               />

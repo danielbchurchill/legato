@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../ui/Icon'
+import { Popover } from '../ui/Popover'
+import { Slider } from '../ui/Slider'
 import type { PlaybackStatus, RepeatMode } from '../playback/usePlayback'
 import { Surface } from './Surface'
 import { API_BASE as API } from '../config/serverHost'
@@ -171,7 +173,7 @@ export function TransportDock({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-[14px]">
             {/* No established toggle language for this glass/signal-color
-             * context (Toggle.tsx's knob-and-track is built for the denser
+             * context (Switch.tsx's track-and-thumb is built for the denser
              * settings-panel register, not this dock) — shuffle reads its
              * on/off state the same way the app already marks active vs.
              * inactive elsewhere: signal when on, muted when off. */}
@@ -250,19 +252,39 @@ export function TransportDock({
             )}
           </span>
 
-          <div className="flex items-center gap-[8px]">
-            <Icon name="volume" size={24} className="text-[var(--color-signal)]" />
-            <input
-              type="range"
-              aria-label="Volume"
+          {/* The volume glyph opens a popover holding a vertical Slider —
+           * v2's bare-glyph dock (DESIGN.md "v2: the transport dock, not
+           * reconciled") answered the gpui-kit way, and the first piece of
+           * that redesign to land. The dock itself is still v1's shape.
+           * The glyph swaps to volume-mute at zero so the state reads
+           * without opening anything. */}
+          <Popover
+            label="Volume"
+            placement="top"
+            align="center"
+            className="px-[10px] py-[14px]"
+            trigger={({ open: _open, ...props }) => (
+              <button
+                type="button"
+                aria-label={`Volume, ${Math.round(status.volume * 100)}%`}
+                {...props}
+                className="text-[var(--color-signal)] transition-opacity duration-[var(--motion-fast)] hover:opacity-80"
+              >
+                <Icon name={status.volume === 0 ? 'volume-mute' : 'volume'} size={24} />
+              </button>
+            )}
+          >
+            <Slider
+              orientation="vertical"
+              label="Volume"
               min={0}
               max={1}
               step={0.01}
               value={status.volume}
-              onChange={(e) => onSetVolume(Number(e.target.value))}
-              className="h-[4px] w-[64px] accent-[var(--color-signal)]"
+              onChange={onSetVolume}
+              format={(v) => `${Math.round(v * 100)}%`}
             />
-          </div>
+          </Popover>
         </div>
 
         <WaveformScrubber

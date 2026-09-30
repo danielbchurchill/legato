@@ -5,6 +5,7 @@ import { ScrollingText } from '../ui/ScrollingText'
 import { formatDuration, NO_VALUE } from '../ui/format'
 import { useLibraryPage } from './useLibraryPage'
 import { TRACK_SORT_OPTIONS, type SortDir, type TrackRow, type TrackSort } from './types'
+import { Skeleton } from '../ui/Skeleton'
 
 // Shared between the header row and every data row so their columns stay
 // pixel-aligned — see AlbumsGrid's own note on why this view has no Figma
@@ -171,7 +172,7 @@ export function TracksTable({ query, sort, dir, onSort, onSelectNode }: TracksTa
                       </span>
                     </button>
                   ) : (
-                    <div aria-hidden className="h-full w-full bg-[var(--color-placeholder)]" />
+                    <Skeleton className="h-full w-full" />
                   )}
                 </div>
               )

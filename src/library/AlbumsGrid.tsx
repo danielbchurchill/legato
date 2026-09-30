@@ -4,6 +4,7 @@ import { CoverArt } from '../ui/CoverArt'
 import { ScrollingText } from '../ui/ScrollingText'
 import { useLibraryPage } from './useLibraryPage'
 import type { AlbumRow, AlbumSort, SortDir } from './types'
+import { Skeleton } from '../ui/Skeleton'
 
 // There's no Figma frame for this view yet (issue #126 shipped ahead of the
 // design pass — same footing DESIGN.md already documents for Database
@@ -168,7 +169,7 @@ export function AlbumsGrid({ query, sort, dir, onSelectNode }: AlbumsGridProps) 
                 return album ? (
                   <AlbumCell key={album.id} album={album} onSelectNode={onSelectNode} />
                 ) : (
-                  <div key={index} aria-hidden className="shrink-0 rounded-[var(--radius-control)] bg-[var(--color-placeholder)]" style={{ width: CELL_WIDTH, height: CELL_WIDTH }} />
+                  <Skeleton key={index} className="shrink-0 rounded-[var(--radius-control)]" style={{ width: CELL_WIDTH, height: CELL_WIDTH }} />
                 )
               })}
             </div>

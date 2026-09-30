@@ -211,7 +211,7 @@ const SETTLE_REFIT_DURATION_MS = 320
  * button. */
 const DRAG_THRESHOLD_PX = 4
 
-const HOVER_DWELL_MS = 90 // --motion-instant — used here as a debounce threshold, not a transition
+const HOVER_DWELL_MS = 90 // was --motion-instant's value before the gpui-kit port zeroed that token; a debounce threshold, not a transition, so it keeps its own number
 const DIM_CROSSFADE_MS = 120 // --motion-exit
 
 function osPrefersReducedMotion(): boolean {
