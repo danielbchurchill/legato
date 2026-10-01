@@ -78,11 +78,21 @@ fn resolve_media_binary(_app: &AppHandle, _name: &str) -> Option<PathBuf> {
   None
 }
 
-pub fn spawn(app: &AppHandle) -> Result<Child, String> {
-  let data_dir = app
+fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+  app
     .path()
     .app_data_dir()
-    .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
+    .map_err(|e| format!("failed to resolve app data dir: {e}"))
+}
+
+/// Where the server records the last time it streamed audio (issue #130,
+/// server/src/stream/activity.ts), for keep_awake.rs to read.
+pub fn stream_activity_file(app: &AppHandle) -> Result<PathBuf, String> {
+  Ok(data_dir(app)?.join("stream-activity"))
+}
+
+pub fn spawn(app: &AppHandle) -> Result<Child, String> {
+  let data_dir = data_dir(app)?;
 
   std::fs::create_dir_all(&data_dir)
     .map_err(|e| format!("failed to create app data dir {data_dir:?}: {e}"))?;
@@ -99,9 +109,16 @@ pub fn spawn(app: &AppHandle) -> Result<Child, String> {
     Command::new(sidecar)
   };
 
+  // A server that's only just starting hasn't streamed anything yet. Left
+  // in place, the previous run's timestamp would have keep-awake hold the
+  // machine up on resume or relaunch for a listener who already left.
+  let activity_file = stream_activity_file(app)?;
+  let _ = std::fs::remove_file(&activity_file);
+
   cmd
     .env("LEGATO_DATA_DIR", &data_dir)
     .env("LEGATO_PORT", SERVER_PORT.to_string())
+    .env("LEGATO_STREAM_ACTIVITY_FILE", &activity_file)
     // Issue #110: the desktop app updates through the Tauri updater (#129),
     // so the server it spawns skips the release check and shows no notice.
     .env("LEGATO_INSTALL_CHANNEL", "desktop");

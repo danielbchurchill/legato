@@ -93,3 +93,8 @@ export const MEDIA_CONCURRENCY_LIMIT = resolveMediaConcurrencyLimit();
 // provider, so it gates both providers exactly like a missing client
 // id/secret does.
 export const AUTH_CALLBACK_BASE_URL = process.env.AUTH_CALLBACK_BASE_URL;
+
+// Issue #130: where to record the last time a media byte was streamed, for
+// the desktop shell's keep-awake setting (stream/activity.ts). Set by the
+// Tauri shell only; undefined everywhere else, which writes nothing.
+export const STREAM_ACTIVITY_FILE = process.env.LEGATO_STREAM_ACTIVITY_FILE;
