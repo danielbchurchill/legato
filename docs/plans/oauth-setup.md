@@ -43,8 +43,8 @@ Two facts that shape everything below:
 
 1. **The sign-in hostname.** Recommendation: **`auth.legato.fm`**. It's short, it says what it is, and it stays correct when the relay tunnel becomes just one of the service's jobs. The alternative is `id.legato.fm`. Whatever you pick is baked into every OAuth callback URL, and changing it later means editing every provider registration, so choose once.
 2. **Who owns the GitHub OAuth apps.** Recommendation: **your personal account for now.** An OAuth app can be transferred to an organization later with the same client ID. The alternative is creating a `legato-fm` GitHub organization now, so the consent screen reads "by legato-fm", not "by danielbchurchill".
-3. **Which Google account owns the Cloud project.** Use the account you want Google's verification emails going to for years. Recommendation: a `legato.fm` Google Workspace address (for example `dev@legato.fm`), if you plan to have one. Otherwise your personal Gmail, adding a second owner later. Keep it off the `thinkubik` account: this project is deliberately personal (CLAUDE.md, Git section).
-4. **A support email address** for the Google consent screen, for example `hello@legato.fm`. Google shows it to users, so it should be monitored.
+3. **Which Google account owns the Cloud project.** Use the account you want Google's verification emails going to for years. Keep it off the `thinkubik` account: this project is deliberately personal (CLAUDE.md, Git section). **Decided:** `hello@legato.fm`, the `legato.fm` Workspace account.
+4. **A support email address** for the Google consent screen. Google shows it to users, so it should be monitored. **Decided:** `hello@legato.fm`.
 
 ## Step 1: DNS and TLS for the sign-in hostname
 
@@ -80,6 +80,8 @@ Google won't brand a consent screen with a domain you haven't verified.
 
 Do this with the same Google account that will own the Cloud project (decision 3).
 
+**Already done if you set up Google Workspace on `legato.fm` first.** Workspace setup verifies the domain and adds the `google-site-verification` TXT record itself. Search Console then shows the domain as verified for that account, without asking for a record. That's what happened on 2026-09-30: `hello@legato.fm` is the Workspace account, and the TXT record is live.
+
 ## Step 3: privacy policy and terms on legato.fm
 
 Google's brand verification requires a public privacy policy link, and the homepage has to link to it. The site (`site/index.html`) has neither page today. The waitlist form on it already collects email addresses, so a privacy policy is due regardless of OAuth.
@@ -96,10 +98,12 @@ This is content work in `site/`, not a code change. A worker can draft both page
 
 All of this is in the [Google Cloud console](https://console.cloud.google.com), signed in as the account from decision 3.
 
-1. **Create a project:** top bar, then **New project**. Name: `legato-fm`. No organization is needed.
+1. **Create a project:** top bar, then **New project**. Name: `legato-fm`.
+   - Signed in as a Workspace account (`hello@legato.fm`), the project lives under the **`legato.fm` organization**. That's good: the project is owned by the domain, not a person.
+   - Workspace organizations sometimes start with an org policy that blocks creating a client secret or adding outside users ("Domain restricted sharing"). If a later step fails with an organization-policy error, open **IAM & Admin → Organization policies**, find the named policy, and override it for this project.
 2. **Open Google Auth Platform** (left menu, "Google Auth Platform", or `console.cloud.google.com/auth`). Click **Get started**.
    - **App information:** App name `Legato`, User support email = decision 4.
-   - **Audience:** **External**.
+   - **Audience:** **External**. Because the project is in a Workspace organization, Google also offers **Internal**. That limits sign-in to `@legato.fm` accounts, which is wrong for a public app. Choose External.
    - **Contact information:** your address. Google sends verification and policy mail here.
    - Agree to the user data policy, then **Create**.
 3. **Branding** (left menu):
@@ -200,8 +204,8 @@ None of these need you at a console. They're issues for workers.
 | # | What | Who | Blocks |
 |---|---|---|---|
 | 1 | Decide the hostname, GitHub owner, Google account and support email | Daniel | everything |
-| 2 | `fly certs add`, and the Cloudflare CNAME set to DNS only | Daniel | 6, 7 |
-| 3 | Verify `legato.fm` in Search Console | Daniel | 4 |
+| 2 | `fly certs add`, and the Cloudflare CNAME set to DNS only. **Done 2026-09-30:** the certificate is issued and `https://auth.legato.fm/health` answers | Daniel | 6, 7 |
+| 3 | Verify `legato.fm` in Search Console. **Done 2026-09-30**, through the Workspace setup | Daniel | 4 |
 | 4 | Privacy and terms pages live on legato.fm | Daniel (a worker can draft) | 5 publishing |
 | 5 | Google project, branding, scopes, clients; publish to start brand verification | Daniel | 7 for non-test users |
 | 6 | GitHub OAuth apps (prod and dev) | Daniel | 7 |
