@@ -21,6 +21,10 @@ name: release
 # Issue #105 adds the second job, `docker`: the same tag also publishes the
 # multi-arch server image (linux/amd64 + linux/arm64) to GHCR, built from
 # server/Dockerfile. See docs/install/docker.md for the user side.
+#
+# Issue #109 adds the third, `homebrew`: it opens a PR against the Homebrew
+# tap that bumps the formula to this release. It is off until the tap
+# repository exists; see that job's comment for how to turn it on.
 on:
   push:
     tags:
@@ -159,3 +163,71 @@ jobs:
           build-args: |
             LEGATO_VERSION=${{ steps.meta.outputs.version }}
             LEGATO_GIT_SHA=${{ github.sha }}
+
+  homebrew:
+    # After `release`, because the formula's sha256s come from the
+    # SHA256SUMS that job publishes. Reading the published asset, rather
+    # than rebuilding it here, means the checksums are those of the exact
+    # files brew will download.
+    needs: release
+    # Off until danielbchurchill/homebrew-legato exists. To turn it on:
+    #   1. Move packaging/homebrew/legato.rb to Formula/legato.rb in the tap
+    #      (packaging/homebrew/README.md has the steps).
+    #   2. Create a fine-grained token with Contents and Pull requests
+    #      read/write on the tap only, and add it as this repo's Actions
+    #      secret HOMEBREW_TAP_TOKEN.
+    #   3. Add the Actions variable HOMEBREW_TAP_REPO, set to
+    #      danielbchurchill/homebrew-legato.
+    # With the variable unset this job is skipped, not failed, so tag pushes
+    # before then stay green. Pre-release tags (v1.0.0-rc.1) never bump the
+    # formula: `brew upgrade` would hand them to everyone.
+    if: vars.HOMEBREW_TAP_REPO != '' && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: install Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: resolve release version from tag
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: download this release's SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS --dir "$RUNNER_TEMP"
+
+      - name: check out the tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.HOMEBREW_TAP_REPO }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: bump Formula/legato.rb
+        run: node scripts/bump-homebrew-formula.mjs tap/Formula/legato.rb "${{ steps.version.outputs.value }}" "$RUNNER_TEMP/SHA256SUMS"
+
+      # A PR rather than a push to the tap's main, so a bad bump can be
+      # caught by the tap's own `brew test-bot` (or by eye) before any
+      # `brew upgrade` sees it.
+      - name: open a PR against the tap
+        working-directory: tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.value }}
+          TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+        run: |
+          branch="legato-$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "legato $VERSION"
+          git push origin "$branch"
+          gh pr create --repo "$TAP_REPO" --head "$branch" \
+            --title "legato $VERSION" \
+            --body "Bumps legato to $VERSION, from ${{ github.server_url }}/${{ github.repository }}/releases/tag/$GITHUB_REF_NAME. Opened by release.yml's homebrew job."
