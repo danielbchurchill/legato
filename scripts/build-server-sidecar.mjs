@@ -40,12 +40,11 @@ const OUT_DIR = path.join(REPO_ROOT, "src-tauri", "binaries");
 
 // Covers exactly the five release targets server/scripts/compile.ts's own
 // TARGETS map supports — every platform this repo can actually produce a
-// server binary for is mapped here, deliberately not a subset. Linux is
-// Daniel's main dev machine (the AIO, x64) and the Pi (arm64), so it's the
-// platform this sidecar matters most for, not an also-ran next to macOS and
-// Windows — see issue #103's follow-up. CLAUDE.md's M10 note only defers
-// macOS/Windows *packaging verification* to a future session; it never
-// scoped Linux out of the sidecar itself.
+// server binary for is mapped here, deliberately not a subset. Linux x64 and
+// arm64 are the main development and home-server platforms, so they're the
+// platforms this sidecar matters most for, not an also-ran next to macOS and
+// Windows — see issue #103's follow-up. macOS/Windows *packaging verification* may be
+// deferred; Linux was never scoped out of the sidecar itself.
 const RUST_TRIPLE = {
   "darwin:arm64": "aarch64-apple-darwin",
   "darwin:x64": "x86_64-apple-darwin",

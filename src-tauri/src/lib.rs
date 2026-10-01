@@ -1,11 +1,6 @@
-use std::fs::File;
-use std::io::BufReader;
-use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
-use std::time::Instant;
 
-use rodio::{Decoder, OutputStreamBuilder, Sink};
 use tauri::Manager;
 
 mod keep_awake;
@@ -26,66 +21,6 @@ use serving::{ProcessRunner, Serving, ServingState};
 // the way. Ignored when there's no tray, since then the window is the only
 // way in.
 const BACKGROUND_ARG: &str = "--background";
-
-// Phase 4 of THE SPIKE (see projects/Legato.md): does native decode +
-// gapless playback via rodio/cpal sidestep the WebKitGTK Web Audio +
-// Bluetooth bug found in the WASM-decoder-in-webview spike? Reads straight
-// off disk, no HTTP round trip — isolates decode + Sink scheduling + native
-// device output from everything already proven by the server/webview spike.
-const MEDLEY_ROOT: &str = "/mnt/music/Music/The Beatles/Abbey Road";
-const MEDLEY_TRACKS: [&str; 3] = [
-  "11. Mean Mr. Mustard.flac",
-  "12. Polythene Pam.flac",
-  "13. She Came In Through The Bathroom Window.flac",
-];
-
-#[tauri::command]
-fn play_native_gapless_spike() -> Result<(), String> {
-  std::thread::spawn(|| {
-    let t0 = Instant::now();
-    let root = PathBuf::from(MEDLEY_ROOT);
-
-    let stream_handle = match OutputStreamBuilder::open_default_stream() {
-      Ok(s) => s,
-      Err(e) => {
-        log::error!("[native-spike] failed to open output stream: {e}");
-        return;
-      }
-    };
-    let sink = Sink::connect_new(stream_handle.mixer());
-
-    for name in MEDLEY_TRACKS {
-      let path = root.join(name);
-      let file = match File::open(&path) {
-        Ok(f) => f,
-        Err(e) => {
-          log::error!("[native-spike] failed to open {name}: {e}");
-          return;
-        }
-      };
-      match Decoder::new(BufReader::new(file)) {
-        Ok(source) => {
-          log::info!("[native-spike] +{:?} appending {name}", t0.elapsed());
-          sink.append(source);
-        }
-        Err(e) => {
-          log::error!("[native-spike] failed to decode {name}: {e}");
-          return;
-        }
-      }
-    }
-
-    log::info!(
-      "[native-spike] +{:?} all tracks appended, queue len={}",
-      t0.elapsed(),
-      sink.len()
-    );
-    sink.sleep_until_end();
-    log::info!("[native-spike] +{:?} playback finished", t0.elapsed());
-  });
-
-  Ok(())
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -113,10 +48,10 @@ pub fn run() {
       }
 
       // Embed the server by default — it must start invisibly with the app,
-      // not require a manually-launched second process. See the MVP
-      // roadmap's M0 milestone and Feishin-Competitive-Analysis.md, which
-      // found the lack of this exact behavior to be the load-bearing UX
-      // cost of a client-server split.
+      // not require a manually-launched second process. A look at Feishin,
+      // a client that needs a separately run server, found the lack of this
+      // exact behavior to be the load-bearing UX cost of a client-server
+      // split.
       //
       // Installed whether or not the first start succeeds: a resume from the
       // tray can start the server later, and it must die with the app too.
@@ -157,7 +92,6 @@ pub fn run() {
       }
     })
     .invoke_handler(tauri::generate_handler![
-      play_native_gapless_spike,
       playback::queue_enqueue,
       playback::queue_play,
       playback::queue_pause,

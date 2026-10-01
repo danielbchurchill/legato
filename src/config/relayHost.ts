@@ -1,7 +1,7 @@
 // Where the legato.fm service (today's relay, relay/) lives: the desktop
 // app's legato.fm sign-in (issue #215) talks to it, and nothing else in the
 // client does yet. Production is auth.legato.fm, the hostname the Google
-// and GitHub registrations are bound to (docs/plans/oauth-setup.md).
+// and GitHub OAuth registrations are bound to.
 //
 // Dev override: VITE_RELAY_URL=http://127.0.0.1:8921 points at a local
 // relay (`RELAY_PORT=8921 npm --prefix relay run dev`). The Rust side only

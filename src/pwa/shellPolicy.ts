@@ -1,4 +1,4 @@
-/* Issue #128 (docs/plans/07-clients.md, "Installable web app (G16)"): what
+/* Issue #128: what
  * the service worker is allowed to keep. The answer is the app shell and
  * nothing else — index.html, the bundled JS/CSS/fonts, the icons and the
  * manifest, i.e. exactly what `vite build` wrote to dist/.

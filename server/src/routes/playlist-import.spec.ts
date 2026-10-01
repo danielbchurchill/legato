@@ -147,10 +147,10 @@ describe("prefix remap suggestion — Windows path fixture", () => {
 
 describe("prefix remap suggestion — macOS path fixture", () => {
   it("suggests replacing a /Volumes prefix the same way", () => {
-    const root = insertLibraryRoot("/home/danielc/music");
+    const root = insertLibraryRoot("/home/alex/music");
     insertTrack({
       libraryRootId: root,
-      filePath: "/home/danielc/music/Air/Moon Safari/01 La Femme d'Argent.flac",
+      filePath: "/home/alex/music/Air/Moon Safari/01 La Femme d'Argent.flac",
       title: "La Femme d'Argent",
       durationMs: 265000,
     });
@@ -163,7 +163,7 @@ describe("prefix remap suggestion — macOS path fixture", () => {
     // root — the single unmatched entry's common "prefix" is its whole
     // containing folder here, so the correct replacement has to include
     // the Artist/Album segments the root alone doesn't carry.
-    expect(preview.suggestions[0].replacement).toBe("/home/danielc/music/Air/Moon Safari/");
+    expect(preview.suggestions[0].replacement).toBe("/home/alex/music/Air/Moon Safari/");
   });
 });
 

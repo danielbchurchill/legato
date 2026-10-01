@@ -5,7 +5,7 @@ import { AlbumsGrid } from './AlbumsGrid'
 import { TracksTable } from './TracksTable'
 import { ALBUM_SORT_OPTIONS, type AlbumSort, type SortDir, type TrackSort } from './types'
 
-/* The library view's own container (issue #126, D11 — see DESIGN.md
+/* The library view's own container (issue #126 — see DESIGN.md
  * "Library view"). Takes over the same full-bleed stage Canvas occupies in
  * AppShell (App.tsx renders one or the other, never both), so it inherits
  * the same "runs edge to edge, chrome floats over it" relationship with the

@@ -2,11 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { IS_TAURI } from '../config/runtime'
 
-/* Per-device dark / light / follow-system (#136, D10) — deliberately NOT
- * routed through useSettings.ts's server-backed store. The plan doc is
- * explicit: "stored per device, not per account (a work laptop and a phone
- * can differ)" (docs/plans/06-light-mode.md Step 2). localStorage, not the
- * settings API. */
+/* Per-device dark / light / follow-system (#136) — deliberately NOT
+ * routed through useSettings.ts's server-backed store. It's stored per
+ * device, not per account, since a work laptop and a phone can differ.
+ * localStorage, not the settings API. */
 
 export type ThemePreference = 'dark' | 'light' | 'system'
 export type ResolvedTheme = 'dark' | 'light'
@@ -68,10 +67,9 @@ export function useTheme(): {
   }, [resolvedTheme])
 
   // Web: prefers-color-scheme, tracked live via the standard media query
-  // change event — matches the plan doc's "Follow system uses
-  // prefers-color-scheme on the web". Skipped entirely inside Tauri: that
-  // shell gets its own effect below, per the plan doc's separate instruction
-  // for it, rather than both racing to set the same state.
+  // change event, which is what follow-system means on the web. Skipped
+  // entirely inside Tauri: that shell gets its own effect below, rather
+  // than both racing to set the same state.
   useEffect(() => {
     if (IS_TAURI) return
     const mql = window.matchMedia('(prefers-color-scheme: light)')
@@ -80,7 +78,7 @@ export function useTheme(): {
     return () => mql.removeEventListener('change', onChange)
   }, [])
 
-  // Tauri: "the window theme API with its theme-changed event" (plan doc).
+  // Tauri: the window theme API with its theme-changed event.
   // Distinct from prefers-color-scheme by design — this is the window's own
   // theme, which stays correct if the OS setting changes while the window is
   // unfocused or minimized, which a webview-internal media query is not

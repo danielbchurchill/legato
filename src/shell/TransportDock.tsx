@@ -8,8 +8,8 @@ import type { PlaybackProblem } from '../playback/playbackError'
 import { Surface } from './Surface'
 import { API_BASE as API } from '../config/serverHost'
 
-// D12 (docs/plans/05-listening-and-map.md): "Dock shows current mode; aria-
-// label states it in words" — spelled out here rather than left to the icon
+// Issue #125: the dock shows the current mode and its aria-label states it
+// in words — spelled out here rather than left to the icon
 // alone, since off/all/one is a genuine tri-state a sighted user reads off
 // the badge/color but a screen reader has no equivalent shorthand for.
 const REPEAT_LABEL: Record<RepeatMode, string> = {

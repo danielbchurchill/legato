@@ -9,8 +9,8 @@ export type WriteResult = { writeId: string; writtenMtime: string };
 // Never touches the original file until the very last step. The whole
 // point of temp -> fsync -> rename is that a crash at any point before the
 // rename leaves the original completely untouched — a real requirement,
-// not a nicety, per Legato.md's write-back spec ("the only operation that
-// can destroy user data"). node-taglib-sharp's own FLAC writer already
+// not a nicety: write-back is the only operation in Legato that can
+// destroy user data. node-taglib-sharp's own FLAC writer already
 // patches in place with reserved padding rather than rewriting whole-file
 // (confirmed by reading its source — see flacFile.js's save()); this
 // wrapper adds the crash-safety property on top, since that's not

@@ -229,7 +229,7 @@ function tally(entries: Dirent[]): { audioFiles: number; subfolders: string[] } 
   return { audioFiles, subfolders };
 }
 
-// The plan's count (docs/plans/04 "Server-side folder picker"): audio files
+// Issue #121's shallow count: audio files
 // at this folder's top level plus those in its first level of subfolders.
 // One level alone would show an artist folder as "3 folders" when it holds
 // 36 tracks across three albums; two levels is what makes it read "36 audio
@@ -315,7 +315,7 @@ export async function browse(
     return { status: 400, reason: "invalid_path", error: "path must be an absolute path on the server." };
   }
   // resolve() collapses every ".." before the containment check, so
-  // /home/daniel/../../etc is judged as /etc, not as something under home.
+  // /home/alex/../../etc is judged as /etc, not as something under home.
   // Symlinks inside a root are followed: the owner made them, and a
   // ~/Music pointing at another disk is the usual reason one exists.
   const dir = path.resolve(requested);

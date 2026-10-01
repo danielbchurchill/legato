@@ -1,5 +1,4 @@
-// Issue #120 / D13: the quality ladder (docs/plans/03-connection-and-
-// streaming.md, "Quality ladder (G12)"). `original` is the source file
+// Issue #120: the quality ladder. `original` is the source file
 // itself, never transcoded; every other rung is one ffmpeg encode, cached
 // on disk under its own directory so a track heard at two qualities is two
 // independent cache entries rather than one overwriting the other.
@@ -23,7 +22,7 @@ export type Variant = {
 // play until the whole file exists. Fragmented MP4 (`empty_moov` up front,
 // then self-describing one-second fragments) is the form Safari's media
 // engine accepts progressively, and AAC is the whole reason this rung
-// exists — Safari and iOS web, per the plan's table.
+// exists — Safari and iOS web (#120).
 function opus(kbps: number): Variant {
   return {
     extension: "opus",

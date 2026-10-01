@@ -1,6 +1,5 @@
 // Issue #110: how this copy of legato-server was installed, which decides
-// the one command the update notice shows (docs/plans/01-server-distribution.md,
-// "Update notices"). Each channel's own artifact sets LEGATO_INSTALL_CHANNEL
+// the one command the update notice shows. Each channel's own artifact sets LEGATO_INSTALL_CHANNEL
 // to exactly one of these strings:
 //
 //   docker   set in server/Dockerfile

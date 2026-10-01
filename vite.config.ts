@@ -7,12 +7,9 @@ import { shellWorker } from './scripts/vite-shell-worker.ts'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss(), shellWorker()],
-  // Pinned to IPv4 loopback: 'localhost' resolves IPv6-only on this
-  // machine, so Vite was only listening on [::1]:5173. Airship's tunnel
-  // upgrade path already works around Node's dual-stack "localhost"
-  // ambiguity with autoSelectFamily, but its plain HTTP proxy path doesn't
-  // — it can dial 127.0.0.1 and get refused, which is what was making
-  // edits intermittently fail to reach the Tauri webview.
+  // Pinned to IPv4 loopback: 'localhost' can resolve IPv6-only, which left
+  // Vite listening only on [::1]:5173 while the Tauri webview (devUrl) and
+  // anything else dialling 127.0.0.1 got refused.
   server: {
     host: '127.0.0.1',
   },

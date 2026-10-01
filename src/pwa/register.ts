@@ -9,13 +9,13 @@ import { SERVED_BY_SERVER } from '../config/serverHost'
  * - Not the Tauri webview. The desktop app loads its shell from the bundle,
  *   so a worker gains it nothing. On macOS it's also actively risky: WebKit
  *   keeps storage for unsigned Tauri apps in a bucket named after the raw
- *   binary ("app" for every default-named project, CLAUDE.md), so a worker
+ *   binary ("app" for every default-named project, AGENTS.md), so a worker
  *   registered there could end up serving another project's window.
  * - Served by a Legato server (the legato-server meta tag). A worker's
  *   cache belongs to the server whose shell it holds.
  * - A browser that has service workers at all. They exist only in a secure
  *   context: https, or http on localhost. A phone opening
- *   http://raspberrypi:8899 has none, which is why it can't install the app
+ *   http://musicbox:8899 has none, which is why it can't install the app
  *   either (see the PR for #128).
  */
 export function shouldRegisterShellWorker(env: {

@@ -67,7 +67,7 @@ export function CoverArt({ nodeId, size, className = '', alt = '', style }: Cove
       draggable={false}
       onLoad={() => setLoaded(true)}
       // Guarded against `loaded`: a stray error firing after a successful
-      // load (e.g. a tool like Airship re-touching the DOM node) must not
+      // load (e.g. something re-touching the DOM node) must not
       // retroactively hide art that already rendered.
       onError={() => {
         if (loaded) return

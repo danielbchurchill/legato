@@ -376,7 +376,7 @@ function quantile(sorted: number[], q: number): number {
  * units from the other 397 and squeezed them into ~6% of the viewport.
  *
  * A node dropped far from the pack doesn't necessarily drift back on its
- * own — forceLink's spring is deliberately weak (Legato.md), so a single
+ * own — forceLink's spring is deliberately weak, so a single
  * far-flung node can sit there for a while, or indefinitely if nothing pulls
  * on it. The fix belongs here rather than in the physics: frame the bulk of
  * the graph and let outliers sit off-screen until the user pans to them. */
@@ -767,8 +767,8 @@ type Props = {
 export type CanvasHandle = {
   /** Animates the camera to center on and zoom into a node — search results,
    * fact links, and hygiene worklist items all resolve to this so "select a
-   * node" always means "go look at it," matching the canvas-first navigation
-   * Legato.md calls out as the actual point of a spatial layout. No-op for a
+   * node" always means "go look at it": canvas-first navigation is the
+   * actual point of a spatial layout. No-op for a
    * node not currently in the graph. */
   flyToNode: (nodeId: number) => void
 }
@@ -1032,8 +1032,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
   // Renderer lifecycle — created once per mount (2026-08-29: used to be
   // once per granularity, back when switching artists/albums/tracks meant a
-  // genuinely different graph; there's one combined graph now, see
-  // Legato.md), NOT on every data refresh or settings change.
+  // genuinely different graph; there's one combined graph now), NOT on every data refresh or settings change.
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -1073,7 +1072,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     rendererRef.current = renderer
     setActiveRenderer(renderer)
 
-    // Obsidian-style live physics (2026-08-29 — see Legato.md). The tick
+    // Obsidian-style live physics (the 2026-08-29 map rework). The tick
     // callback is the one place simulation state becomes graph state: copy
     // every simulated node's current x/y into graphology, then ask sigma to
     // repaint. Node identity is d3-force's own (forceSimulation.ts), so this

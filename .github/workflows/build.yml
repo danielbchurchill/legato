@@ -1,8 +1,7 @@
 name: build
 
 # M10 step one: prove the Tauri shell actually builds and bundles clean on
-# macOS and Windows, not just this Linux dev machine. See CLAUDE.md's
-# Development Conventions for what M10 covers and what's still deliberately
+# macOS and Windows, not just this Linux dev machine. What's deliberately
 # deferred (ffmpeg/fpcalc bundling, code signing — none of that is this
 # workflow's job).
 #

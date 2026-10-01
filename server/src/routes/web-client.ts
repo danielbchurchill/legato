@@ -2,8 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-// Issue #116 (docs/plans/03-connection-and-streaming.md, "Web client served
-// by the home server"): opening http://<server>:8899/ in any browser *is*
+// Issue #116: opening http://<server>:8899/ in any browser *is*
 // the client. This plugin serves the built frontend at / and falls back to
 // index.html for any other page path, so a deep link or a reload lands on
 // the app instead of a 404.
@@ -135,9 +134,8 @@ export function webClientRoutes(source: WebClientSource | null = resolveWebClien
     );
 
     // A wildcard, not a not-found handler: find-my-way always prefers a
-    // registered route over `/*`, so every real API route, the websocket
-    // and the old /tracks spike route win without this file knowing they
-    // exist. callNotFound() hands the rest to Fastify's default JSON 404.
+    // registered route over `/*`, so every real API route and the websocket
+    // win without this file knowing they exist. callNotFound() hands the rest to Fastify's default JSON 404.
     app.get("/*", async (request, reply) => {
       const pathname = requestPath(request.url);
       if (pathname === null || isApiPath(pathname) || !source) return reply.callNotFound();

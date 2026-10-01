@@ -1,4 +1,4 @@
--- Full nodes/recordings/files shape (per the MVP roadmap's M2 schema) is
+-- Full nodes/recordings/files shape (M2's matching schema) is
 -- created here rather than in a later migration: the scanner needs to write
 -- match_source/confidence columns from the moment a file is first seen
 -- (every freshly-scanned file starts 'unmatched' until M2's collapse

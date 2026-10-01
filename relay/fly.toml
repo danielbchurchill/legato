@@ -9,7 +9,7 @@ primary_region = "iad"
 
 [env]
   RELAY_PORT = "8901"
-  # Convention matches server/'s LEGATO_DATA_DIR (see repo CLAUDE.md).
+  # Convention matches server/'s LEGATO_DATA_DIR (see AGENTS.md).
   # relay/src/config.ts reads it, and relay/src/db.ts keeps the relay's
   # SQLite database at $RELAY_DATA_DIR/relay.db.
   RELAY_DATA_DIR = "/data"

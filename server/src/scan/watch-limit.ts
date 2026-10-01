@@ -19,8 +19,7 @@ const WATCH_EXHAUSTION_CODES = new Set(["ENOSPC", "EMFILE"]);
 // fs.inotify.max_user_watches is exhausted (a name inherited from disk
 // space errors, not what's actually out); EMFILE is the same exhaustion
 // one layer up, the process' open-file-descriptor limit. Both mean "no
-// watch capacity left," never "this one path is broken" — see
-// docs/plans/04-library-and-scan.md#file-watch-limit-fallback.
+// watch capacity left," never "this one path is broken" (#122).
 export function isWatchExhaustionError(err: unknown): boolean {
   if (typeof err !== "object" || err === null || !("code" in err)) return false;
   const code = (err as { code: unknown }).code;

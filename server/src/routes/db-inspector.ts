@@ -119,7 +119,7 @@ function schemaSnapshot(db: Database): DbInspectorSnapshot["schema"] {
 }
 
 // Recursive rather than aware of the covers/<pixel bound>/<hash prefix>/
-// shape specifically (CLAUDE.md's "Cover art cache") — walking generically
+// shape specifically (AGENTS.md's "Cover art cache") — walking generically
 // means a future size added to the ladder, or a leftover directory
 // pruneStaleSizes() hasn't swept yet, is still counted correctly.
 function walkDirStats(dir: string): { fileCount: number; totalBytes: number } {

@@ -138,10 +138,8 @@ impl Seek for NetworkAheadReader {
   }
 }
 
-// Desktop playback engine — replaces the fixed-medley
-// play_native_gapless_spike command (kept alive, debug-gated, as a smoke
-// test) with real queue control. Per the MVP roadmap's M6 architecture
-// note: this module never talks to the server's DB directly. React
+// Desktop playback engine: native decode and gapless queue control through
+// rodio/cpal. This module never talks to the server's DB directly. React
 // resolves a recording node id to a file path + ReplayGain via
 // POST /api/v1/queue/resolve (the same call the remote/WASM path needs)
 // and hands Rust only the resolved plan — one implementation of "turn a
@@ -156,7 +154,7 @@ pub struct QueueTrack {
   pub replaygain_track_gain: Option<f32>,
 }
 
-/// D12 (docs/plans/05-listening-and-map.md): off/all/one, a persisted
+/// Issue #125: off/all/one, a persisted
 /// player setting rather than per-queue state (unlike shuffle, which lives
 /// entirely in the frontend's playSequence — see usePlayback.ts). Lives
 /// outside `Session` in `PlaybackState`, same as volume/device_name, so it
@@ -497,7 +495,7 @@ pub fn queue_enqueue(app: AppHandle, state: State<PlaybackState>, track: QueueTr
   Ok(())
 }
 
-/// D12's persisted player setting (see RepeatMode's doc comment) — applies
+/// #125's persisted player setting (see RepeatMode's doc comment) — applies
 /// immediately to the monitor thread's own gapless reconciliation
 /// (reconcile_repeat) and to the next queue_skip. Setting this alone
 /// doesn't retroactively change what's already been enqueued into a live
@@ -735,8 +733,8 @@ mod tests {
     }
   }
 
-  // The 2026-09-29 AIO case: /mnt/music exists as an empty mount point
-  // because the NFS mount never came up, so every path under it is missing
+  // A client whose NFS library mount never came up: /mnt/music exists as an
+  // empty mount point, so every path under it is missing
   // and the nearest folder that exists has nothing in it.
   #[test]
   fn open_source_reports_an_empty_mount_point_for_an_unmounted_library() {
@@ -828,8 +826,7 @@ mod tests {
   // Exercises the real audio engine against real hardware and a real file
   // — not run by default `cargo test` (needs a working audio device and
   // LEGATO_TEST_FILE pointed at a real audio file), but this is how
-  // amplify_decibel/try_seek/get_pos (all new in this module — none used
-  // by the original play_native_gapless_spike) were actually verified,
+  // amplify_decibel/try_seek/get_pos were actually verified,
   // rather than just compiled and trusted.
   #[test]
   #[ignore]

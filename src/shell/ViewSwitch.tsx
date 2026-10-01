@@ -1,7 +1,7 @@
 import { Tabs } from '../ui/Tabs'
 import { Surface } from './Surface'
 
-/* The map/library switch (issue #126, D11 — see DESIGN.md "Library view").
+/* The map/library switch (issue #126 — see DESIGN.md "Library view").
  * Still the retired GraphToggle's Surface pill; what sits in it is Tabs'
  * segmented variant since the gpui-kit port — a raised thumb sliding to the
  * active view, with arrow keys that work — `bare`, since the glass pill is

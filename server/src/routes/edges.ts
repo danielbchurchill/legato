@@ -2,7 +2,8 @@ import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 
 // Manual, user-authored edges — the free-text "sounds like"/"sampled in"
-// layer from Legato.md's edge-types spec. Restricted to source='manual'
+// layer that sits on top of the edges derived from tags and MusicBrainz.
+// Restricted to source='manual'
 // throughout: this route can never touch a derived local/musicbrainz edge,
 // only ones a person actually created here. Survives re-scan because
 // match/edges.ts's regeneration is scoped to `WHERE source = 'local'` —

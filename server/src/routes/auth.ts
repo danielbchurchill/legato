@@ -259,9 +259,9 @@ const SETUP_CODE_HELP =
   "It's on the server's /setup page, and in its log; on a Linux service, run journalctl --user-unit legato-server.";
 
 // Where the /setup page's QR code points: legato.fm's claim page, which
-// signs the phone in and pairs this server with that account (plan 02,
-// step 2). The claim side isn't built yet, see the #113 PR; the URL is
-// already the one the plan names, so a printed QR keeps working once it is.
+// signs the phone in and pairs this server with that account. The claim
+// side isn't built yet (#237); the URL is already the final one, so a
+// printed QR keeps working once it is.
 const CLAIM_URL_BASE = "https://legato.fm/claim";
 
 export function authRoutes(

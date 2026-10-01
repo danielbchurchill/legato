@@ -3,8 +3,7 @@ import { API_BASE as API } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
 import type { PlaybackStatus } from './usePlayback'
 
-/* Media Session for the browser player (#128, docs/plans/07-clients.md
- * "Installable web app (G16)"). It's what puts the track on a phone's lock
+/* Media Session for the browser player (#128). It's what puts the track on a phone's lock
  * screen and routes the headphone and lock-screen buttons back into the
  * queue. This is Rowan's Android client until there are mobile apps.
  *

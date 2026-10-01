@@ -8,11 +8,10 @@
 // This is a sibling to fetch-media-binaries.mjs, not a replacement for it:
 // that script feeds the Tauri desktop sidecar (src-tauri/binaries/,
 // macOS + Windows only — Linux relies on system ffmpeg there per
-// CLAUDE.md) and stays exactly as it is. This one is server-release-only,
+// AGENTS.md) and stays exactly as it is. This one is server-release-only,
 // covers all five compile targets including both Linux ones (a headless
-// install per docs/plans/01-server-distribution.md's Install script
-// section has no apt/system ffmpeg guarantee the way the Docker image
-// does), and writes to a different destination. Some sources overlap
+// install from the install script, #108, has no apt/system ffmpeg
+// guarantee the way the Docker image does), and writes to a different destination. Some sources overlap
 // (evermeet.cx, osxexperts.net, gyan.dev, chromaprint's GitHub releases)
 // but each fetch here is independent so neither script can break the
 // other by being edited.

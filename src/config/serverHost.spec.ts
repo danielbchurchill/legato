@@ -3,8 +3,8 @@ import { resolveServerOrigin } from './serverHost'
 
 describe('resolveServerOrigin', () => {
   it('uses the page origin when a Legato server served the page', () => {
-    const page = { servedByServer: true, origin: 'http://raspberrypi:8899' }
-    expect(resolveServerOrigin(page, {})).toBe('http://raspberrypi:8899')
+    const page = { servedByServer: true, origin: 'http://musicbox:8899' }
+    expect(resolveServerOrigin(page, {})).toBe('http://musicbox:8899')
   })
 
   it('ignores a baked-in VITE_SERVER_HOST when a server served the page', () => {

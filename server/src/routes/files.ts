@@ -19,9 +19,7 @@ import {
 // server-reported path and tried to open it directly on the *client's own*
 // filesystem, which only works by accident when client and server happen
 // to share one — false the instant they're on different machines, exactly
-// the case this split-service architecture exists to support. The old
-// /stream/:filename spike (server/src/index.ts) trusted a client-supplied
-// filename directly; this route is what replaces it for real playback.
+// the case this split-service architecture exists to support.
 //
 // Issue #120: `?quality=` picks a rung of the ladder (stream/quality.ts).
 // Absent means `original`, so a client that predates the ladder keeps
@@ -96,7 +94,7 @@ export function filesRoutes(
             // No Content-Length: the encode is still writing, so the length
             // isn't known yet and the body goes out chunked. Accept-Ranges
             // still advertises the seekable file this becomes. TTFA is the
-            // whole point (docs/plans/03, "Quality ladder"): audio starts
+            // whole point of #120's quality ladder: audio starts
             // as soon as ffmpeg's first chunk lands, not when it exits.
             reply.headers({ ...headers, "Accept-Ranges": "bytes" });
             return reply.send(activity.meter(Readable.from(readGrowing(variant.job))));
@@ -112,7 +110,7 @@ export function filesRoutes(
   };
 }
 
-// D13's "Original": the source file as it sits on disk, never transcoded —
+// #120's "Original": the source file as it sits on disk, never transcoded —
 // FLAC passthrough for the real library, and whatever container a non-FLAC
 // source already uses otherwise. Not cached: the file is already here.
 async function sendOriginal(

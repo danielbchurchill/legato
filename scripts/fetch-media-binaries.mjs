@@ -6,7 +6,7 @@
 // up that whole directory, and src-tauri/src/server_process.rs resolves a
 // path inside it at runtime and hands it to the Node server as
 // LEGATO_FFMPEG_PATH/LEGATO_FPCALC_PATH (see server/src/mediaBinaries.ts).
-// Linux keeps relying on system ffmpeg, per CLAUDE.md — nothing here
+// Linux keeps relying on system ffmpeg, so nothing here
 // touches it.
 //
 // Run: node scripts/fetch-media-binaries.mjs   (or `npm run fetch:media-binaries`)

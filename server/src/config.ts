@@ -1,7 +1,7 @@
 import { cpus, homedir } from "node:os";
 import path from "node:path";
 
-// M-9: the first real secret this project has needed. CLAUDE.md's
+// M-9: the first real secret this project has needed. AGENTS.md's
 // documented convention is server/.env.local, never committed — loaded
 // here (the one module that actually reads process.env) rather than in
 // index.ts, since ESM import hoisting means index.ts's own top-level code
@@ -31,7 +31,7 @@ export const PORT = Number(process.env.LEGATO_PORT ?? 8899);
 // fallback stays quietly inactive (enrich/acoustid.ts logs one warning
 // and returns no matches), the same graceful-absence handling as fpcalc
 // itself not being on PATH. Real secrets go in server/.env.local per
-// CLAUDE.md, never committed — there is no .env.local in this repo yet.
+// AGENTS.md, never committed — there is no .env.local in this repo yet.
 export const ACOUSTID_API_KEY = process.env.ACOUSTID_API_KEY;
 
 // Rough OAuth account provisioning (see server/src/routes/auth.ts) — the
@@ -50,16 +50,15 @@ export const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 
 // Issue #111: a shared limit on how many ffmpeg/fpcalc child processes this
 // server runs at once, across every call site that spawns one — playback
-// transcodes (stream/cache.ts, and index.ts's spike route), cover resizing
+// transcodes (stream/cache.ts), cover resizing
 // (cover/store.ts), waveform decode (waveform/decode.ts) and fingerprinting
 // (match/fingerprint.ts), including the enrichment worker's own use of the
 // latter two. media/queue.ts is what actually enforces it (and gives
 // playback priority over queued background work); this is just where the
-// number comes from, per CLAUDE.md's convention of documenting every env
+// number comes from, per AGENTS.md's convention of documenting every env
 // var in this one file.
 //
-// Exists for docs/plans/01-server-distribution.md's Low-power hosts case: a
-// Synology "+" model's J4125-class CPU has 4 cores and 2-4GB of RAM, and a
+// Exists for low-power hosts (#111): a Synology "+" model's J4125-class CPU has 4 cores and 2-4GB of RAM, and a
 // fresh scan's fingerprinting/cover/waveform work must never leave nothing
 // for the track someone is actually listening to. Defaulting to
 // max(1, cores - 1) leaves one core free for the server and OS themselves

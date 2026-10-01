@@ -10,7 +10,7 @@
 // same way it already passes LEGATO_DATA_DIR/LEGATO_PORT. Unset, both fall
 // back to the bare command name — exactly today's working PATH-resolution
 // behavior on this dev machine and on Linux generally, which is
-// deliberately left as-is (see CLAUDE.md).
+// deliberately left as-is (see AGENTS.md).
 //
 // Exported as functions, not just top-level constants, so the pure
 // resolution logic is directly testable without mutating process.env.

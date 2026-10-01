@@ -3,8 +3,7 @@
 // server/scripts/compile.ts and scripts/fetch-release-media-binaries.mjs,
 // both of which must have already run) into the per-target archives
 // .github/workflows/release.yml publishes, plus one SHA256SUMS covering
-// all of them — the shape docs/plans/01-server-distribution.md's Compile
-// section asks for: legato-server-<version>-<target>.tar.gz (.zip for
+// all of them — the shape issue #102 asks for: legato-server-<version>-<target>.tar.gz (.zip for
 // Windows), each archive holding a single legato-server-<version>-<target>/
 // directory so extracting it into a shared downloads folder can't clobber
 // another target's files of the same name.

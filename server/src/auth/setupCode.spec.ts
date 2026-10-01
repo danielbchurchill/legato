@@ -113,10 +113,10 @@ describe("maySeeSetupCode", () => {
   it("shows it to a browser on the LAN or tailnet, on the server's own page", () => {
     for (const [peer, host] of [
       ["192.168.1.20", "192.168.1.5:8899"],
-      ["10.0.0.4", "raspberrypi:8899"],
-      ["172.20.1.1", "raspberrypi.local:8899"],
+      ["10.0.0.4", "musicbox:8899"],
+      ["172.20.1.1", "musicbox.local:8899"],
       ["100.101.102.103", "100.100.20.30:8899"],
-      ["100.101.102.103", "raspberrypi.tail1234.ts.net:8899"],
+      ["100.101.102.103", "musicbox.tail1234.ts.net:8899"],
       ["fd7a:115c:a1e0::5", "[fd7a:115c:a1e0::1]:8899"],
       ["::ffff:192.168.1.20", "music.home.arpa:8899"],
     ] as const) {

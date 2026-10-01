@@ -8,7 +8,7 @@
 //   this is a positive signal rather than a guess from the hostname. It
 //   deliberately beats VITE_SERVER_HOST: a .env.local baked into the build
 //   (the Mac's one pins the Pi) must not send a page the Pi served at
-//   http://raspberrypi:8899/ to a hardcoded IP instead.
+//   http://musicbox:8899/ to a hardcoded IP instead.
 // - Desktop app (Tauri, dev or packaged) and plain `npm run dev`: the
 //   configured endpoint, which today is still the env-derived default below.
 // - app.legato.fm: a server picked on the connect screen (plan 03,
@@ -64,7 +64,7 @@ export const SERVER_ORIGIN = resolveServerOrigin(currentPage(), {
   VITE_SERVER_PORT: import.meta.env.VITE_SERVER_PORT,
 })
 // Read back out of the resolved origin, not the env, so a message naming
-// the server ("legato-server on raspberrypi is out of date") names the one
+// the server ("legato-server on musicbox is out of date") names the one
 // actually being talked to. The port falls back to the scheme's default
 // when the origin leaves it implicit, as a page served on :443 does.
 const serverUrl = new URL(SERVER_ORIGIN)

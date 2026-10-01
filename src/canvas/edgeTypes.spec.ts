@@ -9,7 +9,7 @@ import {
 } from './edgeTypes'
 
 // The app's first pure-logic frontend module worth a real test file — see
-// CLAUDE.md's "Root app has vitest installed but no tests yet". Everything
+// the project notes' old "Root app has vitest installed but no tests yet". Everything
 // here is deterministic and needs no DOM, no server, no settings store.
 
 describe('edgeTypes', () => {

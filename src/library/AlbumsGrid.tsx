@@ -31,9 +31,9 @@ type AlbumsGridProps = {
 }
 
 // Selecting a cell only selects+flies — it doesn't also play (no
-// PlayNodeButton here). Out of the issue's "Done when" list (the plan
-// spec's grid is cover/title/artist/sort, nothing about a transport
-// affordance per cell), so it's left as a documented follow-up rather than
+// PlayNodeButton here). Out of #126's "Done when" list (the grid is
+// cover/title/artist/sort, nothing about a transport affordance per
+// cell), so it's left as a documented follow-up rather than
 // added speculatively: the map's own NodeCard already covers play-on-select
 // once a node picked here is flown to.
 function AlbumCell({ album, onSelectNode }: { album: AlbumRow; onSelectNode: (id: number) => void }) {
@@ -72,7 +72,7 @@ function AlbumCell({ album, onSelectNode }: { album: AlbumRow; onSelectNode: (id
   )
 }
 
-/** Album cover grid (issue #126, D11). Virtualized by row, not by cell — see
+/** Album cover grid (issue #126). Virtualized by row, not by cell — see
  * DESIGN.md "Library view" for why: @tanstack/react-virtual has no built-in
  * notion of a wrapping grid, only a linear list of items with a size, so a
  * "row" here is one virtual item containing `columnCount` cells, and

@@ -101,7 +101,7 @@ service, a Slack notification on new signups, etc.), add the key the normal Clou
 way — `npx wrangler secret put SOME_KEY` from `site/`, or the same field in the
 dashboard under the Pages project's Settings → Environment variables — not a `.env`
 file. Nothing about this repo's own secrets convention (`server/.env.local`, see the
-root `CLAUDE.md`) applies here; that's for the Fastify service, not this Worker.
+root `AGENTS.md`) applies here; that's for the Fastify service, not this Worker.
 
 ### Read what's been collected
 

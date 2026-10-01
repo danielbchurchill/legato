@@ -1,6 +1,6 @@
 // Pure formatting helpers for the collection panel's overview stats — split
 // out so they're unit-testable without a DOM (root app's first real
-// pure-logic test target, per CLAUDE.md: everything before this was a thin
+// pure-logic test target, per AGENTS.md: everything before this was a thin
 // fetch-wrapper UI).
 
 export function formatBytes(bytes: number): string {

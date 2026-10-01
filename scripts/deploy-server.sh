@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Deploys the compiled legato-server to a standalone host that already runs
-# it as a systemd *user* unit (the Pi today) — issue #194. This is the
-# manual procedure from CLAUDE.md's Pi note as one command, so a deploy
-# can't stop half-done: the 2026-09-29 deploy by hand lost a round trip to a
-# forgotten `chmod`, since scp drops the executable bit.
+# Deploys the compiled legato-server to a standalone target host that already
+# runs it as a systemd *user* unit — issue #194. It's the manual update
+# procedure as one command, so a deploy can't stop half-done: a deploy by
+# hand once lost a round trip to a forgotten `chmod`, since scp drops the
+# executable bit.
 #
 #   scripts/deploy-server.sh [--allow-dirty] [--health-timeout <s>] <ssh-host>
 #   scripts/deploy-server.sh [--allow-dirty] [--health-timeout <s>] --local
@@ -121,8 +121,7 @@ host_command() {
 }
 
 # Shared by the probe and the health wait: fetch a URL on the host with
-# whatever it has. The Pi has curl and python3; a minimal Debian may only
-# have one of curl/wget/python3.
+# whatever it has: a minimal Debian may only have one of curl/wget/python3.
 # shellcheck disable=SC2016 # expanded on the host, not here
 fetch_fn='
 fetch() {
@@ -309,8 +308,9 @@ body=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
   if body=$(fetch "$url" 2>/dev/null) && [ -n "$body" ]; then break; fi
   body=""
-  # A failed Condition (ConditionPathIsMountPoint=/mnt/music on the Pi)
-  # leaves the unit inactive without an error; waiting longer will not help.
+  # A failed Condition (say ConditionPathIsMountPoint= on a library mount
+  # such as /mnt/music) leaves the unit inactive without an error; waiting
+  # longer will not help.
   if [ "$(systemctl --user show "$unit" -p ConditionResult --value 2>/dev/null)" = no ]; then break; fi
   sleep 1
 done
@@ -335,7 +335,7 @@ if ((install_ok)); then
   echo "--version: ${after_version:-<no output>}"
   echo "/health:   ${after_health:-<no answer>}"
   if [[ $after_condition == no ]]; then
-    failure="the unit was skipped because a Condition failed — on the Pi that's ConditionPathIsMountPoint=/mnt/music, so check the drive is mounted"
+    failure="the unit was skipped because a Condition failed — if the unit is gated on a mount point, check the drive is mounted"
   elif [[ -z $after_health ]]; then
     failure="no answer from $HEALTH_PATH on port $port within ${health_timeout}s (unit ${after_active:-unknown})"
   elif [[ $after_version != *"($head_sha)"* ]]; then

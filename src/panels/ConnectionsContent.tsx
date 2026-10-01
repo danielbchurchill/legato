@@ -243,7 +243,7 @@ export function MembersList({ node, onSelectNode }: { node: NodeDetail; onSelect
 }
 
 // "Sounds like", "sampled in", "played this at X" — the free-text personal
-// edge layer from Legato.md's edge-types spec. First-class, never
+// edge layer, on top of the edges derived from tags. First-class, never
 // overwritten by re-scans (match/edges.ts only ever touches source='local').
 function AddEdgeForm({ nodeId, onAdded }: { nodeId: number; onAdded: () => void }) {
   const [open, setOpen] = useState(false)

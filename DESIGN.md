@@ -23,7 +23,7 @@ Two consequences worth stating outright:
 
 ## Color
 
-Legato is a two-theme app now (D10, issue #136): dark, and a paper light mode. Dark is the original, unchanged intent — a canvas of album art needs a dark, neutral, non-competing ground — and stays the default in every context that has no stored preference. Light is not a dimmed or inverted copy of it; it has its own rationale (below) and its own signed-off palette (issue #104's approval comment), not a formula derived from the dark values. A component never branches on which is active — both live as the same `--color-*` custom property names, dark in `tokens.css`'s `@theme` block, light overriding them under `:root[data-theme="light"]`, and every component just reads `var(--color-*)` either way. The one structural exception is the sigma canvas, which renders to WebGL and never sees CSS at all — see "The graph" below for how it stays in sync instead.
+Legato is a two-theme app now (issue #136): dark, and a paper light mode. Dark is the original, unchanged intent — a canvas of album art needs a dark, neutral, non-competing ground — and stays the default in every context that has no stored preference. Light is not a dimmed or inverted copy of it; it has its own rationale (below) and its own signed-off palette (issue #104's approval comment), not a formula derived from the dark values. A component never branches on which is active — both live as the same `--color-*` custom property names, dark in `tokens.css`'s `@theme` block, light overriding them under `:root[data-theme="light"]`, and every component just reads `var(--color-*)` either way. The one structural exception is the sigma canvas, which renders to WebGL and never sees CSS at all — see "The graph" below for how it stays in sync instead.
 
 | Token | Dark value | Role |
 |---|---|---|
@@ -38,11 +38,11 @@ Legato is a two-theme app now (D10, issue #136): dark, and a paper light mode. D
 | `--color-muted` | `#646464` | Labels, dividers, inactive states |
 | `--color-control` | `#646464` *(v2)* | Switch/slider/checkbox/radio chrome, resting state |
 
-### Paper (light mode, D10)
+### Paper (light mode, issue #136)
 
 **Sheet music in colour and contrast.** Warm paper that is not yellow — a subtly tinted off-white, the colour of good engraving paper under daylight, not parchment. Ink is pen-ink black, a little softer than pure `#000`. Staff-line grays for dividers, edge colours darkened to clear WCAG 3:1 against the paper canvas (4.5:1 anywhere an edge colour also carries text), each hue kept recognizable next to its dark-mode counterpart. Glass becomes frosted paper — surface at high opacity, with a softer, shorter, lower-alpha shadow than dark mode's punchier one; a paper shadow that read as heavy would fight the "resting on a lit desk" feeling the theme is going for.
 
-Exact values live only in `tokens.css`'s `:root[data-theme="light"]` block, copied verbatim from issue #104's sign-off comment — this file doesn't duplicate a second token table that would just drift out of sync with it. A handful of values in that block are *not* from the approved table (the node-dot fallback colors, the edge/placeholder washes, the light-mode shadow) — each is called out inline there as a derived extension pending design review, not a D10-approved value.
+Exact values live only in `tokens.css`'s `:root[data-theme="light"]` block, copied verbatim from issue #104's sign-off comment — this file doesn't duplicate a second token table that would just drift out of sync with it. A handful of values in that block are *not* from the approved table (the node-dot fallback colors, the edge/placeholder washes, the light-mode shadow) — each is called out inline there as a derived extension pending design review, not an approved value.
 
 Preference is dark / light / follow-system, stored per device (`localStorage`, not the server-backed settings store — a work laptop and a phone can genuinely differ) — see `src/hooks/useTheme.ts`. Follow-system tracks `prefers-color-scheme` live on the web and the Tauri window theme API's `onThemeChanged` event in the desktop shell. `index.html` carries a synchronous inline script that sets `data-theme` before the stylesheet or React ever run, so a light-mode user never sees a dark first paint.
 
@@ -339,7 +339,7 @@ Storage: a type → hex override map, most naturally in the existing `settings` 
 
 ## Library view
 
-**Decision D11** (issue #126): a map/library switch in the shell, persisted like every other settings-backed toggle (`ViewSwitch.tsx`, `settings.viewMode`, `'map' | 'library'`, default `'map'`). Library has two layouts — an albums cover grid (`src/library/AlbumsGrid.tsx`) and a virtualized track table (`src/library/TracksTable.tsx`) — behind one container, `src/library/LibraryView.tsx`, with its own albums/tracks sub-toggle.
+**Issue #126**: a map/library switch in the shell, persisted like every other settings-backed toggle (`ViewSwitch.tsx`, `settings.viewMode`, `'map' | 'library'`, default `'map'`). Library has two layouts — an albums cover grid (`src/library/AlbumsGrid.tsx`) and a virtualized track table (`src/library/TracksTable.tsx`) — behind one container, `src/library/LibraryView.tsx`, with its own albums/tracks sub-toggle.
 
 No Figma frame exists for any of this yet — same footing as "v2: panels without a frame" above (Database Inspector, Favourites, Tag Manager): the system gets reused correctly rather than matched pixel-for-pixel against a mockup that doesn't exist. Concretely, that means:
 
@@ -357,7 +357,7 @@ No Figma frame exists for any of this yet — same footing as "v2: panels withou
 
 **Documented scope boundary: switching back to the map does not re-fly the camera to whatever was last selected in the library.** `selectAndFly` calls `canvasRef.current?.flyToNode(id)`, which is a no-op while `Canvas` is unmounted (library active) since the ref is null — so the selection itself carries over (the node card shows correctly once back on the map, if still selected) but the fly-to-it camera move does not replay retroactively. Fixing this means touching `Canvas.tsx`'s 1500-line, carefully-commented effect stack for a polish item outside issue #126's "Done when" list — left as a follow-up rather than done speculatively.
 
-**Also deliberately not built:** a per-row/per-cell play button. Selecting a row or cover selects+flies only; playing something found this way means switching to the map first, where the now-selected node's own card already has one. Neither the issue's "Done when" list nor the plan doc's own description of the two layouts mentions a transport affordance here, so — same reasoning as the camera fly-to above — it's flagged as a follow-up rather than added on spec.
+**Also deliberately not built:** a per-row/per-cell play button. Selecting a row or cover selects+flies only; playing something found this way means switching to the map first, where the now-selected node's own card already has one. Issue #126's "Done when" list doesn't mention a transport affordance here, so — same reasoning as the camera fly-to above — it's flagged as a follow-up rather than added on spec.
 
 ---
 

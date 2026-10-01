@@ -27,7 +27,7 @@ type ResolvedTrack = {
 
 export type QueueEntry = { recordingNodeId: number; title: string; durationMs: number | null }
 export type ReplayGainMode = 'track' | 'album' | 'off'
-// D12 (docs/plans/05-listening-and-map.md): off -> all -> one, a persisted
+// Issue #125: off -> all -> one, a persisted
 // player setting (App.tsx reads/writes it via useSettings, same as
 // replaygainMode) rather than per-queue state — unlike shuffle, which lives
 // entirely in playSequence/originalOrder below.
@@ -170,7 +170,7 @@ function reportPlay(entry: PlayInProgress): void {
 // reject, so this branches to a plain HTML5 <audio> element pointed at the
 // server's GET /api/v1/files/:id/stream transcode route instead — not
 // gapless, but that's exactly the "no native decode option" case the stream
-// route was built for (see CLAUDE.md's Development Conventions). Both paths
+// route was built for (see AGENTS.md's Development Conventions). Both paths
 // present the same play/pause/seek/next/previous/queue-management interface
 // below so the rest of the app doesn't care which backend is live
 // underneath.
@@ -374,7 +374,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     [finalizeCurrentPlay],
   )
 
-  // D12's off/all/one for the web-fallback path — Rust's reconcile_repeat
+  // #125's off/all/one for the web-fallback path — Rust's reconcile_repeat
   // (playback.rs) has no equivalent here since there's no Sink to
   // re-append to, so the <audio> element just gets told which index to
   // load next. Shared by onEnded (automatic) and the manual next() below

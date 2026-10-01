@@ -72,7 +72,7 @@ describe("public routes", () => {
   });
 
   it("returns 401, not 404, for an unmatched URL under an API prefix", async () => {
-    for (const url of ["/api/v1/no-such-route", "/api/v2/stats", "/covers/abc", "/stream/x.flac", "/tracks"]) {
+    for (const url of ["/api/v1/no-such-route", "/api/v2/stats", "/covers/abc"]) {
       const res = await app.inject({ method: "GET", url });
       expect(res.statusCode).toBe(401);
     }

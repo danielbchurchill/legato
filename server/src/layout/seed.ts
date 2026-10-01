@@ -55,8 +55,8 @@ function upsertSeeds(db: Database, seeds: Map<number, Seed>, locked: boolean): v
 }
 
 // Recording, release, and artist nodes together — the one combined graph
-// (2026-08-29: replaced the three tab-switched granularities with live
-// client-side physics, see Legato.md). Recordings are positioned first by
+// (the 2026-08-29 map rework replaced the three tab-switched granularities
+// with live client-side physics). Recordings are positioned first by
 // deterministic cell assignment (primary artist, falling back to label,
 // falling back to unclustered) crossed with decade, then local force
 // relaxation within each cell — unchanged from the old tracks-only layout.
@@ -227,7 +227,7 @@ export function recomputeAllLayouts(db: Database): void {
 //
 // 1. Clears every node's user_x/user_y first. A dragged node's placement
 //    used to be a permanent physics pin (`.fx`/`.fy`, never released — see
-//    Canvas.tsx's drag handling and Legato.md); #46 changed that so a drop
+//    Canvas.tsx's drag handling); #46 changed that so a drop
 //    is now just a starting position a node is free to drift from
 //    afterward, same as a server seed. That means a manually-placed node's
 //    user_x/user_y row is the only thing left "stuck" from before a

@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
-// Issue #102's actual named risk: "the most likely thing to break
-// silently" per docs/plans/01-server-distribution.md's Compile section.
+// Issue #102's actual named risk, the most likely thing to break silently.
 // A compiled binary has no source tree, so if migrations weren't really
 // embedded (a stale manifest, a bundler regression, an empty target dir
 // that shadowed the real one), it boots clean, serves traffic, and just
