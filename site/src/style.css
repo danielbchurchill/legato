@@ -637,3 +637,89 @@ section {
 .footer-credit a:hover {
   color: var(--color-ink);
 }
+
+.footer-legal a {
+  color: var(--color-muted-hi);
+  text-decoration: none;
+}
+
+.footer-legal a:hover {
+  color: var(--color-ink);
+  text-decoration: underline;
+}
+
+/* ---- Legal pages (privacy.html, terms.html) ---------------------------- */
+
+/* Long-form reading, not a marketing section: one narrow column, no glass,
+ * body text at ink-adjacent contrast because people actually read every
+ * line here. */
+.legal {
+  padding: 64px 24px 96px;
+}
+
+.legal-body {
+  max-width: 68ch;
+  margin: 0 auto;
+}
+
+.legal-body h1 {
+  max-width: none;
+  margin-bottom: 8px;
+}
+
+.legal-body h2 {
+  font-size: 1.35rem;
+  margin-top: 48px;
+}
+
+.legal-body h3 {
+  font-size: 1.05rem;
+  margin-top: 28px;
+}
+
+.legal-body p,
+.legal-body li {
+  color: var(--color-muted-hi);
+}
+
+.legal-body ul {
+  padding-left: 1.2em;
+  margin: 0 0 16px;
+}
+
+.legal-body li {
+  margin-bottom: 8px;
+}
+
+.legal-body a {
+  color: var(--color-ink);
+  text-decoration: underline;
+  text-decoration-color: var(--color-muted);
+  text-underline-offset: 3px;
+}
+
+.legal-body a:hover {
+  text-decoration-color: var(--color-ink);
+}
+
+.legal-body strong {
+  color: var(--color-ink);
+  font-weight: 500;
+}
+
+.legal-updated {
+  font-size: 13px;
+  color: var(--color-muted);
+  margin-bottom: 40px;
+}
+
+/* Draft-only: every <mark class="todo"> is a decision Daniel still has to
+ * make before publishing. Loud on purpose, so none can ship unnoticed. */
+mark.todo {
+  background: var(--color-edge-produced-by);
+  color: #0e1112;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
