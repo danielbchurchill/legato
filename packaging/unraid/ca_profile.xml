@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<!--
+  Repository profile Community Applications reads from the root of the public
+  template repository (README.md next to this file). It lives here so the
+  template and its profile change together.
+-->
+<CommunityApplications>
+  <Profile>
+    Templates for [Legato](https://legato.fm), a local-first music player that lays your library out as a graph. The one app here is the Legato server, which reads your music share read-only and serves the Legato apps and any browser on your network.
+  </Profile>
+  <Icon>https://legato.fm/favicon-128.png</Icon>
+  <WebPage>https://legato.fm</WebPage>
+</CommunityApplications>
