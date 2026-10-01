@@ -1,0 +1,16 @@
+-- Issue #189: findOrCreateNode (match/edges.ts) looks artist/release/year/
+-- label/credit nodes up by `type = ? AND lower(trim(title)) = lower(trim(?))`
+-- so "The Beatles" and "the beatles " collapse into one node. Nothing
+-- indexed that expression, so every lookup scanned the whole nodes table —
+-- recording nodes included, one per file. deriveLocalEdges makes several of
+-- these lookups per file, once in the scan's 'collapse' stage and again for
+-- every file in the library in recompute() ('layout'), so both stages grew
+-- with the square of the library: 12.4s → 482.2s and 17.4s → 526.9s going
+-- from 20k to 100k files on #182's synthetic benchmark.
+--
+-- The indexed expression has to be written exactly as the query writes it
+-- for SQLite's planner to use it. lower() and trim() here are SQLite's own
+-- built-ins (no ICU extension is loaded, see sqlite.ts), both deterministic,
+-- so the index stays valid across engines and restarts. enrich/members.ts's
+-- artist lookup uses the same expression and picks the index up too.
+CREATE INDEX nodes_type_title_lookup_idx ON nodes (type, lower(trim(title)));
