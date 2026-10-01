@@ -19,7 +19,7 @@ describe('readServerVersion', () => {
       28,
     )
 
-    expect(server).toEqual({ version: '0.4.0', gitSha: 'abc1234', schemaVersion: 28, outOfDate: false })
+    expect(server).toEqual({ version: '0.4.0', gitSha: 'abc1234', schemaVersion: 28, outOfDate: false, update: null })
   })
 
   it('a server newer than the minimum is not out of date either', () => {
@@ -31,18 +31,54 @@ describe('readServerVersion', () => {
   it('a server reporting an older schemaVersion is out of date, and says what it runs', () => {
     const server = readServerVersion({ status: 'ok', version: '0.3.0', gitSha: 'abc1234', schemaVersion: 24 }, 28)
 
-    expect(server).toEqual({ version: '0.3.0', gitSha: 'abc1234', schemaVersion: 24, outOfDate: true })
+    expect(server).toEqual({ version: '0.3.0', gitSha: 'abc1234', schemaVersion: 24, outOfDate: true, update: null })
   })
 
   it('a server from before the version fields existed is out of date', () => {
     const server = readServerVersion({ status: 'ok' }, 28)
 
-    expect(server).toEqual({ version: null, gitSha: null, schemaVersion: null, outOfDate: true })
+    expect(server).toEqual({ version: null, gitSha: null, schemaVersion: null, outOfDate: true, update: null })
   })
 
   it('treats wrongly typed or unparseable fields as missing, not as an error', () => {
     expect(readServerVersion({ status: 'ok', schemaVersion: '28' }, 28).outOfDate).toBe(true)
     expect(readServerVersion(null, 28).outOfDate).toBe(true)
+  })
+
+  it('reads an available update with the command for the server\'s install channel', () => {
+    const server = readServerVersion({
+      version: '0.3.0',
+      schemaVersion: MIN_SERVER_SCHEMA_VERSION,
+      installChannel: 'docker',
+      update: { check: 'on', latestVersion: '0.4.0', available: true, releaseUrl: null, checkedAt: null },
+    })
+
+    expect(server.update).toEqual({
+      latestVersion: '0.4.0',
+      action: { kind: 'command', command: 'docker compose pull && docker compose up -d' },
+    })
+  })
+
+  it('has no update when the server says none is available, or is too old to report one', () => {
+    const current = {
+      schemaVersion: MIN_SERVER_SCHEMA_VERSION,
+      installChannel: 'brew',
+      update: { check: 'on', latestVersion: '0.3.0', available: false, releaseUrl: null, checkedAt: null },
+    }
+
+    expect(readServerVersion(current).update).toBeNull()
+    expect(readServerVersion({ schemaVersion: MIN_SERVER_SCHEMA_VERSION }).update).toBeNull()
+    expect(readServerVersion({ ...current, update: 'yes' }).update).toBeNull()
+  })
+
+  it('has no update for the desktop app\'s server, which the Tauri updater handles', () => {
+    const server = readServerVersion({
+      schemaVersion: MIN_SERVER_SCHEMA_VERSION,
+      installChannel: 'desktop',
+      update: { check: 'on', latestVersion: '0.4.0', available: true, releaseUrl: null, checkedAt: null },
+    })
+
+    expect(server.update).toBeNull()
   })
 
   it('defaults to the one minimum declared in config/serverVersion.ts', () => {
@@ -109,6 +145,7 @@ describe('useServerReady', () => {
       gitSha: 'abc1234',
       schemaVersion: MIN_SERVER_SCHEMA_VERSION - 1,
       outOfDate: true,
+      update: null,
     })
   })
 
