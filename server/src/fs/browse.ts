@@ -21,8 +21,9 @@ export type BrowseRoot = { path: string; kind: "home" | "mount" | "music" };
 export type BrowseEntry = {
   name: string;
   path: string;
-  // Shallow: audio files directly inside this folder, and folders directly
-  // inside it. null when the folder couldn't be read in time.
+  // Shallow: audio files directly inside this folder or one level below
+  // it, and folders directly inside it. null when the folder couldn't be
+  // read in time.
   audioFiles: number | null;
   folders: number | null;
 };
@@ -215,25 +216,43 @@ function sortByName(a: { name: string }, b: { name: string }): number {
   return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
 }
 
-async function countChildren(
-  d: Resolved,
-  dir: string,
-  deadline: number,
-): Promise<{ audioFiles: number | null; folders: number | null }> {
+type Counts = { audioFiles: number | null; folders: number | null; direct: number | null };
+
+function tally(entries: Dirent[]): { audioFiles: number; subfolders: string[] } {
+  let audioFiles = 0;
+  const subfolders: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isDirectory()) subfolders.push(entry.name);
+    else if (isAudioFile(entry.name)) audioFiles++;
+  }
+  return { audioFiles, subfolders };
+}
+
+// The plan's count (docs/plans/04 "Server-side folder picker"): audio files
+// at this folder's top level plus those in its first level of subfolders.
+// One level alone would show an artist folder as "3 folders" when it holds
+// 36 tracks across three albums; two levels is what makes it read "36 audio
+// files". Symlinks aren't followed at the second level, to keep a folder
+// that links back to its parent from multiplying the work.
+async function countChildren(d: Resolved, dir: string, deadline: number): Promise<Counts> {
   try {
-    const entries = await withDeadline(d.readdir(dir), deadline);
-    let audioFiles = 0;
-    let folders = 0;
-    for (const entry of entries) {
-      if (entry.name.startsWith(".")) continue;
-      if (entry.isDirectory()) folders++;
-      else if (isAudioFile(entry.name)) audioFiles++;
+    const top = tally(await withDeadline(d.readdir(dir), deadline));
+    let audioFiles = top.audioFiles;
+    for (const name of top.subfolders) {
+      try {
+        audioFiles += tally(await withDeadline(d.readdir(path.join(dir, name)), deadline)).audioFiles;
+      } catch (err) {
+        // One unreadable subfolder (permissions) shouldn't blank out the
+        // count for its siblings; a timeout means the whole count is unknown.
+        if (err instanceof BrowseTimeout) throw err;
+      }
     }
-    return { audioFiles, folders };
+    return { audioFiles, folders: top.subfolders.length, direct: top.audioFiles };
   } catch {
     // Timed out, or unreadable (permissions, a broken symlink). The folder
     // is still listed; it just can't say what's in it.
-    return { audioFiles: null, folders: null };
+    return { audioFiles: null, folders: null, direct: null };
   }
 }
 
@@ -241,18 +260,21 @@ async function withCounts(
   d: Resolved,
   folders: { name: string; path: string }[],
   deadline: number,
-): Promise<BrowseEntry[]> {
+): Promise<{ entries: BrowseEntry[]; directAudioFiles: number }> {
   const results: BrowseEntry[] = new Array(folders.length);
+  let directAudioFiles = 0;
   let next = 0;
   const worker = async () => {
     while (next < folders.length) {
       const i = next++;
       const folder = folders[i]!;
-      results[i] = { ...folder, ...(await countChildren(d, folder.path, deadline)) };
+      const { direct, ...counts } = await countChildren(d, folder.path, deadline);
+      directAudioFiles += direct ?? 0;
+      results[i] = { ...folder, ...counts };
     }
   };
   await Promise.all(Array.from({ length: Math.min(COUNT_CONCURRENCY, folders.length) }, worker));
-  return results;
+  return { entries: results, directAudioFiles };
 }
 
 function readError(err: unknown, dir: string, timeoutMs: number): BrowseError {
@@ -281,7 +303,7 @@ export async function browse(
   const roots = await rootsFor(d, deadline);
 
   if (requested === undefined || requested === "") {
-    const entries = await withCounts(
+    const { entries } = await withCounts(
       d,
       roots.map((root) => ({ name: root.path, path: root.path })),
       deadline,
@@ -330,13 +352,16 @@ export async function browse(
     }
   }
   folders.sort(sortByName);
+  const counted = await withCounts(d, folders, deadline);
 
   return {
     path: dir,
     parent: dir === root.path ? null : path.dirname(dir),
     docker: d.docker,
-    audioFiles,
-    entries: await withCounts(d, folders, deadline),
+    // Same two levels as each entry's count. A subfolder that didn't
+    // answer adds nothing, so this is a floor rather than a guess.
+    audioFiles: audioFiles + counted.directAudioFiles,
+    entries: counted.entries,
   };
 }
 

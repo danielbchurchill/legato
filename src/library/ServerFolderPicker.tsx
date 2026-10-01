@@ -10,8 +10,8 @@ import { Spinner } from '../ui/Spinner'
  * decides which of the two "add folder" opens.
  *
  * Clicking a folder goes into it; "add this folder" adds the one being
- * shown. Each row carries the server's shallow count (audio files and
- * folders directly inside), which is what tells "Music" from "Music (old
+ * shown. Each row carries the server's shallow count (audio files inside
+ * it and one level down, and its subfolders), which is what tells "Music" from "Music (old
  * rips)" without opening both. */
 
 type BrowseEntry = { name: string; path: string; audioFiles: number | null; folders: number | null }
@@ -188,8 +188,8 @@ function Count({ n, unit }: { n: number; unit: string }) {
 
 function EntryCounts({ entry }: { entry: BrowseEntry }) {
   if (entry.audioFiles === null || entry.folders === null) {
-    // The server gave up on reading it in time, or couldn't read it.
-    return <span className="whitespace-nowrap text-[var(--color-muted)]">didn't answer</span>
+    // The server gave up on reading it in time, or wasn't allowed to.
+    return <span className="whitespace-nowrap text-[var(--color-muted)]">couldn't count</span>
   }
   if (entry.audioFiles > 0) return <Count n={entry.audioFiles} unit={entry.audioFiles === 1 ? 'audio file' : 'audio files'} />
   if (entry.folders > 0) return <Count n={entry.folders} unit={entry.folders === 1 ? 'folder' : 'folders'} />

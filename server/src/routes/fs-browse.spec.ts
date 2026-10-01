@@ -19,6 +19,7 @@ import { fsBrowseRoutes } from "./fs-browse.js";
 //   home/
 //     Music/            3 audio files, 1 cover, 1 folder (Live)
 //       Live/           1 audio file
+//         Encore/       1 audio file (two levels down from Music)
 //     Documents/        empty
 //     .cache/           hidden
 //     notes.flac        an audio file directly in home
@@ -74,7 +75,7 @@ beforeEach(async () => {
   drive = path.join(base, "drive");
   outside = path.join(base, "outside");
   for (const dir of [
-    path.join(home, "Music", "Live"),
+    path.join(home, "Music", "Live", "Encore"),
     path.join(home, "Documents"),
     path.join(home, ".cache"),
     path.join(drive, "Albums"),
@@ -84,6 +85,7 @@ beforeEach(async () => {
   }
   for (const file of ["01.flac", "02.FLAC", "03.mp3", "cover.jpg"]) writeFileSync(path.join(home, "Music", file), "");
   writeFileSync(path.join(home, "Music", "Live", "01.flac"), "");
+  writeFileSync(path.join(home, "Music", "Live", "Encore", "01.flac"), "");
   writeFileSync(path.join(home, "notes.flac"), "");
   writeFileSync(path.join(drive, "Albums", "a.flac"), "");
   writeFileSync(path.join(drive, "Albums", "b.m4a"), "");
@@ -137,9 +139,10 @@ describe("GET /fs/browse — roots", () => {
     expect(body.entries.map((e: { path: string }) => e.path)).toEqual([home, drive]);
   });
 
-  it("counts each root's own contents", async () => {
+  it("counts each root's contents, its first level of subfolders included", async () => {
     const body = (await get("/api/v1/fs/browse")).json();
-    expect(body.entries[1]).toEqual({ name: drive, path: drive, audioFiles: 0, folders: 1 });
+    // drive/ has no audio of its own; Albums' two files are one level down.
+    expect(body.entries[1]).toEqual({ name: drive, path: drive, audioFiles: 2, folders: 1 });
   });
 
   it("in Docker, offers /music and the container's mounts but not home", async () => {
@@ -166,19 +169,21 @@ describe("GET /fs/browse — roots", () => {
 });
 
 describe("GET /fs/browse — listing a folder", () => {
-  it("lists directories only, with shallow audio counts", async () => {
+  it("lists directories only, counting audio two levels deep", async () => {
     const res = await get(`/api/v1/fs/browse?path=${encodeURIComponent(home)}`);
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.path).toBe(home);
     expect(body.parent).toBeNull(); // home is a root
-    expect(body.audioFiles).toBe(1); // notes.flac, counted but not listed
+    // notes.flac (counted, not listed) plus Music's own three. Live's file
+    // is two levels below home, so it isn't in home's count.
+    expect(body.audioFiles).toBe(4);
     expect(body.entries).toEqual([
       { name: "Documents", path: path.join(home, "Documents"), audioFiles: 0, folders: 0 },
-      { name: "link-to-drive", path: path.join(home, "link-to-drive"), audioFiles: 0, folders: 1 },
-      // 01.flac, 02.FLAC, 03.mp3; cover.jpg isn't audio, and Live's own
-      // file isn't counted here: shallow means one level.
-      { name: "Music", path: path.join(home, "Music"), audioFiles: 3, folders: 1 },
+      { name: "link-to-drive", path: path.join(home, "link-to-drive"), audioFiles: 2, folders: 1 },
+      // 01.flac, 02.FLAC, 03.mp3 and Live/01.flac; cover.jpg isn't audio,
+      // and Live/Encore's file is a level too deep.
+      { name: "Music", path: path.join(home, "Music"), audioFiles: 4, folders: 1 },
     ]);
   });
 
@@ -186,7 +191,7 @@ describe("GET /fs/browse — listing a folder", () => {
     const music = path.join(home, "Music");
     const body = (await get(`/api/v1/fs/browse?path=${encodeURIComponent(path.join(music, "Live"))}`)).json();
     expect(body.parent).toBe(music);
-    expect(body.audioFiles).toBe(1);
+    expect(body.audioFiles).toBe(2); // its own file and Encore's
   });
 
   it("follows a symlinked folder inside a root", async () => {
@@ -278,6 +283,44 @@ describe("GET /fs/browse — a mount that stopped answering", () => {
     expect(res.statusCode).toBe(200);
     const music = res.json().entries.find((e: { name: string }) => e.name === "Music");
     expect(music).toEqual({ name: "Music", path: hung, audioFiles: null, folders: null });
+  });
+
+  // The second level of a count is a read too, and can hang just the same.
+  it("leaves a count unknown when a subfolder one level down won't answer", async () => {
+    await app.close();
+    const hung = path.join(home, "Music", "Live");
+    app = await buildApp(
+      linuxDeps({
+        timeoutMs: 100,
+        readdir: async (dir) => {
+          if (dir === hung) return never();
+          const { readdir } = await import("node:fs/promises");
+          return readdir(dir, { withFileTypes: true });
+        },
+      }),
+    );
+    const res = await get(`/api/v1/fs/browse?path=${encodeURIComponent(home)}`);
+    expect(res.statusCode).toBe(200);
+    const music = res.json().entries.find((e: { name: string }) => e.name === "Music");
+    expect(music).toMatchObject({ audioFiles: null, folders: null });
+  });
+
+  it("still counts a folder when one of its subfolders is unreadable", async () => {
+    await app.close();
+    const locked = path.join(home, "Music", "Live");
+    app = await buildApp(
+      linuxDeps({
+        readdir: async (dir) => {
+          if (dir === locked) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+          const { readdir } = await import("node:fs/promises");
+          return readdir(dir, { withFileTypes: true });
+        },
+      }),
+    );
+    const music = (await get(`/api/v1/fs/browse?path=${encodeURIComponent(home)}`))
+      .json()
+      .entries.find((e: { name: string }) => e.name === "Music");
+    expect(music).toMatchObject({ audioFiles: 3, folders: 1 });
   });
 
   // Each hung read keeps a filesystem thread blocked until the mount comes
