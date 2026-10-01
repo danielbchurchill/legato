@@ -33,7 +33,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(() => Promise.resolve(() => undefined)),
 }))
 
-import { usePlayback } from './usePlayback'
+import { usePlayback, type RepeatMode } from './usePlayback'
 
 // A believable IPC round-trip delay — real enough that a second, unguarded
 // invoke() call has time to fire before the first one's promise resolves,
@@ -102,17 +102,24 @@ function renderPlaybackHook() {
   let root!: Root
   const result: { current: ReturnType<typeof usePlayback> | null } = { current: null }
 
-  function Harness() {
-    result.current = usePlayback('track')
+  // Repeat mode arrives as a prop (App.tsx owns the persisted setting), so
+  // changing it means re-rendering with a new one, same as the dock's
+  // repeat button does.
+  function Harness({ repeatMode }: { repeatMode: RepeatMode }) {
+    result.current = usePlayback('track', repeatMode)
     return null
   }
 
   act(() => {
     root = createRoot(container)
-    root.render(createElement(Harness))
+    root.render(createElement(Harness, { repeatMode: 'off' }))
   })
 
-  return { result, unmount: () => act(() => root.unmount()) }
+  return {
+    result,
+    setRepeatMode: (repeatMode: RepeatMode) => root.render(createElement(Harness, { repeatMode })),
+    unmount: () => act(() => root.unmount()),
+  }
 }
 
 // Reduces an invoke() call log to just what these tests care about —
@@ -359,6 +366,76 @@ describe('usePlayback Tauri queue-operation serialization', () => {
       { cmd: 'queue_play' },
     ])
     expect(result.current!.status.currentRecordingNodeId).toBe(20)
+
+    unmount()
+  })
+
+  // #186: the repeat-mode effect used to call queue_set_repeat bare, the
+  // one queue invoke outside this lock. Cycling repeat while a rebuild was
+  // mid-enqueue could land it between that rebuild's queue_stop and
+  // queue_play, telling Rust's reconcile_repeat about a mode the queue
+  // being built wasn't shaped for yet.
+  it('runs a repeat change issued mid-enqueue after the in-flight previous() rebuild, not between its steps', async () => {
+    const { result, setRepeatMode, unmount } = renderPlaybackHook()
+    await act(async () => {
+      await delay(0)
+    })
+
+    await act(async () => {
+      await result.current!.playTracks([10, 20, 30, 40], 3, 'Track 40')
+    })
+    invokeMock.mockClear()
+
+    // Hold previous()'s first queue_enqueue open until the repeat change
+    // has been issued, so "mid-enqueue" is a fact of the test rather than
+    // a timing window it hopes to hit.
+    let enqueueStarted!: () => void
+    const enqueueInFlight = new Promise<void>((resolve) => (enqueueStarted = resolve))
+    let releaseEnqueue!: () => void
+    const enqueueGate = new Promise<void>((resolve) => (releaseEnqueue = resolve))
+    const defaultInvoke = invokeMock.getMockImplementation()!
+    invokeMock.mockImplementationOnce((cmd: string) => defaultInvoke(cmd))
+    invokeMock.mockImplementationOnce(() => {
+      enqueueStarted()
+      return enqueueGate
+    })
+
+    let p1: Promise<void> = Promise.resolve()
+    act(() => {
+      p1 = result.current!.previous()
+    })
+    await enqueueInFlight
+    act(() => {
+      setRepeatMode('all')
+    })
+    // The effect's rebuild isn't a promise the test can hold, but it always
+    // ends on queue_seek, with or without the fix.
+    await act(async () => {
+      releaseEnqueue()
+      await p1
+      await vi.waitFor(() => expect(invokeMock.mock.calls.some(([cmd]) => cmd === 'queue_seek')).toBe(true), {
+        interval: 1,
+      })
+      await delay(INVOKE_DELAY_MS)
+    })
+
+    expect(summarizeCalls(invokeMock.mock.calls)).toEqual([
+      // previous(): index 3 -> 2, uninterrupted.
+      { cmd: 'queue_stop' },
+      { cmd: 'queue_enqueue', recordingNodeId: 30 },
+      { cmd: 'queue_enqueue', recordingNodeId: 40 },
+      { cmd: 'queue_play' },
+      // The repeat change, queued behind it. Without the fix this showed up
+      // right after the first queue_enqueue above.
+      { cmd: 'queue_set_repeat' },
+      // The effect's own rebuild for the new mode follows as one sequence.
+      { cmd: 'queue_stop' },
+      { cmd: 'queue_enqueue', recordingNodeId: 30 },
+      { cmd: 'queue_enqueue', recordingNodeId: 40 },
+      { cmd: 'queue_play' },
+      { cmd: 'queue_seek' },
+    ])
+    expect(invokeMock).toHaveBeenCalledWith('queue_set_repeat', { mode: 'all' })
 
     unmount()
   })

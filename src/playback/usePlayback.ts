@@ -766,15 +766,23 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   // session to match the new mode's enqueue policy — entering 'one' has to
   // shrink what's enqueued down to just the current track, leaving it has
   // to restore the rest of the tail. See rebuildTauriQueueInPlace's own
-  // comment above for why the enqueued set has to change at all. No-ops
-  // when nothing's playing (currentIndex is -1) — there's nothing to push
-  // to yet, and the next playTracksCore call already reads repeatModeRef
-  // fresh.
+  // comment above for why the enqueued set has to change at all. The
+  // rebuild no-ops when nothing's playing (currentIndex is -1) — there's
+  // nothing to rebuild yet, and the next playTracksCore call already reads
+  // repeatModeRef fresh.
+  //
+  // #186: queue_set_repeat runs inside the lock too, so a repeat change
+  // made while a skip or play is mid-rebuild lands after that rebuild's
+  // queue_play, never between its queue_stop and queue_play. currentIndex
+  // is read in there as well, for the same stale-ref reason as every other
+  // serialized operation.
   useEffect(() => {
     if (!IS_TAURI) return
-    invoke('queue_set_repeat', { mode: repeatMode }).catch(() => undefined)
-    if (currentIndex.current === -1) return
-    void serialized(() => rebuildTauriQueueInPlace())
+    void serialized(async () => {
+      await invoke('queue_set_repeat', { mode: repeatMode }).catch(() => undefined)
+      if (currentIndex.current === -1) return
+      await rebuildTauriQueueInPlace()
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repeatMode])
 
