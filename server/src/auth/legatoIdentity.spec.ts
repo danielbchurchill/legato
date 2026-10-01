@@ -112,8 +112,8 @@ describe("privacy: an unlinked server never contacts legato.fm", () => {
     expect(h.identity.scheduled).toBe(false);
 
     const res = await me(h, h.token());
-    expect(res.statusCode).toBe(401);
-    expect(res.json().error).toMatch(/key this server doesn't have/);
+    expect(res.statusCode).toBe(403);
+    expect(res.json().reason).toBe("not_linked");
 
     const status = await h.app.inject({ method: "GET", url: "/api/v1/auth/status" });
     expect(status.json().legato).toEqual({ serverId: h.identity.serverId(), issuer: TEST_ISSUER, linked: null });
@@ -159,7 +159,7 @@ describe("linking the owner", () => {
     const unlink = await h.app.inject({ method: "DELETE", url: "/api/v1/auth/legato/link", headers: bearer(owner) });
     expect(unlink.statusCode).toBe(200);
     expect(h.identity.scheduled).toBe(false);
-    expect((await me(h, h.token())).json().reason).toBe("not_a_member");
+    expect((await me(h, h.token())).json().reason).toBe("not_linked");
   });
 
   it("refuses a non-owner, a bad token, and an account already linked elsewhere", async () => {

@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Database } from "../sqlite.js";
 import { legatoIdentity } from "./legatoIdentity.js";
 import { looksLikeJws, VERIFY_FAILURE_MESSAGES } from "./legatoToken.js";
-import { userForLegatoClaims } from "./legatoUsers.js";
+import { anyLinkedAccount, userForLegatoClaims } from "./legatoUsers.js";
 import { ownerExists } from "./owner.js";
 import { userForMediaTicket, userForSessionToken, type SessionUser } from "./sessions.js";
 
@@ -107,6 +107,17 @@ function resolveLegatoToken(db: Database, token: string): Resolved {
   const identity = legatoIdentity(db);
   if (!identity.enabled) {
     return { rejected: "legato.fm sign-in is turned off on this server (LEGATO_ID_ORIGIN=off)." };
+  }
+  // Until the owner links an account this server has no keys and fetches
+  // none (legatoIdentity.ts), so say that rather than "unknown key, try
+  // again", which would never come true.
+  if (!anyLinkedAccount(db)) {
+    return {
+      rejected:
+        "This server isn't linked to a legato.fm account yet, so it can't accept legato.fm sign-in. Its owner can link it, or sign in with the owner's password.",
+      status: 403,
+      reason: "not_linked",
+    };
   }
   const result = identity.verify(token);
   if (!result.ok) return { rejected: VERIFY_FAILURE_MESSAGES[result.reason] };
