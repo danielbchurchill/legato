@@ -72,7 +72,7 @@ fn resolve_media_binary(app: &AppHandle, name: &str) -> Option<PathBuf> {
 }
 
 // Linux keeps relying on system ffmpeg/fpcalc on PATH — deliberately out of
-// scope here, per CLAUDE.md.
+// scope for the desktop bundle.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn resolve_media_binary(_app: &AppHandle, _name: &str) -> Option<PathBuf> {
   None

@@ -14,7 +14,7 @@
 // invoke() is mocked with a real (if small) delay specifically so two
 // overlapping calls have every opportunity to actually interleave if
 // nothing is serializing them — this is the "no clean harness" case
-// CLAUDE.md's testing conventions call for skipping if it can't be made to
+// AGENTS.md's testing conventions call for skipping if it can't be made to
 // work; it can be, and does not depend on tuning that delay to hit a
 // timing window (see the ordering argument in each test's comment).
 import { act } from 'react'

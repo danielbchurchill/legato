@@ -48,7 +48,7 @@ class Legato < Formula
     # A wrapper rather than service-only environment_variables, so running
     # `legato-server` by hand opens the same database the service does. A
     # second empty database next to the real one is this project's most
-    # common standalone-run mistake (CLAUDE.md). Each value is a ${VAR:-...}
+    # common standalone-run mistake (AGENTS.md). Each value is a ${VAR:-...}
     # default, so anything already set in the caller's environment still wins.
     (bin/"legato-server").write_env_script libexec/"legato-server",
       LEGATO_DATA_DIR:        "${LEGATO_DATA_DIR:-#{var}/legato}",

@@ -733,8 +733,8 @@ mod tests {
     }
   }
 
-  // The 2026-09-29 AIO case: /mnt/music exists as an empty mount point
-  // because the NFS mount never came up, so every path under it is missing
+  // A client whose NFS library mount never came up: /mnt/music exists as an
+  // empty mount point, so every path under it is missing
   // and the nearest folder that exists has nothing in it.
   #[test]
   fn open_source_reports_an_empty_mount_point_for_an_unmounted_library() {

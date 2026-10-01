@@ -21,7 +21,7 @@ CREATE TABLE users (
   UNIQUE (provider, provider_user_id)
 );
 
--- A real table, not a JWT: CLAUDE.md's own description of this database is
+-- A real table, not a JWT: AGENTS.md's own description of this database is
 -- "real, SQLite-backed, not aspirational", and the concrete win a sessions
 -- table has over a signed token is that revocation is a DELETE instead of
 -- an unsolved problem. id doubles as the bearer token (a random 32-byte hex

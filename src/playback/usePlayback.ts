@@ -170,7 +170,7 @@ function reportPlay(entry: PlayInProgress): void {
 // reject, so this branches to a plain HTML5 <audio> element pointed at the
 // server's GET /api/v1/files/:id/stream transcode route instead — not
 // gapless, but that's exactly the "no native decode option" case the stream
-// route was built for (see CLAUDE.md's Development Conventions). Both paths
+// route was built for (see AGENTS.md's Development Conventions). Both paths
 // present the same play/pause/seek/next/previous/queue-management interface
 // below so the rest of the app doesn't care which backend is live
 // underneath.
