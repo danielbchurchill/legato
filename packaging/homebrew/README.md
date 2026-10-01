@@ -1,6 +1,6 @@
 # Homebrew formula
 
-`legato.rb` is the formula for the `danielbchurchill/homebrew-legato` tap (issue #109, [plan](../../docs/plans/01-server-distribution.md#install-script--homebrew)). It stays in this repo until that tap repository exists. After that, the tap is where it lives (see [Moving it to the tap](#moving-it-to-the-tap)).
+`legato.rb` is the formula for the `danielbchurchill/homebrew-legato` tap (issue #109). It stays in this repo until that tap repository exists. After that, the tap is where it lives (see [Moving it to the tap](#moving-it-to-the-tap)).
 
 Once the tap is live, a user runs:
 

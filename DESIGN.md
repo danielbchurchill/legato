@@ -1,6 +1,6 @@
 # Legato — Design System
 
-**This file is ground truth for how Legato looks and why.** [CLAUDE.md](CLAUDE.md) owns how to work in this repo; [Legato.md](~/Documents/Fifth%20Brain/projects/Legato.md) owns what the product is and why. This file owns the visual language, and `src/styles/tokens.css` is its machine-readable half — when the two disagree, this file explains the intent and the token file wins on values.
+**This file is ground truth for how Legato looks and why.** [AGENTS.md](AGENTS.md) owns how to work in this repo. This file owns the visual language, and `src/styles/tokens.css` is its machine-readable half — when the two disagree, this file explains the intent and the token file wins on values.
 
 Source of truth for the design itself: Figma file `NSaK1N64NwcKzlKpqaYs49`. The original **Desktop - 1** frame (1440 × 1024) is still ground truth for anything not called out below. **Design v2** (canvas "version 2", frames **Search**, **Music Map**, **Panel Collapse**) is a new direction, still WIP as of 2026-08-27 — sections below marked *v2* reflect decisions confirmed against it so far. A full survey of the "version 2" canvas on 2026-08-30 confirmed those three frames are the entirety of it — there is no fourth v2 frame waiting to be found, and every rail icon and shell measurement in it has now been checked. What's still open: the transport dock's v2 redesign, and the Search panel's populated-query state — both flagged where they're discussed below, not resolved.
 
@@ -299,7 +299,7 @@ Three ways out of a selection, and none of them move the camera: click empty can
 
 Edge color encodes **relationship type**.
 
-Session 4 split the graph into three granularities (artists/albums/tracks), each its own view with its own edge types, none of which ever rendered together — the constraint the original three-color palette had to satisfy was only "mutually distinguishable within one graph." 2026-08-29 replaced those three tab-switched views with one combined graph, live-physics-laid-out (see Legato.md), which is what the table below now describes: every one of these 7 types can render together, at once, and the ≥44° clearance they were already spaced at (below) is exactly what makes that safe.
+Session 4 split the graph into three granularities (artists/albums/tracks), each its own view with its own edge types, none of which ever rendered together — the constraint the original three-color palette had to satisfy was only "mutually distinguishable within one graph." 2026-08-29 replaced those three tab-switched views with one combined graph, live-physics-laid-out, which is what the table below now describes: every one of these 7 types can render together, at once, and the ≥44° clearance they were already spaced at (below) is exactly what makes that safe.
 
 **7 types, all mutually distinguishable, all in the one graph:**
 
@@ -357,7 +357,7 @@ No Figma frame exists for any of this yet — same footing as "v2: panels withou
 
 **Documented scope boundary: switching back to the map does not re-fly the camera to whatever was last selected in the library.** `selectAndFly` calls `canvasRef.current?.flyToNode(id)`, which is a no-op while `Canvas` is unmounted (library active) since the ref is null — so the selection itself carries over (the node card shows correctly once back on the map, if still selected) but the fly-to-it camera move does not replay retroactively. Fixing this means touching `Canvas.tsx`'s 1500-line, carefully-commented effect stack for a polish item outside issue #126's "Done when" list — left as a follow-up rather than done speculatively.
 
-**Also deliberately not built:** a per-row/per-cell play button. Selecting a row or cover selects+flies only; playing something found this way means switching to the map first, where the now-selected node's own card already has one. Neither the issue's "Done when" list nor the plan doc's own description of the two layouts (`docs/plans/05-listening-and-map.md`) mentions a transport affordance here, so — same reasoning as the camera fly-to above — it's flagged as a follow-up rather than added on spec.
+**Also deliberately not built:** a per-row/per-cell play button. Selecting a row or cover selects+flies only; playing something found this way means switching to the map first, where the now-selected node's own card already has one. Neither the issue's "Done when" list nor the plan doc's own description of the two layouts mentions a transport affordance here, so — same reasoning as the camera fly-to above — it's flagged as a follow-up rather than added on spec.
 
 ---
 
@@ -568,7 +568,6 @@ Issue #87 revised this once more: that collapsed idle column had grown its own q
 
 | File | What it owns |
 |---|---|
-| [CLAUDE.md](CLAUDE.md) | How to work in this repo |
-| [Legato.md](~/Documents/Fifth%20Brain/projects/Legato.md) | Product status, architecture, decisions |
+| [AGENTS.md](AGENTS.md) | How to work in this repo |
 | `src/styles/tokens.css` | The values, machine-readable |
 | `src/ui/Icon.tsx` | The icon set |

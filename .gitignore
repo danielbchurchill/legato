@@ -27,6 +27,10 @@ src-tauri/binaries/*
 
 .claude/
 
+# Personal agent context: machine names, infrastructure, private planning
+# pointers. The shared conventions are in AGENTS.md.
+CLAUDE.local.md
+
 # `bun build --compile` (server/scripts/compile.ts, issue #102) leaves a
 # temp `.<hash>-<n>.bun-build` file next to wherever it's invoked from on
 # top of the real dist/ output above.
