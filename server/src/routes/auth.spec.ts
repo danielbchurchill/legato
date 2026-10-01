@@ -3,9 +3,11 @@ import type { FastifyInstance } from "fastify";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { createSession, userForSessionToken } from "../auth/sessions.js";
-import { setupCode } from "../auth/setupCode.js";
+import cookie from "@fastify/cookie";
+import Fastify from "fastify";
+import { SetupCodes, setupCode } from "../auth/setupCode.js";
 import { buildTestApp, createOwnerForTest, LOCAL_PAGE } from "../auth/test-app.js";
-import { generateState, isValidState, signInKnownOAuthUser, type OAuthProfile } from "./auth.js";
+import { authRoutes, generateState, isValidState, signInKnownOAuthUser, type OAuthProfile } from "./auth.js";
 
 // The live code exchange against Google/GitHub (exchangeGoogleCode /
 // exchangeGithubCode) is only exercised against the real providers, the
@@ -128,6 +130,36 @@ describe("first-run owner creation", () => {
     expect(res.statusCode).toBe(403);
   });
 
+  it("tells a remote client its setup code expired, and takes the one that replaced it", async () => {
+    // authRoutes on its own, so the code store can run on a fake clock.
+    const clock = { now: 0 };
+    const codes = ["AAAA-AAAA", "BBBB-BBBB"];
+    const setupCodes = new SetupCodes({ ttlMs: 600_000, now: () => clock.now, generate: () => codes.shift()! });
+    const bare = Fastify();
+    await bare.register(cookie);
+    await bare.register(authRoutes(db, { setupCodes }), { prefix: "/api/v1" });
+    const post = (code: string) =>
+      bare.inject({
+        method: "POST",
+        url: "/api/v1/auth/owner",
+        payload: { password: "correct horse battery", setupCode: code },
+        ...REMOTE_CLIENT,
+      });
+
+    const shown = await bare.inject({ method: "GET", url: "/api/v1/auth/setup", ...REMOTE_CLIENT });
+    expect(shown.json()).toMatchObject({ code: "AAAA-AAAA", expiresInMs: 600_000 });
+
+    clock.now = 600_000;
+    const late = await post("aaaaaaaa");
+    expect(late.statusCode).toBe(403);
+    expect(late.json().reason).toBe("expired_setup_code");
+
+    const fresh = await bare.inject({ method: "GET", url: "/api/v1/auth/setup", ...REMOTE_CLIENT });
+    expect(fresh.json().code).toBe("BBBB-BBBB");
+    expect((await post("bbbb bbbb")).statusCode).toBe(201);
+    await bare.close();
+  });
+
   it("rate-limits setup-code guesses", async () => {
     const statuses: number[] = [];
     for (let i = 0; i < 7; i++) {
@@ -238,5 +270,51 @@ describe("OAuth state", () => {
     expect(isValidState(generateState(), state)).toBe(false);
     expect(isValidState(undefined, state)).toBe(false);
     expect(isValidState(state, undefined)).toBe(false);
+  });
+});
+
+describe("GET /auth/setup", () => {
+  const LAN_PAGE = { remoteAddress: "192.168.1.20", headers: { host: "192.168.1.5:8899", origin: "http://192.168.1.5:8899" } };
+
+  it("shows the live code, its countdown and the claim link to the server's own page on the LAN", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/v1/auth/setup", ...LAN_PAGE });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.code).toBe(setupCode());
+    expect(body.claimUrl).toBe(`https://legato.fm/claim?code=${body.code}`);
+    expect(body.expiresInMs).toBeGreaterThan(0);
+    expect(body.expiresInMs).toBeLessThanOrEqual(10 * 60 * 1000);
+    expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("doesn't hand the code to another website open on the LAN", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/setup",
+      remoteAddress: "192.168.1.20",
+      headers: { host: "192.168.1.5:8899", origin: "https://evil.example" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().reason).toBe("setup_code_hidden");
+    expect(res.body).not.toContain(setupCode());
+  });
+
+  it("goes quiet once there's an owner", async () => {
+    await createOwnerForTest(app);
+    const res = await app.inject({ method: "GET", url: "/api/v1/auth/setup", ...LAN_PAGE });
+    expect(res.statusCode).toBe(409);
+    expect(res.body).not.toContain(setupCode());
+  });
+
+  it("lets the page that showed the code create the owner with it", async () => {
+    const { code } = (await app.inject({ method: "GET", url: "/api/v1/auth/setup", ...LAN_PAGE })).json();
+    const res = await createOwner({ password: "correct horse battery", setupCode: code }, LAN_PAGE);
+    expect(res.statusCode).toBe(201);
+  });
+
+  it("still needs the code to create the owner, even from a page allowed to see it", async () => {
+    const res = await createOwner({ password: "correct horse battery" }, LAN_PAGE);
+    expect(res.statusCode).toBe(403);
+    expect(res.json().reason).toBe("bad_setup_code");
   });
 });

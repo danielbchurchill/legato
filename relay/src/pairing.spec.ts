@@ -21,7 +21,7 @@ describe("mintPairingCode", () => {
   it("mints a code tied to the given account, expiring in the future", () => {
     const { code, expiresAt } = mintPairingCode(db, userId);
 
-    expect(code).toMatch(/^[0-9a-f]{16}$/);
+    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
     expect(expiresAt.getTime()).toBeGreaterThan(Date.now());
 
     const row = db.prepare("SELECT relay_user_id, used_at FROM pairing_codes WHERE code = ?").get(code) as {
@@ -80,6 +80,23 @@ describe("redeemPairingCode", () => {
     expect(row.used_at).not.toBeNull();
   });
 
+  it("accepts the code the way a person types it", () => {
+    const { code } = mintPairingCode(db, userId);
+    // Lowercase, no dash, and every 0 and 1 typed as the letter it looks like.
+    const typed = code.replace("-", "").toLowerCase().replace(/0/g, "o").replace(/1/g, "l");
+
+    expect(redeemPairingCode(db, typed).ok).toBe(true);
+  });
+
+  it("draws again when a new code clashes with a stored one", () => {
+    db.prepare(
+      "INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES ('K7QM-4XRD', ?, datetime('now', '+10 minutes'))",
+    ).run(userId);
+    const draws = ["K7QM-4XRD", "K7QM-4XRD", "AAAA-BBBB"];
+    const { code } = mintPairingCode(db, userId, () => draws.shift()!);
+    expect(code).toBe("AAAA-BBBB");
+  });
+
   it("rejects a code that was never issued", () => {
     const result = redeemPairingCode(db, "not-a-real-code");
     expect(result).toEqual({ ok: false, reason: "not_found" });
@@ -96,9 +113,9 @@ describe("redeemPairingCode", () => {
   it("rejects an expired code", () => {
     db.prepare(
       "INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES (?, ?, datetime('now', '-1 minute'))",
-    ).run("expired-code", userId);
+    ).run("EXPD-0000", userId);
 
-    const result = redeemPairingCode(db, "expired-code");
+    const result = redeemPairingCode(db, "EXPD-0000");
     expect(result).toEqual({ ok: false, reason: "expired" });
   });
 });

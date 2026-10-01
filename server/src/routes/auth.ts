@@ -12,7 +12,7 @@ import { USER_AGENT } from "../enrich/mbClient.js";
 import { SESSION_COOKIE, bearerToken } from "../auth/gate.js";
 import { createOwner, ownerExists, passwordProblem, verifyOwnerPassword } from "../auth/owner.js";
 import { SignInLimiter } from "../auth/rateLimit.js";
-import { isLocalRequest, isSetupCode } from "../auth/setupCode.js";
+import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type SetupCodes } from "../auth/setupCode.js";
 import { createSession, deleteSession, type SessionUser } from "../auth/sessions.js";
 
 // Sign-in for this server (issue #112): the local owner's password, plus
@@ -251,11 +251,22 @@ function setupCodeRequired(request: FastifyRequest): boolean {
   return !isLocalRequest(request) && request.authUser?.role !== "legacy";
 }
 
+const SETUP_CODE_LOG_HELP = "It's in the server's log; on a Linux service, run journalctl --user-unit legato-server.";
 const SETUP_CODE_HELP =
-  "It's shown in the server's log on startup; on a Linux service, run journalctl --user-unit legato-server.";
+  "It's on the server's /setup page, and in its log; on a Linux service, run journalctl --user-unit legato-server.";
 
-export function authRoutes(db: Database, options: { limiter?: SignInLimiter } = {}) {
+// Where the /setup page's QR code points: legato.fm's claim page, which
+// signs the phone in and pairs this server with that account (plan 02,
+// step 2). The claim side isn't built yet, see the #113 PR; the URL is
+// already the one the plan names, so a printed QR keeps working once it is.
+const CLAIM_URL_BASE = "https://legato.fm/claim";
+
+export function authRoutes(
+  db: Database,
+  options: { limiter?: SignInLimiter; setupCodes?: SetupCodes } = {},
+) {
   const limiter = options.limiter ?? new SignInLimiter();
+  const setupCodes = options.setupCodes ?? serverSetupCodes;
 
   function tooManyAttempts(request: FastifyRequest, reply: FastifyReply) {
     const retryAfter = limiter.retryAfterSeconds(request.ip);
@@ -296,6 +307,32 @@ export function authRoutes(db: Database, options: { limiter?: SignInLimiter } = 
       };
     });
 
+    // Public, and only while there's no owner: what the /setup page shows
+    // (issue #113). maySeeSetupCode() decides who gets the code itself;
+    // everyone else is pointed at the log. expiresInMs rather than only a
+    // timestamp, so the page's countdown is right even when the browser's
+    // clock isn't.
+    app.get("/auth/setup", async (request, reply) => {
+      if (ownerExists(db)) {
+        reply.code(409);
+        return { error: "This server already has an owner. Sign in instead.", reason: "owner_exists" };
+      }
+      if (!maySeeSetupCode(request)) {
+        reply.code(403);
+        return {
+          error: `This page can't show the setup code from where you're connecting. ${SETUP_CODE_LOG_HELP}`,
+          reason: "setup_code_hidden",
+        };
+      }
+      const { code, expiresAt } = setupCodes.current();
+      return {
+        code,
+        expiresAt: new Date(expiresAt).toISOString(),
+        expiresInMs: setupCodes.remainingMs(),
+        claimUrl: `${CLAIM_URL_BASE}?code=${encodeURIComponent(code)}`,
+      };
+    });
+
     app.post<{ Body: { password?: unknown; displayName?: unknown; setupCode?: unknown } | null }>(
       "/auth/owner",
       async (request, reply) => {
@@ -313,10 +350,16 @@ export function authRoutes(db: Database, options: { limiter?: SignInLimiter } = 
         if (setupCodeRequired(request)) {
           const limited = tooManyAttempts(request, reply);
           if (limited) return limited;
-          if (!isSetupCode(request.body?.setupCode)) {
+          const check = setupCodes.check(request.body?.setupCode);
+          if (check !== "ok") {
             limiter.recordFailure(request.ip);
             reply.code(403);
-            return { error: `That setup code doesn't match. ${SETUP_CODE_HELP}`, reason: "bad_setup_code" };
+            return check === "expired"
+              ? {
+                  error: "That setup code expired. The server has made a new one; use that instead.",
+                  reason: "expired_setup_code",
+                }
+              : { error: `That setup code doesn't match. ${SETUP_CODE_HELP}`, reason: "bad_setup_code" };
           }
           limiter.recordSuccess(request.ip);
         }
