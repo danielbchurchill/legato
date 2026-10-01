@@ -20,6 +20,7 @@ import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
 import { formatLongDuration } from '../ui/format'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
+import { StreamQualityRow } from './StreamQualityRow'
 
 /* The Legato settings panel — DESIGN.md's "The gpui-kit control set",
  * restyled onto the same GroupHeader/SettingsRow geometry MusicMapSettings.tsx
@@ -582,6 +583,7 @@ export function LegatoSettings({
             onChange={(v) => void updateSettings({ replaygainMode: v })}
           />
         </SettingsRow>
+        <StreamQualityRow />
         <SettingsRow label="device">
           {IS_TAURI ? (
             <Select

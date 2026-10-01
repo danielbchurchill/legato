@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { API_BASE as API } from '../config/serverHost'
-import { withMediaTicket } from '../auth/session'
 import { IS_TAURI } from '../config/runtime'
+import { streamUrl, watchForDrops } from './quality'
 
 type ResolvedTrack = {
   recordingNodeId: number
@@ -327,7 +327,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         startedAt: new Date().toISOString(),
         lastPositionMs: 0,
       }
-      audio.src = withMediaTicket(`${API}/files/${info.fileId}/stream`)
+      audio.src = streamUrl(info.fileId)
       // A missing/unreadable source file or a format ffmpeg can't
       // transcode surfaces here as a rejected play() (confirmed live:
       // NotSupportedError against a file the server's own ffmpeg spawn
@@ -384,9 +384,13 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
     audio.addEventListener('timeupdate', onTimeUpdate)
     audio.addEventListener('ended', onEnded)
+    // #120: a mid-track drop pauses this track and moves the next one down
+    // the quality ladder (playback/quality.ts).
+    const stopWatchingDrops = watchForDrops(audio, () => setStatus((s) => ({ ...s, playing: false })))
     return () => {
       audio.removeEventListener('timeupdate', onTimeUpdate)
       audio.removeEventListener('ended', onEnded)
+      stopWatchingDrops()
     }
   }, [advanceWebTrack])
 
