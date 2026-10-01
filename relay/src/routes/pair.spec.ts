@@ -51,7 +51,7 @@ describe("POST /pair/start", () => {
     expect(response.status).toBe(200);
 
     const body = (await response.json()) as { code: string; expiresAt: string };
-    expect(body.code).toMatch(/^[0-9a-f]{16}$/);
+    expect(body.code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
     expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
   });
 });
@@ -115,12 +115,13 @@ describe("POST /pair/exchange", () => {
     const { userId } = signIn(db);
     db.prepare(
       "INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES (?, ?, datetime('now', '-1 minute'))",
-    ).run("expired-code", userId);
+    ).run("EXPD-0000", userId);
 
     const response = await fetch(`${httpUrl}/pair/exchange`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code: "expired-code" }),
+      // Typed the way a person would: lowercase, no dash, O for 0.
+      body: JSON.stringify({ code: "expdoooo" }),
     });
 
     expect(response.status).toBe(410);

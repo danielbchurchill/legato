@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { Database } from "./sqlite.js";
+import { generateCode, normalizeCode } from "./claimCode.js";
 import { parseSqliteDatetime } from "./sqlite-datetime.js";
 
 // The pairing-code -> tunnel-credential handoff — see migrations/
@@ -20,16 +21,31 @@ export interface PairingCodeMinted {
   expiresAt: Date;
 }
 
-export function mintPairingCode(db: Database, relayUserId: number): PairingCodeMinted {
-  const code = randomBytes(8).toString("hex");
-  const row = db
-    .prepare(
-      `INSERT INTO pairing_codes (code, relay_user_id, expires_at)
-       VALUES (?, ?, datetime('now', ?))
-       RETURNING expires_at`,
-    )
-    .get(code, relayUserId, PAIRING_CODE_TTL_SQL) as { expires_at: string };
-  return { code, expiresAt: parseSqliteDatetime(row.expires_at) };
+// Codes are short enough to type now (issue #113: the same K7QM-4XRD
+// format a headless server shows on /setup), stored in that display form so
+// a row reads the way the person saw it. 40 bits makes a clash with a live
+// row unlikely rather than impossible, and the primary key would turn one
+// into a 500, so a clash just draws again. Spent and expired rows are never
+// deleted today, which only makes a clash fractionally likelier.
+const MINT_ATTEMPTS = 5;
+
+export function mintPairingCode(db: Database, relayUserId: number, generate = generateCode): PairingCodeMinted {
+  for (let attempt = 1; ; attempt++) {
+    const code = generate();
+    try {
+      const row = db
+        .prepare(
+          `INSERT INTO pairing_codes (code, relay_user_id, expires_at)
+           VALUES (?, ?, datetime('now', ?))
+           RETURNING expires_at`,
+        )
+        .get(code, relayUserId, PAIRING_CODE_TTL_SQL) as { expires_at: string };
+      return { code, expiresAt: parseSqliteDatetime(row.expires_at) };
+    } catch (err) {
+      const clash = err instanceof Error && /UNIQUE constraint failed/.test(err.message);
+      if (!clash || attempt >= MINT_ATTEMPTS) throw err;
+    }
+  }
 }
 
 export interface TunnelCredentialMinted {
@@ -56,7 +72,13 @@ export type RedeemResult =
 // A transaction so two near-simultaneous redemptions of the same code
 // can't both pass the used_at check and each mint their own credential —
 // the UPDATE below only ever succeeds in "spending" the code once.
-export function redeemPairingCode(db: Database, code: string): RedeemResult {
+//
+// The code arrives as someone typed it (lowercase, no dash, an O for a 0),
+// so it's normalized before the lookup. Anything that can't be a code at
+// all is simply not found.
+export function redeemPairingCode(db: Database, typed: string): RedeemResult {
+  const code = normalizeCode(typed);
+  if (!code) return { ok: false, reason: "not_found" };
   return db.transaction((): RedeemResult => {
     const row = db
       .prepare(
