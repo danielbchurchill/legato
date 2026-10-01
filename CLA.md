@@ -1,6 +1,6 @@
 # Legato Individual Contributor License Agreement
 
-*Version 1.0, <!-- DATE: fill in when published -->. Adapted from the Apache Software Foundation's Individual Contributor License Agreement v2.2.*
+*Version 1.0, October 1, 2026. Adapted from the Apache Software Foundation's Individual Contributor License Agreement v2.2.*
 
 This agreement is between you and Daniel Churchill ("the Maintainer"), who maintains Legato at github.com/danielbchurchill/legato. It covers every Contribution you submit to the project. Signing it doesn't change your ownership of your work. It gives the Maintainer the rights needed to include your work in Legato and distribute it.
 
