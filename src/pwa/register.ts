@@ -15,7 +15,7 @@ import { SERVED_BY_SERVER } from '../config/serverHost'
  *   cache belongs to the server whose shell it holds.
  * - A browser that has service workers at all. They exist only in a secure
  *   context: https, or http on localhost. A phone opening
- *   http://raspberrypi:8899 has none, which is why it can't install the app
+ *   http://musicbox:8899 has none, which is why it can't install the app
  *   either (see the PR for #128).
  */
 export function shouldRegisterShellWorker(env: {

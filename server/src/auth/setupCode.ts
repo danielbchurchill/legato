@@ -207,7 +207,7 @@ function isPrivateAddress(address: string): boolean {
 }
 
 // Names a public DNS record can't hand a victim's browser: a bare IP, a
-// single label ("raspberrypi"), mDNS, the reserved home-network suffixes,
+// single label ("musicbox"), mDNS, the reserved home-network suffixes,
 // and Tailscale's MagicDNS.
 const HOME_NETWORK_SUFFIXES = [".local", ".lan", ".home", ".home.arpa", ".internal", ".localhost", ".ts.net"];
 

@@ -2,7 +2,7 @@
 # Drops from root to PUID:PGID before starting the server (issue #105).
 #
 # PUID/PGID rather than compose's `user:` because the numbers have to match
-# whoever owns the music on the host (a Synology user, a Pi's `tapestry`),
+# whoever owns the music on the host (a Synology user, a Pi's default user),
 # and the data volume has to be owned by that same uid. Only root can fix
 # the volume's ownership, so the container starts as root, does that one
 # chown, and gives the privilege up before anything else runs.

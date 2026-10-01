@@ -315,7 +315,7 @@ export async function browse(
     return { status: 400, reason: "invalid_path", error: "path must be an absolute path on the server." };
   }
   // resolve() collapses every ".." before the containment check, so
-  // /home/daniel/../../etc is judged as /etc, not as something under home.
+  // /home/alex/../../etc is judged as /etc, not as something under home.
   // Symlinks inside a root are followed: the owner made them, and a
   // ~/Music pointing at another disk is the usual reason one exists.
   const dir = path.resolve(requested);
