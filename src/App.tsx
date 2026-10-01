@@ -39,6 +39,7 @@ import { LibraryView } from './library/LibraryView'
 import { useAuth } from './auth/useAuth'
 import { OwnerGate } from './auth/OwnerGate'
 import { Button } from './ui/Button'
+import { LAUNCHED_OFFLINE } from './pwa/register'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -630,7 +631,16 @@ export default function App() {
   const debug = new URLSearchParams(window.location.search).has('debug')
 
   if (!ready) {
-    return <Centered>{everConnected ? 'lost connection to legato-server…' : 'starting legato-server…'}</Centered>
+    // #128: an installed web app launched with the server out of reach
+    // runs the service worker's cached shell, and "starting" would be a
+    // lie there: no browser starts a server. It still polls, so the app
+    // comes up by itself once the server answers.
+    const waiting = everConnected
+      ? 'lost connection to legato-server…'
+      : LAUNCHED_OFFLINE
+        ? "can't reach legato-server…"
+        : 'starting legato-server…'
+    return <Centered>{waiting}</Centered>
   }
 
   const app = debug ? <DebugSpikes /> : <MainApp />
