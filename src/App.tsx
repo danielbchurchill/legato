@@ -40,6 +40,7 @@ import { useAuth } from './auth/useAuth'
 import { OwnerGate } from './auth/OwnerGate'
 import { Button } from './ui/Button'
 import { LAUNCHED_OFFLINE } from './pwa/register'
+import { useInstallOffer } from './pwa/installOffer'
 
 // Phase 1 of THE SPIKE (see projects/Legato.md): does sigma.js/graphology
 // hold up at ~5k nodes at all, in a plain browser tab, before Tauri/WebKitGTK
@@ -270,6 +271,8 @@ function MainApp() {
   // hook-internal state.
   const repeatMode = (settings.repeatMode as RepeatMode) || 'off'
   const playback = usePlayback(replaygainMode, repeatMode)
+  // #128: the install offer, shown once after the first track plays.
+  useInstallOffer()
   const canvasRef = useRef<CanvasHandle>(null)
   const collectionPanelRef = useRef<CollectionPanelHandle>(null)
 

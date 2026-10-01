@@ -5,6 +5,7 @@ import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
 import { streamUrl, watchForDrops } from './quality'
 import { useMediaSession } from './mediaSession'
+import { notePlaybackStarted } from '../pwa/installOffer'
 import {
   describePlaybackError,
   isNativePlaybackError,
@@ -410,12 +411,16 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
     audio.addEventListener('timeupdate', onTimeUpdate)
     audio.addEventListener('ended', onEnded)
+    // #128: the install offer waits for sound actually coming out, which a
+    // click on play alone doesn't prove (play() can still reject).
+    audio.addEventListener('playing', notePlaybackStarted)
     // #120: a mid-track drop pauses this track and moves the next one down
     // the quality ladder (playback/quality.ts).
     const stopWatchingDrops = watchForDrops(audio, () => setStatus((s) => ({ ...s, playing: false })))
     return () => {
       audio.removeEventListener('timeupdate', onTimeUpdate)
       audio.removeEventListener('ended', onEnded)
+      audio.removeEventListener('playing', notePlaybackStarted)
       stopWatchingDrops()
     }
   }, [advanceWebTrack])
