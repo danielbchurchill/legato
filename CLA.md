@@ -32,4 +32,4 @@ You grant the Maintainer, and recipients of software distributed by the Maintain
 
 ## 6. Signing
 
-You sign this agreement by following the CLA bot's link on Your first pull request. Your GitHub account, the date and this agreement's version are recorded.
+You sign this agreement through [CLA Assistant](https://cla-assistant.io). On Your first pull request, its bot comments with a link: sign in with GitHub and accept. Your GitHub account, the date and this agreement's version are recorded. The text You sign is published at https://gist.github.com/danielbchurchill/df55093900e20adf30b595f8d2e9ae89, identical to this file. Signing once covers all Your later Contributions to this agreement's version.

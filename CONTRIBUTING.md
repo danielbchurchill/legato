@@ -22,7 +22,7 @@ Thanks for wanting to help. Legato is pre-release and built mostly by one person
 
 ## The Contributor License Agreement
 
-Before a pull request can be merged, its author signs the [Contributor License Agreement](CLA.md). A bot asks you to do this on your first PR. You keep the copyright in your work. The CLA gives the project permission to distribute it under the AGPL and under other licences. That's what lets Legato offer the hosted relay and change licensing terms later without contacting every past contributor.
+Before a pull request can be merged, its author signs the [Contributor License Agreement](CLA.md). [CLA Assistant](https://cla-assistant.io) asks you to do this on your first PR: follow its link, sign in with GitHub, and accept. It takes a minute, and you only do it once. You keep the copyright in your work. The CLA gives the project permission to distribute it under the AGPL and under other licences. That's what lets Legato offer the hosted relay and change licensing terms later without contacting every past contributor.
 
 ## Names and logos
 
