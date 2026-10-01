@@ -1,5 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Database } from "../sqlite.js";
+import { legatoIdentity } from "./legatoIdentity.js";
+import { looksLikeJws, VERIFY_FAILURE_MESSAGES } from "./legatoToken.js";
+import { userForLegatoClaims } from "./legatoUsers.js";
 import { ownerExists } from "./owner.js";
 import { userForMediaTicket, userForSessionToken, type SessionUser } from "./sessions.js";
 
@@ -8,7 +11,10 @@ import { userForMediaTicket, userForSessionToken, type SessionUser } from "./ses
 // do it. gate.spec.ts enumerates every registered route to hold that line.
 //
 // Three credentials, checked in this order:
-//   1. Authorization: Bearer <session token>. What every fetch() sends.
+//   1. Authorization: Bearer <session token>, or Bearer <legato.fm token>
+//      (issue #114): a signed JWS, told apart by its two dots, verified
+//      against legato.fm's cached keys and mapped to a users row by
+//      legato_account_id. What every fetch() sends.
 //      The only one that works for the desktop app talking to the Pi over
 //      plain http on a Tailscale IP, or the packaged app's tauri://localhost
 //      page talking to 127.0.0.1: both are cross-site, and without TLS a
@@ -91,10 +97,40 @@ function originMatchesHost(request: FastifyRequest): boolean {
   }
 }
 
-type Resolved = { user: SessionUser } | { rejected: string };
+type Resolved = { user: SessionUser } | { rejected: string; status?: 403; reason?: string };
+
+// A legato.fm token that verifies but whose account this server doesn't
+// know is 403, not 401: signing in again wouldn't help, and the client
+// should say "ask the owner for an invite" (#143) rather than show a
+// sign-in form.
+function resolveLegatoToken(db: Database, token: string): Resolved {
+  const identity = legatoIdentity(db);
+  if (!identity.enabled) {
+    return { rejected: "legato.fm sign-in is turned off on this server (LEGATO_ID_ORIGIN=off)." };
+  }
+  const result = identity.verify(token);
+  if (!result.ok) return { rejected: VERIFY_FAILURE_MESSAGES[result.reason] };
+  if (result.claims.scope !== "access") {
+    return {
+      rejected: "That legato.fm token can only link an account to this server, not open it.",
+      status: 403,
+      reason: "wrong_scope",
+    };
+  }
+  const user = userForLegatoClaims(db, result.claims);
+  if (!user) {
+    return {
+      rejected: "This server doesn't know that legato.fm account. Ask the server's owner to invite you.",
+      status: 403,
+      reason: "not_a_member",
+    };
+  }
+  return { user };
+}
 
 function resolveCredential(db: Database, request: FastifyRequest): Resolved | null {
   const token = bearerToken(request);
+  if (token && looksLikeJws(token)) return resolveLegatoToken(db, token);
   if (token) {
     const user = userForSessionToken(db, token);
     return user ? { user } : { rejected: "That session has expired or was signed out." };
@@ -142,6 +178,9 @@ export function installAuthGate(app: FastifyInstance, db: Database): void {
     // server" rather than a sign-in form nobody has a password for — the
     // upgraded-server case, where the library is all still here and only
     // the account is missing.
+    if (resolved && "rejected" in resolved && resolved.status === 403) {
+      return reply.code(403).send({ error: resolved.rejected, reason: resolved.reason });
+    }
     const reason = ownerExists(db) ? "signed_out" : "owner_required";
     const error =
       resolved && "rejected" in resolved

@@ -13,6 +13,7 @@ import { installAuthGate, redactCredentials } from "./auth/gate.js";
 import { registerRoutes } from "./routes/register.js";
 import { setupCodes } from "./auth/setupCode.js";
 import { ownerExists } from "./auth/owner.js";
+import { installLegatoIdentity, LegatoIdentity } from "./auth/legatoIdentity.js";
 import { webClientRoutes } from "./routes/web-client.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { reconcileInterruptedScans } from "./scan/scanner.js";
@@ -164,6 +165,22 @@ app.addContentTypeParser(
 // rules.
 installAuthGate(app, db);
 await registerRoutes(app, db);
+
+// Issue #114: legato.fm's signing keys. syncSchedule() starts the daily
+// refresh only if an account is already linked; an unlinked server makes
+// no contact with legato.fm at all (auth/legatoIdentity.ts).
+{
+  const identity = new LegatoIdentity(db, {
+    log: (level, message) => (level === "warn" ? app.log.warn(message) : app.log.info(message)),
+  });
+  installLegatoIdentity(db, identity);
+  identity.syncSchedule();
+  app.log.info(
+    identity.enabled
+      ? `legato.fm: server id ${identity.serverId()}, trusting ${identity.origin}${identity.scheduled ? " (linked, refreshing keys daily)" : " (not linked, no contact)"}`
+      : "legato.fm: sign-in turned off (LEGATO_ID_ORIGIN=off)",
+  );
+}
 
 // #116's web client and its SPA fallback. Registered after the gate like
 // everything else; auth/gate.ts lets plain GET/HEAD outside the API
