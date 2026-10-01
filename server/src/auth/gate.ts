@@ -40,6 +40,7 @@ const PUBLIC_ROUTES = new Set([
   "GET /api/v1/health",
   "GET /api/v1/auth/status",
   "POST /api/v1/auth/owner",
+  "GET /api/v1/auth/setup",
   "POST /api/v1/auth/sign-in",
   "POST /api/v1/auth/sign-out",
   "GET /api/v1/auth/google",

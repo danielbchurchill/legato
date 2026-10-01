@@ -11,7 +11,7 @@ import { FFMPEG_PATH, FPCALC_PATH } from "./mediaBinaries.js";
 import { acquireMediaSlot } from "./media/queue.js";
 import { installAuthGate, redactCredentials } from "./auth/gate.js";
 import { registerRoutes } from "./routes/register.js";
-import { setupCode } from "./auth/setupCode.js";
+import { setupCodes } from "./auth/setupCode.js";
 import { ownerExists } from "./auth/owner.js";
 import { webClientRoutes } from "./routes/web-client.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
@@ -75,15 +75,28 @@ try {
 
 // Issue #112: until an owner exists, every route but /health refuses to
 // answer, and anyone creating the owner from another machine (the Mac
-// talking to the Pi, a browser on the LAN) has to type this code. Warn
-// level so it stands out among the startup lines in journalctl or docker
-// logs. Logged on every start until an owner exists; #113 adds a /setup
-// page that shows it too.
+// talking to the Pi, a browser on the LAN) has to send the setup code. #113
+// shows it on the /setup page too, and replaces it every ten minutes; each
+// new one is logged here as well, at warn level so it stands out among the
+// startup lines in journalctl or docker logs, for whoever reads the log
+// instead of opening the page. Both stop once an owner exists.
 if (!ownerExists(db)) {
-  app.log.warn(
-    `No owner account yet — setup code ${setupCode()}. Open Legato and create the owner for this server; ` +
-      "from another machine it asks for this code.",
-  );
+  setupCodes.onIssue(({ code }, replaced) => {
+    if (ownerExists(db)) return;
+    app.log.warn(
+      replaced
+        ? `Setup code ${replaced} expired — the new one is ${code}, valid for 10 minutes.`
+        : `No owner account yet — setup code ${code}, valid for 10 minutes. Open http://<this server>:${PORT}/setup ` +
+            "in a browser on your network, or create the owner in the Legato app; from another machine it asks for this code.",
+    );
+  });
+  setupCodes.scheduleRefresh(() => !ownerExists(db));
+  // Seam for the legato.fm half of plan 02's claim (step 4), a follow-up
+  // to #113 waiting on #215 and #114: each code issued above would also be
+  // offered to the relay's POST /pair/exchange every few seconds until it
+  // expires, so a phone that scanned the /setup QR and claimed it on
+  // legato.fm pairs this server with no typing. That needs the tunnel
+  // client and somewhere to keep its credential, which don't exist yet.
 }
 
 // Issue #123 (D17): a scan_jobs row stuck at status='running' means the
