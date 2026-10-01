@@ -66,12 +66,12 @@ type ScanProgress = {
 }
 // A run actively scanning (progress) vs. one a pause request stopped mid-way
 // — the same job id, kept visible with a resume affordance rather than
-// disappearing the way a genuinely finished run does (issue #123, D17).
+// disappearing the way a genuinely finished run does (issue #123).
 type RunningScan = { progress: ScanProgress; paused: boolean }
 type ScanFileError = { file_path: string; stage: string; reason: string }
 
-// docs/plans/04-library-and-scan.md's own wording for the pipeline, reused
-// verbatim as the stage list's labels.
+// Issue #123's own wording for the pipeline, reused verbatim as the stage
+// list's labels.
 const SCAN_STAGE_LABELS: Record<ScanStage, string> = {
   discover: 'discover',
   read_tags: 'read tags',
@@ -97,7 +97,7 @@ const REPLAYGAIN_OPTIONS = [
   { value: 'off', label: 'off' },
 ] as const satisfies readonly { value: ReplayGainMode; label: string }[]
 
-// #136/D10: per-device, not per-account — see useTheme.ts. 'system' rather
+// #136: per-device, not per-account — see useTheme.ts. 'system' rather
 // than the resolved theme itself is the value this control edits, so
 // picking it doesn't need to know or care which way prefers-color-scheme
 // currently leans.
@@ -418,7 +418,7 @@ export function LegatoSettings({
                       </p>
                       {run && (
                         <div className="flex flex-col gap-[2px] py-[2px]">
-                          {/* Issue #123 (D17): discover → read tags → match →
+                          {/* Issue #123: discover → read tags → match →
                            * collapse → layout → enrich queued, the current
                            * stage in ink, everything else in control-color —
                            * same active/inactive contrast the theme and

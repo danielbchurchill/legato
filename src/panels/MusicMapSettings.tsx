@@ -25,8 +25,8 @@ import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
  * src/canvas/forceSimulation.ts reads these settings every tick. They used
  * to be UI-only placeholders (this app's graph was a static one-shot
  * layout, server/src/layout/cluster.ts, "Deliberately NOT a global force
- * simulation") before Daniel asked for Obsidian-style live physics; see
- * Legato.md for the change. Same session removed the granularity tabs
+ * simulation") until the 2026-08-29 map rework switched to Obsidian-style
+ * live physics. Same session removed the granularity tabs
  * (artists/albums/tracks are now one combined graph, not three switchable
  * ones), so this file also lost its "music map > default view" section and
  * the "images" row's per-tab meaning became per-node-type instead.
@@ -60,7 +60,7 @@ const NODE_TYPE_IMAGE_TOGGLES: { key: string; label: string }[] = [
   { key: 'showImagesTracks', label: 'tracks' },
 ]
 
-/* #127/D19: the three preset pills — a single-choice ToggleGroup since the
+/* #127: the three preset pills — a single-choice ToggleGroup since the
  * gpui-kit port (pressed = hover wash + ink, see ToggleGroup.tsx), where
  * they used to borrow ColorSwatch's ring. No pill pressed at all still
  * means "custom", once a slider's been dragged off every named point. */
@@ -76,7 +76,7 @@ function PresetPicker({ activePreset, onApplyPreset }: { activePreset: MapPreset
   )
 }
 
-/* A "forces" slider row with D19's plain-language label as the primary
+/* A "forces" slider row with #127's plain-language label as the primary
  * text and the technical name (what MusicMapSettings called this before
  * #127, and what forceSimulation.ts's own comments still call it) kept as
  * secondary text next to it — see FORCE_SLIDER_LABELS in mapPresets.ts. */
@@ -269,7 +269,7 @@ export function MusicMapSettings({ settings, updateSettings, mapPresets }: Music
         </SettingsRow>
       </SettingsGroup>
 
-      {/* #127/D19: plain-language primary label, technical name secondary —
+      {/* #127: plain-language primary label, technical name secondary —
        * "link force" / "repel" / "center" are still what forceSimulation.ts
        * and this settings store's own keys call these, just no longer the
        * first thing a person reads here. No `align="start"` SettingsRow

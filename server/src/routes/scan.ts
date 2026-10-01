@@ -170,7 +170,7 @@ export function scanRoutes(db: Database) {
       return { ok: true };
     });
 
-    // Cancel keeps everything indexed so far (D17) — it only stops the run
+    // Cancel keeps everything indexed so far (#123) — it only stops the run
     // and marks it canceled, never rolls back nodes/files already written.
     // A running job is signalled and finalizes itself; a paused job (no
     // live loop to signal) is finalized synchronously by

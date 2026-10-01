@@ -3,8 +3,8 @@ import { useToast } from '../ui/toastContext'
 
 /* The install prompt (#128). Chrome fires `beforeinstallprompt` as soon as
  * the page qualifies, usually on load, and shows its own banner unless the
- * page claims the event. The plan wants the offer at a natural moment
- * instead, "after first successful playback, never on page load". So the
+ * page claims the event. The offer belongs at a natural moment instead:
+ * after the first successful playback, never on page load. So the
  * event is claimed and held from startup (main.tsx), and the offer only
  * appears once a track has actually started playing.
  *

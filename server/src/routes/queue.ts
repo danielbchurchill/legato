@@ -16,12 +16,12 @@ type ResolvedTrack = {
 // file per node (the best instance among however many a collapsed
 // recording has), excluding anything currently missing on disk. Both the
 // desktop (native Rust) and remote/WASM playback paths call this same
-// route rather than each re-implementing "which file backs this node,"
-// per the MVP roadmap's M6 architecture note.
+// route rather than each re-implementing "which file backs this node," so
+// there's one implementation of it instead of two that can drift.
 //
 // Order matters here in a way most list endpoints don't: this is the
 // resolution step behind both a plain "play album" queue and a shuffled
-// one (D12, docs/plans/05-listening-and-map.md — shuffle keeps its own
+// one (#125 — shuffle keeps its own
 // permutation of recordingNodeIds and hands it straight to this route), so
 // `.map()` rather than a join/IN-clause query is deliberate — it's the one
 // shape that can't silently re-sort the caller's order out from under it.

@@ -78,8 +78,7 @@ jobs:
           LEGATO_RELEASE_VERSION: ${{ steps.version.outputs.value }}
           LEGATO_RELEASE_GIT_SHA: ${{ github.sha }}
 
-      # Issue #102's named risk (docs/plans/01-server-distribution.md's
-      # Compile section): a compiled binary has no source tree, so a
+      # Issue #102's named risk: a compiled binary has no source tree, so a
       # broken or stale embed (server/src/migrations/manifest.generated.ts)
       # would boot clean and just silently have no schema. This is the
       # release-time gate on top of check.yml's identical per-PR copy of

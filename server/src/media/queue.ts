@@ -6,9 +6,8 @@ import { MEDIA_CONCURRENCY_LIMIT } from "../config.js";
 // this, nothing stopped a fresh library scan's fingerprinting/cover/
 // waveform work from spawning exactly as many concurrent processes as it
 // had files left to look at, which is invisible on a desktop and starves
-// a low-power host (see config.ts's MEDIA_CONCURRENCY_LIMIT and
-// docs/plans/01-server-distribution.md's Low-power hosts section for the
-// actual number and why it's shaped that way).
+// a low-power host (see config.ts's MEDIA_CONCURRENCY_LIMIT for the actual
+// number and why it's shaped that way).
 //
 // Playback jumps the *queue*, not a running process: a background spawn
 // already under way when a playback request arrives runs to completion

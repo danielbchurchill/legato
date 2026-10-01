@@ -265,7 +265,7 @@ export async function rescanNode(db: Database, nodeId: number): Promise<RescanFi
   return results;
 }
 
-// Issue #123 (D17): the pipeline a full/incremental scan actually walks
+// Issue #123: the pipeline a full/incremental scan actually walks
 // through, in order. 'discover' is the filesystem walk; the middle four
 // are each a full pass over every file this run touches, in this order,
 // because deriveLocalEdges ('collapse') has to run before a file's cover
@@ -374,8 +374,7 @@ function persistCursor(db: Database, jobId: number, stage: ScanStage, cursor: nu
 
 const INSERT_CHUNK = 2000;
 
-// Batched on purpose (CLAUDE.md's "batch writes" scale note, and the plan
-// doc's own "It has to feel normal at 180k files"): one transaction per
+// Batched on purpose (a scan has to feel normal at 180k files): one transaction per
 // chunk rather than one INSERT per file, and one transaction per run
 // rather than one giant statement that would need every bound parameter
 // held at once.
@@ -404,7 +403,7 @@ const PAGE_SIZE = 500;
 // one per file, while still keeping a resume within a small multiple of
 // this many files' rework of whatever it repeats.
 const CHECKPOINT_EVERY = 50;
-// ~4/s per the plan doc's throttling requirement.
+// ~4 progress updates a second.
 const PROGRESS_THROTTLE_MS = 250;
 
 type StageOutcome = "completed" | "pause" | "cancel";
@@ -478,7 +477,7 @@ async function runReadTagsStage(
       // far more often than every PROGRESS_THROTTLE_MS at real-world
       // throughput (confirmed on the ≥100k-file synthetic benchmark: 2000+
       // files/sec meant a forced emit every ~25ms, an order of magnitude
-      // over the plan doc's "about 4/s"). emit() is still called every
+      // over the intended ~4/s). emit() is still called every
       // file, but un-forced — the gate itself decides whether real wall
       // time has actually passed.
       if (cursor % CHECKPOINT_EVERY === 0) persistCursor(db, job.id, "read_tags", cursor);
@@ -577,8 +576,7 @@ async function runLayoutStage(
 
   // The missing-file sweep (full mode only) has always run right before
   // recompute(), not as its own reported stage — it's a couple of set
-  // queries, not per-file work proportional to what the plan calls out as
-  // needing its own progress.
+  // queries, not per-file work of the size that needs its own progress.
   if (mode === "full") {
     const seen = new Set(
       (db.prepare<{ file_path: string }>("SELECT file_path FROM scan_run_files WHERE job_id = ?").all(job.id)).map(
@@ -643,7 +641,7 @@ export function createScanJob(db: Database, libraryRootId: number, mode: ScanMod
   return job.id;
 }
 
-// Issue #123 (D17): resume-aware by construction rather than a separate
+// Issue #123: resume-aware by construction rather than a separate
 // "resumeScan" code path — every call re-reads the job's persisted
 // stage/cursor before doing anything, so a fresh job (stage='discover',
 // cursor=0, the columns' own DB defaults) and a job resumeScanJob() just
@@ -905,8 +903,8 @@ export async function executeScan(
 // no process left actually running it. Called once at boot: any such row
 // becomes 'paused' instead, which is both honest (nothing is running) and
 // exactly the state a deliberate pause would have left it in — same
-// resume path either way, and the plan's "pause survives a server
-// restart" guarantee holds even for a restart nobody asked for.
+// resume path either way, and #123's "pause survives a server restart"
+// guarantee holds even for a restart nobody asked for.
 export function reconcileInterruptedScans(db: Database): number {
   const stuck = db.prepare<{ id: number }>("SELECT id FROM scan_jobs WHERE status = 'running'").all();
   if (stuck.length > 0) {

@@ -2,8 +2,7 @@ import type { Database } from "../sqlite.js";
 import { DEV_VERSION, VERSION } from "../version.js";
 import { resolveInstallChannel } from "./installChannel.js";
 
-// Issue #110: notify-only update check (docs/plans/01-server-distribution.md,
-// "Update notices"). The server asks GitHub's releases API whether a newer
+// Issue #110: notify-only update check. The server asks GitHub's releases API whether a newer
 // stable release exists, at most once a day, and /health passes the answer
 // on so the client can show the install channel's own update command. It
 // never downloads or installs anything.

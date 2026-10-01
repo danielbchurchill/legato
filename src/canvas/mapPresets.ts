@@ -1,6 +1,6 @@
 import type { Settings } from '../hooks/useSettings'
 
-/* #127/D19: clusters / balanced / sprawl. A named bundle over the same four
+/* #127: clusters / balanced / sprawl. A named bundle over the same four
  * settings keys MusicMapSettings.tsx's "forces" group and "links > distance"
  * row already expose — no new physics, no new setting keys, just three
  * fixed points along sliders that already exist (see that file's own
@@ -8,9 +8,9 @@ import type { Settings } from '../hooks/useSettings'
  * centralizes).
  *
  * Only forceLinkStrength and forceRepelStrength actually move between
- * presets — D19's own text names exactly those two ("strong link force, low
- * repel" / "weak link, high repel") and says nothing about center pull or
- * link distance, so both stay pinned to balanced's value in every preset
+ * presets — clusters is a strong link force with low repel, sprawl a weak
+ * link with high repel, and nothing about center pull or link distance
+ * tells the presets apart, so both stay pinned to balanced's value in every preset
  * rather than inventing a third and fourth axis nobody asked for. */
 
 export type ForceSettings = {
@@ -54,7 +54,7 @@ export const MAP_PRESET_LABELS: Record<MapPresetId, string> = {
 }
 
 /* Plain-language label for each force slider, technical name kept as
- * secondary text — D19's own three mappings, verbatim. */
+ * secondary text (#127's human labels). */
 export const FORCE_SLIDER_LABELS: Record<keyof Omit<ForceSettings, 'linkDistance'>, { plain: string; technical: string }> = {
   forceCenterStrength: { plain: 'pull toward the middle', technical: 'center' },
   forceRepelStrength: { plain: 'space between everything', technical: 'repel' },

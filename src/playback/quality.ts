@@ -1,15 +1,14 @@
 import { API_BASE as API } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
 
-/* Issue #120 / D13: which rung of the server's quality ladder a browser
- * client asks GET /files/:id/stream for (docs/plans/03-connection-and-
- * streaming.md, "Quality ladder (G12)"). Only the web <audio> path uses
+/* Issue #120: which rung of the server's quality ladder a browser
+ * client asks GET /files/:id/stream for. Only the web <audio> path uses
  * this. Native desktop playback reads files straight off disk and never
  * asks the server to transcode anything.
  *
  * Chosen once per track, when its URL is built: a drop part-way through a
  * track pauses that track and moves the *next* one down a rung. There's no
- * HLS or other mid-track switching (D13). */
+ * HLS or other mid-track switching (#120). */
 
 export type StreamQuality = 'original' | 'opus96' | 'opus160' | 'opus256' | 'aac160' | 'aac256'
 export type ConnectionPath = 'home' | 'relay' | 'custom'
@@ -24,7 +23,7 @@ export type QualityPreference = 'auto' | Rung
 
 export const QUALITY_PREFERENCES: readonly QualityPreference[] = ['auto', ...LADDER]
 
-// The plan's "Default" column.
+// Issue #120's default rung for each connection path.
 const DEFAULT_RUNG: Record<ConnectionPath, Rung> = {
   home: 'original',
   relay: 'standard',
@@ -42,7 +41,7 @@ export function connectionPath(): ConnectionPath {
 type BrowserTraits = { userAgent: string; maxTouchPoints: number; canPlayOpus: boolean }
 
 /** Safari and every iOS browser (all WebKit underneath) get AAC in place of
- * Opus, per the plan's table. Safari's Opus support has come and gone
+ * Opus (#120). Safari's Opus support has come and gone
  * across versions, so a browser that says it can't play Ogg Opus gets AAC
  * as well, whatever its user agent claims. */
 export function prefersAac({ userAgent, maxTouchPoints, canPlayOpus }: BrowserTraits): boolean {

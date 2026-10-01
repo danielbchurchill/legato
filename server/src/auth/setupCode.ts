@@ -9,8 +9,7 @@ import type { FastifyRequest } from "fastify";
 // The desktop app's own embedded server is exempt: it's reached over
 // loopback, from a loopback or tauri:// page, so whoever is sitting at that
 // window already owns the machine. Everything else has to send the setup
-// code. Issue #113 (docs/plans/02-identity-and-accounts.md, "Claiming a
-// headless server") shows that code on a /setup page as well as in the log,
+// code. Issue #113 shows that code on a /setup page as well as in the log,
 // with a QR code and a countdown, and replaces it every ten minutes so a
 // code read off a screen yesterday is worth nothing today.
 
@@ -221,7 +220,7 @@ function isHomeNetworkHostname(hostname: string): boolean {
 
 /**
  * Whether this request may be *shown* the setup code (GET /auth/setup).
- * The plan accepts that anyone on the home network can claim an unclaimed
+ * Issue #113 accepts that anyone on the home network can claim an unclaimed
  * server; this is what keeps it to the home network and to pages that
  * aren't someone else's:
  *   * the peer is on a private network, and not behind a reverse proxy

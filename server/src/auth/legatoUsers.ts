@@ -21,7 +21,7 @@ export function linkedAccountId(db: Database, userId: number): string | null {
   return row?.legato_account_id ?? null;
 }
 
-// The plan's migration step for Google/GitHub users from before 0029,
+// Issue #114's migration step for Google/GitHub users from before 0029,
 // run the first time their account shows up rather than in 0032 itself:
 // the legato.fm accounts aren't on this machine, so the SQL migration has
 // nothing to match against. Links only when legato.fm says the email is

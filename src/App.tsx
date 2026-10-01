@@ -39,7 +39,7 @@ import { Button } from './ui/Button'
 import { LAUNCHED_OFFLINE } from './pwa/register'
 import { useInstallOffer } from './pwa/installOffer'
 
-// D12: off -> all -> one -> off. The dock's single repeat button cycles
+// #125: off -> all -> one -> off. The dock's single repeat button cycles
 // through this rather than exposing three separate controls.
 const NEXT_REPEAT_MODE: Record<RepeatMode, RepeatMode> = {
   off: 'all',
@@ -51,7 +51,7 @@ const NEXT_REPEAT_MODE: Record<RepeatMode, RepeatMode> = {
 // LibrarySetup's own scope note (M0's job is just proving the folder-picker
 // round trip; the canvas taking over from there is M3's).
 function MainApp() {
-  // #136/D10: per-device, applies (and keeps applying — system-theme and
+  // #136: per-device, applies (and keeps applying — system-theme and
   // Tauri window-theme changes) as a side effect of the hook itself. See
   // useTheme.ts. resolvedTheme threads down to the two surfaces that still
   // need to know which theme is active for a reason CSS tokens can't cover
@@ -95,7 +95,7 @@ function MainApp() {
   // Cmd/Ctrl+Z below, so it has to live somewhere that outlives the panel
   // regardless.
   const mapPresets = useMapPresetHistory(settings, updateSettings)
-  // Issue #126, D11: the map/library switch persists like every other
+  // Issue #126: the map/library switch persists like every other
   // settings-backed toggle in the app (hoverDimEnabled, replaygainMode,
   // etc.) rather than resetting to the map on every launch.
   const viewMode = (settings.viewMode as ViewMode) || 'map'
@@ -105,7 +105,7 @@ function MainApp() {
   // boxes that happen to agree by coincidence.
   const [libraryQuery, setLibraryQuery] = useState('')
   const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
-  // D12: repeat is a persisted player setting (unlike shuffle, which lives
+  // #125: repeat is a persisted player setting (unlike shuffle, which lives
   // entirely inside usePlayback's own playSequence/originalOrder), so it
   // reads from the same settings store as replaygainMode rather than being
   // hook-internal state.
@@ -175,7 +175,7 @@ function MainApp() {
   const nodeSizeMultipliers = useMemo(() => resolveNodeSizeMultipliers(settings), [settings])
 
   // Music Map settings' "nodes > lock" and "forces" + "links > distance" —
-  // real live physics inputs since 2026-08-29 (see Legato.md), read the same
+  // real live physics inputs since the 2026-08-29 map rework, read the same
   // live way as the multipliers above.
   const nodesLocked = settings.nodePositionsLocked === 'true'
   const forceCenterStrength = Number(settings.forceCenterStrength ?? '0.03')
@@ -195,7 +195,7 @@ function MainApp() {
   // Every "go to this node" action in the app — search, similarity
   // thumbnails, fact links, hygiene worklist items — resolves through here,
   // so selecting is always also navigating. Canvas-first spatial navigation
-  // is the actual point (Legato.md), not a side effect of clicking a node
+  // is the actual point of a map, not a side effect of clicking a node
   // directly on the graph.
   const selectAndFly = (id: number) => {
     setSelectedNodeId(id)

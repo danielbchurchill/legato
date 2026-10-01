@@ -1,7 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { SessionUser } from "./sessions.js";
 
-// The local owner (issue #112, D1): one password account per server, stored
+// The local owner (issue #112): one password account per server, stored
 // only here, usable with no internet and no legato.fm account. Hashed with
 // Bun.password, whose default is argon2id. It's built into Bun itself, so
 // the compiled sidecar and the Pi's binary carry it with nothing extra to

@@ -229,7 +229,7 @@ function tally(entries: Dirent[]): { audioFiles: number; subfolders: string[] } 
   return { audioFiles, subfolders };
 }
 
-// The plan's count (docs/plans/04 "Server-side folder picker"): audio files
+// Issue #121's shallow count: audio files
 // at this folder's top level plus those in its first level of subfolders.
 // One level alone would show an artist folder as "3 folders" when it holds
 // 36 tracks across three albums; two levels is what makes it read "36 audio

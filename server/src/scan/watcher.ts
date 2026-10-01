@@ -62,8 +62,7 @@ function clearUnlinkBatch(libraryRootId: number): void {
   unlinkBatches.delete(libraryRootId);
 }
 
-// docs/plans/04-library-and-scan.md calls the interval "configurable" —
-// this reads the same generic key/value settings table every other
+// The fallback interval (#122) is configurable — this reads the same generic key/value settings table every other
 // per-install knob in this app already goes through (routes/settings.ts),
 // rather than inventing a bespoke config surface just for one timer.
 function fallbackIntervalMs(db: Database): number {

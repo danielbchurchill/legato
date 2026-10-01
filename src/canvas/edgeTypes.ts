@@ -5,8 +5,8 @@
  * WebGL and never sees CSS, so Canvas.tsx needs these as concrete hex too,
  * imported from here rather than each file keeping its own copy).
  *
- * 2026-08-29: the three granularities collapsed into one combined graph
- * (Legato.md), so there is no more per-graph type list — every real
+ * 2026-08-29: the three granularities collapsed into one combined graph,
+ * so there is no more per-graph type list — every real
  * relationship edge renders together now. same_artist/same_label/
  * collaborated_with (entities/collaboration.ts's derived edges, once these
  * granularities' own distinguishing feature) are deliberately NOT among

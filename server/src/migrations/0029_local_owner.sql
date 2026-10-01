@@ -1,4 +1,4 @@
--- Issue #112 (D1): every server gets a local owner, and every route now
+-- Issue #112: every server gets a local owner, and every route now
 -- requires a signed-in user. 0021 described these tables as "provisioning
 -- plumbing, not an access-control system" — this migration is where that
 -- stops being true, so both tables change shape.

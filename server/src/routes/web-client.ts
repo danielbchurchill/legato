@@ -2,8 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
-// Issue #116 (docs/plans/03-connection-and-streaming.md, "Web client served
-// by the home server"): opening http://<server>:8899/ in any browser *is*
+// Issue #116: opening http://<server>:8899/ in any browser *is*
 // the client. This plugin serves the built frontend at / and falls back to
 // index.html for any other page path, so a deep link or a reload lands on
 // the app instead of a 404.

@@ -1,4 +1,4 @@
--- Issue #123 (D17): scan_jobs stops being one flat filesScanned/filesTotal
+-- Issue #123: scan_jobs stops being one flat filesScanned/filesTotal
 -- counter and becomes a real checkpoint row — which of the six pipeline
 -- stages (discover -> read_tags -> match -> collapse -> layout ->
 -- enrich_queued) a run is in, and a cursor into it, so pause survives a

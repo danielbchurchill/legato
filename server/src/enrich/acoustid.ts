@@ -1,4 +1,4 @@
-// M-9: tier 2 of the collapse design (Legato.md) — AcoustID resolves a
+// M-9: tier 2 of collapse matching — AcoustID resolves a
 // Chromaprint fingerprint (match/fingerprint.ts computes it locally, no
 // key needed for that half) to a MusicBrainz recording id via AcoustID's
 // web service. That half genuinely needs a client key, the same way any

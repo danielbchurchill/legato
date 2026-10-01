@@ -380,7 +380,7 @@ describe("runIncrementalScan", () => {
   });
 });
 
-// Issue #123 (D17): stages, ETA, and pause/resume/cancel that survive a
+// Issue #123: stages, ETA, and pause/resume/cancel that survive a
 // restart. CHECKPOINT_EVERY in scanner.ts is 50, so these tests write 55+
 // files where they need a guaranteed mid-stage checkpoint (and therefore a
 // forced, deterministic progress callback) to hook a pause off of, rather
@@ -498,7 +498,7 @@ describe("executeScan stages", () => {
     expect(job.status).toBe("canceled");
     expect(job.canceled_at).toBeTruthy();
 
-    // D17: cancel keeps indexed work — the 50 files already read_tags'd stay
+    // #123: cancel keeps indexed work — the 50 files already read_tags'd stay
     // in the library, they just never finished match/collapse/enrich.
     const fileRows = db.prepare("SELECT COUNT(*) AS n FROM files").get() as { n: number };
     expect(fileRows.n).toBe(50);

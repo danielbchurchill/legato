@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <!--
-      #136/D10: sets data-theme on <html> before Tailwind's tokens.css rules
+      #136: sets data-theme on <html> before Tailwind's tokens.css rules
       or React ever run, so a light-mode user never sees a dark first paint.
       Mirrors useTheme.ts's own resolution exactly (same storage key, same
       'system' -> prefers-color-scheme fallback) — keep the two in sync by

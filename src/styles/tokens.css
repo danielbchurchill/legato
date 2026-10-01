@@ -8,13 +8,13 @@
  * @theme namespaces so they generate utilities: --color-* -> bg-canvas / text-muted,
  * --radius-* -> rounded-surface, and so on.
  *
- * D10 / issue #136: two themes now, not one. This @theme block stays the dark
- * default (unchanged values — "the dark theme stays exactly as it is",
- * docs/plans/06-light-mode.md). The light ("paper") theme lives in the
+ * Issue #136: two themes now, not one. This @theme block stays the dark
+ * default (unchanged values: the dark theme stays exactly as it is).
+ * The light ("paper") theme lives in the
  * `:root[data-theme="light"]` block near the bottom of this file, overriding
  * the same custom properties rather than introducing new ones — components
  * read `var(--color-*)` either way and never branch on which theme is active.
- * The paper values are the table Daniel signed off on in issue #104 (D10),
+ * The paper values are the table Daniel signed off on in issue #104,
  * copied verbatim; anything in that block NOT sourced from that table is
  * called out inline as a derived extension, not an approved design value. */
 
@@ -54,7 +54,7 @@
    * token rather than kept as a second one-off shade), and the canvas's
    * shift-drag marquee fill (Canvas.tsx). Was a bare `bg-white/6` in most of
    * these spots (#126's own placeholder, plus the marquee) until #136
-   * converted it: not part of the D10 table, same hairline-style white/
+   * converted it: not part of the #104 table, same hairline-style white/
    * near-black flip for the light override below. */
   --color-placeholder: rgb(255 255 255 / 0.06);
 
@@ -140,7 +140,7 @@
 
   /* Colored-dot fallback for a node with no cover art (or art toggled off),
    * one hue per domain type — see Canvas.tsx's NODE_COLOR. Not part of the
-   * D10 palette table Daniel signed off in issue #104 (that table covers
+   * palette table Daniel signed off in issue #104 (that table covers
    * canvas/surface/text/edge tokens only); these are today's existing
    * dark-mode values, now named as tokens instead of inline literals per
    * #136's "convert remaining inline colours" requirement. See the light
@@ -357,11 +357,11 @@
   color-scheme: dark;
 }
 
-/* ---- Light theme ("paper") — D10, issue #136 -----------------------------
+/* ---- Light theme ("paper") — issue #136 ----------------------------------
  *
  * "Sheet music in colour and contrast": warm paper that reads as engraving
  * paper under daylight, not parchment, with pen-ink black text and
- * staff-line-gray dividers (docs/plans/06-light-mode.md). Overrides the same
+ * staff-line-gray dividers (#136). Overrides the same
  * custom properties the @theme block above defines — never new names, so
  * every `bg-canvas`/`text-ink`/etc utility Tailwind generated from that block
  * already works unchanged here. Applied via a `data-theme="light"` attribute
@@ -369,7 +369,7 @@
  * dark flash) and kept live afterward by useTheme.ts.
  *
  * Values through --color-edge-collaborated-with below are the exact table
- * Daniel signed off in issue #104 (D10) — every one already hits the
+ * Daniel signed off in issue #104 — every one already hits the
  * required contrast (3:1 for lines, 4.5:1 wherever an edge colour is also
  * used as text; ink/muted/muted-hi/control/signal all clear 4.5:1 against
  * canvas, surface, and inset — see that issue's approval comment for the
@@ -432,11 +432,11 @@
   --color-node-work: #a4851f;
   --color-node-credit: #1d9a70;
 
-  /* Plan doc Step 1: "a softer, shorter, lower-alpha shadow than dark
-   * mode's" for frosted-paper glass. Dark mode's is
-   * `0 4px 4px rgb(0 0 0 / 0.25)` — halved the offset/blur and cut the alpha
-   * by more than half, same qualitative direction the plan doc calls for,
-   * not a measured value (no light-mode render exists to sample yet). */
+  /* A softer, shorter, lower-alpha shadow than dark mode's, for
+   * frosted-paper glass. Dark mode's is `0 4px 4px rgb(0 0 0 / 0.25)`, so
+   * this halves the offset/blur and cuts the alpha by more than half. A
+   * qualitative call, not a measured value (no light-mode render exists to
+   * sample yet). */
   --shadow-surface: 0 2px 3px rgb(0 0 0 / 0.1);
 
   color-scheme: light;

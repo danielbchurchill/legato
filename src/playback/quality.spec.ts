@@ -33,7 +33,7 @@ const CHROME_IOS =
 const FIREFOX_LINUX = 'Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0'
 
 describe('chooseQuality', () => {
-  it("uses the plan's default per path: original at home, Opus 160 on the relay, Opus 256 on a custom endpoint", () => {
+  it("uses #120's default per path: original at home, Opus 160 on the relay, Opus 256 on a custom endpoint", () => {
     const base = { preference: 'auto', drops: 0, aac: false } as const
     expect(chooseQuality({ ...base, path: 'home' })).toBe('original')
     expect(chooseQuality({ ...base, path: 'relay' })).toBe('opus160')

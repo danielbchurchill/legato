@@ -29,10 +29,9 @@ const EDGE_VERB: Record<string, string> = {
   dj_mixed_by: "DJ-mixed by",
 };
 
-// Template-based, not an LLM call — see Legato.md's article-view spec.
-// field_provenance (M2's migration created it) is still empty at this
-// point in the roadmap: nothing writes it until M7's enrichment pass adds
-// provenance-tracked fields. Facts here come straight from edges (M2's
+// Template-based, not an LLM call. field_provenance (M2's
+// migration created it) was empty when this was written: nothing wrote it
+// until M7's enrichment pass added provenance-tracked fields. Facts here come straight from edges (M2's
 // local hard edges) and file/tag data instead — the actual source of
 // everything currently known about a node.
 export function generateFacts(db: Database, nodeId: number): Fact[] {

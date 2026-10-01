@@ -85,8 +85,7 @@ jobs:
       - name: server test suite
         run: npm --prefix server test
 
-      # Issue #102's named risk (docs/plans/01-server-distribution.md's
-      # Compile section): a compiled binary has no source tree, so a
+      # Issue #102's named risk: a compiled binary has no source tree, so a
       # broken or stale embed would boot clean and just silently have no
       # schema. This compiles one target (matching this runner, so no
       # cross-compile download) and boots it against a brand-new empty

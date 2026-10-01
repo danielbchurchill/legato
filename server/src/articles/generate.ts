@@ -1,9 +1,9 @@
-// Template-based, not an LLM call — same reasoning as facts.ts. Where
+// Template-based, not an LLM call, like facts.ts. Where
 // facts.ts produces a flat bullet list from local hard edges, this module
 // weaves the same underlying data (edges, entity aggregates, collaboration
-// ties) into the prose Legato.md's Vision section describes: "a wiki page
-// dense with links to everything else in your collection... that the
-// engineer also worked on three other records you own."
+// ties) into prose: a wiki page dense with links to everything else in
+// the collection, the kind that says the engineer also worked on three
+// other records you own.
 //
 // Links use plain markdown syntax with a custom scheme — [text](node:123)
 // — real, valid markdown (openable in any editor, not a made-up format),

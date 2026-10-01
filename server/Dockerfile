@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Issue #105: the Docker install channel (docs/plans/01-server-distribution.md,
-# Docker + Synology). Ships issue #102's compiled `legato-server` binary on
+# Issue #105: the Docker install channel, Synology included. Ships issue #102's compiled `legato-server` binary on
 # debian:bookworm-slim with Debian's own ffmpeg and fpcalc. There is no Bun,
 # Node or source tree in the runtime image.
 #

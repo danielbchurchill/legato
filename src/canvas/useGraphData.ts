@@ -42,7 +42,7 @@ export type GraphEdge = {
   note: string | null
 }
 
-// One combined graph now (2026-08-29 — see Legato.md), so this has nothing
+// One combined graph now (since the 2026-08-29 map rework), so this has nothing
 // left to key a refetch on besides the coalesced WS events below.
 export function useGraphData() {
   const [nodes, setNodes] = useState<GraphNode[]>([])

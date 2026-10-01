@@ -6,8 +6,7 @@ import { longestCommonPathPrefix, normalizeSeparators, parseM3U } from "./m3u-pa
 
 // #124: import a playlist exported on another machine. The paths inside
 // almost always point somewhere this server can't see (`D:\Music\…`,
-// `/Volumes/Music/…`) — see docs/plans/04-library-and-scan.md's "M3U /
-// M3U8 import" section, which this module implements in full:
+// `/Volumes/Music/…`), so an import runs like this:
 //
 //   1. Try each entry's path as-is (normalized to forward slashes) against
 //      files.file_path.

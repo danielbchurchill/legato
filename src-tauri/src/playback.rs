@@ -154,7 +154,7 @@ pub struct QueueTrack {
   pub replaygain_track_gain: Option<f32>,
 }
 
-/// D12 (docs/plans/05-listening-and-map.md): off/all/one, a persisted
+/// Issue #125: off/all/one, a persisted
 /// player setting rather than per-queue state (unlike shuffle, which lives
 /// entirely in the frontend's playSequence — see usePlayback.ts). Lives
 /// outside `Session` in `PlaybackState`, same as volume/device_name, so it
@@ -495,7 +495,7 @@ pub fn queue_enqueue(app: AppHandle, state: State<PlaybackState>, track: QueueTr
   Ok(())
 }
 
-/// D12's persisted player setting (see RepeatMode's doc comment) — applies
+/// #125's persisted player setting (see RepeatMode's doc comment) — applies
 /// immediately to the monitor thread's own gapless reconciliation
 /// (reconcile_repeat) and to the next queue_skip. Setting this alone
 /// doesn't retroactively change what's already been enqueued into a live

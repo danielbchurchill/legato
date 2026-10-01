@@ -98,7 +98,7 @@ if (!ownerExists(db)) {
   // client and somewhere to keep its credential, which don't exist yet.
 }
 
-// Issue #123 (D17): a scan_jobs row stuck at status='running' means the
+// Issue #123: a scan_jobs row stuck at status='running' means the
 // server died mid-scan — nothing is actually running it. Reconciled to
 // 'paused' before anything else starts, so "pause survives a restart"
 // holds even for a restart nobody asked for, and a client that comes back

@@ -54,7 +54,7 @@ function SortHeader({
   )
 }
 
-/** Virtualized track table (issue #126, D11): a flat list, one row per
+/** Virtualized track table (issue #126): a flat list, one row per
  * recording, unlike AlbumsGrid's row-of-cells — @tanstack/react-virtual's
  * plain linear-list mode applies directly, no column-count measuring
  * needed. Same windowed useLibraryPage underneath, same "smooth at 30k"

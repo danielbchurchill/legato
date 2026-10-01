@@ -58,8 +58,7 @@ export const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 // number comes from, per CLAUDE.md's convention of documenting every env
 // var in this one file.
 //
-// Exists for docs/plans/01-server-distribution.md's Low-power hosts case: a
-// Synology "+" model's J4125-class CPU has 4 cores and 2-4GB of RAM, and a
+// Exists for low-power hosts (#111): a Synology "+" model's J4125-class CPU has 4 cores and 2-4GB of RAM, and a
 // fresh scan's fingerprinting/cover/waveform work must never leave nothing
 // for the track someone is actually listening to. Defaulting to
 // max(1, cores - 1) leaves one core free for the server and OS themselves

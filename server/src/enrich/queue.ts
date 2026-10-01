@@ -2,8 +2,9 @@ import type { Database } from "../sqlite.js";
 
 // Auto-queues on scan, gated by one global switch — no per-node consent
 // prompts. Missing the setting entirely means enabled: a new library
-// should start enriching itself the first time it's scanned, per
-// Legato.md's consent model, not wait for an explicit opt-in.
+// should start enriching itself the first time it's scanned, not wait for
+// an explicit opt-in: turning on enrichment is the one consent, given once
+// for the whole library.
 export function isEnrichmentEnabled(db: Database): boolean {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'enrichmentEnabled'").get() as
     | { value: string }

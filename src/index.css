@@ -8,7 +8,7 @@
 /* Legato is a desktop app in a frameless window. It never scrolls as a document
  * and never renders below its minimum window size — so the base layer is
  * deliberately thin. Everything else is tokens + utilities. Two themes now
- * (#136, D10): dark is the default here, tokens.css's `:root[data-theme="light"]`
+ * (#136): dark is the default here, tokens.css's `:root[data-theme="light"]`
  * block overrides the same custom properties for paper — nothing in this file
  * branches on which one is active. */
 

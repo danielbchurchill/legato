@@ -34,7 +34,7 @@ function seedFile(title: string, opts: { bitrate?: number; missing?: boolean } =
 }
 
 describe("resolveQueueTracks", () => {
-  it("preserves the caller's order, including a shuffled (non-sequential) one — D12's shuffled queues hand this their permutation directly", () => {
+  it("preserves the caller's order, including a shuffled (non-sequential) one — #125's shuffled queues hand this their permutation directly", () => {
     const a = seedFile("A");
     const b = seedFile("B");
     const c = seedFile("C");

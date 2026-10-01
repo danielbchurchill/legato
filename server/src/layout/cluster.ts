@@ -1,10 +1,8 @@
-// Deterministic cell assignment + local force relaxation — the fix
-// Legato.md's Canvas layout section already prescribed once the old
-// year-only seeding overplotted at scale: same-artist albums landed at
+// Deterministic cell assignment + local force relaxation — the fix for
+// the old year-only seeding, which overplotted at scale: same-artist albums landed at
 // near-identical centroids with overlapping covers, and recordings packed
 // into a rigid grid rendered every release's edges as one dense parallel
-// ribbon. Deliberately NOT a global force simulation (Legato.md: "No
-// global force simulation") — relaxation only ever runs *within* one cell,
+// ribbon. Deliberately NOT a global force simulation — relaxation only ever runs *within* one cell,
 // on however many nodes share that cell (bounded, at most a few hundred on
 // a real library), never across the whole graph.
 

@@ -48,10 +48,10 @@ pub fn run() {
       }
 
       // Embed the server by default — it must start invisibly with the app,
-      // not require a manually-launched second process. See the MVP
-      // roadmap's M0 milestone and Feishin-Competitive-Analysis.md, which
-      // found the lack of this exact behavior to be the load-bearing UX
-      // cost of a client-server split.
+      // not require a manually-launched second process. A look at Feishin,
+      // a client that needs a separately run server, found the lack of this
+      // exact behavior to be the load-bearing UX cost of a client-server
+      // split.
       //
       // Installed whether or not the first start succeeds: a resume from the
       // tray can start the server later, and it must die with the app too.

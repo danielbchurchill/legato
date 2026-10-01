@@ -13,8 +13,8 @@ export type MetadataEditingState = {
   discardWrite: () => Promise<void>
 }
 
-/* The edit -> mandatory dry-run diff -> approve/discard flow (Legato.md's
- * write-back spec), lifted out of the metadata page so both the paginated
+/* The edit -> mandatory dry-run diff -> approve/discard flow for tag
+ * write-back (the one operation that can destroy user data), lifted out of the metadata page so both the paginated
  * inspector and the persistent panel's track-metadata disclosure drive one
  * state machine instead of two copies that could drift apart. Editable
  * fields are exactly what the tag write-back API supports
@@ -45,7 +45,7 @@ export function useMetadataEditing(node: NodeDetail, reload: () => void): Metada
     setEditing(true)
   }
 
-  // Mandatory dry-run diff, per Legato.md's write-back spec — this only
+  // Mandatory dry-run diff before any tag write — this only
   // ever computes and stores a diff for review, never writes to disk.
   const submitDraft = async () => {
     const file = node.files[0] as FileRow | undefined

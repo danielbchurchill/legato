@@ -2,7 +2,7 @@ import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { resolveCoverForNode } from "../cover/extract.js";
 
-// The library view's two layouts (issue #126, D11 — see DESIGN.md "Library
+// The library view's two layouts (issue #126 — see DESIGN.md "Library
 // view"): a paginated, sortable, searchable read model over the same
 // albums/tracks the graph already draws. GET /nodes exists for the canvas
 // and returns the *whole* graph in one shot (fine for a force layout that

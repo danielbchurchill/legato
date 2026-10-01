@@ -8,8 +8,8 @@ import { rescanNode } from "../scan/scanner.js";
 import { nodeSummary } from "../summary.js";
 import { broadcast } from "../ws.js";
 
-// The one combined graph is always 'tracks' now (2026-08-29 — see
-// Legato.md) — 'granularity' persists only because `positions` still keys
+// The one combined graph is always 'tracks' now (since the 2026-08-29 map
+// rework) — 'granularity' persists only because `positions` still keys
 // on it (migration 0015) and a PATCH /nodes/:id/position body still names
 // it, not because more than one value is ever actually queried.
 const GRANULARITY = "tracks";

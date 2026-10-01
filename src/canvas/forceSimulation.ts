@@ -10,8 +10,8 @@ import {
   type SimulationNodeDatum,
 } from 'd3-force'
 
-/* Obsidian-style live physics for the combined graph (2026-08-29 — see
- * Legato.md). A plain module rather than a React hook: its lifetime has to
+/* Obsidian-style live physics for the combined graph (the 2026-08-29 map
+ * rework). A plain module rather than a React hook: its lifetime has to
  * exactly match the Sigma renderer/graphology Graph instance Canvas.tsx
  * already owns for the lifetime of one mount, not a hook's own render
  * cycle, so it's created and torn down inside that same effect.
