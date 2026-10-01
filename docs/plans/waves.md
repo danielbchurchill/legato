@@ -39,6 +39,10 @@ The two parallel workers in wave 2 both picked `0026`. Migration numbers are now
 | 0028 | #173 (merged) |
 | 0029 | #112 (merged) |
 | 0030 | #189, if its fix needs an index or column |
+| 0031 | free (#120 found it didn't need one) |
+| 0032 | #114 |
+
+**The relay has its own sequence** (`relay/src/migrations/`): 0001 and 0002 are merged, 0003 is #215, and 0004 is #114. Workers also need to be told this one: the two sequences aren't related.
 
 Give the next free number to any other issue that turns out to need storage, and note it here.
 
@@ -67,7 +71,15 @@ That's six workers in step 1 and three in step 2. #110 and #120 moved to wave 5 
 
 These open up as their dependencies merge.
 
-- **Wave 5:**
+- **Wave 5, step 1 (running since 2026-10-01, run `run_3bc80cecaa4e`):** #184 then #186 (one worker), #189, #120, #113, #121, #188 and #194. Also running alongside, outside the wave: #215 (desktop sign-in handoff, run `run_ab6e76138d6a`).
+- **Wave 5, step 2 (after step 1 merges):** #114, once #215 has merged too, because both rewrite relay auth. Then #130, which adds a tray in `src-tauri/` and waits for #215's Tauri command and #184's `playback.rs` changes. Then #110 and #128.
+- **Wave 5, needs Daniel's hardware or accounts:**
+  - #106 needs a real Synology NAS and screenshots.
+  - #107 needs an Unraid box and a Community Applications submission.
+  - #108 needs testing on five distros.
+  - #109 needs a new `homebrew-legato` tap repo, and creating a public repo is Daniel's call.
+  Workers can draft all four, but none can finish.
+- **Wave 5 (the original list):**
   - #114 (identity provider; needs #112 and #101 ✓)
   - #113, #121 (both need #112)
   - #128 (installable web app; needs #116)
