@@ -33,10 +33,9 @@ export const MEDIA_TICKET_PARAM = "t";
 // Paths the gate owns. Everything else is the web client's static files
 // and its SPA fallback (#116), which have to load before anyone can sign in
 // at all, so a plain GET/HEAD outside these is let through. Any other
-// method, anywhere, still needs a credential. /tracks and /stream/ are the
-// debug spike's routes in index.ts, which live outside /api/. /covers/
-// matches the list routes/web-client.ts keeps for the same reason.
-const API_PREFIXES = ["/api/", "/covers/", "/tracks", "/stream/"];
+// method, anywhere, still needs a credential. /covers/ matches the list
+// routes/web-client.ts keeps for the same reason.
+const API_PREFIXES = ["/api/", "/covers/"];
 
 // Matched against the route's own pattern (routeOptions.url), never the raw
 // URL, so /api/v1/health/../stats can't sneak through on a prefix check.

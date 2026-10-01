@@ -19,9 +19,7 @@ import {
 // server-reported path and tried to open it directly on the *client's own*
 // filesystem, which only works by accident when client and server happen
 // to share one — false the instant they're on different machines, exactly
-// the case this split-service architecture exists to support. The old
-// /stream/:filename spike (server/src/index.ts) trusted a client-supplied
-// filename directly; this route is what replaces it for real playback.
+// the case this split-service architecture exists to support.
 //
 // Issue #120: `?quality=` picks a rung of the ladder (stream/quality.ts).
 // Absent means `original`, so a client that predates the ladder keeps

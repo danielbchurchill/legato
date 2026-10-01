@@ -25,7 +25,6 @@
     "@tanstack/react-virtual": "^3.14.13",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.2",
-    "@wasm-audio-decoders/flac": "^0.2.10",
     "d3-force": "^3.0.0",
     "graphology": "^0.26.0",
     "graphology-layout": "^0.6.1",

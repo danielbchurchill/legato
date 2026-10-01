@@ -138,10 +138,8 @@ impl Seek for NetworkAheadReader {
   }
 }
 
-// Desktop playback engine — replaces the fixed-medley
-// play_native_gapless_spike command (kept alive, debug-gated, as a smoke
-// test) with real queue control. Per the MVP roadmap's M6 architecture
-// note: this module never talks to the server's DB directly. React
+// Desktop playback engine: native decode and gapless queue control through
+// rodio/cpal. This module never talks to the server's DB directly. React
 // resolves a recording node id to a file path + ReplayGain via
 // POST /api/v1/queue/resolve (the same call the remote/WASM path needs)
 // and hands Rust only the resolved plan — one implementation of "turn a
@@ -828,8 +826,7 @@ mod tests {
   // Exercises the real audio engine against real hardware and a real file
   // — not run by default `cargo test` (needs a working audio device and
   // LEGATO_TEST_FILE pointed at a real audio file), but this is how
-  // amplify_decibel/try_seek/get_pos (all new in this module — none used
-  // by the original play_native_gapless_spike) were actually verified,
+  // amplify_decibel/try_seek/get_pos were actually verified,
   // rather than just compiled and trusted.
   #[test]
   #[ignore]

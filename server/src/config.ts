@@ -50,7 +50,7 @@ export const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 
 // Issue #111: a shared limit on how many ffmpeg/fpcalc child processes this
 // server runs at once, across every call site that spawns one — playback
-// transcodes (stream/cache.ts, and index.ts's spike route), cover resizing
+// transcodes (stream/cache.ts), cover resizing
 // (cover/store.ts), waveform decode (waveform/decode.ts) and fingerprinting
 // (match/fingerprint.ts), including the enrichment worker's own use of the
 // latter two. media/queue.ts is what actually enforces it (and gives

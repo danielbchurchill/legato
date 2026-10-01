@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-import { readdir } from "node:fs/promises";
 import path from "node:path";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
@@ -8,7 +6,6 @@ import Fastify from "fastify";
 import { openDb } from "./db.js";
 import { PORT, DATA_DIR } from "./config.js";
 import { FFMPEG_PATH, FPCALC_PATH } from "./mediaBinaries.js";
-import { acquireMediaSlot } from "./media/queue.js";
 import { installAuthGate, redactCredentials } from "./auth/gate.js";
 import { registerRoutes } from "./routes/register.js";
 import { setupCodes } from "./auth/setupCode.js";
@@ -211,91 +208,6 @@ setInterval(() => {
 // Issue #110: the daily "is there a newer release" check. Never awaited, so
 // GitHub being slow or unreachable can't hold up startup.
 startUpdateChecks(db, (message) => app.log.info(message));
-
-// --- THE SPIKE (debug-only smoke test routes, kept alive for src/PlaybackSpike.tsx) ---
-//
-// Real recursive folder scan + tag extraction lands in M1; these two routes
-// still do the original flat-readdir/ffmpeg-passthrough spike behavior, but
-// now read their root from the first enabled library_roots row instead of a
-// hardcoded default — no shipped code should point at one specific machine's
-// folder layout. If no root is configured yet, they fail closed.
-function activeLibraryRoot(): string | null {
-  const row = db
-    .prepare("SELECT path FROM library_roots WHERE enabled = 1 ORDER BY id LIMIT 1")
-    .get() as { path: string } | undefined;
-  return row?.path ?? null;
-}
-
-app.get("/tracks", async (_request, reply) => {
-  const root = activeLibraryRoot();
-  if (!root) {
-    reply.code(503);
-    return { error: "no library root configured" };
-  }
-  const entries = await readdir(root);
-  return entries.filter((f) => f.toLowerCase().endsWith(".flac")).sort();
-});
-
-app.get<{ Params: { filename: string } }>("/stream/:filename", async (request, reply) => {
-  const root = activeLibraryRoot();
-  if (!root) {
-    reply.code(503);
-    return { error: "no library root configured" };
-  }
-
-  const filename = decodeURIComponent(request.params.filename);
-  const resolved = path.resolve(root, filename);
-
-  if (!resolved.startsWith(root + path.sep)) {
-    reply.code(400);
-    return { error: "invalid filename" };
-  }
-
-  // Issue #111: this bare spawn is #98's to rewrite properly (it's the
-  // route that trusts a client-supplied filename directly — see
-  // routes/files.ts's own comment on why it exists only for the debug
-  // spike now), so the edit here is deliberately narrow: just give this
-  // spawn a playback-priority slot in the shared media queue, same as the
-  // real GET /files/:id/stream route (stream/cache.ts's ensureVariant), so
-  // a scan's background ffmpeg work can't starve this one either.
-  const release = await acquireMediaSlot("playback");
-
-  // Decode the source to PCM and re-encode to FLAC — one transport format
-  // for every client regardless of source codec, per Legato's design.
-  const ffmpeg = spawn(FFMPEG_PATH, [
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-i",
-    resolved,
-    "-map",
-    "0:a:0",
-    "-f",
-    "flac",
-    "-compression_level",
-    "5",
-    "pipe:1",
-  ]);
-
-  ffmpeg.stderr.on("data", (chunk: Buffer) => {
-    request.log.warn(chunk.toString());
-  });
-
-  // Released once this spawn is actually done, not once this handler
-  // returns — the handler hands the stream to reply.send() and returns
-  // long before ffmpeg exits. release() is idempotent, so both 'close'
-  // and 'error' firing is harmless.
-  ffmpeg.on("close", release);
-  ffmpeg.on("error", release);
-
-  request.raw.on("close", () => {
-    if (!ffmpeg.killed) ffmpeg.kill("SIGTERM");
-  });
-
-  reply.header("Content-Type", "audio/flac");
-  reply.header("Cache-Control", "no-store");
-  return reply.send(ffmpeg.stdout);
-});
 
 app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
   if (err) {

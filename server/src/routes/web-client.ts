@@ -135,9 +135,8 @@ export function webClientRoutes(source: WebClientSource | null = resolveWebClien
     );
 
     // A wildcard, not a not-found handler: find-my-way always prefers a
-    // registered route over `/*`, so every real API route, the websocket
-    // and the old /tracks spike route win without this file knowing they
-    // exist. callNotFound() hands the rest to Fastify's default JSON 404.
+    // registered route over `/*`, so every real API route and the websocket
+    // win without this file knowing they exist. callNotFound() hands the rest to Fastify's default JSON 404.
     app.get("/*", async (request, reply) => {
       const pathname = requestPath(request.url);
       if (pathname === null || isApiPath(pathname) || !source) return reply.callNotFound();

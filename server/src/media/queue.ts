@@ -43,8 +43,8 @@ export function createMediaQueue(limit: number) {
   // Resolves once a concurrency slot is free, with a release() the caller
   // must call exactly once when its own child process is actually done —
   // not necessarily when the async function that requested the slot
-  // returns (see index.ts's spike route, which spawns and returns a
-  // stream immediately, well before that stream finishes).
+  // returns (a route that spawns and hands back a stream returns well
+  // before that stream finishes).
   function acquireMediaSlot(priority: MediaPriority): Promise<() => void> {
     return new Promise((resolve) => {
       let released = false;
@@ -71,9 +71,8 @@ export function createMediaQueue(limit: number) {
   }
 
   // The common case: a plain async function whose whole lifetime — spawn
-  // through exit — is the thing being rate-limited. Everything under
-  // media/ except index.ts's spike route goes through this rather than
-  // acquireMediaSlot directly.
+  // through exit — is the thing being rate-limited. Every shared-queue
+  // caller goes through this rather than acquireMediaSlot directly.
   async function runMediaTask<T>(priority: MediaPriority, task: () => Promise<T>): Promise<T> {
     const release = await acquireMediaSlot(priority);
     try {
@@ -88,5 +87,4 @@ export function createMediaQueue(limit: number) {
 
 const sharedMediaQueue = createMediaQueue(MEDIA_CONCURRENCY_LIMIT);
 
-export const acquireMediaSlot = sharedMediaQueue.acquireMediaSlot;
 export const runMediaTask = sharedMediaQueue.runMediaTask;
