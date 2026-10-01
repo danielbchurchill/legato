@@ -476,7 +476,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     // So "access" is only for (account, server) pairs legato.fm has on
     // record, and nothing records them yet: a server can't prove it owns
     // an id to the relay until it has a tunnel credential. Until that
-    // follow-up lands (it blocks #117), the only thing a token can do on a
+    // follow-up lands (#231, which blocks #117), the only thing a token can do on a
     // server is link the owner's account.
     app.post<{ Body: { serverId?: unknown } | null }>("/auth/server-token", async (request, reply) => {
       const token = sessionToken(request);

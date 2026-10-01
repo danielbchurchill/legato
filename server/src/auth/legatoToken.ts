@@ -23,8 +23,8 @@ export const MAX_LIFETIME_SECONDS = 15 * 60;
 
 // "access" opens this server's library. "link" only proves who someone is,
 // for POST /auth/legato/link. legato.fm signs "access" only for a server
-// it knows that account has linked; until it can record that (a follow-up
-// that blocks #117), it signs "link" alone. See the #114 PR.
+// it knows that account has linked; until it can record that (#231,
+// which blocks #117), it signs "link" alone.
 export type TokenScope = "access" | "link";
 
 export type LegatoClaims = {
