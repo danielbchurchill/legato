@@ -8,8 +8,10 @@ use rodio::{Decoder, OutputStreamBuilder, Sink};
 use tauri::Manager;
 
 mod playback;
+mod relay_sign_in;
 mod server_process;
 use playback::PlaybackState;
+use relay_sign_in::SignInState;
 use server_process::ServerProcess;
 
 // Phase 4 of THE SPIKE (see projects/Legato.md): does native decode +
@@ -76,8 +78,12 @@ fn play_native_gapless_spike() -> Result<(), String> {
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
+    // Rust-only: relay_sign_in.rs opens the system browser through it.
+    // capabilities/default.json grants it nothing, so the webview can't.
+    .plugin(tauri_plugin_opener::init())
     .manage(ServerProcess(Mutex::new(None)))
     .manage(PlaybackState::new())
+    .manage(SignInState::default())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -115,6 +121,8 @@ pub fn run() {
       playback::queue_set_volume,
       playback::list_audio_devices,
       playback::queue_set_device,
+      relay_sign_in::relay_sign_in,
+      relay_sign_in::relay_sign_in_cancel,
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")
