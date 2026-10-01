@@ -144,6 +144,29 @@ async function exchangeGithubCode(code: string): Promise<OAuthProfile> {
 
 const STATE_COOKIE = "relay_oauth_state";
 
+// Every cookie this relay sets or clears shares these attributes. Secure
+// is on whenever the relay is served over https, as it is in production
+// (https://auth.legato.fm). Without it a browser still attaches the
+// session cookie to a plain-http request; Fly's http->https redirect only
+// answers after that request is already on the wire, so anyone on the
+// same network (cafe wifi, hotel LAN) could copy a signed-in session.
+// Loopback development (http://127.0.0.1:8901) stays non-Secure, because
+// a browser refuses to store a Secure cookie over http.
+//
+// Clears pass the same attributes: a browser only replaces a cookie when
+// the clearing Set-Cookie matches it, so a non-Secure clear could leave a
+// Secure session cookie in place after logout.
+export function cookieAttributes(callbackBaseUrl: string | undefined) {
+  return {
+    path: "/",
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: Boolean(callbackBaseUrl?.startsWith("https://")),
+  };
+}
+
+const COOKIE = cookieAttributes(RELAY_AUTH_CALLBACK_BASE_URL);
+
 function notConfiguredMessage(provider: Provider): string {
   const vars =
     provider === "google"
@@ -178,7 +201,7 @@ export function authRoutes(db: Database) {
         return { error: notConfiguredMessage("google") };
       }
       const state = generateState();
-      reply.setCookie(STATE_COOKIE, state, { path: "/", httpOnly: true, sameSite: "lax", maxAge: 600 });
+      reply.setCookie(STATE_COOKIE, state, { ...COOKIE, maxAge: 600 });
       const url = `${GOOGLE_AUTHORIZE_URL}?${new URLSearchParams({
         client_id: RELAY_GOOGLE_CLIENT_ID!,
         redirect_uri: callbackUrl("google"),
@@ -195,7 +218,7 @@ export function authRoutes(db: Database) {
         return { error: notConfiguredMessage("google") };
       }
       const cookieState = request.cookies[STATE_COOKIE];
-      reply.clearCookie(STATE_COOKIE, { path: "/" });
+      reply.clearCookie(STATE_COOKIE, COOKIE);
       if (!request.query.code || !isValidState(cookieState, request.query.state)) {
         reply.code(400);
         return { error: "invalid or missing OAuth state" };
@@ -204,7 +227,7 @@ export function authRoutes(db: Database) {
       const profile = await exchangeGoogleCode(request.query.code);
       const user = upsertUser(db, "google", profile);
       const { token, expiresAt } = createSession(db, user.id);
-      reply.setCookie(SESSION_COOKIE, token, { path: "/", httpOnly: true, sameSite: "lax", expires: expiresAt });
+      reply.setCookie(SESSION_COOKIE, token, { ...COOKIE, expires: expiresAt });
       reply.type("text/html");
       return successPage(user.display_name);
     });
@@ -215,7 +238,7 @@ export function authRoutes(db: Database) {
         return { error: notConfiguredMessage("github") };
       }
       const state = generateState();
-      reply.setCookie(STATE_COOKIE, state, { path: "/", httpOnly: true, sameSite: "lax", maxAge: 600 });
+      reply.setCookie(STATE_COOKIE, state, { ...COOKIE, maxAge: 600 });
       const url = `${GITHUB_AUTHORIZE_URL}?${new URLSearchParams({
         client_id: RELAY_GITHUB_CLIENT_ID!,
         redirect_uri: callbackUrl("github"),
@@ -231,7 +254,7 @@ export function authRoutes(db: Database) {
         return { error: notConfiguredMessage("github") };
       }
       const cookieState = request.cookies[STATE_COOKIE];
-      reply.clearCookie(STATE_COOKIE, { path: "/" });
+      reply.clearCookie(STATE_COOKIE, COOKIE);
       if (!request.query.code || !isValidState(cookieState, request.query.state)) {
         reply.code(400);
         return { error: "invalid or missing OAuth state" };
@@ -240,7 +263,7 @@ export function authRoutes(db: Database) {
       const profile = await exchangeGithubCode(request.query.code);
       const user = upsertUser(db, "github", profile);
       const { token, expiresAt } = createSession(db, user.id);
-      reply.setCookie(SESSION_COOKIE, token, { path: "/", httpOnly: true, sameSite: "lax", expires: expiresAt });
+      reply.setCookie(SESSION_COOKIE, token, { ...COOKIE, expires: expiresAt });
       reply.type("text/html");
       return successPage(user.display_name);
     });
@@ -248,7 +271,7 @@ export function authRoutes(db: Database) {
     app.post("/auth/logout", async (request, reply) => {
       const token = request.cookies[SESSION_COOKIE];
       if (token) deleteSession(db, token);
-      reply.clearCookie(SESSION_COOKIE, { path: "/" });
+      reply.clearCookie(SESSION_COOKIE, COOKIE);
       return { ok: true };
     });
 
