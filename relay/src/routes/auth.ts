@@ -1,5 +1,5 @@
 import type { Database } from "../sqlite.js";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   RELAY_AUTH_CALLBACK_BASE_URL,
   RELAY_GITHUB_CLIENT_ID,
@@ -17,7 +17,18 @@ import {
   upsertUser,
   type OAuthProfile,
   type Provider,
+  type RelayUserRow,
 } from "../accounts.js";
+import {
+  createNativeRequest,
+  mintAuthCode,
+  parseNativeStart,
+  redeemAuthCode,
+  REDEEM_FAILURE_MESSAGES,
+  takeNativeRequest,
+  type NativeQuery,
+} from "../native-sign-in.js";
+import { clientAddress, TokenLimiter } from "../rate-limit.js";
 
 // Relay-side OAuth account provisioning. This mirrors server/'s pattern
 // (server/src/routes/auth.ts) deliberately: hand-rolled Authorization
@@ -29,15 +40,42 @@ import {
 // accounts answer "which relay account owns which home server's tunnel,"
 // a real multi-tenant mapping — see accounts.ts and migrations/
 // 0001_relay_users.sql.
+//
+// Two ways through it (issue #215). A browser sign-in ends with the
+// relay_session cookie, exactly as it always has. A native sign-in (the
+// desktop app) starts with a PKCE challenge and a loopback redirect_uri,
+// and ends with a one-time code sent to that loopback, which the app
+// redeems at POST /auth/token for a bearer token. The provider's
+// registered redirect URI is the relay's own callback either way; the
+// loopback is the relay's second hop. See native-sign-in.ts.
 
 const USER_AGENT = "Legato-Relay/0.1 (+https://github.com/danielbchurchill/legato)";
 
-export function isGoogleConfigured(): boolean {
-  return Boolean(RELAY_GOOGLE_CLIENT_ID && RELAY_GOOGLE_CLIENT_SECRET && RELAY_AUTH_CALLBACK_BASE_URL);
+// Everything this file reads from the environment, gathered so tests and
+// the end-to-end harness can run the real routes against a stubbed
+// provider without touching process.env or global fetch.
+export type AuthConfig = {
+  googleClientId?: string;
+  googleClientSecret?: string;
+  githubClientId?: string;
+  githubClientSecret?: string;
+  callbackBaseUrl?: string;
+};
+
+const ENV_CONFIG: AuthConfig = {
+  googleClientId: RELAY_GOOGLE_CLIENT_ID,
+  googleClientSecret: RELAY_GOOGLE_CLIENT_SECRET,
+  githubClientId: RELAY_GITHUB_CLIENT_ID,
+  githubClientSecret: RELAY_GITHUB_CLIENT_SECRET,
+  callbackBaseUrl: RELAY_AUTH_CALLBACK_BASE_URL,
+};
+
+export function isGoogleConfigured(config: AuthConfig = ENV_CONFIG): boolean {
+  return Boolean(config.googleClientId && config.googleClientSecret && config.callbackBaseUrl);
 }
 
-export function isGithubConfigured(): boolean {
-  return Boolean(RELAY_GITHUB_CLIENT_ID && RELAY_GITHUB_CLIENT_SECRET && RELAY_AUTH_CALLBACK_BASE_URL);
+export function isGithubConfigured(config: AuthConfig = ENV_CONFIG): boolean {
+  return Boolean(config.githubClientId && config.githubClientSecret && config.callbackBaseUrl);
 }
 
 const GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -49,19 +87,19 @@ const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
 const GITHUB_USER_URL = "https://api.github.com/user";
 const GITHUB_EMAILS_URL = "https://api.github.com/user/emails";
 
-function callbackUrl(provider: Provider): string {
-  return `${RELAY_AUTH_CALLBACK_BASE_URL}/auth/${provider}/callback`;
+function callbackUrl(config: AuthConfig, provider: Provider): string {
+  return `${config.callbackBaseUrl}/auth/${provider}/callback`;
 }
 
-async function exchangeGoogleCode(code: string): Promise<OAuthProfile> {
+async function exchangeGoogleCode(config: AuthConfig, code: string): Promise<OAuthProfile> {
   const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       code,
-      client_id: RELAY_GOOGLE_CLIENT_ID!,
-      client_secret: RELAY_GOOGLE_CLIENT_SECRET!,
-      redirect_uri: callbackUrl("google"),
+      client_id: config.googleClientId!,
+      client_secret: config.googleClientSecret!,
+      redirect_uri: callbackUrl(config, "google"),
       grant_type: "authorization_code",
     }),
   });
@@ -86,15 +124,15 @@ async function exchangeGoogleCode(code: string): Promise<OAuthProfile> {
   };
 }
 
-async function exchangeGithubCode(code: string): Promise<OAuthProfile> {
+async function exchangeGithubCode(config: AuthConfig, code: string): Promise<OAuthProfile> {
   const tokenRes = await fetch(GITHUB_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
     body: new URLSearchParams({
       code,
-      client_id: RELAY_GITHUB_CLIENT_ID!,
-      client_secret: RELAY_GITHUB_CLIENT_SECRET!,
-      redirect_uri: callbackUrl("github"),
+      client_id: config.githubClientId!,
+      client_secret: config.githubClientSecret!,
+      redirect_uri: callbackUrl(config, "github"),
     }),
   });
   if (!tokenRes.ok) {
@@ -140,6 +178,38 @@ async function exchangeGithubCode(code: string): Promise<OAuthProfile> {
   };
 }
 
+type ProviderFlow = {
+  isConfigured(config: AuthConfig): boolean;
+  authorizeUrl(config: AuthConfig, state: string): string;
+  exchange(config: AuthConfig, code: string): Promise<OAuthProfile>;
+};
+
+const PROVIDERS: Record<Provider, ProviderFlow> = {
+  google: {
+    isConfigured: isGoogleConfigured,
+    authorizeUrl: (config, state) =>
+      `${GOOGLE_AUTHORIZE_URL}?${new URLSearchParams({
+        client_id: config.googleClientId!,
+        redirect_uri: callbackUrl(config, "google"),
+        response_type: "code",
+        scope: "openid email profile",
+        state,
+      })}`,
+    exchange: exchangeGoogleCode,
+  },
+  github: {
+    isConfigured: isGithubConfigured,
+    authorizeUrl: (config, state) =>
+      `${GITHUB_AUTHORIZE_URL}?${new URLSearchParams({
+        client_id: config.githubClientId!,
+        redirect_uri: callbackUrl(config, "github"),
+        scope: "read:user user:email",
+        state,
+      })}`,
+    exchange: exchangeGithubCode,
+  },
+};
+
 // --- routes ---
 
 const STATE_COOKIE = "relay_oauth_state";
@@ -164,8 +234,6 @@ export function cookieAttributes(callbackBaseUrl: string | undefined) {
     secure: Boolean(callbackBaseUrl?.startsWith("https://")),
   };
 }
-
-const COOKIE = cookieAttributes(RELAY_AUTH_CALLBACK_BASE_URL);
 
 function notConfiguredMessage(provider: Provider): string {
   const vars =
@@ -193,102 +261,185 @@ function successPage(displayName: string | null): string {
 </html>`;
 }
 
-export function authRoutes(db: Database) {
+function publicUser(user: RelayUserRow) {
+  return {
+    id: user.id,
+    provider: user.provider,
+    email: user.email,
+    displayName: user.display_name,
+    avatarUrl: user.avatar_url,
+  };
+}
+
+// A bearer token wins over the cookie: the desktop app only ever sends
+// the header, and a browser only ever has the cookie, so in practice a
+// request carries one or the other.
+export function sessionToken(request: FastifyRequest): string | undefined {
+  const header = request.headers.authorization;
+  if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim() || undefined;
+  return request.cookies[SESSION_COOKIE];
+}
+
+// The endpoints a desktop webview calls directly. Its origin is
+// tauri://localhost (Linux, macOS), http(s)://tauri.localhost (Windows),
+// or a loopback Vite in development, all cross-origin to auth.legato.fm.
+// No Access-Control-Allow-Credentials: these callers send a bearer token
+// and nothing else, so a cookie never rides along cross-site.
+const CORS_ROUTES = new Set(["/auth/token", "/auth/me", "/auth/logout"]);
+const LOOPBACK_DEV_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/;
+
+export function isAllowedAppOrigin(origin: string | undefined): boolean {
+  if (!origin) return false;
+  if (origin === "tauri://localhost" || origin === "http://tauri.localhost" || origin === "https://tauri.localhost") {
+    return true;
+  }
+  return LOOPBACK_DEV_ORIGIN.test(origin);
+}
+
+function applyCors(request: FastifyRequest, reply: FastifyReply): void {
+  reply.header("Vary", "Origin");
+  const origin = request.headers.origin;
+  if (!isAllowedAppOrigin(origin)) return;
+  reply.header("Access-Control-Allow-Origin", origin);
+  reply.header("Access-Control-Allow-Methods", "GET, POST");
+  reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  reply.header("Access-Control-Max-Age", "600");
+}
+
+export interface AuthRoutesOptions {
+  config?: AuthConfig;
+  // Swaps a provider's token exchange for a stub. Tests and the local
+  // end-to-end harness (testing/native-sign-in-e2e.ts) use it; production
+  // never passes it.
+  exchange?: Partial<Record<Provider, (code: string) => Promise<OAuthProfile>>>;
+  tokenLimiter?: TokenLimiter;
+}
+
+export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
+  const config = options.config ?? ENV_CONFIG;
+  const cookie = cookieAttributes(config.callbackBaseUrl);
+  const limiter = options.tokenLimiter ?? new TokenLimiter();
+
   return async function routes(app: FastifyInstance) {
-    app.get("/auth/google", async (_request, reply) => {
-      if (!isGoogleConfigured()) {
-        reply.code(503);
-        return { error: notConfiguredMessage("google") };
-      }
-      const state = generateState();
-      reply.setCookie(STATE_COOKIE, state, { ...COOKIE, maxAge: 600 });
-      const url = `${GOOGLE_AUTHORIZE_URL}?${new URLSearchParams({
-        client_id: RELAY_GOOGLE_CLIENT_ID!,
-        redirect_uri: callbackUrl("google"),
-        response_type: "code",
-        scope: "openid email profile",
-        state,
-      })}`;
-      return reply.redirect(url);
+    app.addHook("onRequest", async (request, reply) => {
+      if (CORS_ROUTES.has(request.routeOptions.url ?? "")) applyCors(request, reply);
     });
+    for (const url of CORS_ROUTES) {
+      app.options(url, async (_request, reply) => reply.code(204).send());
+    }
 
-    app.get<{ Querystring: { code?: string; state?: string } }>("/auth/google/callback", async (request, reply) => {
-      if (!isGoogleConfigured()) {
-        reply.code(503);
-        return { error: notConfiguredMessage("google") };
-      }
-      const cookieState = request.cookies[STATE_COOKIE];
-      reply.clearCookie(STATE_COOKIE, COOKIE);
-      if (!request.query.code || !isValidState(cookieState, request.query.state)) {
-        reply.code(400);
-        return { error: "invalid or missing OAuth state" };
-      }
+    for (const provider of ["google", "github"] as const) {
+      const flow = PROVIDERS[provider];
+      const exchange = options.exchange?.[provider] ?? ((code: string) => flow.exchange(config, code));
 
-      const profile = await exchangeGoogleCode(request.query.code);
-      const user = upsertUser(db, "google", profile);
-      const { token, expiresAt } = createSession(db, user.id);
-      reply.setCookie(SESSION_COOKIE, token, { ...COOKIE, expires: expiresAt });
-      reply.type("text/html");
-      return successPage(user.display_name);
-    });
+      app.get<{ Querystring: NativeQuery }>(`/auth/${provider}`, async (request, reply) => {
+        if (!flow.isConfigured(config)) {
+          reply.code(503);
+          return { error: notConfiguredMessage(provider) };
+        }
+        const start = parseNativeStart(request.query);
+        if (start.kind === "invalid") {
+          reply.code(400);
+          return { error: start.message };
+        }
+        const state = generateState();
+        reply.setCookie(STATE_COOKIE, state, { ...cookie, maxAge: 600 });
+        if (start.kind === "native") createNativeRequest(db, state, provider, start.params);
+        return reply.redirect(flow.authorizeUrl(config, state));
+      });
 
-    app.get("/auth/github", async (_request, reply) => {
-      if (!isGithubConfigured()) {
-        reply.code(503);
-        return { error: notConfiguredMessage("github") };
-      }
-      const state = generateState();
-      reply.setCookie(STATE_COOKIE, state, { ...COOKIE, maxAge: 600 });
-      const url = `${GITHUB_AUTHORIZE_URL}?${new URLSearchParams({
-        client_id: RELAY_GITHUB_CLIENT_ID!,
-        redirect_uri: callbackUrl("github"),
-        scope: "read:user user:email",
-        state,
-      })}`;
-      return reply.redirect(url);
-    });
+      app.get<{ Querystring: { code?: string; state?: string; error?: string } }>(
+        `/auth/${provider}/callback`,
+        async (request, reply) => {
+          if (!flow.isConfigured(config)) {
+            reply.code(503);
+            return { error: notConfiguredMessage(provider) };
+          }
+          const cookieState = request.cookies[STATE_COOKIE];
+          reply.clearCookie(STATE_COOKIE, cookie);
+          const stateOk = isValidState(cookieState, request.query.state);
+          const native = stateOk ? takeNativeRequest(db, request.query.state!, provider) : null;
 
-    app.get<{ Querystring: { code?: string; state?: string } }>("/auth/github/callback", async (request, reply) => {
-      if (!isGithubConfigured()) {
-        reply.code(503);
-        return { error: notConfiguredMessage("github") };
-      }
-      const cookieState = request.cookies[STATE_COOKIE];
-      reply.clearCookie(STATE_COOKIE, COOKIE);
-      if (!request.query.code || !isValidState(cookieState, request.query.state)) {
-        reply.code(400);
-        return { error: "invalid or missing OAuth state" };
-      }
+          // The user said no at Google or GitHub. Tell the waiting app now,
+          // rather than leaving it to time out on a listener nobody calls.
+          if (native && request.query.error) {
+            const error = request.query.error === "access_denied" ? "access_denied" : "provider_error";
+            return reply.redirect(`${native.redirectUri}?error=${error}`);
+          }
+          if (!request.query.code || !stateOk) {
+            reply.code(400);
+            return { error: "invalid or missing OAuth state" };
+          }
 
-      const profile = await exchangeGithubCode(request.query.code);
-      const user = upsertUser(db, "github", profile);
-      const { token, expiresAt } = createSession(db, user.id);
-      reply.setCookie(SESSION_COOKIE, token, { ...COOKIE, expires: expiresAt });
-      reply.type("text/html");
-      return successPage(user.display_name);
-    });
+          if (native) {
+            let profile: OAuthProfile;
+            try {
+              profile = await exchange(request.query.code);
+            } catch (err) {
+              request.log.error(err, `${provider} exchange failed during a native sign-in`);
+              return reply.redirect(`${native.redirectUri}?error=provider_error`);
+            }
+            const user = upsertUser(db, provider, profile);
+            // No relay_session cookie here: the browser didn't ask for a
+            // session, the app did, and it gets one at /auth/token.
+            const code = mintAuthCode(db, user.id, native);
+            return reply.redirect(`${native.redirectUri}?code=${encodeURIComponent(code)}`);
+          }
+
+          const profile = await exchange(request.query.code);
+          const user = upsertUser(db, provider, profile);
+          const { token, expiresAt } = createSession(db, user.id);
+          reply.setCookie(SESSION_COOKIE, token, { ...cookie, expires: expiresAt });
+          reply.type("text/html");
+          return successPage(user.display_name);
+        },
+      );
+    }
+
+    app.post<{ Body: { code?: unknown; code_verifier?: unknown; redirect_uri?: unknown } | null }>(
+      "/auth/token",
+      async (request, reply) => {
+        const address = clientAddress(request.headers, request.ip);
+        const retryAfter = limiter.retryAfterSeconds(address);
+        if (retryAfter > 0) {
+          reply.code(429).header("Retry-After", String(retryAfter));
+          return {
+            error: "rate_limited",
+            message: `Too many failed sign-in attempts from this address. Try again in ${retryAfter} seconds.`,
+          };
+        }
+
+        const result = redeemAuthCode(db, {
+          code: request.body?.code,
+          codeVerifier: request.body?.code_verifier,
+          redirectUri: request.body?.redirect_uri,
+        });
+        if (!result.ok) {
+          limiter.recordFailure(address);
+          reply.code(400);
+          return { error: "invalid_grant", reason: result.reason, message: REDEEM_FAILURE_MESSAGES[result.reason] };
+        }
+        limiter.recordSuccess(address);
+
+        const { token, expiresAt } = createSession(db, result.relayUserId);
+        const user = db.prepare("SELECT * FROM relay_users WHERE id = ?").get(result.relayUserId) as RelayUserRow;
+        return { token, expiresAt: expiresAt.toISOString(), user: publicUser(user) };
+      },
+    );
 
     app.post("/auth/logout", async (request, reply) => {
-      const token = request.cookies[SESSION_COOKIE];
+      const token = sessionToken(request);
       if (token) deleteSession(db, token);
-      reply.clearCookie(SESSION_COOKIE, COOKIE);
+      reply.clearCookie(SESSION_COOKIE, cookie);
       return { ok: true };
     });
 
     app.get("/auth/me", async (request) => {
-      const token = request.cookies[SESSION_COOKIE];
+      const token = sessionToken(request);
       const user = token ? getUserBySessionToken(db, token) : null;
       return {
-        user: user
-          ? {
-              id: user.id,
-              provider: user.provider,
-              email: user.email,
-              displayName: user.display_name,
-              avatarUrl: user.avatar_url,
-            }
-          : null,
-        configured: { google: isGoogleConfigured(), github: isGithubConfigured() },
+        user: user ? publicUser(user) : null,
+        configured: { google: isGoogleConfigured(config), github: isGithubConfigured(config) },
       };
     });
   };

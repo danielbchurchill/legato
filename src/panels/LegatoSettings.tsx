@@ -23,6 +23,7 @@ import { ServerFolderPicker } from '../library/ServerFolderPicker'
 import { formatLongDuration } from '../ui/format'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 import { StreamQualityRow } from './StreamQualityRow'
+import { LegatoAccountRow } from './LegatoAccountRow'
 
 /* The Legato settings panel — DESIGN.md's "The gpui-kit control set",
  * restyled onto the same GroupHeader/SettingsRow geometry MusicMapSettings.tsx
@@ -660,6 +661,7 @@ export function LegatoSettings({
       </SettingsGroup>
 
       <AccountGroup />
+      <LegatoAccountRow />
     </div>
   )
 }
