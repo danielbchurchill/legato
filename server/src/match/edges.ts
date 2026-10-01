@@ -39,10 +39,16 @@ function parseTagsRaw(tagsRaw: string | null): LocalTags | null {
 // aggregates in entities/aggregate.ts. Safe without a transaction/lock:
 // better-sqlite3 is fully synchronous, so there's no interleaving between
 // the SELECT and the INSERT within one process.
+//
+// Issue #189: the WHERE clause has to stay character-for-character the
+// expression migration 0030 indexes, or SQLite falls back to scanning every
+// node — recordings included — on each lookup, and the 'collapse' and
+// 'layout' stages go quadratic again. Exported so edges-lookup.spec.ts can
+// ask the planner which it gets.
+export const NODE_LOOKUP_SQL = "SELECT id FROM nodes WHERE type = ? AND lower(trim(title)) = lower(trim(?))";
+
 function findOrCreateNode(db: Database, type: string, title: string): number {
-  const existing = db
-    .prepare("SELECT id FROM nodes WHERE type = ? AND lower(trim(title)) = lower(trim(?))")
-    .get(type, title) as { id: number } | undefined;
+  const existing = db.prepare(NODE_LOOKUP_SQL).get(type, title) as { id: number } | undefined;
   if (existing) return existing.id;
   const row = db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as {
     id: number;

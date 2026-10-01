@@ -14,6 +14,8 @@ import { createProgressGate } from "./throttle.js";
 import { parseTags } from "./tags.js";
 import { checkLibraryRoot, type CheckOptions } from "./reachability.js";
 import { walkLibraryRoot } from "./walk.js";
+import { createDecodeWindow, scanDecodeShare } from "./decode-window.js";
+import { MEDIA_CONCURRENCY_LIMIT } from "../config.js";
 
 const HASH_PREFIX_BYTES = 64 * 1024;
 
@@ -501,6 +503,11 @@ async function runFileStage(
   startCursor: number,
   handle: (row: ScanRunFileRow) => Promise<void>,
   emit: (done: number, force?: boolean) => void,
+  // Awaited before every cursor write. A stage whose handle() leaves work
+  // running after it returns ('enrich_queued', via its decode window) waits
+  // for it here, so a persisted cursor never runs ahead of work that hasn't
+  // finished yet — pause, cancel and a plain checkpoint alike.
+  settle: () => Promise<void> = async () => {},
 ): Promise<StageOutcome> {
   let cursor = startCursor;
   emit(cursor, true);
@@ -512,6 +519,7 @@ async function runFileStage(
     for (const row of rows) {
       const signal = controlSignals.get(job.id);
       if (signal) {
+        await settle();
         persistCursor(db, job.id, stage, cursor);
         return signal;
       }
@@ -532,11 +540,15 @@ async function runFileStage(
       cursor = row.seq + 1;
       // See runReadTagsStage's comment on why a checkpoint no longer forces
       // its progress emission through the throttle gate.
-      if (cursor % CHECKPOINT_EVERY === 0) persistCursor(db, job.id, stage, cursor);
+      if (cursor % CHECKPOINT_EVERY === 0) {
+        await settle();
+        persistCursor(db, job.id, stage, cursor);
+      }
       emit(cursor, false);
     }
   }
 
+  await settle();
   persistCursor(db, job.id, stage, cursor);
   emit(cursor, true);
   return "completed";
@@ -816,6 +828,7 @@ export async function executeScan(
         if (layoutOutcome === "unreachable") return;
         outcome = layoutOutcome;
       } else {
+        const decodes = createDecodeWindow(scanDecodeShare(MEDIA_CONCURRENCY_LIMIT));
         outcome = await runFileStage(
           db,
           job,
@@ -841,19 +854,31 @@ export async function executeScan(
                 `cover art failed: ${err instanceof Error ? err.message : String(err)}`,
               );
             }
-            try {
-              await ensurePeaksForFile(db, fileId);
-            } catch (err) {
-              recordFileError(
-                db,
-                jobId,
-                row.file_path,
-                "enrich_queued",
-                `waveform peaks failed: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
+            // Issue #189: the decode is this stage's whole cost (~25ms of
+            // ffmpeg per file, against well under 1ms for everything above
+            // it), so it alone runs alongside the next files' work instead
+            // of being awaited here. Enqueueing and cover art stay strictly
+            // in file order: a release's cover is upserted by whichever of
+            // its files is handled last, and that must not depend on which
+            // decode happened to finish first. A peaks envelope depends on
+            // nothing but its own file, so its finishing order can't change
+            // any result.
+            await decodes.add(async () => {
+              try {
+                await ensurePeaksForFile(db, fileId);
+              } catch (err) {
+                recordFileError(
+                  db,
+                  jobId,
+                  row.file_path,
+                  "enrich_queued",
+                  `waveform peaks failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
+            });
           },
           emitFor("enrich_queued", filesTotal),
+          decodes.drain,
         );
       }
 
