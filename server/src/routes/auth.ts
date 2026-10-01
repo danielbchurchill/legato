@@ -251,6 +251,7 @@ function setupCodeRequired(request: FastifyRequest): boolean {
   return !isLocalRequest(request) && request.authUser?.role !== "legacy";
 }
 
+const SETUP_CODE_LOG_HELP = "It's in the server's log; on a Linux service, run journalctl --user-unit legato-server.";
 const SETUP_CODE_HELP =
   "It's on the server's /setup page, and in its log; on a Linux service, run journalctl --user-unit legato-server.";
 
@@ -319,7 +320,7 @@ export function authRoutes(
       if (!maySeeSetupCode(request)) {
         reply.code(403);
         return {
-          error: `This page can't show the setup code from where you're connecting. ${SETUP_CODE_HELP}`,
+          error: `This page can't show the setup code from where you're connecting. ${SETUP_CODE_LOG_HELP}`,
           reason: "setup_code_hidden",
         };
       }

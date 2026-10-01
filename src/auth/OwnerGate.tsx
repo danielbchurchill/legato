@@ -6,6 +6,8 @@ import { Button } from '../ui/Button'
 import { API_BASE } from '../config/serverHost'
 import type { ResolvedTheme } from '../hooks/useTheme'
 import type { AuthStatus, SessionResponse } from './useAuth'
+import { QrCode } from './QrCode'
+import { formatCountdown, useSetupCode } from './useSetupCode'
 
 /* Issue #112: the two screens between "the server answered" and the app.
  * Both take over the whole window, like first-run library setup (DESIGN.md
@@ -50,6 +52,12 @@ export function OwnerGate({
   const [busy, setBusy] = useState(false)
 
   const creating = mode === 'create-owner'
+  // Issue #113: a server set up from another machine shows its setup code
+  // right here (the /setup page) when it trusts where this page is, so
+  // nobody has to go and read the log.
+  const needsCode = creating && status.setupCodeRequired
+  const { state: setupCodeState, reload: reloadSetupCode } = useSetupCode(needsCode)
+  const shownCode = setupCodeState.kind === 'shown' ? setupCodeState : null
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -70,12 +78,24 @@ export function OwnerGate({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           creating
-            ? { password, displayName: displayName || undefined, setupCode: setupCode || undefined }
+            ? {
+                password,
+                displayName: displayName || undefined,
+                setupCode: (shownCode?.code ?? setupCode) || undefined,
+              }
             : { password },
         ),
       })
       const body = (await res.json().catch(() => ({}))) as ErrorBody & SessionResponse
       if (!res.ok) {
+        // Expired between reading it and pressing the button: the page
+        // fetches the replacement and says so, and the password fields
+        // keep what was typed.
+        if (body.reason === 'expired_setup_code' && shownCode) {
+          void reloadSetupCode()
+          setError("That code expired while you were typing. Here's the new one; press create owner again.")
+          return
+        }
         setError(describeFailure(res.status, body))
         return
       }
@@ -140,7 +160,23 @@ export function OwnerGate({
           />
         )}
 
-        {creating && status.setupCodeRequired && (
+        {needsCode && shownCode && (
+          <div className="flex flex-col items-center gap-[12px]">
+            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+              {shownCode.replaced ? "That code expired. Here's a new one:" : "This server's setup code:"}
+            </p>
+            <p
+              aria-live="polite"
+              className="font-[family-name:var(--font-mono)] text-[length:var(--text-wordmark-header)] tracking-[0.08em] text-[var(--color-ink)]"
+            >
+              {shownCode.code}
+            </p>
+            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+              expires in {formatCountdown(shownCode.remainingMs)}, then a new one appears here
+            </p>
+          </div>
+        )}
+        {needsCode && setupCodeState.kind === 'hidden' && (
           <>
             <input
               value={setupCode}
@@ -152,12 +188,8 @@ export function OwnerGate({
               className={`${FIELD_CLASSES} font-[family-name:var(--font-mono)] uppercase placeholder:normal-case`}
             />
             <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
-              You're setting this server up from another machine, so it needs its setup code. It's shown in the
-              server's log on startup; on a Linux service, run{' '}
-              <span className="font-[family-name:var(--font-mono)] whitespace-nowrap text-[var(--color-muted-hi)]">
-                journalctl --user-unit legato-server
-              </span>
-              .
+              You're setting this server up from another machine, so it needs its setup code.{' '}
+              {setupCodeState.message} The code changes every ten minutes; the log shows each new one.
             </p>
           </>
         )}
@@ -165,11 +197,25 @@ export function OwnerGate({
         {error && <p className="text-[length:var(--text-base)] text-[var(--color-ink)]">{error}</p>}
 
         <div className="flex justify-center">
-          <Button type="submit" disabled={busy || !password}>
+          <Button type="submit" disabled={busy || !password || (needsCode && setupCodeState.kind === 'loading')}>
             {creating ? 'create owner' : 'sign in'}
           </Button>
         </div>
       </form>
+
+      {/* The legato.fm half of plan 02's claim isn't built yet (see the
+       * seam in server/src/index.ts), so the QR sits below the real step,
+       * muted, and says plainly that it doesn't work yet. The URL is
+       * already the final one, so nothing changes here once it does. */}
+      {shownCode && (
+        <div className="flex flex-col items-center gap-[8px] pt-[12px]">
+          <QrCode value={shownCode.claimUrl} theme={theme} label={`QR code for ${shownCode.claimUrl}`} />
+          <p className="max-w-[360px] text-[length:var(--text-base)] text-[var(--color-muted)]">
+            Claiming this server for a legato.fm account by scanning this is coming soon. For now, creating the
+            owner above is all it needs.
+          </p>
+        </div>
+      )}
 
       {!status.user && (status.oauth.google || status.oauth.github) && (
         <div className="flex items-center gap-[16px] text-[var(--color-muted)]">
