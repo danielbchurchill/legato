@@ -64,10 +64,11 @@ class Legato < Formula
         #{var}/legato
       and listens on port 8899 (set LEGATO_PORT to change it).
 
-      Once the service is running, open http://127.0.0.1:8899 on this machine
-      to create the owner account. From another machine you will also need
-      the setup code the server prints at startup:
-        grep "setup code" #{var}/log/legato.log
+      Once the service is running, open http://127.0.0.1:8899/setup on this
+      machine to create the owner account. Doing it from another machine
+      asks for the setup code shown on that page. The code changes every ten
+      minutes, and the newest one is also in the log:
+        grep -i "setup code" #{var}/log/legato.log | tail -1
 
       If your music is on an external drive or in a protected folder, macOS
       may ask you to allow legato-server access the first time it scans.
