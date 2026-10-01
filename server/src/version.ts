@@ -15,5 +15,9 @@
 declare const __LEGATO_VERSION__: string | undefined;
 declare const __LEGATO_GIT_SHA__: string | undefined;
 
-export const VERSION = typeof __LEGATO_VERSION__ !== "undefined" ? __LEGATO_VERSION__ : "0.0.0-dev";
+// Exported so the update check (update/check.ts) can tell a source run
+// apart from a release without re-typing the placeholder.
+export const DEV_VERSION = "0.0.0-dev";
+
+export const VERSION = typeof __LEGATO_VERSION__ !== "undefined" ? __LEGATO_VERSION__ : DEV_VERSION;
 export const GIT_SHA = typeof __LEGATO_GIT_SHA__ !== "undefined" ? __LEGATO_GIT_SHA__ : "unknown";

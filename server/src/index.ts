@@ -19,6 +19,7 @@ import { reconcileInterruptedScans } from "./scan/scanner.js";
 import { backfillFuzzyIndex } from "./match/backfill-fuzzy-index.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
+import { startUpdateChecks } from "./update/check.js";
 
 // Checked before anything else touches disk (openDb below creates the data
 // dir and runs migrations) — `legato-server --version` should work without
@@ -189,6 +190,10 @@ const ENRICH_POLL_INTERVAL_MS = 5000;
 setInterval(() => {
   void runDueJobs(db);
 }, ENRICH_POLL_INTERVAL_MS);
+
+// Issue #110: the daily "is there a newer release" check. Never awaited, so
+// GitHub being slow or unreachable can't hold up startup.
+startUpdateChecks(db, (message) => app.log.info(message));
 
 // --- THE SPIKE (debug-only smoke test routes, kept alive for src/PlaybackSpike.tsx) ---
 //
