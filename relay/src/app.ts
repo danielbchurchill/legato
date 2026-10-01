@@ -2,7 +2,7 @@ import cookie from "@fastify/cookie";
 import websocketPlugin from "@fastify/websocket";
 import type { Database } from "./sqlite.js";
 import Fastify, { type FastifyInstance } from "fastify";
-import { authRoutes } from "./routes/auth.js";
+import { authRoutes, type AuthRoutesOptions } from "./routes/auth.js";
 import { pairRoutes } from "./routes/pair.js";
 import { relayRoutes } from "./routes/relay.js";
 import { tunnelRoutes } from "./routes/tunnel.js";
@@ -11,6 +11,9 @@ import { TunnelRegistry } from "./tunnel-registry.js";
 export interface BuildAppOptions {
   db: Database;
   logger?: boolean;
+  // Stubbed provider exchange and config for tests and the local
+  // end-to-end harness; production leaves it unset and reads the env.
+  auth?: AuthRoutesOptions;
 }
 
 export function buildApp(options: BuildAppOptions): FastifyInstance {
@@ -26,7 +29,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   app.register(websocketPlugin);
   app.register(tunnelRoutes(registry, options.db));
   app.register(relayRoutes(registry, options.db));
-  app.register(authRoutes(options.db));
+  app.register(authRoutes(options.db, options.auth));
   app.register(pairRoutes(options.db));
 
   return app;

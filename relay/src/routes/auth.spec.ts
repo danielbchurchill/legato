@@ -1,7 +1,10 @@
-import { describe, expect, it } from "bun:test";
-import Fastify from "fastify";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import { cookieAttributes } from "./auth.js";
+import { buildApp } from "../app.js";
+import { openDb } from "../db.js";
+import type { Database } from "../sqlite.js";
 
 describe("cookieAttributes", () => {
   it("marks cookies Secure when the relay is served over https", () => {
@@ -39,5 +42,232 @@ describe("cookieAttributes", () => {
       expect(header).toContain("SameSite=Lax");
     }
     await app.close();
+  });
+});
+
+// The native (desktop) sign-in, end to end through the real routes, with
+// only the provider's token exchange stubbed. No real client id or secret
+// is involved: the config below is placeholder text, and the stub never
+// reaches Google or GitHub.
+describe("native sign-in (issue #215)", () => {
+  const VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+  const CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+  const REDIRECT = "http://127.0.0.1:53682/callback";
+  const CONFIG = {
+    googleClientId: "test-google-id",
+    googleClientSecret: "test-google-secret",
+    githubClientId: "test-github-id",
+    githubClientSecret: "test-github-secret",
+    callbackBaseUrl: "https://auth.example",
+  };
+
+  let db: Database;
+  let app: FastifyInstance;
+  let exchangeCalls: string[];
+
+  beforeEach(async () => {
+    db = openDb(":memory:");
+    exchangeCalls = [];
+    const stub = async (code: string) => {
+      exchangeCalls.push(code);
+      if (code === "provider-down") throw new Error("stubbed provider failure");
+      return { providerUserId: "gh-42", email: "rowan@example.com", displayName: "Rowan", avatarUrl: null };
+    };
+    app = buildApp({ db, auth: { config: CONFIG, exchange: { google: stub, github: stub } } });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  function startQuery(overrides: Record<string, string | undefined> = {}): string {
+    const params: Record<string, string> = {};
+    const all = { redirect_uri: REDIRECT, code_challenge: CHALLENGE, code_challenge_method: "S256", ...overrides };
+    for (const [key, value] of Object.entries(all)) if (value !== undefined) params[key] = value;
+    return new URLSearchParams(params).toString();
+  }
+
+  // Plays the browser: start, then come back from the provider with the
+  // state the relay put in the provider URL and the cookie it set.
+  async function signInThroughBrowser(
+    provider: "github" | "google" = "github",
+    callback: Record<string, string> = { code: "provider-code" },
+  ) {
+    const start = await app.inject({ url: `/auth/${provider}?${startQuery()}` });
+    expect(start.statusCode).toBe(302);
+    const state = new URL(String(start.headers.location)).searchParams.get("state")!;
+    const stateCookie = start.cookies.find((c) => c.name === "relay_oauth_state")!;
+    const query = new URLSearchParams({ state, ...callback });
+    return app.inject({
+      url: `/auth/${provider}/callback?${query}`,
+      cookies: { relay_oauth_state: stateCookie.value },
+    });
+  }
+
+  async function codeFromCallback(provider: "github" | "google" = "github"): Promise<string> {
+    const callback = await signInThroughBrowser(provider);
+    expect(callback.statusCode).toBe(302);
+    const location = new URL(String(callback.headers.location));
+    expect(`${location.origin}${location.pathname}`).toBe(REDIRECT);
+    return location.searchParams.get("code")!;
+  }
+
+  const redeem = (body: Record<string, unknown>, headers: Record<string, string> = {}) =>
+    app.inject({ method: "POST", url: "/auth/token", payload: body, headers });
+
+  it("redirects the browser to the loopback with a code, sets no browser session, and the code redeems for a bearer token", async () => {
+    const callback = await signInThroughBrowser();
+    expect(callback.statusCode).toBe(302);
+    expect(callback.cookies.find((c) => c.name === "relay_session")).toBeUndefined();
+    const code = new URL(String(callback.headers.location)).searchParams.get("code")!;
+
+    const res = await redeem({ code, code_verifier: VERIFIER, redirect_uri: REDIRECT });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { token: string; expiresAt: string; user: { displayName: string; provider: string } };
+    expect(body.user).toMatchObject({ displayName: "Rowan", provider: "github" });
+
+    const me = await app.inject({ url: "/auth/me", headers: { authorization: `Bearer ${body.token}` } });
+    expect((me.json() as { user: { email: string } }).user.email).toBe("rowan@example.com");
+
+    const logout = await app.inject({ method: "POST", url: "/auth/logout", headers: { authorization: `Bearer ${body.token}` } });
+    expect(logout.statusCode).toBe(200);
+    const after = await app.inject({ url: "/auth/me", headers: { authorization: `Bearer ${body.token}` } });
+    expect((after.json() as { user: unknown }).user).toBeNull();
+  });
+
+  it("works the same through Google", async () => {
+    const code = await codeFromCallback("google");
+    expect((await redeem({ code, code_verifier: VERIFIER, redirect_uri: REDIRECT })).statusCode).toBe(200);
+  });
+
+  it("keeps the browser sign-in exactly as it was: cookie, success page, no redirect", async () => {
+    const start = await app.inject({ url: "/auth/github" });
+    expect(start.statusCode).toBe(302);
+    const state = new URL(String(start.headers.location)).searchParams.get("state")!;
+    const stateCookie = start.cookies.find((c) => c.name === "relay_oauth_state")!;
+    expect(stateCookie.secure).toBe(true);
+
+    const callback = await app.inject({
+      url: `/auth/github/callback?code=provider-code&state=${state}`,
+      cookies: { relay_oauth_state: stateCookie.value },
+    });
+    expect(callback.statusCode).toBe(200);
+    expect(callback.body).toContain("Signed in as Rowan");
+    const session = callback.cookies.find((c) => c.name === "relay_session")!;
+    expect(session.secure).toBe(true);
+    expect(session.httpOnly).toBe(true);
+
+    const me = await app.inject({ url: "/auth/me", cookies: { relay_session: session.value } });
+    expect((me.json() as { user: { displayName: string } }).user.displayName).toBe("Rowan");
+  });
+
+  it("rejects a non-loopback redirect before the provider is ever involved", async () => {
+    for (const redirect of ["https://evil.example/callback", "http://localhost:53682/callback", "http://127.0.0.1:53682/elsewhere"]) {
+      const res = await app.inject({ url: `/auth/github?${startQuery({ redirect_uri: redirect })}` });
+      expect(res.statusCode).toBe(400);
+      expect((res.json() as { error: string }).error).toContain("can only return to this computer");
+      expect(res.cookies.find((c) => c.name === "relay_oauth_state")).toBeUndefined();
+    }
+    expect(db.prepare("SELECT COUNT(*) AS n FROM relay_native_requests").get()).toEqual({ n: 0 });
+  });
+
+  it("rejects plain PKCE", async () => {
+    const res = await app.inject({ url: `/auth/github?${startQuery({ code_challenge_method: "plain" })}` });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toBe("code_challenge_method must be S256. Plain PKCE isn't accepted.");
+  });
+
+  it("rejects a wrong verifier, and the code is spent afterwards", async () => {
+    const code = await codeFromCallback();
+    const wrong = await redeem({ code, code_verifier: "w".repeat(43), redirect_uri: REDIRECT });
+    expect(wrong.statusCode).toBe(400);
+    expect(wrong.json()).toMatchObject({ error: "invalid_grant", reason: "mismatch" });
+
+    const retry = await redeem({ code, code_verifier: VERIFIER, redirect_uri: REDIRECT });
+    expect(retry.json()).toMatchObject({ reason: "used" });
+  });
+
+  it("rejects a reused code", async () => {
+    const code = await codeFromCallback();
+    expect((await redeem({ code, code_verifier: VERIFIER, redirect_uri: REDIRECT })).statusCode).toBe(200);
+    const again = await redeem({ code, code_verifier: VERIFIER, redirect_uri: REDIRECT });
+    expect(again.statusCode).toBe(400);
+    expect(again.json()).toMatchObject({ reason: "used", message: "This sign-in code was already used. Start sign-in again from Legato." });
+  });
+
+  it("rejects an expired code", async () => {
+    const code = await codeFromCallback();
+    db.prepare("UPDATE relay_auth_codes SET expires_at = datetime('now', '-1 second')").run();
+    const res = await redeem({ code, code_verifier: VERIFIER, redirect_uri: REDIRECT });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ reason: "expired" });
+  });
+
+  it("rejects a redirect_uri that isn't exactly the one the code was sent to", async () => {
+    const code = await codeFromCallback();
+    const res = await redeem({ code, code_verifier: VERIFIER, redirect_uri: "http://[::1]:53682/callback" });
+    expect(res.json()).toMatchObject({ reason: "mismatch" });
+  });
+
+  it("replays nothing: a second callback with the same state gets no code", async () => {
+    const start = await app.inject({ url: `/auth/github?${startQuery()}` });
+    const state = new URL(String(start.headers.location)).searchParams.get("state")!;
+    const stateCookie = start.cookies.find((c) => c.name === "relay_oauth_state")!;
+    const hit = () =>
+      app.inject({ url: `/auth/github/callback?code=c&state=${state}`, cookies: { relay_oauth_state: stateCookie.value } });
+    expect((await hit()).statusCode).toBe(302);
+    // The pending row is gone, so the replay falls to the browser path.
+    expect((await hit()).statusCode).toBe(200);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM relay_auth_codes").get()).toEqual({ n: 1 });
+  });
+
+  it("sends a provider-side cancel straight back to the waiting app", async () => {
+    const res = await signInThroughBrowser("github", { error: "access_denied" });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe(`${REDIRECT}?error=access_denied`);
+    expect(exchangeCalls).toEqual([]);
+  });
+
+  it("sends a provider exchange failure back to the app instead of a 500 in the browser", async () => {
+    const res = await signInThroughBrowser("github", { code: "provider-down" });
+    expect(res.headers.location).toBe(`${REDIRECT}?error=provider_error`);
+  });
+
+  it("still refuses a callback with a forged state, native or not", async () => {
+    await app.inject({ url: `/auth/github?${startQuery()}` });
+    const res = await app.inject({ url: "/auth/github/callback?code=c&state=forged", cookies: { relay_oauth_state: "other" } });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("rate-limits failed redemptions per address, with Retry-After", async () => {
+    const bad = () => redeem({ code: "guess", code_verifier: VERIFIER, redirect_uri: REDIRECT }, { "fly-client-ip": "203.0.113.9" });
+    for (let i = 0; i < 5; i++) expect((await bad()).statusCode).toBe(400);
+    const limited = await bad();
+    expect(limited.statusCode).toBe(429);
+    expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
+
+    // Another address isn't punished for that one's guesses.
+    const code = await codeFromCallback();
+    const ok = await redeem({ code, code_verifier: VERIFIER, redirect_uri: REDIRECT }, { "fly-client-ip": "198.51.100.4" });
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it("answers CORS for the desktop origins only, and never allows credentials", async () => {
+    for (const origin of ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://127.0.0.1:5181"]) {
+      const pre = await app.inject({
+        method: "OPTIONS",
+        url: "/auth/token",
+        headers: { origin, "access-control-request-method": "POST" },
+      });
+      expect(pre.statusCode).toBe(204);
+      expect(pre.headers["access-control-allow-origin"]).toBe(origin);
+      expect(pre.headers["access-control-allow-credentials"]).toBeUndefined();
+    }
+    const foreign = await app.inject({ url: "/auth/me", headers: { origin: "https://evil.example" } });
+    expect(foreign.headers["access-control-allow-origin"]).toBeUndefined();
+    // The browser-only routes get no CORS at all.
+    const start = await app.inject({ url: "/auth/github", headers: { origin: "tauri://localhost" } });
+    expect(start.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });
