@@ -4,6 +4,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { streamActivity, type StreamActivity } from "../stream/activity.js";
 import { CACHE_DIR, ensureVariant, readGrowing } from "../stream/cache.js";
 import {
   isStreamQuality,
@@ -26,7 +27,14 @@ import {
 // Absent means `original`, so a client that predates the ladder keeps
 // getting full-quality audio, now straight from the source file rather than
 // a FLAC re-encode of it.
-export function filesRoutes(db: Database, { cacheDir = CACHE_DIR }: { cacheDir?: string } = {}) {
+//
+// Every audio body goes out through `activity.meter` (issue #130), which is
+// how the desktop shell knows this server is streaming and keeps the
+// computer awake for it. See stream/activity.ts.
+export function filesRoutes(
+  db: Database,
+  { cacheDir = CACHE_DIR, activity = streamActivity }: { cacheDir?: string; activity?: StreamActivity } = {},
+) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Params: { id: string }; Querystring: { quality?: string } }>(
       "/files/:id/stream",
@@ -48,7 +56,7 @@ export function filesRoutes(db: Database, { cacheDir = CACHE_DIR }: { cacheDir?:
           return { error: "file not found" };
         }
 
-        if (quality === "original") return sendOriginal(file.file_path, file.file_hash, request.headers.range, reply);
+        if (quality === "original") return sendOriginal(file.file_path, file.file_hash, request.headers.range, reply, activity);
 
         // file_hash is populated by the scanner for every real row — only
         // something inserted outside the scan path could lack one, which
@@ -91,9 +99,9 @@ export function filesRoutes(db: Database, { cacheDir = CACHE_DIR }: { cacheDir?:
             // whole point (docs/plans/03, "Quality ladder"): audio starts
             // as soon as ffmpeg's first chunk lands, not when it exits.
             reply.headers({ ...headers, "Accept-Ranges": "bytes" });
-            return reply.send(Readable.from(readGrowing(variant.job)));
+            return reply.send(activity.meter(Readable.from(readGrowing(variant.job))));
           }
-          return await sendFile(variant.path, request.headers.range, reply, headers);
+          return await sendFile(variant.path, request.headers.range, reply, headers, activity);
         } catch (err) {
           request.log.error(err);
           reply.code(502);
@@ -112,6 +120,7 @@ async function sendOriginal(
   fileHash: string | null,
   rangeHeader: string | undefined,
   reply: FastifyReply,
+  activity: StreamActivity,
 ) {
   // Unlike a transcode variant this URL isn't content-addressed: a tag
   // write rewrites these bytes in place under the same file id. The ETag
@@ -123,7 +132,7 @@ async function sendOriginal(
   };
   if (fileHash) headers.ETag = `"${fileHash}"`;
   try {
-    return await sendFile(filePath, rangeHeader, reply, headers);
+    return await sendFile(filePath, rangeHeader, reply, headers, activity);
   } catch (err) {
     // Gone from disk since the last scan noticed (unmounted drive, file
     // moved): the row's missing_since hasn't caught up yet.
@@ -143,6 +152,7 @@ async function sendFile(
   rangeHeader: string | undefined,
   reply: FastifyReply,
   headers: Record<string, string>,
+  activity: StreamActivity,
 ) {
   const { size } = await stat(filePath);
   const range = parseRange(rangeHeader, size);
@@ -160,11 +170,11 @@ async function sendFile(
     reply.code(206);
     reply.header("Content-Range", `bytes ${range.start}-${range.end}/${size}`);
     reply.header("Content-Length", range.end - range.start + 1);
-    return reply.send(createReadStream(filePath, { start: range.start, end: range.end }));
+    return reply.send(activity.meter(createReadStream(filePath, { start: range.start, end: range.end })));
   }
 
   reply.header("Content-Length", size);
-  return reply.send(createReadStream(filePath));
+  return reply.send(activity.meter(createReadStream(filePath)));
 }
 
 // What a browser sends to start playback from the top: no Range at all, or

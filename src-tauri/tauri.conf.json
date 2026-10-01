@@ -21,6 +21,7 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
+        "visible": false,
         "backgroundColor": "#14181A"
       }
     ],
@@ -40,6 +41,10 @@
     ],
     "resources": ["binaries/"],
     "externalBin": ["binaries/legato-server"],
+    "linux": {
+      "deb": { "depends": ["libayatana-appindicator3-1"] },
+      "rpm": { "depends": ["libayatana-appindicator-gtk3"] }
+    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }

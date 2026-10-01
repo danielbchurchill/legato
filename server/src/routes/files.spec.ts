@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "../sqlite.js";
@@ -125,6 +126,24 @@ describe("GET /api/v1/files/:id/stream", () => {
     const res = await get("", { range: `bytes=${size}-` });
     expect(res.statusCode).toBe(416);
     expect(res.headers["content-range"]).toBe(`bytes */${size}`);
+  });
+
+  // Issue #130: the desktop shell's keep-awake reads this to know the
+  // server is streaming. A 416 sends no audio, so it must not count.
+  it("records stream activity for audio bytes sent, and not for a refused range", async () => {
+    let notes = 0;
+    const activity = { note: () => notes++, meter: (s: Readable) => s.on("data", () => notes++) };
+    const app = Fastify();
+    await app.register(filesRoutes(db, { cacheDir: path.join(dir, "streams"), activity }), { prefix: "/api/v1" });
+
+    const size = readFileSync(sourcePath).length;
+    const refused = await app.inject({ url: `/api/v1/files/${fileId}/stream`, headers: { range: `bytes=${size}-` } });
+    expect(refused.statusCode).toBe(416);
+    expect(notes).toBe(0);
+
+    const played = await app.inject({ url: `/api/v1/files/${fileId}/stream` });
+    expect(played.statusCode).toBe(200);
+    expect(notes).toBeGreaterThan(0);
   });
 
   it("refuses an unknown quality with 400 instead of guessing", async () => {
