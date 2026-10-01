@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { Button } from '../ui/Button'
 import { Icon } from '../ui/Icon'
 import { Popover } from '../ui/Popover'
 import { Slider } from '../ui/Slider'
 import type { PlaybackStatus, RepeatMode } from '../playback/usePlayback'
+import type { PlaybackProblem } from '../playback/playbackError'
 import { Surface } from './Surface'
 import { API_BASE as API } from '../config/serverHost'
 
@@ -139,6 +141,10 @@ type TransportDockProps = {
   // rather than usePlayback's own return value. See RepeatMode in
   // usePlayback.ts.
   repeatMode: RepeatMode
+  // Why the last track didn't start (#184), or null. Takes the waveform's
+  // row while set: there's nothing to scrub in a track that never began.
+  problem: PlaybackProblem | null
+  onResolveProblem: () => void
   onPause: () => void
   onResume: () => void
   onSeek: (ms: number) => void
@@ -154,6 +160,8 @@ export function TransportDock({
   shuffled,
   queueBusy,
   repeatMode,
+  problem,
+  onResolveProblem,
   onPause,
   onResume,
   onSeek,
@@ -287,12 +295,30 @@ export function TransportDock({
           </Popover>
         </div>
 
-        <WaveformScrubber
-          fileId={status.currentFileId}
-          positionMs={status.positionMs}
-          durationMs={status.currentDurationMs}
-          onSeek={onSeek}
-        />
+        {problem ? (
+          // H9: the headline says what happened, the detail why and what to
+          // do, and the one button does it. role="alert" so a screen reader
+          // hears it too: the play button that was just pressed gives no
+          // other sign that nothing happened.
+          <div role="alert" className="flex items-start justify-between gap-[14px]">
+            <div className="min-w-0">
+              <p className="truncate text-[length:var(--text-base)] text-[var(--color-ink)]">{problem.headline}</p>
+              <p title={problem.detail} className="line-clamp-2 text-[length:var(--text-base)] text-[var(--color-muted)]">
+                {problem.detail}
+              </p>
+            </div>
+            <Button onClick={onResolveProblem} disabled={queueBusy} className="shrink-0">
+              {problem.action === 'retry' ? 'Try again' : 'Skip track'}
+            </Button>
+          </div>
+        ) : (
+          <WaveformScrubber
+            fileId={status.currentFileId}
+            positionMs={status.positionMs}
+            durationMs={status.currentDurationMs}
+            onSeek={onSeek}
+          />
+        )}
       </div>
     </Surface>
   )

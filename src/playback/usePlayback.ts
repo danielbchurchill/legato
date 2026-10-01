@@ -4,6 +4,13 @@ import { listen } from '@tauri-apps/api/event'
 import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
 import { streamUrl, watchForDrops } from './quality'
+import {
+  describePlaybackError,
+  isNativePlaybackError,
+  readLibraryRoots,
+  type LibraryRootReachability,
+  type PlaybackProblem,
+} from './playbackError'
 
 type ResolvedTrack = {
   recordingNodeId: number
@@ -129,6 +136,18 @@ async function resolveQueueContext(recordingNodeId: number, fallbackTitle: strin
   }
 }
 
+// Fetched at failure time rather than cached: what matters is whether the
+// server can see each root *now*, and a failed play is rare enough that one
+// extra request costs nothing. Any failure here just means the message
+// works from the local evidence alone (see playbackError.ts).
+async function fetchLibraryRoots(): Promise<LibraryRootReachability[]> {
+  try {
+    return readLibraryRoots(await fetch(`${API}/health`).then((r) => r.json()))
+  } catch {
+    return []
+  }
+}
+
 // Server applies the scrobble threshold (server/src/plays/scrobble.ts) and
 // silently no-ops a report that doesn't qualify — this always fires on
 // every track boundary and lets the server decide what counts as a play.
@@ -176,6 +195,12 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   const [currentTitle, setCurrentTitle] = useState<string | null>(null)
   const [upNext, setUpNext] = useState<QueueEntry[]>([])
   const [shuffled, setShuffled] = useState(false)
+  // Issue #184: why the last start attempt didn't play, for the transport
+  // to show. failedStart mirrors it for the imperative callbacks below,
+  // the same way statusRef mirrors status. Non-null means Rust holds no
+  // session and currentIndex points at the entry that couldn't open.
+  const [problem, setProblem] = useState<PlaybackProblem | null>(null)
+  const failedStart = useRef<PlaybackProblem | null>(null)
 
   // Mirrors `status` for code that needs the latest position/playing state
   // synchronously (the Tauri rebuild helpers below) without taking a
@@ -461,6 +486,82 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     }
   }, [finalizeCurrentPlay])
 
+  // Hands playSequence[startIndex..] (or the slice of it a caller chose) to
+  // Rust in order. The first entry is the track about to play: if it can't
+  // open, nothing started, so enqueuing stops there and its error comes
+  // back for showStartFailure. A later entry that can't open is dropped
+  // from playSequence instead (one missing file shouldn't stop the rest of
+  // an album) so up-next keeps showing only what will really play.
+  const enqueueTauri = useCallback(
+    async (entries: QueueEntry[], startIndex: number): Promise<{ error: unknown } | null> => {
+      const unplayable = new Set<number>()
+      for (const [i, entry] of entries.entries()) {
+        const info = trackInfo.current.get(entry.recordingNodeId)!
+        try {
+          await invoke('queue_enqueue', {
+            track: {
+              file_path: info.filePath,
+              recording_node_id: entry.recordingNodeId,
+              // Rust just applies whatever dB value arrives here — the mode
+              // selection (track/album/off) is entirely a frontend decision
+              // about *which* precomputed gain to send, not something the
+              // audio engine needs to know about.
+              replaygain_track_gain: gainForMode(info, replaygainMode),
+            },
+          })
+        } catch (error) {
+          if (i === 0) return { error }
+          unplayable.add(entry.recordingNodeId)
+        }
+      }
+      if (unplayable.size > 0) {
+        playSequence.current = [
+          ...playSequence.current.slice(0, startIndex + 1),
+          ...playSequence.current.slice(startIndex + 1).filter((e) => !unplayable.has(e.recordingNodeId)),
+        ]
+      }
+      return null
+    },
+    [replaygainMode],
+  )
+
+  // A track that never started. The dock stays mounted (it keys off
+  // currentTitle) so the reason has somewhere to show, while
+  // currentRecordingNodeId stays null so nothing else, the canvas halo or
+  // the now-playing panel, claims the track is live.
+  const showStartFailure = useCallback(
+    async (index: number, error: unknown) => {
+      // playback.rs already drops a session whose first track failed; this
+      // covers any other rejection, so nothing stale is left half-built.
+      await invoke('queue_stop').catch(() => undefined)
+      finalizeCurrentPlay()
+      const title = playSequence.current[index]?.title ?? ''
+      currentIndex.current = index
+      setCurrentTitle(title)
+      setUpNext(playSequence.current.slice(index + 1))
+      setStatus((s) => ({
+        ...s,
+        playing: false,
+        positionMs: 0,
+        currentRecordingNodeId: null,
+        currentFileId: null,
+        currentDurationMs: null,
+      }))
+      // Only an unreachable file needs the server's view of the drive; the
+      // other two kinds say everything on their own.
+      const roots = isNativePlaybackError(error) && error.kind === 'file_unreachable' ? await fetchLibraryRoots() : []
+      const described = describePlaybackError(error, title, roots)
+      failedStart.current = described
+      setProblem(described)
+    },
+    [finalizeCurrentPlay],
+  )
+
+  const clearStartFailure = useCallback(() => {
+    failedStart.current = null
+    setProblem(null)
+  }, [])
+
   // The generalized entry point everything else funnels through: given an
   // explicit ordered list of recording node ids and where to start in it,
   // resolve, populate playSequence/currentIndex, and start playback. Only
@@ -527,25 +628,17 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
       finalizeCurrentPlay()
       await invoke('queue_stop')
-      for (const entry of toPlay) {
-        const info = trackInfo.current.get(entry.recordingNodeId)!
-        await invoke('queue_enqueue', {
-          track: {
-            file_path: info.filePath,
-            recording_node_id: entry.recordingNodeId,
-            // Rust just applies whatever dB value arrives here — the mode
-            // selection (track/album/off) is entirely a frontend decision
-            // about *which* precomputed gain to send, not something the
-            // audio engine needs to know about.
-            replaygain_track_gain: gainForMode(info, replaygainMode),
-          },
-        })
+      const failure = await enqueueTauri(toPlay, resolvedStartIndex)
+      if (failure) {
+        await showStartFailure(resolvedStartIndex, failure.error)
+        return
       }
       await invoke('queue_play')
+      clearStartFailure()
       const startEntry = toPlay[0]
       const startInfo = trackInfo.current.get(startEntry.recordingNodeId)!
       setCurrentTitle(startEntry.title || title)
-      setUpNext(sequence.slice(resolvedStartIndex + 1))
+      setUpNext(playSequence.current.slice(resolvedStartIndex + 1))
       setStatus((s) => ({
         ...s,
         playing: true,
@@ -554,7 +647,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         currentDurationMs: startInfo.durationMs,
       }))
     },
-    [cacheTracks, finalizeCurrentPlay, replaygainMode, startWebTrack],
+    [cacheTracks, clearStartFailure, enqueueTauri, finalizeCurrentPlay, showStartFailure, startWebTrack],
   )
 
   const playTracks = useCallback(
@@ -642,19 +735,21 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         : playSequence.current.slice(currentIndex.current)
     if (toEnqueue.length === 0) return
 
+    // After a failed start Rust holds nothing to rebuild; the edit only
+    // changes what play (or the transport's retry/skip) will start next.
+    if (failedStart.current) {
+      setUpNext(playSequence.current.slice(currentIndex.current + 1))
+      return
+    }
+
     const wasPlaying = statusRef.current.playing
     const resumeAtMs = statusRef.current.positionMs
 
     await invoke('queue_stop')
-    for (const entry of toEnqueue) {
-      const info = trackInfo.current.get(entry.recordingNodeId)!
-      await invoke('queue_enqueue', {
-        track: {
-          file_path: info.filePath,
-          recording_node_id: entry.recordingNodeId,
-          replaygain_track_gain: gainForMode(info, replaygainMode),
-        },
-      })
+    const failure = await enqueueTauri(toEnqueue, currentIndex.current)
+    if (failure) {
+      await showStartFailure(currentIndex.current, failure.error)
+      return
     }
     await invoke('queue_play')
     await invoke('queue_seek', { positionMs: resumeAtMs })
@@ -664,7 +759,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     if (!wasPlaying) await invoke('queue_pause')
 
     setUpNext(playSequence.current.slice(currentIndex.current + 1))
-  }, [ensureResolved, replaygainMode])
+  }, [ensureResolved, enqueueTauri, showStartFailure])
 
   // Pushes a repeat-mode change straight to Rust (queue_set_repeat, used by
   // its own natural-completion gapless looping) and rebuilds the live
@@ -735,44 +830,6 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     [playTracks, toggleShuffle],
   )
 
-  // #81: pause/resume used to run outside `serialized`, the one queue-
-  // mutating operation that did — a click here could fire its single
-  // queue_pause/queue_play invoke() in the middle of another operation's
-  // queue_stop -> queue_enqueue... -> queue_play rebuild sequence (previous/
-  // toggleShuffle/reorderQueue/etc.), landing before that rebuild's own
-  // trailing queue_play (or queue_pause, when the rebuild has to restore a
-  // paused state) and getting silently overwritten by it. That reproduces
-  // exactly as "play/pause needs several clicks before anything happens" —
-  // same race class `serialized`'s own module comment above already
-  // documents, just for the one call it hadn't been applied to.
-  const pause = useCallback(
-    () =>
-      serialized(async () => {
-        if (IS_TAURI) await invoke('queue_pause')
-        else audioRef.current?.pause()
-        setStatus((s) => ({ ...s, playing: false }))
-      }),
-    [serialized],
-  )
-
-  const resume = useCallback(
-    () =>
-      serialized(async () => {
-        if (IS_TAURI) {
-          await invoke('queue_play')
-          setStatus((s) => ({ ...s, playing: true }))
-          return
-        }
-        try {
-          await audioRef.current?.play()
-          setStatus((s) => ({ ...s, playing: true }))
-        } catch {
-          setStatus((s) => ({ ...s, playing: false }))
-        }
-      }),
-    [serialized],
-  )
-
   const stop = useCallback(async () => {
     finalizeCurrentPlay()
     if (IS_TAURI) {
@@ -796,7 +853,8 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       volume: status.volume,
     })
     setCurrentTitle(null)
-  }, [finalizeCurrentPlay, status.volume])
+    clearStartFailure()
+  }, [clearStartFailure, finalizeCurrentPlay, status.volume])
 
   // Full stop/re-enqueue/play rebuild onto playSequence[targetIndex] — the
   // native counterpart to startWebTrack above. Shared by previous() (which
@@ -818,17 +876,15 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
       finalizeCurrentPlay()
       await invoke('queue_stop')
-      for (const entry of resolved) {
-        const info = trackInfo.current.get(entry.recordingNodeId)!
-        await invoke('queue_enqueue', {
-          track: {
-            file_path: info.filePath,
-            recording_node_id: entry.recordingNodeId,
-            replaygain_track_gain: gainForMode(info, replaygainMode),
-          },
-        })
+      const failure = await enqueueTauri(resolved, targetIndex)
+      if (failure) {
+        // Handled, not a reason for next()'s repeat-one branch to stop():
+        // the transport now says why, and offers retry or skip.
+        await showStartFailure(targetIndex, failure.error)
+        return true
       }
       await invoke('queue_play')
+      clearStartFailure()
 
       currentIndex.current = targetIndex
       const startEntry = resolved[0]
@@ -844,7 +900,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       }))
       return true
     },
-    [ensureResolved, finalizeCurrentPlay, replaygainMode],
+    [clearStartFailure, enqueueTauri, ensureResolved, finalizeCurrentPlay, showStartFailure],
   )
 
   const next = useCallback(
@@ -852,6 +908,13 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       serialized(async () => {
         if (!IS_TAURI) {
           advanceWebTrack(currentIndex.current)
+          return
+        }
+        // Rust holds nothing to skip after a failed start, so walk
+        // playSequence instead. Past the end, nothing is left to try.
+        if (failedStart.current) {
+          if (playSequence.current[currentIndex.current + 1]) await jumpToIndexTauri(currentIndex.current + 1)
+          else await stop()
           return
         }
         // repeat-one: Rust's Sink only ever holds the one looping track
@@ -883,6 +946,58 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       }),
     [jumpToIndexTauri, startWebTrack, serialized],
   )
+
+  // #81: pause/resume used to run outside `serialized`, the one queue-
+  // mutating operation that did — a click here could fire its single
+  // queue_pause/queue_play invoke() in the middle of another operation's
+  // queue_stop -> queue_enqueue... -> queue_play rebuild sequence (previous/
+  // toggleShuffle/reorderQueue/etc.), landing before that rebuild's own
+  // trailing queue_play (or queue_pause, when the rebuild has to restore a
+  // paused state) and getting silently overwritten by it. That reproduces
+  // exactly as "play/pause needs several clicks before anything happens" —
+  // same race class `serialized`'s own module comment above already
+  // documents, just for the one call it hadn't been applied to.
+  const pause = useCallback(
+    () =>
+      serialized(async () => {
+        if (IS_TAURI) await invoke('queue_pause')
+        else audioRef.current?.pause()
+        setStatus((s) => ({ ...s, playing: false }))
+      }),
+    [serialized],
+  )
+
+  const resume = useCallback(
+    () =>
+      serialized(async () => {
+        if (IS_TAURI) {
+          // After a failed start there's no session for queue_play to
+          // resume, so play means try that track again (the drive may be
+          // back by now).
+          if (failedStart.current) {
+            await jumpToIndexTauri(currentIndex.current)
+            return
+          }
+          await invoke('queue_play')
+          setStatus((s) => ({ ...s, playing: true }))
+          return
+        }
+        try {
+          await audioRef.current?.play()
+          setStatus((s) => ({ ...s, playing: true }))
+        } catch {
+          setStatus((s) => ({ ...s, playing: false }))
+        }
+      }),
+    [jumpToIndexTauri, serialized],
+  )
+
+  // The transport's one action for a failed start (PlaybackProblem.action):
+  // retry the same entry, or skip past it. Same paths as play and next.
+  const resolveProblem = useCallback(() => {
+    if (failedStart.current?.action === 'skip') return next()
+    return resume()
+  }, [next, resume])
 
   const reorderQueue = useCallback(
     (fromIndex: number, toIndex: number) =>
@@ -1027,6 +1142,10 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     // toggleShuffle call), so it covers every "play this" button too, not
     // just the transport controls.
     queueBusy,
+    // Why the last start attempt didn't play (#184), or null. While set,
+    // nothing is playing, and resolveProblem runs its one suggested action.
+    problem,
+    resolveProblem,
     playNode,
     playTracks,
     playAlbum,
