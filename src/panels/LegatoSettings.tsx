@@ -18,6 +18,8 @@ import type { ReplayGainMode } from '../playback/usePlayback'
 import { signOut } from '../auth/useAuth'
 import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
+import { FOLDER_PICKER } from '../library/folderPicker'
+import { ServerFolderPicker } from '../library/ServerFolderPicker'
 import { formatLongDuration } from '../ui/format'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 import { StreamQualityRow } from './StreamQualityRow'
@@ -194,6 +196,7 @@ export function LegatoSettings({
   const [confirmingRemoveId, setConfirmingRemoveId] = useState<number | null>(null)
   const removingRoot = roots?.find((r) => r.id === confirmingRemoveId) ?? null
   const [error, setError] = useState<string | null>(null)
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false)
   const [scanning, setScanning] = useState<Record<number, RunningScan>>({})
   const [scanErrors, setScanErrors] = useState<Record<number, ScanFileError[]>>({})
   const [devices, setDevices] = useState<string[] | null>(null)
@@ -271,11 +274,20 @@ export function LegatoSettings({
   const resumeScan = (jobId: number) => fetch(`${API}/scan-jobs/${jobId}/resume`, { method: 'POST' })
   const cancelScan = (jobId: number) => fetch(`${API}/scan-jobs/${jobId}/cancel`, { method: 'POST' })
 
+  // Same choice as LibrarySetup's: the native dialog only when the server
+  // is on this machine (issue #121, library/folderPicker.ts).
   const addFolder = async () => {
-    if (!IS_TAURI) return
     setError(null)
+    if (FOLDER_PICKER === 'server') {
+      setFolderPickerOpen(true)
+      return
+    }
     const selected = await open({ directory: true, multiple: false })
     if (!selected || Array.isArray(selected)) return
+    await addRoot(selected)
+  }
+
+  const addRoot = async (selected: string) => {
     const res = await fetch(`${API}/library-roots`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -366,16 +378,17 @@ export function LegatoSettings({
       <SettingsGroup
         title="library"
         action={
-          <Button onClick={() => void addFolder()} disabled={!IS_TAURI}>
-            + add folder
-          </Button>
+          <Button onClick={() => void addFolder()}>+ add folder</Button>
         }
       >
-        {!IS_TAURI && (
-          <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-            Adding a library folder needs the desktop app — this preview reads whatever's already configured.
-          </p>
-        )}
+        <ServerFolderPicker
+          open={folderPickerOpen}
+          onClose={() => setFolderPickerOpen(false)}
+          onChoose={(path) => {
+            setFolderPickerOpen(false)
+            void addRoot(path)
+          }}
+        />
         {roots === null ? (
           <div className="flex flex-col gap-[var(--spacing-sm)]" aria-label="loading library folders">
             <Skeleton className="h-[12px] w-[200px] rounded-full" />

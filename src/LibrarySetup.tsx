@@ -5,7 +5,8 @@ import blackWordmarkSrc from './assets/brand/black-wordmark.svg'
 import { useWsEvent } from './hooks/useWs'
 import { Button } from './ui/Button'
 import { API_BASE as API } from './config/serverHost'
-import { IS_TAURI } from './config/runtime'
+import { FOLDER_PICKER } from './library/folderPicker'
+import { ServerFolderPicker } from './library/ServerFolderPicker'
 import type { ResolvedTheme } from './hooks/useTheme'
 
 type LibraryRoot = { id: number; path: string; label: string | null }
@@ -30,6 +31,7 @@ export default function LibrarySetup({
   const [scanningRoot, setScanningRoot] = useState<LibraryRoot | null>(null)
   const [filesScanned, setFilesScanned] = useState(0)
   const [filesTotal, setFilesTotal] = useState(0)
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   useWsEvent(['scan:progress'], (payload) => {
     const p = payload as ScanProgress
@@ -65,12 +67,20 @@ export default function LibrarySetup({
     if (scanningRoot && p.libraryRootId === scanningRoot.id) onLibraryReady()
   })
 
+  // The native dialog only when the server is on this machine; otherwise
+  // the server's own folders (issue #121, library/folderPicker.ts).
   const chooseFolder = async () => {
-    if (!IS_TAURI) return
     setError(null)
+    if (FOLDER_PICKER === 'server') {
+      setPickerOpen(true)
+      return
+    }
     const selected = await open({ directory: true, multiple: false })
     if (!selected || Array.isArray(selected)) return
+    await addRoot(selected)
+  }
 
+  const addRoot = async (selected: string) => {
     const res = await fetch(`${API}/library-roots`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -123,12 +133,18 @@ export default function LibrarySetup({
       ) : (
         <>
           <p className="max-w-[420px] text-[length:var(--text-base)] text-[var(--color-muted)]">
-            {IS_TAURI
-              ? 'No music library configured yet. Choose a folder to scan.'
-              : 'No music library configured yet. Adding one needs the desktop app — open Legato there first, then come back to preview it.'}
+            No music library configured yet. Choose a folder to scan.
           </p>
-          {IS_TAURI && <Button onClick={() => void chooseFolder()}>choose music folder</Button>}
+          <Button onClick={() => void chooseFolder()}>choose music folder</Button>
           {error && <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{error}</p>}
+          <ServerFolderPicker
+            open={pickerOpen}
+            onClose={() => setPickerOpen(false)}
+            onChoose={(path) => {
+              setPickerOpen(false)
+              void addRoot(path)
+            }}
+          />
         </>
       )}
     </Centered>
