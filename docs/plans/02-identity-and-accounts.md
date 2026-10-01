@@ -24,6 +24,10 @@ legato.fm account ──owns──▶ home server(s) ──local owner (always)�
 
 - **legato.fm is the identity provider.** Accounts, sign-in methods and sessions live in the relay's service on Fly (it's already the public, always-on piece). Rename things as needed: it becomes "the legato.fm service", with the relay tunnel as one of its jobs.
 - **Home servers trust legato.fm with signed tokens.** When a user opens a server through the relay or directly, the client gets a short-lived token from legato.fm for that server, signed with the service's key. The server verifies it against the service's public keys, which it fetches and caches at claim time and refreshes daily. A cached key keeps working offline for signed-in devices until the token expires.
+  - **As built in #114:**
+    - There is no claim flow yet, so keys aren't fetched at claim time. An unlinked server makes no contact with legato.fm at all, which is the promise on the privacy page. The owner links their account (`POST /api/v1/auth/legato/link`), and that link does the first key fetch. After that the keys refresh daily.
+    - Every token carries a `scope`. `access` opens the library. `link` is only accepted by the link endpoint.
+    - legato.fm signs `link` only, until it can record which servers an account has linked. Signing `access` for any server id would let a hostile server that claims a real server's public id replay a visitor's token against the real one. That follow-up is #231, and it blocks #117.
 - **Every server has a local owner.** Created at first boot, it signs in with a password or passkey stored only on that server. It works with no account and no internet. A server can be claimed to an account later, or never. Nothing the local owner can do today gets gated behind an account, except relay access.
 - **Server `users` rows** keep their local primary key and gain `legato_account_id` (nullable). The existing Google/GitHub users are migrated by matching verified email to a legato.fm account, and anything that doesn't match stays local-only.
 

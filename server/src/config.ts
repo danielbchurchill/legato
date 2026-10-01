@@ -98,3 +98,33 @@ export const AUTH_CALLBACK_BASE_URL = process.env.AUTH_CALLBACK_BASE_URL;
 // the desktop shell's keep-awake setting (stream/activity.ts). Set by the
 // Tauri shell only; undefined everywhere else, which writes nothing.
 export const STREAM_ACTIVITY_FILE = process.env.LEGATO_STREAM_ACTIVITY_FILE;
+
+// Issue #114: the legato.fm service whose signed tokens this server
+// accepts. It's both the `iss` a token must carry and where the public
+// keys come from (<origin>/.well-known/jwks.json). Nothing contacts it
+// until the owner links a legato.fm account (auth/legatoIdentity.ts).
+// `off` turns legato.fm sign-in off entirely: no link, no key fetch, and
+// every legato.fm token refused. Anything that isn't a plain http(s)
+// origin is a startup error rather than a quiet fallback, since a typo
+// here would otherwise send key fetches somewhere nobody meant.
+export const DEFAULT_LEGATO_ID_ORIGIN = "https://auth.legato.fm";
+
+export function resolveLegatoIdOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.LEGATO_ID_ORIGIN?.trim();
+  if (!raw) return DEFAULT_LEGATO_ID_ORIGIN;
+  if (raw.toLowerCase() === "off") return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`LEGATO_ID_ORIGIN must be an origin like ${DEFAULT_LEGATO_ID_ORIGIN}, or "off". Got "${raw}".`);
+  }
+  if ((url.protocol !== "https:" && url.protocol !== "http:") || url.origin !== raw.replace(/\/$/, "")) {
+    throw new Error(
+      `LEGATO_ID_ORIGIN must be just an origin (scheme, host and port, no path), like ${DEFAULT_LEGATO_ID_ORIGIN}, or "off". Got "${raw}".`,
+    );
+  }
+  return url.origin;
+}
+
+export const LEGATO_ID_ORIGIN = resolveLegatoIdOrigin();
