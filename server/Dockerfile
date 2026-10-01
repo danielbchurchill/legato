@@ -39,9 +39,7 @@ RUN echo "server/Dockerfile needs the repo root as a second build context for th
 # below only has server/'s dependencies.
 FROM --platform=$BUILDPLATFORM node:24.19.0-slim AS web
 WORKDIR /web
-# patches/ because the root postinstall runs patch-package.
 COPY --from=client package.json package-lock.json ./
-COPY --from=client patches ./patches
 RUN npm ci
 COPY --from=client index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json ./
 COPY --from=client public ./public
