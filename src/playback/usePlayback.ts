@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
 import { streamUrl, watchForDrops } from './quality'
+import { useMediaSession } from './mediaSession'
 import {
   describePlaybackError,
   isNativePlaybackError,
@@ -1134,6 +1135,15 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     if (!IS_TAURI) return
     await invoke('queue_set_device', { name })
   }, [])
+
+  // #128: lock-screen and headphone controls for the browser player. Off
+  // in Tauri, where native media keys are #131's.
+  useMediaSession({
+    enabled: !IS_TAURI,
+    status,
+    title: currentTitle,
+    controls: { play: resume, pause, next, previous, seek },
+  })
 
   return {
     status,
