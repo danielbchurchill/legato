@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
+use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -168,6 +169,57 @@ pub enum RepeatMode {
   One,
 }
 
+/// Why a track couldn't start (issue #184). Returned as the rejection value
+/// of queue_enqueue/queue_skip, so usePlayback.ts gets a tagged object it
+/// can explain on screen instead of a string that only ever reached the
+/// `npx tauri dev` terminal. Three cases because each needs a different
+/// fix from the person at the keyboard: reconnect a drive, replace a file,
+/// or plug in an output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlaybackError {
+  /// The file couldn't be opened at all: missing, a dropped NFS mount, a
+  /// permissions problem. `nearest_folder` is the deepest ancestor of
+  /// `path` that exists on this machine, and `nearest_folder_empty` says
+  /// whether it has nothing in it. Together they let the frontend tell
+  /// "this one file is gone" (the album folder is still there) from "the
+  /// whole library isn't here" (an unmounted mount point is an empty
+  /// directory, not a missing one, so existence alone can't tell them
+  /// apart).
+  FileUnreachable {
+    path: String,
+    nearest_folder: Option<String>,
+    nearest_folder_empty: bool,
+    detail: String,
+  },
+  /// The file opened, but symphonia couldn't make audio out of it:
+  /// truncated, corrupt, or a format it doesn't read.
+  Undecodable { path: String, detail: String },
+  /// No output stream could be opened, on the chosen device or the
+  /// system default. Nothing about the file is wrong.
+  NoOutputDevice { detail: String },
+}
+
+// Every probe here is a plain metadata/read_dir call that treats any error
+// as "not there" — a stale NFS handle answers ESTALE rather than ENOENT,
+// and that mount is exactly as unusable as an absent one.
+fn classify_open_error(path: &str, err: &io::Error) -> PlaybackError {
+  let nearest = Path::new(path)
+    .ancestors()
+    .skip(1)
+    .find(|dir| std::fs::metadata(dir).map(|m| m.is_dir()).unwrap_or(false));
+  let nearest_folder_empty = nearest
+    .and_then(|dir| std::fs::read_dir(dir).ok())
+    .map(|mut entries| entries.next().is_none())
+    .unwrap_or(false);
+  PlaybackError::FileUnreachable {
+    path: path.to_string(),
+    nearest_folder: nearest.map(|dir| dir.to_string_lossy().into_owned()),
+    nearest_folder_empty,
+    detail: err.to_string(),
+  }
+}
+
 #[derive(Clone, Serialize)]
 pub struct PositionEvent {
   pub position_ms: u64,
@@ -258,16 +310,22 @@ fn gain_db(track: &QueueTrack) -> f32 {
 // both a normal queue_enqueue call and the monitor thread's own gapless
 // repeat re-enqueue (reconcile_repeat below), so there's exactly one place
 // that turns a QueueTrack into a playing source.
-fn append_track(sink: &Sink, track: &QueueTrack) -> Result<(), String> {
-  let file = File::open(&track.file_path).map_err(|e| format!("failed to open {}: {e}", track.file_path))?;
+fn append_track(sink: &Sink, track: &QueueTrack) -> Result<(), PlaybackError> {
+  let source = open_source(&track.file_path)?;
+  sink.append(source.amplify_decibel(gain_db(track)));
+  Ok(())
+}
+
+// Split from append_track so the open/decode classification is testable
+// without a Sink (and so without an audio device).
+fn open_source(path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError> {
+  let file = File::open(path).map_err(|e| classify_open_error(path, &e))?;
   // See NetworkAheadReader above: confirmed live over an NFS-mounted
   // library that a plain File/BufReader pops mid-track, even with a large
   // buffer, because decode's reads are still synchronous with the
   // network. This background-prefetches instead.
-  let reader = NetworkAheadReader::new(file).map_err(|e| e.to_string())?;
-  let source = Decoder::new(reader).map_err(|e| e.to_string())?;
-  sink.append(source.amplify_decibel(gain_db(track)));
-  Ok(())
+  let reader = NetworkAheadReader::new(file).map_err(|e| classify_open_error(path, &e))?;
+  Decoder::new(reader).map_err(|e| PlaybackError::Undecodable { path: path.to_string(), detail: e.to_string() })
 }
 
 // Pure gapless-repeat scheduling core — given how many tracks have
@@ -386,11 +444,13 @@ fn open_stream(device_name: &Option<String>) -> Result<OutputStream, String> {
 fn ensure_session<'a>(
   app: &AppHandle,
   state: &'a PlaybackState,
-) -> Result<std::sync::MutexGuard<'a, Option<Session>>, String> {
+) -> Result<std::sync::MutexGuard<'a, Option<Session>>, PlaybackError> {
   let mut guard = state.session.lock().unwrap();
   if guard.is_none() {
     let device_name = state.device_name.lock().unwrap().clone();
-    let stream = open_stream(&device_name)?;
+    // open_stream already fell back to the system default, so a failure
+    // here means there is nowhere at all to send audio.
+    let stream = open_stream(&device_name).map_err(|detail| PlaybackError::NoOutputDevice { detail })?;
     let sink = Sink::connect_new(stream.mixer());
     sink.set_volume(*state.volume.lock().unwrap());
     *guard = Some(Session { _stream: stream, sink, queue: VecDeque::new(), full_order: Vec::new() });
@@ -418,11 +478,20 @@ pub fn queue_set_device(state: State<PlaybackState>, name: Option<String>) -> Re
 }
 
 #[tauri::command]
-pub fn queue_enqueue(app: AppHandle, state: State<PlaybackState>, track: QueueTrack) -> Result<(), String> {
+pub fn queue_enqueue(app: AppHandle, state: State<PlaybackState>, track: QueueTrack) -> Result<(), PlaybackError> {
   let mut guard = ensure_session(&app, &state)?;
   let session = guard.as_mut().unwrap();
 
-  append_track(&session.sink, &track)?;
+  if let Err(err) = append_track(&session.sink, &track) {
+    // A session that never got a playable track would otherwise hold the
+    // output device open, and its monitor thread would announce
+    // track-changed(null) on its first tick, wiping the error usePlayback
+    // is about to show. Drop it, same as queue_stop.
+    if session.queue.is_empty() {
+      *guard = None;
+    }
+    return Err(err);
+  }
   session.full_order.push(track.clone());
   session.queue.push_back(track);
   Ok(())
@@ -489,7 +558,7 @@ pub fn queue_seek(state: State<PlaybackState>, position_ms: u64) -> Result<(), S
 /// holds the single looping track while repeat-one is active — this
 /// command has nothing real behind it to skip to in that case.
 #[tauri::command]
-pub fn queue_skip(state: State<PlaybackState>) -> Result<(), String> {
+pub fn queue_skip(state: State<PlaybackState>) -> Result<(), PlaybackError> {
   if let Some(session) = state.session.lock().unwrap().as_mut() {
     session.sink.skip_one();
     session.queue.pop_front();
@@ -648,6 +717,96 @@ mod tests {
 
     assert!(queue.is_empty());
     assert!(to_append.is_empty());
+  }
+
+  // A throwaway directory per test under the OS temp dir. The suffix keeps
+  // parallel tests (and parallel worktrees running cargo test) apart.
+  fn scratch_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("legato-playback-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+  }
+
+  fn unreachable_parts(err: PlaybackError) -> (Option<String>, bool) {
+    match err {
+      PlaybackError::FileUnreachable { nearest_folder, nearest_folder_empty, .. } => (nearest_folder, nearest_folder_empty),
+      other => panic!("expected FileUnreachable, got {other:?}"),
+    }
+  }
+
+  // The 2026-09-29 AIO case: /mnt/music exists as an empty mount point
+  // because the NFS mount never came up, so every path under it is missing
+  // and the nearest folder that exists has nothing in it.
+  #[test]
+  fn open_source_reports_an_empty_mount_point_for_an_unmounted_library() {
+    let mount_point = scratch_dir("unmounted");
+    let path = mount_point.join("Music/Artist/Album/01.flac");
+
+    let err = open_source(path.to_str().unwrap()).err().unwrap();
+
+    let (nearest, empty) = unreachable_parts(err);
+    assert_eq!(nearest.as_deref(), mount_point.to_str());
+    assert!(empty);
+    std::fs::remove_dir_all(&mount_point).unwrap();
+  }
+
+  // One file deleted from an album folder that is otherwise intact.
+  #[test]
+  fn open_source_reports_the_intact_album_folder_for_a_single_missing_file() {
+    let root = scratch_dir("one-missing");
+    let album = root.join("Artist/Album");
+    std::fs::create_dir_all(&album).unwrap();
+    std::fs::write(album.join("02.flac"), b"still here").unwrap();
+
+    let err = open_source(album.join("01.flac").to_str().unwrap()).err().unwrap();
+
+    let (nearest, empty) = unreachable_parts(err);
+    assert_eq!(nearest.as_deref(), album.to_str());
+    assert!(!empty);
+    std::fs::remove_dir_all(&root).unwrap();
+  }
+
+  #[test]
+  fn open_source_reports_a_file_that_opens_but_is_not_audio_as_undecodable() {
+    let dir = scratch_dir("garbage");
+    let path = dir.join("01.flac");
+    std::fs::write(&path, vec![0x5au8; 4096]).unwrap();
+
+    let err = open_source(path.to_str().unwrap()).err().unwrap();
+
+    assert!(matches!(err, PlaybackError::Undecodable { .. }), "got {err:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  // usePlayback.ts switches on `kind` and reads these field names; this
+  // pins the wire shape so a rename on either side fails here first.
+  #[test]
+  fn playback_error_serializes_as_a_kind_tagged_object() {
+    let unreachable = PlaybackError::FileUnreachable {
+      path: "/mnt/music/a.flac".into(),
+      nearest_folder: Some("/mnt/music".into()),
+      nearest_folder_empty: true,
+      detail: "No such file or directory".into(),
+    };
+    assert_eq!(
+      serde_json::to_value(&unreachable).unwrap(),
+      serde_json::json!({
+        "kind": "file_unreachable",
+        "path": "/mnt/music/a.flac",
+        "nearest_folder": "/mnt/music",
+        "nearest_folder_empty": true,
+        "detail": "No such file or directory",
+      })
+    );
+    assert_eq!(
+      serde_json::to_value(PlaybackError::Undecodable { path: "/a.flac".into(), detail: "bad".into() }).unwrap(),
+      serde_json::json!({ "kind": "undecodable", "path": "/a.flac", "detail": "bad" })
+    );
+    assert_eq!(
+      serde_json::to_value(PlaybackError::NoOutputDevice { detail: "none".into() }).unwrap(),
+      serde_json::json!({ "kind": "no_output_device", "detail": "none" })
+    );
   }
 
   #[test]

@@ -578,6 +578,8 @@ function MainApp() {
           shuffled={playback.shuffled}
           queueBusy={playback.queueBusy}
           repeatMode={repeatMode}
+          problem={playback.problem}
+          onResolveProblem={() => void playback.resolveProblem()}
           onPause={playback.pause}
           onResume={playback.resume}
           onSeek={playback.seek}
