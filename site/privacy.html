@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy policy · Legato</title>
+  <meta name="description" content="What Legato and legato.fm collect, why, where it's kept, and how to have it deleted." />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="128x128" href="/favicon-128.png" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="row">
+      <a href="/" aria-label="legato home"><img src="/wordmark.svg" alt="" class="wordmark" /></a>
+      <nav class="nav-links">
+        <a href="/">legato.fm</a>
+        <a href="/terms">Terms</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="legal">
+    <article class="legal-body">
+      <p class="eyebrow">legal</p>
+      <h1>Privacy policy</h1>
+      <p class="legal-updated mono">Last updated <mark class="todo">[DATE OF PUBLICATION]</mark></p>
+
+      <p>
+        Legato is a music player you run on your own hardware. Most of it never talks to us at
+        all. This page covers the parts that do: this website, its waitlist, and the optional
+        legato.fm account and remote-access service. It says what we collect, why, where it's
+        kept, and how to have it removed.
+      </p>
+      <p>
+        "We" and "us" mean <mark class="todo">[LEGAL NAME: Daniel Churchill, or a business name]</mark>,
+        who builds and runs Legato. Write to <a href="mailto:hello@legato.fm">hello@legato.fm</a>
+        about anything on this page.
+      </p>
+
+      <h2>The short version</h2>
+      <ul>
+        <li>Your music library, its metadata, and your play history stay on your own machine. We never receive them.</li>
+        <li>This website has no analytics, no tracking, no third-party scripts, and sets no cookies.</li>
+        <li>If you join the waitlist, we keep your email address so we can tell you when Legato is ready to install.</li>
+        <li>If you create a legato.fm account, we keep the name, email, and profile picture your sign-in provider shares, so you can sign in and link your servers.</li>
+        <li>We don't sell your data, show ads, or share it with anyone except the providers listed below, who run parts of the service for us.</li>
+      </ul>
+
+      <h2>The Legato app and your own server</h2>
+      <p>
+        The Legato desktop app and the Legato server run on hardware you control: your
+        computer, a NAS, a Raspberry Pi. Your music files, everything Legato works out about
+        them, your playlists, favourites and play history, and the owner account you create on
+        your server (its password is stored only as a one-way hash) all stay there. We don't
+        receive copies, and the app sends us no usage statistics.
+      </p>
+      <p>
+        To fill in details about your music, your server looks things up in public music
+        databases directly, without going through us: MusicBrainz, the Cover Art Archive,
+        LRCLIB (lyrics), Deezer (artist photos), and Wikipedia and Wikidata (descriptions). If
+        you add an AcoustID key yourself, it also sends audio fingerprints to AcoustID. These
+        lookups send the names of artists, albums and recordings in your library, and those
+        services see your server's IP address. Their own privacy policies apply to what they
+        receive.
+      </p>
+
+      <h2>This website</h2>
+      <p>
+        legato.fm is hosted on Cloudflare. Like any web host, Cloudflare handles your IP
+        address and browser details to deliver the page and protect it from attacks. We don't
+        add anything on top: there's no analytics, no tracking pixel, no embedded third-party
+        content, and no cookies. Fonts and images are served from legato.fm itself.
+      </p>
+
+      <h3>The waitlist</h3>
+      <p>
+        When you join the waitlist, we store your email address and the time you joined, in
+        Cloudflare's storage. We use it for one thing: to email you when Legato is ready to
+        install. There's no newsletter and no mailing-list company. To stop abuse of the form,
+        your IP address is kept for up to 10 minutes to limit repeated sign-ups, then deleted
+        automatically.
+      </p>
+      <p>
+        We delete the waitlist <mark class="todo">[CONFIRM: once the launch email has gone out / on request only]</mark>.
+        Email <a href="mailto:hello@legato.fm">hello@legato.fm</a> at any time to have your address removed sooner.
+      </p>
+
+      <h2>legato.fm accounts</h2>
+      <p>
+        A legato.fm account is optional. A Legato install at home works without one. You need
+        one to reach your own server from outside your home network, and later to use Legato
+        in a browser or join a friend's server.
+      </p>
+      <p>
+        You sign in with Google or GitHub. We never see your Google or GitHub password. We ask
+        those providers only for your basic profile, and we store:
+      </p>
+      <ul>
+        <li>which provider you used, and the account ID it gives us;</li>
+        <li>your email address (from GitHub, your primary verified address);</li>
+        <li>your display name and profile picture link;</li>
+        <li>when you created the account and when you last signed in;</li>
+        <li>your active sign-in sessions, so you stay signed in on your devices;</li>
+        <li>for each Legato server you link to your account, the credential it uses to connect, and the short-lived code you used to link it.</li>
+      </ul>
+      <p>
+        From Google we request only <span class="mono">openid</span>, <span class="mono">email</span>
+        and <span class="mono">profile</span>. From GitHub we request only read access to your
+        profile and email addresses (<span class="mono">read:user</span>,
+        <span class="mono">user:email</span>). We can't see your contacts, files, repositories,
+        or anything else in those accounts.
+      </p>
+      <p>
+        Legato's use and transfer of information received from Google APIs follows the
+        <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">Google API Services User Data Policy</a>,
+        including its Limited Use requirements.
+      </p>
+
+      <h2>Remote access (Legato Relay)</h2>
+      <p>
+        When you open your own server from outside your home network, your device and your
+        server connect through the legato.fm service. Requests from your apps, including the
+        audio you play, pass through it on the way. The service relays this traffic and
+        doesn't store it, read it, or keep copies of your music. Because it sits in the
+        middle, it's technically able to see that traffic as it passes. We say so plainly
+        because it's true of any relay.
+      </p>
+      <p>
+        Like most web services, it keeps request logs: the time, your IP address, and the
+        address requested. We use them to keep the service running and to deal with abuse, and
+        they're kept for <mark class="todo">[CONFIRM: up to 30 days]</mark>.
+      </p>
+      <p>
+        Remote access will be a paid service. Payments will be handled by a separate payment
+        provider, and this page will be updated to name it before we take any money.
+      </p>
+
+      <h2>Who else handles your data</h2>
+      <p>These companies run parts of Legato for us. Each only gets what it needs for its job:</p>
+      <ul>
+        <li><strong>Cloudflare</strong>: hosts this website and the waitlist, and runs legato.fm's DNS.</li>
+        <li><strong>Fly.io</strong>: hosts the legato.fm account and remote-access service, in the United States (Ashburn, Virginia).</li>
+        <li><strong>Google</strong>: our email (Google Workspace), and sign-in if you choose "Sign in with Google".</li>
+        <li><strong>GitHub</strong>: sign-in, if you choose "Sign in with GitHub".</li>
+      </ul>
+      <p>
+        We'll also share data if the law requires it, and only as much as it requires. Apart
+        from that, we don't share, sell, or rent it to anyone.
+      </p>
+
+      <h2>Where it's kept, and for how long</h2>
+      <ul>
+        <li><strong>Waitlist:</strong> in Cloudflare's storage, as described above.</li>
+        <li><strong>Account and linked servers:</strong> on the legato.fm service in the United States, for as long as you keep the account.</li>
+        <li><strong>Sign-in sessions:</strong> up to 30 days after last use, or until you sign out.</li>
+        <li><strong>Server-linking codes:</strong> 10 minutes.</li>
+        <li><strong>Request logs:</strong> as stated under remote access.</li>
+      </ul>
+      <p>
+        If you're outside the United States, using legato.fm accounts means your account data
+        is stored there.
+      </p>
+
+      <h2>Your choices and rights</h2>
+      <p>
+        You can ask us at any time to show you the data we hold about you, correct it, send
+        you a copy, or delete it. Email <a href="mailto:hello@legato.fm">hello@legato.fm</a>
+        from the address on your account or waitlist entry, and we'll do it within 30 days.
+        Deleting your account removes your profile, sessions and linked-server credentials.
+        Your servers keep working at home and keep everything stored on them. Self-service
+        export and deletion are coming to account settings.
+      </p>
+      <p>
+        Depending on where you live, privacy law may give you further rights, such as
+        objecting to how we use your data or complaining to your local data protection
+        authority. Get in touch and we'll help.
+      </p>
+      <p>
+        We keep your account data because you asked for an account, and your waitlist email
+        because you asked to be told when Legato launches. Where the law asks us to state a
+        legal basis, those are ours: providing the service you signed up for, and your consent.
+      </p>
+
+      <h2>Security</h2>
+      <p>
+        Everything between your browser and legato.fm is encrypted (HTTPS). Access to our
+        systems is limited to the person running them. No system is perfectly secure, so if we
+        ever find a breach that affects your data, we'll tell you without delay.
+      </p>
+
+      <h2>Children</h2>
+      <p>
+        Legato isn't directed at children under 16, and we don't knowingly collect data from
+        them. If you think a child has given us their details, email us and we'll delete them.
+      </p>
+
+      <h2>Changes</h2>
+      <p>
+        Legato is pre-release, and this page will change as features launch: a browser
+        version, Spotify import, invites, paid remote access. We'll update the date at the top
+        each time. Before anything that collects new kinds of data goes live, we'll update
+        this page first, and email account holders about any significant change.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        <a href="mailto:hello@legato.fm">hello@legato.fm</a><br />
+        <mark class="todo">[POSTAL ADDRESS, if you choose to publish one]</mark>
+      </p>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <img src="/wordmark.svg" alt="legato" class="wordmark small" />
+    <div class="footer-meta">
+      <span class="mono muted footer-legal"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span>
+      <span class="mono muted">legato.fm</span>
+    </div>
+  </footer>
+</body>
+</html>
