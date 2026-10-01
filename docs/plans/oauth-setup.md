@@ -2,6 +2,8 @@
 
 What Daniel does, and what has to be built, to get production Google and GitHub OAuth working. The OAuth routes can be tested on a throwaway server; this is about sign-in that works for real users. It covers the decisions, the console steps, the secrets and the code gaps, in the order they have to happen.
 
+**Status, 2026-10-01: steps 1–7 are done.** Daniel signed in through both Google and GitHub at `https://auth.legato.fm` with his own accounts. What's left is code: steps 8–11 below. Until #114 lands, these sign-ins create relay accounts only. They don't yet grant access to any home server.
+
 _Written 2026-09-30, against `main` at `147e008`. The plan this follows is [02-identity-and-accounts.md](02-identity-and-accounts.md); where the two disagree, 02 wins._
 
 ## The short version
@@ -195,7 +197,7 @@ None of these need you at a console. They're issues for workers.
    - Today the OAuth window ends with a cookie. The desktop app and the Mac → Pi setup authenticate with a bearer token, and can't read that cookie.
    - The fix PR #205 recommends: the callback issues a **one-time exchange code**; the app opens the sign-in in the system browser with a PKCE-style verifier and redeems the code for a token. The token itself never goes over `postMessage` or into a URL.
    - It needs a small design and should land with or just after #114. I can file it.
-3. **`Secure` cookies on the relay.** The relay's session and OAuth-state cookies are set without `Secure` (`relay/src/routes/auth.ts`, the `reply.setCookie` calls). That was right for loopback development, but on `https://auth.legato.fm` they should be `Secure`, set whenever `RELAY_AUTH_CALLBACK_BASE_URL` starts with `https://`. It's a one-line fix per cookie, plus a test. It belongs in #114, or can be a tiny issue of its own, and must land **before real users sign in**.
+3. **`Secure` cookies on the relay. This is now the most urgent item, because real sign-in is live.** Checked 2026-10-01: `https://auth.legato.fm/auth/google` still answers `set-cookie: relay_oauth_state=…; HttpOnly; SameSite=Lax`, with no `Secure`. Fly redirects `http://` to `https://`, but a browser still sends a non-`Secure` cookie on that first plain-http request, before the redirect. The relay's session and OAuth-state cookies are set without `Secure` (`relay/src/routes/auth.ts`, the `reply.setCookie` calls). That was right for loopback development, but on `https://auth.legato.fm` they should be `Secure`, set whenever `RELAY_AUTH_CALLBACK_BASE_URL` starts with `https://`. It's a one-line fix per cookie, plus a test. It belongs in #114, or can be a tiny issue of its own, and must land **before real users sign in**.
 4. **Retire home-server OAuth once #114 lands.** No server has Google/GitHub users, so `server/src/routes/auth.ts`'s provider flow and its env vars can go. That removes the need for any per-server OAuth registration. Keep them until #114 is verified.
 5. **Passkeys, email links and Sign in with Apple** (#137) come after. Apple needs an Apple Developer account, the same one #129's signing needs, and its own domain verification. It's out of scope here.
 
@@ -203,13 +205,13 @@ None of these need you at a console. They're issues for workers.
 
 | # | What | Who | Blocks |
 |---|---|---|---|
-| 1 | Decide the hostname, GitHub owner, Google account and support email | Daniel | everything |
+| 1 | Decide the hostname, GitHub owner, Google account and support email. **Done** | Daniel | everything |
 | 2 | `fly certs add`, and the Cloudflare CNAME set to DNS only. **Done 2026-09-30:** the certificate is issued and `https://auth.legato.fm/health` answers | Daniel | 6, 7 |
 | 3 | Verify `legato.fm` in Search Console. **Done 2026-09-30**, through the Workspace setup | Daniel | 4 |
-| 4 | Privacy and terms pages live on legato.fm | Daniel (a worker can draft) | 5 publishing |
-| 5 | Google project, branding, scopes, clients; publish to start brand verification | Daniel | 7 for non-test users |
-| 6 | GitHub OAuth apps (prod and dev) | Daniel | 7 |
-| 7 | `fly secrets set`, then the live check | Daniel | nothing (it's the proof) |
+| 4 | Privacy and terms pages live on legato.fm. **Done 2026-10-01** (PRs #210, #211) | Daniel (a worker can draft) | 5 publishing |
+| 5 | Google project, branding, scopes, clients; publish to start brand verification. **Done** | Daniel | 7 for non-test users |
+| 6 | GitHub OAuth apps (prod and dev). **Done** | Daniel | 7 |
+| 7 | `fly secrets set`, then the live check. **Done 2026-10-01:** both providers sign in at `auth.legato.fm` | Daniel | nothing (it's the proof) |
 | 8 | `Secure` cookies on the relay | worker | real users |
 | 9 | #114 identity provider | worker, wave 5 | home-server sign-in |
 | 10 | Desktop sign-in handoff | worker, with or after #114 | desktop and Mac → Pi sign-in |
