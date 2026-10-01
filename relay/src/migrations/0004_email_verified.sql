@@ -1,0 +1,12 @@
+-- Issue #114: legato.fm now vouches for its accounts to home servers, in
+-- the tokens it signs (signing-keys.ts). A home server links a pre-0029
+-- Google/GitHub user to a legato.fm account by email, but only if the
+-- token says the provider verified it, so the relay has to remember
+-- whether one did. Google says so in userinfo's email_verified; GitHub's
+-- path (routes/auth.ts) only ever returns an address GitHub verified.
+--
+-- Existing rows start at 0, "not known to be verified", and correct
+-- themselves on their next sign-in, because upsertUser refreshes it every
+-- time. Until then their tokens say email_verified: false and match
+-- nothing by email, which is the safe way to be wrong.
+ALTER TABLE relay_users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0;

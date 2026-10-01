@@ -71,6 +71,26 @@ message rather than failing to boot — see `relay/src/routes/auth.ts`. The
 relay proxy itself (`/tunnel`, `/relay/*`) works with none of this configured,
 since tunnel auth is credential-based, not OAuth-gated.
 
+### Token signing key (issue #114)
+
+legato.fm signs short-lived tokens that home servers verify against
+`GET /.well-known/jwks.json`. The key is a secret, never a file on the volume,
+which holds `relay.db` and its snapshots:
+
+```
+bun relay/scripts/generate-signing-key.ts      # prints {"privateKey":"…"}, and the kid on stderr
+fly secrets set RELAY_SIGNING_KEYS='[<that entry>]' --app legato-relay
+```
+
+Without it the relay still boots: the JWKS is `{"keys":[]}` and
+`POST /auth/server-token` 503s naming the variable. A malformed value is
+treated the same way, with one error line at startup.
+
+Rotating: append a new entry second (published, not yet signing), wait more
+than a day so every linked server's daily refresh has it, move it first, and
+remove the old one 15 minutes later. The steps are also in
+`relay/src/signing-keys.ts`.
+
 ## 4. Deploy
 
 ```

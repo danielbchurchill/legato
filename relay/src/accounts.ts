@@ -14,6 +14,7 @@ export type RelayUserRow = {
   provider: Provider;
   provider_user_id: string;
   email: string | null;
+  email_verified: 0 | 1;
   display_name: string | null;
   avatar_url: string | null;
   created_at: string;
@@ -23,6 +24,9 @@ export type RelayUserRow = {
 export type OAuthProfile = {
   providerUserId: string;
   email: string | null;
+  // Whether the provider vouched for `email` (migration 0004). Optional so
+  // that leaving it out reads as "not known", which is false.
+  emailVerified?: boolean;
   displayName: string | null;
   avatarUrl: string | null;
 };
@@ -33,14 +37,22 @@ export const SESSION_COOKIE = "relay_session";
 // signing in again is an UPSERT, not a new row.
 export function upsertUser(db: Database, provider: Provider, profile: OAuthProfile): RelayUserRow {
   db.prepare(
-    `INSERT INTO relay_users (provider, provider_user_id, email, display_name, avatar_url)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO relay_users (provider, provider_user_id, email, email_verified, display_name, avatar_url)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(provider, provider_user_id) DO UPDATE SET
        email = excluded.email,
+       email_verified = excluded.email_verified,
        display_name = excluded.display_name,
        avatar_url = excluded.avatar_url,
        last_login_at = datetime('now')`,
-  ).run(provider, profile.providerUserId, profile.email, profile.displayName, profile.avatarUrl);
+  ).run(
+    provider,
+    profile.providerUserId,
+    profile.email,
+    profile.email !== null && profile.emailVerified === true ? 1 : 0,
+    profile.displayName,
+    profile.avatarUrl,
+  );
 
   return db
     .prepare("SELECT * FROM relay_users WHERE provider = ? AND provider_user_id = ?")

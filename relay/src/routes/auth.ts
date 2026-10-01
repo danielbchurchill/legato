@@ -6,6 +6,7 @@ import {
   RELAY_GITHUB_CLIENT_SECRET,
   RELAY_GOOGLE_CLIENT_ID,
   RELAY_GOOGLE_CLIENT_SECRET,
+  RELAY_SIGNING_KEYS,
 } from "../config.js";
 import {
   createSession,
@@ -29,6 +30,7 @@ import {
   type NativeQuery,
 } from "../native-sign-in.js";
 import { clientAddress, TokenLimiter } from "../rate-limit.js";
+import { parseSigningKeys, SERVER_ID_PATTERN, signServerToken, type SigningKeys } from "../signing-keys.js";
 
 // Relay-side OAuth account provisioning. This mirrors server/'s pattern
 // (server/src/routes/auth.ts) deliberately: hand-rolled Authorization
@@ -114,11 +116,18 @@ async function exchangeGoogleCode(config: AuthConfig, code: string): Promise<OAu
   if (!userRes.ok) {
     throw new Error(`Google userinfo fetch failed: ${userRes.status} ${await userRes.text()}`);
   }
-  const profile = (await userRes.json()) as { sub: string; email?: string; name?: string; picture?: string };
+  const profile = (await userRes.json()) as {
+    sub: string;
+    email?: string;
+    email_verified?: boolean;
+    name?: string;
+    picture?: string;
+  };
 
   return {
     providerUserId: profile.sub,
     email: profile.email ?? null,
+    emailVerified: profile.email_verified === true,
     displayName: profile.name ?? null,
     avatarUrl: profile.picture ?? null,
   };
@@ -170,9 +179,12 @@ async function exchangeGithubCode(config: AuthConfig, code: string): Promise<OAu
     }
   }
 
+  // Verified either way: GitHub only lets a verified address be public,
+  // and the /user/emails fallback above only takes verified ones.
   return {
     providerUserId: String(profile.id),
     email,
+    emailVerified: email !== null,
     displayName: profile.name ?? profile.login,
     avatarUrl: profile.avatar_url,
   };
@@ -285,7 +297,7 @@ export function sessionToken(request: FastifyRequest): string | undefined {
 // or a loopback Vite in development, all cross-origin to auth.legato.fm.
 // No Access-Control-Allow-Credentials: these callers send a bearer token
 // and nothing else, so a cookie never rides along cross-site.
-const CORS_ROUTES = new Set(["/auth/token", "/auth/me", "/auth/logout"]);
+const CORS_ROUTES = new Set(["/auth/token", "/auth/me", "/auth/logout", "/auth/server-token"]);
 const LOOPBACK_DEV_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/;
 
 export function isAllowedAppOrigin(origin: string | undefined): boolean {
@@ -313,7 +325,14 @@ export interface AuthRoutesOptions {
   // never passes it.
   exchange?: Partial<Record<Provider, (code: string) => Promise<OAuthProfile>>>;
   tokenLimiter?: TokenLimiter;
+  // Token signing keys (issue #114). Undefined reads RELAY_SIGNING_KEYS;
+  // null is "signing off", which is what tests of the unconfigured path pass.
+  signingKeys?: SigningKeys | null;
 }
+
+const SIGNING_NOT_CONFIGURED =
+  "legato.fm can't sign server tokens yet: RELAY_SIGNING_KEYS isn't set on this relay. " +
+  "Generate one with `bun relay/scripts/generate-signing-key.ts` and set it as a secret.";
 
 export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
   const config = options.config ?? ENV_CONFIG;
@@ -321,6 +340,17 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
   const limiter = options.tokenLimiter ?? new TokenLimiter();
 
   return async function routes(app: FastifyInstance) {
+    let signingKeys: SigningKeys | null = null;
+    if (options.signingKeys !== undefined) {
+      signingKeys = options.signingKeys;
+    } else {
+      try {
+        signingKeys = parseSigningKeys(RELAY_SIGNING_KEYS);
+      } catch (err) {
+        app.log.error(`${err instanceof Error ? err.message : String(err)} Server token signing is off until it's fixed.`);
+      }
+    }
+
     app.addHook("onRequest", async (request, reply) => {
       if (CORS_ROUTES.has(request.routeOptions.url ?? "")) applyCors(request, reply);
     });
@@ -426,6 +456,50 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
         return { token, expiresAt: expiresAt.toISOString(), user: publicUser(user) };
       },
     );
+
+    // Public keys for every home server that trusts legato.fm (issue #114).
+    // Fetched by a server only once its owner has linked an account, then
+    // daily (server/src/auth/legatoIdentity.ts). An hour of caching is far
+    // inside the day-long overlap a rotation leaves (signing-keys.ts).
+    app.get("/.well-known/jwks.json", async (_request, reply) => {
+      reply.header("Cache-Control", "public, max-age=3600");
+      return { keys: signingKeys?.published ?? [] };
+    });
+
+    // A short-lived token for one home server, for a signed-in account.
+    // The token says who the account is; the server decides what that
+    // account may do there (server/src/auth/gate.ts).
+    //
+    // Always scope "link" for now. An "access" token for a server the
+    // account hasn't linked would let a hostile server that claims a real
+    // server's (public) id replay a visitor's token against the real one.
+    // So "access" is only for (account, server) pairs legato.fm has on
+    // record, and nothing records them yet: a server can't prove it owns
+    // an id to the relay until it has a tunnel credential. Until that
+    // follow-up lands (it blocks #117), the only thing a token can do on a
+    // server is link the owner's account.
+    app.post<{ Body: { serverId?: unknown } | null }>("/auth/server-token", async (request, reply) => {
+      const token = sessionToken(request);
+      const user = token ? getUserBySessionToken(db, token) : null;
+      if (!user) {
+        reply.code(401);
+        return { error: "Sign in to legato.fm first.", reason: "signed_out" };
+      }
+      if (!signingKeys || !config.callbackBaseUrl) {
+        reply.code(503);
+        return { error: SIGNING_NOT_CONFIGURED, reason: "signing_not_configured" };
+      }
+      const serverId = request.body?.serverId;
+      if (typeof serverId !== "string" || !SERVER_ID_PATTERN.test(serverId)) {
+        reply.code(400);
+        return {
+          error: "serverId must be the 32-character id from the server's GET /api/v1/auth/status (legato.serverId).",
+          reason: "bad_server_id",
+        };
+      }
+      const issued = signServerToken(signingKeys, { issuer: config.callbackBaseUrl, user, serverId, scope: "link" });
+      return { token: issued.token, expiresAt: issued.expiresAt.toISOString(), scope: issued.scope };
+    });
 
     app.post("/auth/logout", async (request, reply) => {
       const token = sessionToken(request);
