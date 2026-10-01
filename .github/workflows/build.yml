@@ -3,20 +3,22 @@ name: build
 # M10 step one: prove the Tauri shell actually builds and bundles clean on
 # macOS and Windows, not just this Linux dev machine. See CLAUDE.md's
 # Development Conventions for what M10 covers and what's still deliberately
-# deferred (real sidecar packaging, ffmpeg/fpcalc bundling, code signing —
-# none of that is this workflow's job).
+# deferred (ffmpeg/fpcalc bundling, code signing — none of that is this
+# workflow's job).
 #
 # This is the expensive one — a real 3-platform compile + bundle via
 # tauri-action, and macOS/Windows runners bill against GitHub's included-
 # minutes quota at 10x/2x the Linux rate. It deliberately does NOT run on
 # every push/PR the way check.yml does: the `paths` filters below scope it
 # to commits that can actually change what gets compiled or bundled —
-# Rust source, the frontend src/ the webview bundles, or root deps. A
-# server/-only, relay/-only, or site/-only change (those have their own
-# coverage in check.yml, and none of them are compiled into this binary —
-# server/ is spawned as a sidecar at runtime, relay/ and site/ are separate
-# deployables) never triggers this. Force a full build regardless of what
-# changed via workflow_dispatch (Actions tab -> build -> Run workflow, or
+# Rust source, the frontend src/ the webview bundles, root deps, and
+# server/. Since issue #103 the server ships *inside* the bundle as the
+# `legato-server` sidecar (tauri.conf.json's bundle.externalBin), compiled
+# by scripts/build-server-sidecar.mjs from beforeBuildCommand, so a
+# server/-only change does alter what this job produces. relay/ and site/
+# are still separate deployables with their own coverage in check.yml and
+# never trigger this. Force a full build regardless of what changed via
+# workflow_dispatch (Actions tab -> build -> Run workflow, or
 # `gh workflow run build.yml`).
 on:
   push:
@@ -26,6 +28,8 @@ on:
       - 'src/**'
       - 'package.json'
       - 'package-lock.json'
+      - 'server/**'
+      - 'scripts/build-server-sidecar.mjs'
       - '.github/workflows/build.yml'
   pull_request:
     branches: [main]
@@ -34,6 +38,8 @@ on:
       - 'src/**'
       - 'package.json'
       - 'package-lock.json'
+      - 'server/**'
+      - 'scripts/build-server-sidecar.mjs'
       - '.github/workflows/build.yml'
   workflow_dispatch:
 
@@ -56,7 +62,9 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
 
       # Cargo.toml pins rust-version = "1.77.2" as an MSRV floor, not an
       # exact toolchain version — stable is well above it and is what's
@@ -93,8 +101,34 @@ jobs:
             patchelf \
             libasound2-dev
 
+      # Root deps before server deps, and both before tauri-action: the
+      # sidecar compile (server/scripts/compile.ts) runs the root
+      # `npm run build` itself to embed the web client it serves at / (issue
+      # #116), so it needs root node_modules as much as tauri's own
+      # beforeBuildCommand does.
       - name: install root dependencies
         run: npm ci
+
+      # beforeBuildCommand runs `npm run build:sidecar`, which compiles the
+      # server with `bun build --compile` (issue #103). Same pinned Bun as
+      # check.yml and release.yml; scripts/build-server-sidecar.mjs's
+      # BUN_VERSION says to bump all three together.
+      - name: install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+
+      - name: install server dependencies
+        run: npm --prefix server ci
+
+      # Has to come before clippy, not just before tauri-action:
+      # tauri-build's build script checks every bundle.externalBin path
+      # exists on *every* cargo invocation, so clippy on a fresh runner fails
+      # with "resource path `binaries/legato-server-<triple>` doesn't exist"
+      # otherwise. tauri-action's beforeBuildCommand compiles it again
+      # (no --if-missing there), so the bundle still ships a fresh binary.
+      - name: build server sidecar
+        run: npm run build:sidecar
 
       - name: cargo clippy (src-tauri)
         run: cargo clippy --all-targets --all-features -- -D warnings
