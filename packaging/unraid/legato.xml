@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<!--
+  Unraid Community Applications template for the Legato server (issue #107).
+  It wraps the same image as docs/install/docker-compose.yml, with the same
+  container paths, so docs/install/docker.md holds for an Unraid install too.
+  packaging/unraid/README.md covers testing it and submitting it to CA.
+-->
+<Container version="2">
+  <Name>Legato</Name>
+  <Repository>ghcr.io/danielbchurchill/legato-server:latest</Repository>
+  <Registry>https://github.com/danielbchurchill/legato/pkgs/container/legato-server</Registry>
+  <Network>bridge</Network>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Project>https://legato.fm</Project>
+  <Overview>
+    Legato is a local-first music player that lays your library out as a graph, with a wiki-style article for every recording, artist and album. This container is its server: it scans your music share read-only (FLAC, MP3, M4A, Ogg, WAV, APE), enriches it from keyless open sources such as MusicBrainz and Cover Art Archive, and serves the Legato desktop app and any browser on your network.[br][br]
+    After the first start, open the WebUI. It shows a setup code (also printed in the container log) to create the owner account. Then add /music as a library folder.[br][br]
+    Music is mounted read-only. Tag write-back, the one feature that edits files, needs the Music path switched to read/write, so take a backup first.
+  </Overview>
+  <Category>MediaServer:Music MediaApp:Music</Category>
+  <WebUI>http://[IP]:[PORT:8899]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/danielbchurchill/unraid-templates/main/templates/legato.xml</TemplateURL>
+  <Icon>https://legato.fm/favicon-128.png</Icon>
+  <ExtraSearchTerms>music library flac musicbrainz streaming graph</ExtraSearchTerms>
+  <Date>2026-10-01</Date>
+  <Changes>Initial template.</Changes>
+  <Config Name="WebUI port" Target="8899" Default="8899" Mode="tcp" Description="Port for the web interface and for Legato apps to connect to. The container always listens on 8899 inside, so change only the host side if 8899 is taken." Type="Port" Display="always" Required="true" Mask="false">8899</Config>
+  <Config Name="Music" Target="/music" Default="" Mode="ro" Description="Your music share, for example /mnt/user/music. Mounted read-only. Inside Legato, add /music as the library folder." Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Appdata" Target="/data" Default="/mnt/user/appdata/legato" Mode="rw" Description="Database, cover art and waveform cache. Only legato.db* needs backing up; the rest rebuilds itself." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/legato</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Description="User id the server runs as. 99 (nobody) owns Unraid's shares by default. Never 0: the container refuses to run as root." Type="Variable" Display="advanced" Required="true" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Description="Group id the server runs as. 100 (users) is Unraid's default." Type="Variable" Display="advanced" Required="true" Mask="false">100</Config>
+  <Config Name="Install channel" Target="LEGATO_INSTALL_CHANNEL" Default="docker" Description="Tells Legato it was installed as a container, so update notices show the right steps. Leave as docker." Type="Variable" Display="advanced-hide" Required="false" Mask="false">docker</Config>
+</Container>
