@@ -2,6 +2,8 @@
 
 The image is `ghcr.io/danielbchurchill/legato-server`, built for `linux/amd64` and `linux/arm64`: a Synology or Unraid box, a Raspberry Pi 4/5, or any Linux machine with Docker. It holds the compiled server plus Debian's `ffmpeg` and `fpcalc`. Nothing else needs installing on the host.
 
+On a Synology, follow [synology.md](synology.md) instead: it does the same thing through Container Manager's web interface.
+
 ## Quick start
 
 1. Copy [`docker-compose.yml`](docker-compose.yml) into an empty folder.
