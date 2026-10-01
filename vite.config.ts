@@ -2,10 +2,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { shellWorker } from './scripts/vite-shell-worker.ts'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), shellWorker()],
   // Pinned to IPv4 loopback: 'localhost' resolves IPv6-only on this
   // machine, so Vite was only listening on [::1]:5173. Airship's tunnel
   // upgrade path already works around Node's dual-stack "localhost"

@@ -4,6 +4,8 @@ import { listen } from '@tauri-apps/api/event'
 import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
 import { streamUrl, watchForDrops } from './quality'
+import { useMediaSession } from './mediaSession'
+import { notePlaybackStarted } from '../pwa/installOffer'
 import {
   describePlaybackError,
   isNativePlaybackError,
@@ -409,12 +411,16 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
     audio.addEventListener('timeupdate', onTimeUpdate)
     audio.addEventListener('ended', onEnded)
+    // #128: the install offer waits for sound actually coming out, which a
+    // click on play alone doesn't prove (play() can still reject).
+    audio.addEventListener('playing', notePlaybackStarted)
     // #120: a mid-track drop pauses this track and moves the next one down
     // the quality ladder (playback/quality.ts).
     const stopWatchingDrops = watchForDrops(audio, () => setStatus((s) => ({ ...s, playing: false })))
     return () => {
       audio.removeEventListener('timeupdate', onTimeUpdate)
       audio.removeEventListener('ended', onEnded)
+      audio.removeEventListener('playing', notePlaybackStarted)
       stopWatchingDrops()
     }
   }, [advanceWebTrack])
@@ -1134,6 +1140,15 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     if (!IS_TAURI) return
     await invoke('queue_set_device', { name })
   }, [])
+
+  // #128: lock-screen and headphone controls for the browser player. Off
+  // in Tauri, where native media keys are #131's.
+  useMediaSession({
+    enabled: !IS_TAURI,
+    status,
+    title: currentTitle,
+    controls: { play: resume, pause, next, previous, seek },
+  })
 
   return {
     status,

@@ -9,20 +9,30 @@
       'system' -> prefers-color-scheme fallback) — keep the two in sync by
       hand if either changes; this one has to stay a plain inline script
       since it must run synchronously, before the stylesheet paints anything.
+
+      #128: it also colours the browser/installed-app chrome to match, via
+      the theme-color meta below. The two hexes are tokens.css's
+      --color-canvas for each theme, repeated here because tokens.css hasn't
+      loaded yet; useTheme.ts reads the token itself from then on.
     -->
+    <meta name="theme-color" content="#14181a" />
     <script>
       (function () {
+        var theme;
         try {
           var stored = localStorage.getItem('legato:theme');
           var pref = stored === 'dark' || stored === 'light' || stored === 'system' ? stored : 'system';
-          var theme = pref === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
-          document.documentElement.dataset.theme = theme;
+          theme = pref === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
         } catch (e) {
-          document.documentElement.dataset.theme = 'dark';
+          theme = 'dark';
         }
+        document.documentElement.dataset.theme = theme;
+        document.querySelector('meta[name="theme-color"]').content = theme === 'light' ? '#f6f4ef' : '#14181a';
       })();
     </script>
     <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Legato</title>
   </head>

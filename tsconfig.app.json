@@ -22,5 +22,8 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // The service worker runs in a worker scope, not a window: tsconfig.sw.json
+  // checks it against the WebWorker lib instead.
+  "exclude": ["src/pwa/worker.ts"]
 }

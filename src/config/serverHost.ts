@@ -52,6 +52,11 @@ function currentPage(): PageContext | null {
   }
 }
 
+/** True when a Legato server handed out this page. Also the condition for
+ * registering the service worker (src/pwa/register.ts): a Tauri bundle or a
+ * Vite dev page is never one. */
+export const SERVED_BY_SERVER = currentPage()?.servedByServer ?? false
+
 // The only places a server URL is assembled. Every other file imports one
 // of these rather than building its own.
 export const SERVER_ORIGIN = resolveServerOrigin(currentPage(), {
