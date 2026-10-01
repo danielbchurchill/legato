@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { API_BASE } from '../config/serverHost'
 import { MIN_SERVER_SCHEMA_VERSION } from '../config/serverVersion'
+import { updateAction, type UpdateAction } from '../config/installChannel'
 
 const HEALTH_URL = `${API_BASE}/health`
 const STARTUP_POLL_INTERVAL_MS = 300
@@ -29,6 +30,23 @@ export type ServerVersion = {
   /** Below MIN_SERVER_SCHEMA_VERSION, or too old to say — both mean the
    * same thing to someone reading the notice: update the server. */
   outOfDate: boolean
+  /** A newer release and what to run for it (issue #110). Null when there
+   * is none, the check is off, or the server is the desktop app's. */
+  update: AvailableUpdate | null
+}
+
+export type AvailableUpdate = { latestVersion: string; action: UpdateAction }
+
+// The server only reports `available` when its own daily check found a
+// newer stable release than it runs (server/src/update/check.ts), so the
+// client trusts that flag instead of comparing versions itself.
+function readAvailableUpdate(fields: Record<string, unknown>): AvailableUpdate | null {
+  const update = typeof fields.update === 'object' && fields.update !== null ? (fields.update as Record<string, unknown>) : {}
+  if (update.available !== true || typeof update.latestVersion !== 'string') return null
+  const channel = typeof fields.installChannel === 'string' ? fields.installChannel : null
+  const releaseUrl = typeof update.releaseUrl === 'string' ? update.releaseUrl : null
+  const action = updateAction(channel, releaseUrl)
+  return action ? { latestVersion: update.latestVersion, action } : null
 }
 
 // Reads the version fields out of a /health body (shape documented in
@@ -45,7 +63,13 @@ export function readServerVersion(body: unknown, minSchemaVersion: number = MIN_
     gitSha,
     schemaVersion,
     outOfDate: schemaVersion === null || schemaVersion < minSchemaVersion,
+    update: readAvailableUpdate(fields),
   }
+}
+
+function updateActionTarget(update: AvailableUpdate | null): string | undefined {
+  if (!update) return undefined
+  return update.action.kind === 'command' ? update.action.command : update.action.url
 }
 
 function sameServerVersion(a: ServerVersion | null, b: ServerVersion): boolean {
@@ -54,7 +78,10 @@ function sameServerVersion(a: ServerVersion | null, b: ServerVersion): boolean {
     a.version === b.version &&
     a.gitSha === b.gitSha &&
     a.schemaVersion === b.schemaVersion &&
-    a.outOfDate === b.outOfDate
+    a.outOfDate === b.outOfDate &&
+    a.update?.latestVersion === b.update?.latestVersion &&
+    a.update?.action.kind === b.update?.action.kind &&
+    updateActionTarget(a.update) === updateActionTarget(b.update)
   )
 }
 
