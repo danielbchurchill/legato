@@ -33,6 +33,16 @@ The image is `ghcr.io/danielbchurchill/legato-server`, built for `linux/amd64` a
 
 The server runs as `PUID:PGID`, never as root. On start, the container gives `/data` to that user if it isn't theirs yet (a first start, or after you change `PUID`). `PUID=0` is refused. That user needs read access to every folder in the library. On a Synology, check the shared folder's permissions for that user in Control Panel.
 
+## Adding another folder
+
+Legato can only see folders mounted into its container, so the folder picker lists `/music` and any other mount, nothing else from the host. To add a second library (another drive, a share mounted on the host), add a line under `volumes:` in `docker-compose.yml`, with a path inside the container that's yours to pick:
+
+```yaml
+      - "/volume2/more-music:/more-music:ro"
+```
+
+then `docker compose up -d` to recreate the container. The new folder shows up in the picker straight away; add it there like the first one.
+
 ## Tag write-back needs a read-write library
 
 The library is mounted `:ro`, so Legato can't change a single byte of your music, even by mistake. Scanning, playback, enrichment and the hygiene worklist all work read-only. Only the tag write-back feature writes to files: it saves corrected tags back into your FLACs. With the `:ro` mount, a write-back fails with a read-only filesystem error and leaves the file untouched.
