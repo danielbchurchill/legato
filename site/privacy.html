@@ -24,7 +24,7 @@
     <article class="legal-body">
       <p class="eyebrow">legal</p>
       <h1>Privacy policy</h1>
-      <p class="legal-updated mono">Last updated October 1, 2026</p>
+      <p class="legal-updated mono">Last updated <mark class="todo">[DATE THIS GOES LIVE]</mark></p>
 
       <p>
         Legato is a music player you run on your own hardware. Most of it never talks to us at
@@ -63,6 +63,16 @@
         lookups send the names of artists, albums and recordings in your library, and those
         services see your server's IP address. Their own privacy policies apply to what they
         receive.
+      </p>
+      <p>
+        Two more requests leave your server, and neither carries anything about your library.
+        Once a day it asks GitHub whether a newer version of Legato has been released, so it
+        can tell you how to update. That request sends only its IP address and the Legato
+        version it's running, and you can turn it off in settings. The desktop app skips it,
+        because it updates itself. And if you link your server to a legato.fm account, it
+        fetches legato.fm's public signing keys once a day, so it can check sign-ins from your
+        other devices. That sends its IP address and nothing else. A server that isn't linked
+        never contacts legato.fm.
       </p>
 
       <h2>This website</h2>
