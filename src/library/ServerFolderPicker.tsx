@@ -153,7 +153,7 @@ export function ServerFolderPicker({
             {listing.path === null ? 'This server has no folders to offer.' : 'No folders inside this one.'}
           </p>
         ) : (
-          <ul className={`flex max-h-[360px] flex-col ${loading ? 'opacity-50' : ''}`} aria-busy={loading}>
+          <ul className={`flex max-h-[360px] flex-col overflow-y-auto ${loading ? 'opacity-50' : ''}`} aria-busy={loading}>
             {listing?.entries.map((entry) => (
               <li key={entry.path}>
                 <button
