@@ -6,7 +6,7 @@ Each wave's workers run at the same time, each in its own worktree off `main`, f
 
 Update this file when a wave merges or the plan changes. The workers don't edit `docs/plans/`, so it stays the coordinator's.
 
-_Last updated 2026-09-29, `main` at `eebf44d`._
+_Last updated 2026-10-01, `main` at `efb149a`._
 
 ## Done
 
@@ -15,6 +15,7 @@ _Last updated 2026-09-29, `main` at `eebf44d`._
 | 1 and earlier | #98, #99, #100, #104, #111, #124, #125, #126, #127 | Merged before this file existed |
 | 2 | #102 compiled server, #122 watch-limit fallback, #123 scan stages, #136 light mode | #169, #168, #171, #170 |
 | 3 | #101 relay on Bun, #103 Tauri sidecar, #174 manifest drift test, #173 fuzzy-match index, #172 library cold start, #81 icon button clicks | #177, #180, #176, #182, #178, #181 |
+| 5 | #184/#186 playback errors and repeat lock, #189 scan scaling, #120 quality ladder, #113 headless claim, #121 folder picker, #188 `build.yml` sidecar, #194 deploy script, then #114 legato.fm identity, #130 tray/keep-awake, #110 update notice, #128 installable web app, #108 install script, #109 Homebrew formula, #106 Synology guide, #107 Unraid template. Alongside: #215 desktop sign-in handoff, #213 `Secure` relay cookies | #219, #224, #234, #218, #225, #223, #217, #220, #233, #229, #228, #232, #236, #230, #226, #227, #221, #214 |
 | 4 | #179 server port, #191 DB backup before migrating, #192 unreachable-root guard, #105 Docker image, #86 inspector width, #187 sidecar Bun check, then #193 version in `/health`, #116 web client served by the server, #112 local owner account | #199, #197, #201, #200, #202, #196, #203, #204, #205 |
 
 Still owed, by Daniel rather than a worker:
@@ -25,6 +26,13 @@ Still owed, by Daniel rather than a worker:
 - #103: optionally, a packaged Linux build (`npx tauri build`) run with Node and Bun off PATH. The Mac's packaged run and the AIO's dev run both pass.
 
 Wave 4's PRs say "Refs", not "Closes", for every issue except #193, per the worker rules: each has one check a worker couldn't reach (the native Tauri window, Linux hardware, the Pi, or a live push). The issues stay open until Daniel runs the steps in each PR. **Deploying #112 to the Pi breaks `~/pi-status`'s `/stats` poll until the kiosk sends a bearer token**; PR #205 has the curl.
+
+Wave 5's PRs all say "Refs" except #189's, for the same reason. #114 is merged but **not deployed**: the relay needs its `RELAY_SIGNING_KEYS` secret created at deploy time. Draft PR #235 adds the privacy-page paragraph for #110's update check and #114's key fetch, to publish with the first server deploy that ships them. Wave 5 found, and filed, #231 (registered-only access tokens, which block #117) and #237 (#113's legato.fm claim step). Smaller follow-ups:
+- the Pi's unit should switch to #108's `ExecStartPre` mount gate;
+- the web app needs HTTPS (`tailscale serve`) before a phone can install it;
+- `legato.fm/install` needs a `_redirects` line;
+- `dist-release/` belongs in `.gitignore`;
+- `web-client.spec.ts` has a type error, already on main.
 
 Wave 3 found six follow-ups, filed as #184–#189 and scheduled below. It also found #179, now in wave 4. A review of the session's failures added four safeguards, #191–#194, and a drive-recovery item on #108.
 
@@ -38,11 +46,11 @@ The two parallel workers in wave 2 both picked `0026`. Migration numbers are now
 | 0027 | #123 (merged) |
 | 0028 | #173 (merged) |
 | 0029 | #112 (merged) |
-| 0030 | #189, if its fix needs an index or column |
+| 0030 | #189 (merged) |
 | 0031 | free (#120 found it didn't need one) |
-| 0032 | #114 |
+| 0032 | #114 (merged) |
 
-**The relay has its own sequence** (`relay/src/migrations/`): 0001 and 0002 are merged, 0003 is #215, and 0004 is #114. Workers also need to be told this one: the two sequences aren't related.
+**The relay has its own sequence** (`relay/src/migrations/`): 0001–0004 are merged (0003 is #215, 0004 is #114). The next relay migration is 0005. Workers also need to be told this one: the two sequences aren't related.
 
 Give the next free number to any other issue that turns out to need storage, and note it here.
 
@@ -71,31 +79,12 @@ That's six workers in step 1 and three in step 2. #110 and #120 moved to wave 5 
 
 These open up as their dependencies merge.
 
-- **Wave 5, step 1 (running since 2026-10-01, run `run_3bc80cecaa4e`):** #184 then #186 (one worker), #189, #120, #113, #121, #188 and #194. Also running alongside, outside the wave: #215 (desktop sign-in handoff, run `run_ab6e76138d6a`).
-- **Wave 5, step 2 (after step 1 merges):** #114, once #215 has merged too, because both rewrite relay auth. Then #130, which adds a tray in `src-tauri/` and waits for #215's Tauri command and #184's `playback.rs` changes. Then #110 and #128.
-- **Wave 5, needs Daniel's hardware or accounts:**
-  - #106 needs a real Synology NAS and screenshots.
-  - #107 needs an Unraid box and a Community Applications submission.
-  - #108 needs testing on five distros.
-  - #109 needs a new `homebrew-legato` tap repo, and creating a public repo is Daniel's call.
-  Workers can draft all four, but none can finish.
-- **Wave 5 (the original list):**
-  - #114 (identity provider; needs #112 and #101 ✓)
-  - #113, #121 (both need #112)
-  - #128 (installable web app; needs #116)
-  - #106, #107 (Synology guide and Unraid template; need #105)
-  - #108, #109 (install script, Homebrew tap)
-  - #184 then #186, **one worker, one after the other**. Both edit `src/playback/usePlayback.ts`. #184 surfaces native playback errors; #186 puts `queue_set_repeat` under `serialized()`. Held until wave 5 because #179 rewrites `usePlayback.ts`'s API base in wave 4
-  - #189 (collapse/layout/enrich_queued scaling; needs #173 ✓). Server scan code only. Uses migration 0030 if it needs one. Held back for capacity
-  - #188 (`build.yml` sidecar build). Held back because it can't be verified on GitHub until the Actions billing problem is fixed. Its local check still means something, so it goes in once there's capacity
-  - #130 (tray and keep-serving; #103 ✓ has merged, so it's ready)
-  - #110 (update-available notice; needs #193, since it reads the version fields #193 adds)
-  - #120 (quality ladder; moved from wave 4 for capacity). Only touches the stream route. #185 builds on it, so it has to land in wave 5 for #185 to start in wave 6
-  - #194 (one-command deploy to a standalone host; needs #102 ✓). Only touches `scripts/` and CLAUDE.md's Pi note. Its real deploy to the Pi needs Daniel's go-ahead
-  - #108 already sits in this wave. Its "Done when" now includes a unit that recovers when the library drive comes back, fixing the Pi's `ConditionPathIsMountPoint` gate
+- **Wave 5:** merged 2026-10-01; see the Done table.
 - **Wave 6:**
-  - #115, #137, #143, #145 (all need #114)
-  - #117 (connect screen; needs #116 and #114)
+  - #115, #137, #143, #145 (all need #114 ✓)
+  - #117 (connect screen; needs #116 ✓, #114 ✓ and **#231**)
+  - #231 (legato.fm signs access tokens only for linked servers; needs #114 ✓). Blocks #117 and #237
+  - #237 (claim a headless server to legato.fm from `/setup`; needs #231)
   - #185 (native client falls back to the server stream; needs #184 and #120). **Before it starts, the coordinator adds a section to [03-connection-and-streaming.md](03-connection-and-streaming.md)** settling how `playback.rs` reads an HTTP stream, what gapless and seek mean over it, and how it relates to #120's ladder. Write that section during wave 5
 - **Wave 7:**
   - #118, #119 (both need #117)
