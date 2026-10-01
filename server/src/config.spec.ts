@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { resolveMediaConcurrencyLimit } from "./config.js";
+import { resolveLegatoIdOrigin, resolveMediaConcurrencyLimit } from "./config.js";
 
 describe("resolveMediaConcurrencyLimit", () => {
   it("defaults to max(1, cores - 1) when LEGATO_MEDIA_CONCURRENCY is unset", () => {
@@ -30,5 +30,28 @@ describe("resolveMediaConcurrencyLimit", () => {
 
   it("falls back to the cores-based default for a non-integer value", () => {
     expect(resolveMediaConcurrencyLimit({ LEGATO_MEDIA_CONCURRENCY: "2.5" }, 4)).toBe(3);
+  });
+});
+
+describe("resolveLegatoIdOrigin", () => {
+  it("defaults to auth.legato.fm", () => {
+    expect(resolveLegatoIdOrigin({})).toBe("https://auth.legato.fm");
+    expect(resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "  " })).toBe("https://auth.legato.fm");
+  });
+
+  it("turns off with `off`", () => {
+    expect(resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "off" })).toBeNull();
+    expect(resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "OFF" })).toBeNull();
+  });
+
+  it("accepts a bare origin, with or without a trailing slash", () => {
+    expect(resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "http://127.0.0.1:8901" })).toBe("http://127.0.0.1:8901");
+    expect(resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "https://auth.example.com/" })).toBe("https://auth.example.com");
+  });
+
+  it("refuses a path, another scheme, or garbage", () => {
+    expect(() => resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "https://auth.legato.fm/api" })).toThrow(/just an origin/);
+    expect(() => resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "ftp://auth.legato.fm" })).toThrow(/just an origin/);
+    expect(() => resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "not a url" })).toThrow(/LEGATO_ID_ORIGIN/);
   });
 });

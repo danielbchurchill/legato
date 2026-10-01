@@ -10,6 +10,9 @@ import {
 } from "../config.js";
 import { USER_AGENT } from "../enrich/mbClient.js";
 import { SESSION_COOKIE, bearerToken } from "../auth/gate.js";
+import { legatoIdentity } from "../auth/legatoIdentity.js";
+import { VERIFY_FAILURE_MESSAGES } from "../auth/legatoToken.js";
+import { linkAccount, linkedAccountId, unlinkAccount } from "../auth/legatoUsers.js";
 import { createOwner, ownerExists, passwordProblem, verifyOwnerPassword } from "../auth/owner.js";
 import { SignInLimiter } from "../auth/rateLimit.js";
 import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type SetupCodes } from "../auth/setupCode.js";
@@ -304,6 +307,16 @@ export function authRoutes(
         // the sign-in screen, since the settings panel that used to hold
         // these buttons is behind the gate now.
         oauth: { google: isGoogleConfigured(), github: isGithubConfigured() },
+        // What a client needs to ask legato.fm for a token for this server
+        // (issue #114): the id goes in as the token's audience, and the
+        // issuer says which legato.fm to ask. issuer is null when
+        // LEGATO_ID_ORIGIN=off. linked only tells the signed-in caller
+        // about their own row.
+        legato: {
+          serverId: legatoIdentity(db).serverId(),
+          issuer: legatoIdentity(db).origin,
+          linked: request.authUser ? linkedAccountId(db, request.authUser.id) !== null : null,
+        },
       };
     });
 
@@ -399,6 +412,76 @@ export function authRoutes(
       const token = bearerToken(request) ?? request.cookies[SESSION_COOKIE];
       if (token) deleteSession(db, token);
       reply.clearCookie(SESSION_COOKIE, { path: "/" });
+      return { ok: true };
+    });
+
+    // Issue #114: the owner attaches their legato.fm account to this server,
+    // so a token legato.fm signs for it maps to the owner's row. Takes a
+    // token rather than an account id, so the server sees legato.fm's own
+    // signature on who the account is. This is the first time the server
+    // contacts legato.fm at all (auth/legatoIdentity.ts's privacy note):
+    // the keys it needs to verify the token are fetched here, and the
+    // daily refresh starts once the link is stored.
+    app.post<{ Body: { token?: unknown } | null }>("/auth/legato/link", async (request, reply) => {
+      if (request.authUser?.role !== "owner") {
+        reply.code(403);
+        return { error: "Only this server's owner can link it to a legato.fm account.", reason: "owner_only" };
+      }
+      const identity = legatoIdentity(db);
+      if (!identity.enabled) {
+        reply.code(503);
+        return {
+          error: "legato.fm sign-in is turned off on this server (LEGATO_ID_ORIGIN=off).",
+          reason: "legato_disabled",
+        };
+      }
+      const token = request.body?.token;
+      if (typeof token !== "string" || !token) {
+        reply.code(400);
+        return { error: "Send the legato.fm token to link as `token`.", reason: "missing_token" };
+      }
+
+      let result = identity.verify(token);
+      if (!result.ok && result.reason === "unknown_key") {
+        // The one place a request waits on legato.fm: an owner is at the
+        // screen, and there are no cached keys yet on a first link.
+        if (!(await identity.refresh())) {
+          reply.code(502);
+          return {
+            error: `Couldn't reach ${identity.origin} to fetch its signing keys. Check this server's internet connection and try again.`,
+            reason: "keys_unavailable",
+          };
+        }
+        result = identity.verify(token);
+      }
+      if (!result.ok) {
+        reply.code(401);
+        return { error: VERIFY_FAILURE_MESSAGES[result.reason], reason: result.reason };
+      }
+
+      const linked = linkAccount(db, request.authUser.id, result.claims.sub);
+      if (!linked.ok) {
+        reply.code(409);
+        return {
+          error: "That legato.fm account is already linked to another user on this server.",
+          reason: "account_taken",
+        };
+      }
+      identity.syncSchedule();
+      request.log.info("auth: owner linked a legato.fm account");
+      return { linked: { accountId: result.claims.sub, email: result.claims.email, name: result.claims.name } };
+    });
+
+    // Unlinking the last account also stops the daily key refresh, so the
+    // server goes back to never contacting legato.fm. The cached keys stay;
+    // they're public and harmless, and a relink can use them.
+    app.delete("/auth/legato/link", async (request, reply) => {
+      if (request.authUser?.role !== "owner") {
+        reply.code(403);
+        return { error: "Only this server's owner can unlink its legato.fm account.", reason: "owner_only" };
+      }
+      unlinkAccount(db, request.authUser.id);
+      legatoIdentity(db).syncSchedule();
       return { ok: true };
     });
 

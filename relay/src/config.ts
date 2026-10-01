@@ -45,3 +45,11 @@ export const RELAY_GITHUB_CLIENT_SECRET = process.env.RELAY_GITHUB_CLIENT_SECRET
 // without it there's no way to construct a redirect_uri that matches
 // what's registered with the provider.
 export const RELAY_AUTH_CALLBACK_BASE_URL = process.env.RELAY_AUTH_CALLBACK_BASE_URL;
+
+// Issue #114: the Ed25519 keys legato.fm signs home-server tokens with.
+// A JSON array of { privateKey: PEM }; see signing-keys.ts for the format
+// and the rotation steps, and scripts/generate-signing-key.ts to make one.
+// Unset is a working relay with token signing off: the JWKS is empty and
+// POST /auth/server-token 503s, the same graceful absence as an
+// unconfigured OAuth provider.
+export const RELAY_SIGNING_KEYS = process.env.RELAY_SIGNING_KEYS;
