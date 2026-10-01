@@ -1,5 +1,13 @@
-import { describe, expect, it } from "bun:test";
-import { parseRange } from "./files.js";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import Fastify from "fastify";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { Database } from "../sqlite.js";
+import { openDb } from "../db.js";
+import { cachePath } from "../stream/cache.js";
+import { filesRoutes, parseRange } from "./files.js";
 
 const SIZE = 1000;
 
@@ -28,13 +36,15 @@ describe("parseRange", () => {
     expect(parseRange("bytes=-5000", SIZE)).toEqual({ start: 0, end: 999 });
   });
 
-  it("rejects a start past the end of the file", () => {
-    expect(parseRange("bytes=1000-1500", SIZE)).toBeNull();
+  it("marks a start at or past the end of the file unsatisfiable, the route's 416", () => {
+    expect(parseRange("bytes=1000-1500", SIZE)).toBe("unsatisfiable");
+    expect(parseRange("bytes=1000-", SIZE)).toBe("unsatisfiable");
+    expect(parseRange("bytes=-0", SIZE)).toBe("unsatisfiable");
   });
 
-  it("rejects an end at or past the file size", () => {
+  it("clamps an end past the file size to the last byte, as RFC 7233 asks", () => {
     expect(parseRange("bytes=0-999", SIZE)).toEqual({ start: 0, end: 999 });
-    expect(parseRange("bytes=0-1000", SIZE)).toBeNull();
+    expect(parseRange("bytes=0-1000", SIZE)).toEqual({ start: 0, end: 999 });
   });
 
   it("rejects start > end", () => {
@@ -48,5 +58,113 @@ describe("parseRange", () => {
   it("rejects garbage instead of throwing", () => {
     expect(parseRange("bytes=abc-def", SIZE)).toBeNull();
     expect(parseRange("bytes=", SIZE)).toBeNull();
+  });
+});
+
+describe("GET /api/v1/files/:id/stream", () => {
+  const HASH = "abcdef0123456789abcdef0123456789abcdef01";
+  let db: Database;
+  let dir: string;
+  let sourcePath: string;
+  let fileId: number;
+
+  beforeEach(() => {
+    db = openDb(":memory:");
+    dir = mkdtempSync(path.join(tmpdir(), "legato-files-route-test-"));
+    sourcePath = path.join(dir, "track.flac");
+    execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", sourcePath], { stdio: "ignore" });
+
+    const root = db.prepare("INSERT INTO library_roots (path) VALUES (?) RETURNING id").get(dir) as { id: number };
+    const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id").get() as {
+      id: number;
+    };
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(node.id);
+    fileId = (
+      db
+        .prepare(
+          `INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size, file_hash)
+           VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z', 0, ?) RETURNING id`,
+        )
+        .get(node.id, root.id, sourcePath, HASH) as { id: number }
+    ).id;
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function get(query = "", headers: Record<string, string> = {}) {
+    const app = Fastify();
+    await app.register(filesRoutes(db, { cacheDir: path.join(dir, "streams") }), { prefix: "/api/v1" });
+    return app.inject({ method: "GET", url: `/api/v1/files/${fileId}/stream${query}`, headers });
+  }
+
+  it("passes the source file straight through for original, the default", async () => {
+    const source = readFileSync(sourcePath);
+    for (const query of ["", "?quality=original"]) {
+      const res = await get(query);
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-type"]).toBe("audio/flac");
+      expect(res.headers["content-length"]).toBe(String(source.length));
+      expect(res.headers.etag).toBe(`"${HASH}"`);
+      expect(res.rawPayload.equals(source)).toBe(true);
+    }
+  });
+
+  it("answers a Range on original with 206 and the exact bytes", async () => {
+    const source = readFileSync(sourcePath);
+    const res = await get("?quality=original", { range: "bytes=10-19" });
+    expect(res.statusCode).toBe(206);
+    expect(res.headers["content-range"]).toBe(`bytes 10-19/${source.length}`);
+    expect(res.rawPayload.equals(source.subarray(10, 20))).toBe(true);
+  });
+
+  it("answers a Range past the end with 416 and the real length", async () => {
+    const size = readFileSync(sourcePath).length;
+    const res = await get("", { range: `bytes=${size}-` });
+    expect(res.statusCode).toBe(416);
+    expect(res.headers["content-range"]).toBe(`bytes */${size}`);
+  });
+
+  it("refuses an unknown quality with 400 instead of guessing", async () => {
+    const res = await get("?quality=flac320");
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("streams a fresh Opus 160 encode without a Content-Length, then serves the cached file with one", async () => {
+    const fresh = await get("?quality=opus160", { range: "bytes=0-" });
+    expect(fresh.statusCode).toBe(200);
+    expect(fresh.headers["content-type"]).toBe("audio/ogg; codecs=opus");
+    expect(fresh.headers["content-length"]).toBeUndefined();
+    expect(fresh.rawPayload.subarray(0, 4).toString()).toBe("OggS");
+
+    const cached = readFileSync(cachePath(HASH, "opus160", path.join(dir, "streams")));
+    expect(fresh.rawPayload.equals(cached)).toBe(true);
+
+    const hit = await get("?quality=opus160");
+    expect(hit.headers["content-length"]).toBe(String(cached.length));
+    expect(hit.rawPayload.equals(cached)).toBe(true);
+  });
+
+  it("holds a mid-file Range on a fresh encode until it finishes, then answers 206", async () => {
+    const res = await get("?quality=aac160", { range: "bytes=100-199" });
+    const cached = readFileSync(cachePath(HASH, "aac160", path.join(dir, "streams")));
+    expect(res.statusCode).toBe(206);
+    expect(res.headers["content-type"]).toBe("audio/mp4");
+    expect(res.headers["content-range"]).toBe(`bytes 100-199/${cached.length}`);
+    expect(res.rawPayload.equals(cached.subarray(100, 200))).toBe(true);
+  });
+
+  it("returns 502 before any audio header when ffmpeg can't read the source", async () => {
+    db.prepare("UPDATE files SET file_path = ? WHERE id = ?").run(path.join(dir, "missing.flac"), fileId);
+    const res = await get("?quality=opus96");
+    expect(res.statusCode).toBe(502);
+  });
+
+  it("returns 404 for original when the file has vanished from disk since the scan", async () => {
+    db.prepare("UPDATE files SET file_path = ? WHERE id = ?").run(path.join(dir, "missing.flac"), fileId);
+    const res = await get();
+    expect(res.statusCode).toBe(404);
   });
 });

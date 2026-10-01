@@ -4,7 +4,9 @@ import path from "node:path";
 import type { Database } from "../sqlite.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { openDb } from "../db.js";
-import { sweepStreamCache } from "./evict.js";
+import { cachePath } from "./cache.js";
+import { streamCacheHash, sweepStreamCache } from "./evict.js";
+import type { TranscodedQuality } from "./quality.js";
 
 let db: Database;
 let dir: string;
@@ -33,9 +35,9 @@ function insertLiveFileHash(hash: string): void {
   ).run(node.id, root.id, path.join(dir, `track-${fileCounter++}.flac`), hash);
 }
 
-// Real cache.ts cachePath() shape: <dir>/<hash prefix>/<hash>.flac
-function writeStreamFile(hash: string): string {
-  const full = path.join(dir, hash.slice(0, 2), `${hash}.flac`);
+// Real cache.ts cachePath() shape: <dir>/<quality>/<hash prefix>/<hash>.<ext>
+function writeStreamFile(hash: string, quality: TranscodedQuality = "opus160"): string {
+  const full = cachePath(hash, quality, dir);
   mkdirSync(path.dirname(full), { recursive: true });
   writeFileSync(full, `flac bytes for ${hash}`);
   return full;
@@ -86,5 +88,62 @@ describe("sweepStreamCache", () => {
     const report = await sweepStreamCache(db, { cacheDir: path.join(dir, "never-created") });
     expect(report.orphans).toEqual([]);
     expect(report.orphanBytes).toBe(0);
+  });
+
+  it("keeps every quality of a live hash and removes every quality of an orphan", async () => {
+    insertLiveFileHash("live1111111111111111111111111111111111");
+    const live = (["opus96", "opus160", "opus256", "aac160", "aac256"] as const).map((q) =>
+      writeStreamFile("live1111111111111111111111111111111111", q),
+    );
+    const orphans = [
+      writeStreamFile("orphan22222222222222222222222222222222", "opus256"),
+      writeStreamFile("orphan22222222222222222222222222222222", "aac160"),
+    ];
+
+    const report = await sweepStreamCache(db, { cacheDir: dir, dryRun: false });
+
+    expect(report.deleted.map((d) => d.path).sort()).toEqual(orphans.sort());
+    for (const file of live) expect(existsSync(file)).toBe(true);
+  });
+
+  it("removes the pre-#120 flat <prefix>/<hash>.flac layout even for a live hash", async () => {
+    insertLiveFileHash("live1111111111111111111111111111111111");
+    const legacy = path.join(dir, "li", "live1111111111111111111111111111111111.flac");
+    mkdirSync(path.dirname(legacy), { recursive: true });
+    writeFileSync(legacy, "old flac re-encode");
+
+    const report = await sweepStreamCache(db, { cacheDir: dir, dryRun: false });
+
+    expect(report.deleted.map((d) => d.path)).toEqual([legacy]);
+  });
+
+  it("leaves temp files, unknown rung directories and wrong extensions alone", async () => {
+    const files = [
+      path.join(dir, "opus160", "or", "orphan22222222222222222222222222222222.opus.0f3a.tmp"),
+      path.join(dir, "flac", "or", "orphan22222222222222222222222222222222.flac"),
+      path.join(dir, "opus160", "or", "orphan22222222222222222222222222222222.m4a"),
+      path.join(dir, "notes.txt"),
+    ];
+    for (const file of files) {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, "not a cache blob");
+    }
+
+    const report = await sweepStreamCache(db, { cacheDir: dir, dryRun: false });
+
+    expect(report.orphans).toEqual([]);
+    for (const file of files) expect(existsSync(file)).toBe(true);
+  });
+});
+
+describe("streamCacheHash", () => {
+  it("never claims a path outside the cache directory", () => {
+    const outside = path.join(path.dirname(dir), "elsewhere", "op", "opus160", "ab", "abc.opus");
+    expect(streamCacheHash(dir, outside)).toBeNull();
+    expect(streamCacheHash(dir, path.join(dir, "..", "ab", "abc.flac"))).toBeNull();
+  });
+
+  it("reads the hash back out of a variant path", () => {
+    expect(streamCacheHash(dir, cachePath("abcdef", "aac256", dir))).toBe("abcdef");
   });
 });

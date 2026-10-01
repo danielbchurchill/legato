@@ -221,7 +221,7 @@ app.get<{ Params: { filename: string } }>("/stream/:filename", async (request, r
   // routes/files.ts's own comment on why it exists only for the debug
   // spike now), so the edit here is deliberately narrow: just give this
   // spawn a playback-priority slot in the shared media queue, same as the
-  // real GET /files/:id/stream route (stream/cache.ts's ensureCached), so
+  // real GET /files/:id/stream route (stream/cache.ts's ensureVariant), so
   // a scan's background ffmpeg work can't starve this one either.
   const release = await acquireMediaSlot("playback");
 
