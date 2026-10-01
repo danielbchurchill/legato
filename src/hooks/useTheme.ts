@@ -42,6 +42,12 @@ function resolveTheme(preference: ThemePreference, systemLight: boolean): Resolv
 // place, so nothing in the component tree ever branches on theme itself.
 function applyTheme(theme: ResolvedTheme): void {
   document.documentElement.dataset.theme = theme
+  // #128: the browser's own chrome (an installed app's title bar, Android's
+  // status bar) follows the canvas colour. Read back from the token rather
+  // than repeated as a hex, so tokens.css stays the one place it's defined.
+  const canvas = getComputedStyle(document.documentElement).getPropertyValue('--color-canvas').trim()
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+  if (meta && canvas) meta.content = canvas
 }
 
 export function useTheme(): {
