@@ -102,7 +102,11 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # LEGATO_DATA_DIR must match the volume below. The server's fallback is
 # ~/.local/share/legato, which here would be an unmounted path inside the
 # container layer: every restart would open a fresh, empty database.
+# LEGATO_INSTALL_CHANNEL tells the update notice to show
+# `docker compose pull && docker compose up -d` (issue #110,
+# server/src/update/installChannel.ts).
 ENV LEGATO_DATA_DIR=/data \
+    LEGATO_INSTALL_CHANNEL=docker \
     LEGATO_PORT=8899 \
     LEGATO_FFMPEG_PATH=/usr/bin/ffmpeg \
     LEGATO_FPCALC_PATH=/usr/bin/fpcalc \

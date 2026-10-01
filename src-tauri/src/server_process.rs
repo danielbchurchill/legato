@@ -101,7 +101,10 @@ pub fn spawn(app: &AppHandle) -> Result<Child, String> {
 
   cmd
     .env("LEGATO_DATA_DIR", &data_dir)
-    .env("LEGATO_PORT", SERVER_PORT.to_string());
+    .env("LEGATO_PORT", SERVER_PORT.to_string())
+    // Issue #110: the desktop app updates through the Tauri updater (#129),
+    // so the server it spawns skips the release check and shows no notice.
+    .env("LEGATO_INSTALL_CHANNEL", "desktop");
 
   if let Some(ffmpeg_path) = resolve_media_binary(app, "ffmpeg") {
     log::info!("[server] using bundled ffmpeg: {ffmpeg_path:?}");
