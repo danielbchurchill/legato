@@ -175,7 +175,11 @@ describe('artworkFor', () => {
     const storage = memoryStorage()
     vi.stubGlobal('localStorage', storage)
     vi.stubGlobal('window', { location: { href: 'http://127.0.0.1:5185/' } })
-    storeSession({ token: 'token', mediaTicket: 'ticket-123' }, storage, 'http://127.0.0.1:8899')
+    // No explicit origin: artworkFor reads the session for whatever server
+    // SERVER_ORIGIN resolves to, and a .env.local can point that anywhere
+    // (a dev machine aimed at a remote server, say). Storing it under the
+    // same default keeps the test independent of the local config.
+    storeSession({ token: 'token', mediaTicket: 'ticket-123' }, storage)
   })
 
   afterEach(() => {
