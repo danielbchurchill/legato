@@ -7,46 +7,82 @@ name: build
 #
 # This is the expensive one — a real 3-platform compile + bundle via
 # tauri-action, and macOS/Windows runners bill against GitHub's included-
-# minutes quota at 10x/2x the Linux rate. It deliberately does NOT run on
-# every push/PR the way check.yml does: the `paths` filters below scope it
-# to commits that can actually change what gets compiled or bundled —
-# Rust source, the frontend src/ the webview bundles, root deps, and
-# server/. Since issue #103 the server ships *inside* the bundle as the
+# minutes quota at 10x/2x the Linux rate. So the 3-platform `build` only
+# runs for commits that can change what gets compiled or bundled: Rust
+# source, the frontend src/ the webview bundles, root deps, and server/.
+# Since issue #103 the server ships *inside* the bundle as the
 # `legato-server` sidecar (tauri.conf.json's bundle.externalBin), compiled
 # by scripts/build-server-sidecar.mjs from beforeBuildCommand, so a
 # server/-only change does alter what this job produces. relay/ and site/
-# are still separate deployables with their own coverage in check.yml and
-# never trigger this. Force a full build regardless of what changed via
-# workflow_dispatch (Actions tab -> build -> Run workflow, or
-# `gh workflow run build.yml`).
+# are separate deployables with their own coverage in check.yml.
+#
+# That scoping lives in the `changes` job, not in `on: paths`. A workflow
+# skipped by a paths filter reports no checks at all, so a required check
+# on `build` would leave a site/-only or docs-only PR waiting forever.
+# Instead the workflow always starts, `build` is skipped when nothing
+# relevant changed, and `build-result` always reports. Branch protection
+# requires `build-result`, never the matrix job names.
+#
+# Force a full build regardless of what changed via workflow_dispatch
+# (Actions tab -> build -> Run workflow, or `gh workflow run build.yml`).
 on:
   push:
     branches: [main]
-    paths:
-      - 'src-tauri/**'
-      - 'src/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'server/**'
-      - 'scripts/build-server-sidecar.mjs'
-      - '.github/workflows/build.yml'
   pull_request:
     branches: [main]
-    paths:
-      - 'src-tauri/**'
-      - 'src/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'server/**'
-      - 'scripts/build-server-sidecar.mjs'
-      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Decides whether the expensive build is needed. Keep BUILD_PATHS in step
+  # with the list in the header comment.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.diff.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: diff against the base
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+          BUILD_PATHS: '^(src-tauri/|src/|server/|package\.json$|package-lock\.json$|scripts/build-server-sidecar\.mjs$|\.github/workflows/build\.yml$)'
+        run: |
+          case "$EVENT" in
+            pull_request) range="$PR_BASE...$PR_HEAD" ;;
+            push) range="$PUSH_BEFORE...$PUSH_AFTER" ;;
+            *) range="" ;;
+          esac
+          # workflow_dispatch, or a push whose "before" isn't a commit we
+          # have (all zeros for a new branch, or gone after a force push):
+          # there's nothing trustworthy to diff against, so build everything.
+          base="${range%%...*}"
+          if [ -z "$range" ] || ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+            echo "no usable diff range; building"
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$range")
+          echo "$changed"
+          if printf '%s\n' "$changed" | grep -qE "$BUILD_PATHS"; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nothing the bundle depends on changed; skipping build"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -143,3 +179,23 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           uploadWorkflowArtifacts: true
+
+  # The one check branch protection requires from this workflow. It always
+  # runs, so a PR that skipped the build still gets a result. It fails
+  # closed: if `changes` itself broke, nothing was proven, so it fails.
+  build-result:
+    needs: [changes, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: build passed or wasn't needed
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          BUILD: ${{ needs.build.result }}
+        run: |
+          echo "changes: $CHANGES, build: $BUILD"
+          [ "$CHANGES" = success ] || { echo "the changes job didn't succeed"; exit 1; }
+          case "$BUILD" in
+            success|skipped) exit 0 ;;
+            *) echo "build $BUILD"; exit 1 ;;
+          esac
