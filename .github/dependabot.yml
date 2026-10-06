@@ -1,0 +1,55 @@
+# Monthly version updates, one grouped PR per ecosystem and directory.
+# Security updates are switched on in the repository settings and arrive
+# as soon as an advisory lands, independent of this schedule.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      app:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /server
+    schedule:
+      interval: monthly
+    groups:
+      server:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /relay
+    schedule:
+      interval: monthly
+    groups:
+      relay:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: monthly
+    groups:
+      site:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: monthly
+    groups:
+      tauri:
+        patterns: ["*"]
+
+  # The workflows pin actions by commit SHA with a version comment;
+  # Dependabot updates both together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
