@@ -25,6 +25,7 @@ import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 import { StreamQualityRow } from './StreamQualityRow'
 import { LegatoAccountRow } from './LegatoAccountRow'
 import { ServingGroup } from './ServingGroup'
+import { deviceForSaved, type AudioDevice } from '../playback/audioDevices'
 
 /* The Legato settings panel — DESIGN.md's "The gpui-kit control set",
  * restyled onto the same GroupHeader/SettingsRow geometry MusicMapSettings.tsx
@@ -203,7 +204,7 @@ export function LegatoSettings({
   const [scanErrors, setScanErrors] = useState<Record<number, ScanFileError[]>>({})
   // Outside Tauri there's no native output to list, so it starts empty
   // instead of being emptied by the effect below.
-  const [devices, setDevices] = useState<string[] | null>(IS_TAURI ? null : [])
+  const [devices, setDevices] = useState<AudioDevice[] | null>(IS_TAURI ? null : [])
   const [confirmingRebuild, setConfirmingRebuild] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
   const toast = useToast()
@@ -217,7 +218,7 @@ export function LegatoSettings({
   useEffect(() => {
     loadRoots()
     if (IS_TAURI) {
-      invoke<string[]>('list_audio_devices')
+      invoke<AudioDevice[]>('list_audio_devices')
         .then(setDevices)
         .catch(() => setDevices([]))
     }
@@ -365,7 +366,10 @@ export function LegatoSettings({
   // must preserve rather than invent a second on/off convention.
   const enrichmentEnabled = settings.enrichmentEnabled !== 'false'
   const replaygainMode: ReplayGainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
-  const audioDevice = settings.audioDevice || ''
+  // A preference saved before device ids is an old name; show it as the
+  // device it still resolves to, so the picker and the player agree. Picking
+  // again saves the id.
+  const audioDevice = deviceForSaved(settings.audioDevice || '', devices ?? [])?.id ?? (settings.audioDevice || '')
   const hoverDimEnabled = settings.hoverDimEnabled !== 'false'
   const reducedMotionForced = settings.reducedMotionForced === 'true'
 
@@ -607,7 +611,7 @@ export function LegatoSettings({
               label="audio output device"
               monospace
               value={audioDevice}
-              options={[{ value: '', label: 'system default' }, ...(devices ?? []).map((d) => ({ value: d, label: d }))]}
+              options={[{ value: '', label: 'system default' }, ...(devices ?? []).map((d) => ({ value: d.id, label: d.label }))]}
               onChange={(value) => {
                 const name = value || null
                 void updateSettings({ audioDevice: name ?? '' })
