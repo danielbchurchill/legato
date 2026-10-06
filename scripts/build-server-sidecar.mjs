@@ -145,10 +145,18 @@ async function main() {
   checkBun();
 
   console.log(`building legato-server sidecar for ${triple} (server compile target: ${compileTarget})`);
+  // On Windows `npm` is npm.cmd, and Node refuses to spawn a .cmd without a
+  // shell (CVE-2024-27980), so without one the spawn fails before npm runs.
+  // Every argument here is a fixed string or a known compile target, so the
+  // shell has nothing to interpret.
   const result = spawnSync("npm", ["--prefix", "server", "run", "compile", "--", compileTarget], {
     stdio: "inherit",
     cwd: REPO_ROOT,
+    shell: process.platform === "win32",
   });
+  if (result.error) {
+    throw new Error(`couldn't run the server compile for ${compileTarget}: ${result.error.message}`);
+  }
   if (result.status !== 0) {
     throw new Error(`server compile failed for ${compileTarget} (exit ${result.status})`);
   }
