@@ -140,6 +140,9 @@ where
   std::thread::Builder::new()
     .name("keep-awake".into())
     .spawn(move || {
+      // Assertion is a unit struct on Windows but holds state on macOS and
+      // Linux, so this shared call has to go through Default everywhere.
+      #[allow(clippy::default_constructed_unit_structs)]
       let mut holder = Holder::new(platform::Assertion::default());
       loop {
         let (enabled, serving) = inputs();

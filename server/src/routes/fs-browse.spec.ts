@@ -27,6 +27,12 @@ import { fsBrowseRoutes } from "./fs-browse.js";
 //   drive/
 //     Albums/           2 audio files
 //   outside/            not a root, not under one
+//
+// Not under os.tmpdir(): on Linux that's /tmp, and browse.ts deliberately
+// never offers a mount under /tmp, so the fake drive would drop out of the
+// roots. /var/tmp is disk-backed and exists on Linux and macOS.
+const TEST_TMP = process.platform === "win32" ? tmpdir() : "/var/tmp";
+
 let base: string;
 let home: string;
 let drive: string;
@@ -70,7 +76,7 @@ function get(url: string, headers: Record<string, string> = { authorization: `Be
 }
 
 beforeEach(async () => {
-  base = mkdtempSync(path.join(tmpdir(), "legato-browse-"));
+  base = mkdtempSync(path.join(TEST_TMP, "legato-browse-"));
   home = path.join(base, "home");
   drive = path.join(base, "drive");
   outside = path.join(base, "outside");
