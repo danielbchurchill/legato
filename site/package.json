@@ -17,11 +17,11 @@
     "@fontsource-variable/sometype-mono": "^5.3.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260908.1",
-    "@types/node": "^24.13.3",
-    "typescript": "~6.0.2",
-    "vite": "^8.2.0",
-    "wrangler": "^4.130.0"
+    "@cloudflare/workers-types": "^5.20261003.1",
+    "@types/node": "^26.6.4",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.2",
+    "wrangler": "^4.147.0"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
