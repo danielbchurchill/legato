@@ -43,6 +43,13 @@ updates:
     groups:
       tauri:
         patterns: ["*"]
+    # rodio 0.22 renames the playback API (OutputStream, Sink) that
+    # playback.rs is built on, so it can't ride along in the monthly group.
+    # Its migration is a separate PR that needs real playback testing;
+    # remove this once that lands. Security updates ignore this rule.
+    ignore:
+      - dependency-name: rodio
+        versions: [">=0.22.0"]
 
   # The workflows pin actions by commit SHA with a version comment;
   # Dependabot updates both together.
