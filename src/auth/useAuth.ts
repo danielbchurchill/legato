@@ -47,6 +47,8 @@ export function useAuth() {
   }, [])
 
   useEffect(() => {
+    // Fetches sign-in status on mount; the state it sets comes from the server.
+    // oxlint-disable-next-line react/set-state-in-effect
     void refresh()
     const onAuthRequired = () => void refresh()
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired)

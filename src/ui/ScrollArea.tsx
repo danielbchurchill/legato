@@ -50,6 +50,9 @@ export function ScrollArea({ children, className = '', contentClassName = '', vi
     (el: HTMLDivElement | null) => {
       viewport.current = el
       if (typeof viewportRef === 'function') viewportRef(el)
+      // Forwarding the element to the caller's object ref is exactly what a
+      // ref callback is for; nothing about this is React state.
+      // oxlint-disable-next-line react/immutability
       else if (viewportRef) viewportRef.current = el
     },
     [viewportRef],

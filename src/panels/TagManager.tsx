@@ -63,6 +63,8 @@ export function TagManager({
   const fetchRows = useCallback(() => fetch(`${API}/tag-manager?field=${field}`).then((r) => r.json()), [field])
 
   useEffect(() => {
+    // Clears the last field's rows before fetching the new field's.
+    // oxlint-disable-next-line react/set-state-in-effect
     setRows(null)
     setRescanErrors({})
     fetchRows()

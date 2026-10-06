@@ -3,6 +3,19 @@
   "plugins": ["react", "typescript", "oxc"],
   "rules": {
     "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
+    "react/only-export-components": ["warn", { "allowConstantExport": true }],
+    // Off: react/refs, react/incompatible-library and react/immutability are
+    // React Compiler rules. Without the compiler (vite.config.ts has none),
+    // reading a ref in render is safe, and they flag deliberate patterns.
+    "react/refs": "off",
+    "react/incompatible-library": "off"
+  },
+  "overrides": [
+    {
+      "files": ["src/**/*.spec.ts", "src/**/*.spec.tsx"],
+      "rules": {
+        "react/immutability": "off"
+      }
+    }
+  ]
 }

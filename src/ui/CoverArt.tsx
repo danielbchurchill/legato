@@ -39,6 +39,8 @@ export function CoverArt({ nodeId, size, className = '', alt = '', style }: Cove
   // That is the intermittent "artwork doesn't display" bug.
   useLayoutEffect(() => {
     const img = imgRef.current
+    // Resetting from the img's real decode state here is the fix described above; it must run before paint.
+    // oxlint-disable-next-line react/set-state-in-effect
     setFailed(false)
     setLoaded(img != null && img.complete && img.naturalWidth > 0)
   }, [src])

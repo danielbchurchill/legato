@@ -58,6 +58,8 @@ export function useGraphData() {
   }, [])
 
   useEffect(() => {
+    // Initial graph fetch; the nodes and edges it sets come from the server.
+    // oxlint-disable-next-line react/set-state-in-effect
     refetch()
   }, [refetch])
 

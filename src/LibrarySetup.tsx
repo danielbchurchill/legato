@@ -45,15 +45,16 @@ export default function LibrarySetup({
   // "scanning…" label already acknowledged the click); past 800ms, one
   // non-looping colour shift says the wait is still real without pretending
   // to know its length. Once filesTotal arrives this never fires again.
-  const [longWait, setLongWait] = useState(false)
+  const walking = Boolean(scanningRoot) && filesTotal === 0
+  const [walkedLong, setWalkedLong] = useState(false)
+  // Cleared during render, so the next walk starts its 800ms from scratch.
+  if (!walking && walkedLong) setWalkedLong(false)
   useEffect(() => {
-    if (!scanningRoot || filesTotal > 0) {
-      setLongWait(false)
-      return
-    }
-    const t = setTimeout(() => setLongWait(true), 800)
+    if (!walking) return
+    const t = setTimeout(() => setWalkedLong(true), 800)
     return () => clearTimeout(t)
-  }, [scanningRoot, filesTotal])
+  }, [walking])
+  const longWait = walking && walkedLong
 
   // A failed initial scan still leaves a real (if empty or partial) library
   // — DESIGN.md puts scan-failure handling on the canvas, not here, so this

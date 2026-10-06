@@ -12,15 +12,16 @@ import { useEffect, useState } from 'react'
  * motion, so nothing here needs a motion-reduce escape hatch. */
 export function useMountFade(active = true): boolean {
   const [shown, setShown] = useState(false)
+  // Reset during render, not in the effect: going inactive reads as hidden
+  // on that same render, and the next activation starts from false again,
+  // so it still gets its one frame to fade in from.
+  if (!active && shown) setShown(false)
 
   useEffect(() => {
-    if (!active) {
-      setShown(false)
-      return
-    }
+    if (!active) return
     const raf = requestAnimationFrame(() => setShown(true))
     return () => cancelAnimationFrame(raf)
   }, [active])
 
-  return shown
+  return active && shown
 }

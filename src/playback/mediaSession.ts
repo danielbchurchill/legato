@@ -198,6 +198,9 @@ export function useMediaSession({
   const durationMs = status.currentDurationMs
   useEffect(() => {
     if (!session || nodeId == null) return
+    // session is navigator.mediaSession (or a stand-in in tests): setting this
+    // property is how the browser API is driven, not a React value mutated.
+    // oxlint-disable-next-line react/immutability
     session.playbackState = playing ? 'playing' : 'paused'
     syncPositionState(session, { positionMs: statusRef.current.positionMs, durationMs })
   }, [session, nodeId, playing, durationMs])

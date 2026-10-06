@@ -74,6 +74,8 @@ const SearchField = forwardRef<SearchFieldHandle, SearchFieldProps>(function Sea
   const [shown, setShown] = useState(false)
   useEffect(() => {
     if (open) {
+      // Mount, enter and exit steps for the panel's animation, keyed on open (as in Dialog).
+      // oxlint-disable-next-line react/set-state-in-effect
       setMounted(true)
     } else {
       setMounted(false)
@@ -88,6 +90,8 @@ const SearchField = forwardRef<SearchFieldHandle, SearchFieldProps>(function Sea
 
   useEffect(() => {
     if (trimmed.length < 2) {
+      // Clears results for a too-short query, in the effect that debounces the search for longer ones.
+      // oxlint-disable-next-line react/set-state-in-effect
       setResults([])
       setSearched(false)
       setInFlight(false)
@@ -114,8 +118,13 @@ const SearchField = forwardRef<SearchFieldHandle, SearchFieldProps>(function Sea
   }, [trimmed])
 
   // Highlight resets whenever the result set changes under it — a stale
-  // index pointing at a row that no longer exists is worse than none.
-  useEffect(() => setHighlighted(null), [results])
+  // index pointing at a row that no longer exists is worse than none. Done
+  // during render, so the stale index is never painted against new rows.
+  const [highlightFor, setHighlightFor] = useState(results)
+  if (highlightFor !== results) {
+    setHighlightFor(results)
+    setHighlighted(null)
+  }
 
   const choose = (result: SearchResult) => {
     onSelectNode(result.id)

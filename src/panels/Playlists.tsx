@@ -83,7 +83,14 @@ function PlaylistRow({
   const [name, setName] = useState(playlist.name)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
-  useEffect(() => setName(playlist.name), [playlist.name])
+  // Follows a rename from elsewhere, during render so the old name never
+  // paints. An edit in progress here doesn't change playlist.name, so it's
+  // left alone.
+  const [nameFrom, setNameFrom] = useState(playlist.name)
+  if (nameFrom !== playlist.name) {
+    setNameFrom(playlist.name)
+    setName(playlist.name)
+  }
 
   if (confirmingDelete) {
     return (
@@ -328,6 +335,8 @@ function PlaylistDetail({
 
   useEffect(load, [load])
   useEffect(() => {
+    // Clears the last playlist's import report before fetching this one's.
+    // oxlint-disable-next-line react/set-state-in-effect
     setImportReport(null)
     fetch(`${API}/playlists/${playlistId}/import-report`)
       .then((r) => (r.ok ? r.json() : null))

@@ -52,6 +52,8 @@ export function useSetupCode(enabled: boolean) {
   }, [])
 
   useEffect(() => {
+    // Loads the setup code from the server once enabled.
+    // oxlint-disable-next-line react/set-state-in-effect
     if (enabled) void load()
   }, [enabled, load])
 

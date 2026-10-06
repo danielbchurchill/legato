@@ -17,9 +17,9 @@ export function ArticleBody({
 }) {
   const parts: ReactNode[] = []
   let lastIndex = 0
-  LINK_PATTERN.lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = LINK_PATTERN.exec(bodyMd))) {
+  // matchAll iterates a copy of the regex, so the shared /g pattern's
+  // lastIndex is never touched and two renders can't trip over each other.
+  for (const match of bodyMd.matchAll(LINK_PATTERN)) {
     if (match.index > lastIndex) parts.push(bodyMd.slice(lastIndex, match.index))
     const [full, text, idStr] = match
     parts.push(
