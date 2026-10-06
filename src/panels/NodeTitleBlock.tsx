@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Icon } from '../ui/Icon'
 import { ScrollingText } from '../ui/ScrollingText'
 import { Tooltip } from '../ui/Tooltip'
@@ -26,7 +26,13 @@ export function NodeTitleBlock({ node }: { node: NodeDetail }) {
   // selection, or useNodeDetail's own favourites:changed listener
   // correcting a request that failed silently.
   const [isFavourite, setIsFavourite] = useState(node.is_favourite)
-  useEffect(() => setIsFavourite(node.is_favourite), [node.id, node.is_favourite])
+  // Resynced during render rather than in an effect, so a new node never
+  // paints one frame with the previous node's heart.
+  const [syncedFrom, setSyncedFrom] = useState({ id: node.id, isFavourite: node.is_favourite })
+  if (syncedFrom.id !== node.id || syncedFrom.isFavourite !== node.is_favourite) {
+    setSyncedFrom({ id: node.id, isFavourite: node.is_favourite })
+    setIsFavourite(node.is_favourite)
+  }
 
   const toggleFavourite = () => {
     const next = !isFavourite

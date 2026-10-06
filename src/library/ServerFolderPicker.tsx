@@ -45,17 +45,23 @@ export function ServerFolderPicker({
   const [listing, setListing] = useState<BrowseListing | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const [slow, setSlow] = useState(false)
+  const [loadedSlowly, setLoadedSlowly] = useState(false)
   const [attempt, setAttempt] = useState(0)
 
   // Every open starts back at the roots, not wherever the last one ended.
-  useEffect(() => {
+  // Done during render, on the change of `open`, so the fetch below already
+  // sees the roots rather than first re-requesting the last folder.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
     if (open) setTrail([])
-  }, [open])
+  }
 
   useEffect(() => {
     if (!open) return
     const controller = new AbortController()
+    // Marks the request this effect starts as in flight.
+    // oxlint-disable-next-line react/set-state-in-effect
     setLoading(true)
     setError(null)
     const query = target === undefined ? '' : `?path=${encodeURIComponent(target)}`
@@ -75,14 +81,14 @@ export function ServerFolderPicker({
     return () => controller.abort()
   }, [open, target, attempt])
 
+  // Cleared during render, so each request starts its delay from scratch.
+  if (!loading && loadedSlowly) setLoadedSlowly(false)
   useEffect(() => {
-    if (!loading) {
-      setSlow(false)
-      return
-    }
-    const timer = setTimeout(() => setSlow(true), SPINNER_DELAY_MS)
+    if (!loading) return
+    const timer = setTimeout(() => setLoadedSlowly(true), SPINNER_DELAY_MS)
     return () => clearTimeout(timer)
   }, [loading])
+  const slow = loading && loadedSlowly
 
   // While a request is out, the rows shown are still the previous folder's;
   // they stay up (no flash to empty), but can't be acted on.

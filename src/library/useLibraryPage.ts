@@ -78,6 +78,8 @@ export function useLibraryPage<Row>(
   useEffect(() => {
     generation.current += 1
     loadedPages.current = new Set()
+    // A new query drops the old pages together with the generation bump above, so no stale page lands in the new result.
+    // oxlint-disable-next-line react/set-state-in-effect
     setRows([])
     setTotal(0)
     setLoading(true)
@@ -135,21 +137,24 @@ export function useLibraryPage<Row>(
   // Same MO-11 wait timing as useLyrics.ts/LibrarySetup.tsx: nothing for the
   // first ~400ms (most local fetches never reach it), one non-looping change
   // past ~800ms.
-  const [waitVisible, setWaitVisible] = useState(false)
-  const [waitLong, setWaitLong] = useState(false)
+  const [waitedShort, setWaitedShort] = useState(false)
+  const [waitedLong, setWaitedLong] = useState(false)
+  // Cleared during render, so each load starts both timers from scratch.
+  if (!loading && (waitedShort || waitedLong)) {
+    setWaitedShort(false)
+    setWaitedLong(false)
+  }
   useEffect(() => {
-    if (!loading) {
-      setWaitVisible(false)
-      setWaitLong(false)
-      return
-    }
-    const shortTimer = setTimeout(() => setWaitVisible(true), 400)
-    const longTimer = setTimeout(() => setWaitLong(true), 800)
+    if (!loading) return
+    const shortTimer = setTimeout(() => setWaitedShort(true), 400)
+    const longTimer = setTimeout(() => setWaitedLong(true), 800)
     return () => {
       clearTimeout(shortTimer)
       clearTimeout(longTimer)
     }
   }, [loading])
+  const waitVisible = loading && waitedShort
+  const waitLong = loading && waitedLong
 
   return { rows, total, loading, waitVisible, waitLong, ensureRange }
 }

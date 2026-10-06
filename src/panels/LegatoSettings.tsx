@@ -201,7 +201,9 @@ export function LegatoSettings({
   const [folderPickerOpen, setFolderPickerOpen] = useState(false)
   const [scanning, setScanning] = useState<Record<number, RunningScan>>({})
   const [scanErrors, setScanErrors] = useState<Record<number, ScanFileError[]>>({})
-  const [devices, setDevices] = useState<string[] | null>(null)
+  // Outside Tauri there's no native output to list, so it starts empty
+  // instead of being emptied by the effect below.
+  const [devices, setDevices] = useState<string[] | null>(IS_TAURI ? null : [])
   const [confirmingRebuild, setConfirmingRebuild] = useState(false)
   const [rebuilding, setRebuilding] = useState(false)
   const toast = useToast()
@@ -218,8 +220,6 @@ export function LegatoSettings({
       invoke<string[]>('list_audio_devices')
         .then(setDevices)
         .catch(() => setDevices([]))
-    } else {
-      setDevices([])
     }
   }, [])
 
