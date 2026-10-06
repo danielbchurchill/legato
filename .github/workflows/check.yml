@@ -53,6 +53,11 @@ jobs:
       - name: build root app (tsc -b && vite build)
         run: npm run build
 
+      # The app's own specs (vitest, scoped to src/**/*.spec.{ts,tsx}). Same
+      # as `npx vitest run` in check:all, so a red local run is a red CI run.
+      - name: app test suite (vitest)
+        run: npm test
+
       # server/ runs on Bun, not Node — issue #100. Dependencies still
       # install via npm (server/package-lock.json stays the source of
       # truth), but `npm --prefix server test` shells out to `bun test`
