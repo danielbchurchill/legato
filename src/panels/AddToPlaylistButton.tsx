@@ -22,6 +22,8 @@ export function AddToPlaylistButton({ nodeId, size = 24 }: { nodeId: number; siz
 
   useEffect(() => {
     if (!open) return
+    // Clears the last open's list before refetching, so a stale list can't be clicked.
+    // oxlint-disable-next-line react/set-state-in-effect
     setPlaylists(null)
     setJustAdded(null)
     fetch(`${API}/playlists`)

@@ -76,6 +76,8 @@ export function Dialog({
   useEffect(() => {
     if (open) {
       restoreRef.current = document.activeElement as HTMLElement | null
+      // Mount, then shown on the next frame, then hidden and unmounted after the exit: the animation needs these steps in order.
+      // oxlint-disable-next-line react/set-state-in-effect
       setMounted(true)
       const raf = requestAnimationFrame(() => setShown(true))
       return () => cancelAnimationFrame(raf)

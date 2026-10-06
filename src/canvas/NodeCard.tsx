@@ -176,6 +176,8 @@ export function NodeCard({ renderer, nodeId, nodeKey, type, title, subtitle, onO
     // Cheap enough to refetch per selection (a few indexed lookups server
     // side), and stale rows under a new cover would be worse than none.
     let cancelled = false
+    // Clears the last node's summary before fetching this one's, so its rows never show under a new cover.
+    // oxlint-disable-next-line react/set-state-in-effect
     setSummary(null)
     fetch(`${API}/nodes/${nodeId}/summary`)
       .then((r) => (r.ok ? r.json() : null))

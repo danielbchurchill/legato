@@ -69,6 +69,8 @@ function WaveformScrubber({
 
   useEffect(() => {
     if (fileId == null) {
+      // Clears the waveform when there's no file, in the effect that fetches it when there is.
+      // oxlint-disable-next-line react/set-state-in-effect
       setPeaks([])
       return
     }

@@ -255,6 +255,8 @@ function AddEdgeForm({ nodeId, onAdded }: { nodeId: number; onAdded: () => void 
 
   useEffect(() => {
     if (!query.trim() || target) {
+      // Clears results for an empty query, in the effect that debounces the search otherwise.
+      // oxlint-disable-next-line react/set-state-in-effect
       setResults([])
       return
     }

@@ -99,6 +99,8 @@ export function ScrollingText({ text, className = '' }: ScrollingTextProps) {
     // snaps the phase (and so the transform) straight back to the start
     // the instant hover ends, rather than finishing whatever leg of the
     // cycle was in flight.
+    // Resetting the phase on every change is what snaps the text back when hover ends (see above).
+    // oxlint-disable-next-line react/set-state-in-effect
     setPhase('hold-start')
     if (!active) return
 
