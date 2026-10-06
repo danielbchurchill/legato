@@ -6,7 +6,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
@@ -240,10 +240,10 @@ pub struct QueueStatus {
 
 struct Session {
   // Held for the lifetime of playback — dropping it stops output.
-  _stream: OutputStream,
-  sink: Sink,
+  _stream: MixerDeviceSink,
+  sink: Player,
   // Tracks appended to the sink, in append order, front = currently
-  // playing. rodio's Sink doesn't expose "which source is this," so this
+  // playing. rodio's Player doesn't expose "which source is this," so this
   // is what lets the monitor thread turn "sink.len() decreased" into
   // "here's the recording_node_id that's now playing."
   queue: VecDeque<QueueTrack>,
@@ -276,8 +276,8 @@ pub struct PlaybackState {
   session: Arc<Mutex<Option<Session>>>,
   // Lives outside Session (and outside the Mutex<Option<_>> that gets
   // wiped to None on every queue_stop) specifically so it survives across
-  // stop/restart — rodio's own Sink::volume resets to 1.0 on every new
-  // Sink, and a user's volume choice shouldn't reset every time the queue
+  // stop/restart — rodio's own Player::volume resets to 1.0 on every new
+  // Player, and a user's volume choice shouldn't reset every time the queue
   // empties and refills.
   volume: Arc<Mutex<f32>>,
   // None means "system default" — the common case, and what every session
@@ -308,14 +308,14 @@ fn gain_db(track: &QueueTrack) -> f32 {
 // both a normal queue_enqueue call and the monitor thread's own gapless
 // repeat re-enqueue (reconcile_repeat below), so there's exactly one place
 // that turns a QueueTrack into a playing source.
-fn append_track(sink: &Sink, track: &QueueTrack) -> Result<(), PlaybackError> {
+fn append_track(sink: &Player, track: &QueueTrack) -> Result<(), PlaybackError> {
   let source = open_source(&track.file_path)?;
   sink.append(source.amplify_decibel(gain_db(track)));
   Ok(())
 }
 
 // Split from append_track so the open/decode classification is testable
-// without a Sink (and so without an audio device).
+// without a Player (and so without an audio device).
 fn open_source(path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError> {
   let file = File::open(path).map_err(|e| classify_open_error(path, &e))?;
   // See NetworkAheadReader above: confirmed live over an NFS-mounted
@@ -331,11 +331,11 @@ fn open_source(path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError>
 // a manual queue_skip never goes through this, see its own comment) and
 // the current repeat mode, decides what needs to be re-appended to stay
 // gapless and updates `queue`'s own bookkeeping to match. Kept free of
-// Sink/file I/O specifically so it's testable without a real audio device
+// Player/file I/O specifically so it's testable without a real audio device
 // — same reasoning as gain_db above, see the tests module below.
 //
 // RepeatMode::One re-appends the just-finished track at the *back* of
-// `queue`/the sink rather than dropping it — because rodio's Sink is
+// `queue`/the sink rather than dropping it — because rodio's Player is
 // strictly FIFO by append order, this only stays correct because
 // usePlayback.ts (the Tauri path) deliberately enqueues *only* the current
 // track while repeat-one is active, never the rest of the tail behind it
@@ -422,21 +422,47 @@ fn spawn_monitor(app: AppHandle, state: Arc<Mutex<Option<Session>>>, repeat_mode
   });
 }
 
+/// One output device as the settings screen lists it. `id` is what gets
+/// saved: cpal's `DeviceId` ("host:device"), stable across reboots and
+/// reconnects, where a display name isn't — two identical USB DACs share a
+/// name, and since cpal 0.17 an ALSA device's name is its description
+/// ("Default ALSA Output (currently PipeWire Media Server)"), not the PCM
+/// id ("pipewire") 0.16 reported.
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioDevice {
+  pub id: String,
+  pub label: String,
+}
+
+// Whether a saved device preference refers to this device. A preference
+// saved before the switch to ids is the name cpal 0.16 reported: on macOS
+// and Windows that's the same string as today's label, and on Linux it's
+// the ALSA PCM id, which is the device half of today's id. Accepting all
+// three means nobody's chosen output silently resets on upgrade.
+fn matches_saved_device(saved: &str, id: &str, id_device_part: &str, label: &str) -> bool {
+  saved == id || saved == id_device_part || saved == label
+}
+
 // Falls back to the system default if the configured device is gone
 // (unplugged, renamed) rather than erroring — a stale device preference
 // should degrade to "plays somewhere," not "doesn't play."
-fn open_stream(device_name: &Option<String>) -> Result<OutputStream, String> {
-  if let Some(name) = device_name {
+fn open_stream(saved_device: &Option<String>) -> Result<MixerDeviceSink, String> {
+  if let Some(saved) = saved_device {
     let host = rodio::cpal::default_host();
     if let Ok(mut devices) = host.output_devices() {
-      if let Some(device) = devices.find(|d| d.name().ok().as_deref() == Some(name.as_str())) {
-        return OutputStreamBuilder::from_device(device)
+      let found = devices.find(|d| {
+        let Ok(id) = d.id() else { return false };
+        let label = d.description().map(|desc| desc.name().to_string()).unwrap_or_default();
+        matches_saved_device(saved, &id.to_string(), &id.1, &label)
+      });
+      if let Some(device) = found {
+        return DeviceSinkBuilder::from_device(device)
           .and_then(|builder| builder.open_stream())
           .map_err(|e| e.to_string());
       }
     }
   }
-  OutputStreamBuilder::open_default_stream().map_err(|e| e.to_string())
+  DeviceSinkBuilder::open_default_sink().map_err(|e| e.to_string())
 }
 
 fn ensure_session<'a>(
@@ -449,7 +475,7 @@ fn ensure_session<'a>(
     // open_stream already fell back to the system default, so a failure
     // here means there is nowhere at all to send audio.
     let stream = open_stream(&device_name).map_err(|detail| PlaybackError::NoOutputDevice { detail })?;
-    let sink = Sink::connect_new(stream.mixer());
+    let sink = Player::connect_new(stream.mixer());
     sink.set_volume(*state.volume.lock().unwrap());
     *guard = Some(Session { _stream: stream, sink, queue: VecDeque::new(), full_order: Vec::new() });
     spawn_monitor(app.clone(), state.session.clone(), state.repeat_mode.clone());
@@ -458,15 +484,25 @@ fn ensure_session<'a>(
 }
 
 #[tauri::command]
-pub fn list_audio_devices() -> Result<Vec<String>, String> {
+pub fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
   let host = rodio::cpal::default_host();
   let devices = host.output_devices().map_err(|e| e.to_string())?;
-  Ok(devices.filter_map(|d| d.name().ok()).collect())
+  Ok(
+    devices
+      .filter_map(|d| {
+        let id = d.id().ok()?;
+        // A device with no readable description still gets listed, under
+        // its id, rather than vanishing from the picker.
+        let label = d.description().map(|desc| desc.name().to_string()).unwrap_or_else(|_| id.1.clone());
+        Some(AudioDevice { id: id.to_string(), label })
+      })
+      .collect(),
+  )
 }
 
 /// Selecting a device tears down any live session (same effect as
 /// queue_stop) so the next enqueue reopens on the new device — rodio has
-/// no way to swap a Sink's output stream mid-session, and this mirrors how
+/// no way to swap a Player's output device mid-session, and this mirrors how
 /// an actual device unplug already behaves.
 #[tauri::command]
 pub fn queue_set_device(state: State<PlaybackState>, name: Option<String>) -> Result<(), String> {
@@ -585,7 +621,7 @@ pub fn queue_status(state: State<PlaybackState>) -> QueueStatus {
   }
 }
 
-/// value is a linear 0.0-1.0 multiplier (rodio's own Sink::set_volume
+/// value is a linear 0.0-1.0 multiplier (rodio's own Player::set_volume
 /// scale, passed straight through) — clamped here rather than trusted from
 /// the frontend, since an out-of-range value would otherwise silently
 /// distort or invert the signal deep inside rodio rather than fail loudly.
@@ -655,7 +691,7 @@ mod tests {
   // if something else were already sitting behind the looping track (which
   // shouldn't happen via the real frontend policy, but this function alone
   // can't enforce that), the repeated copy lands at the *back* of the
-  // queue, not ahead of what's already there — rodio's Sink is strictly
+  // queue, not ahead of what's already there — rodio's Player is strictly
   // append-order, so this reconciliation has no way to jump the line.
   #[test]
   fn reconcile_repeat_one_cannot_reorder_what_is_already_queued_behind_it() {
@@ -823,6 +859,36 @@ mod tests {
     assert!(result.is_ok());
   }
 
+  #[test]
+  fn listed_device_ids_are_unique_and_labelled() {
+    let devices = list_audio_devices().expect("list devices");
+    let mut ids: Vec<&str> = devices.iter().map(|d| d.id.as_str()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), devices.len(), "two devices share an id: {devices:?}");
+    assert!(devices.iter().all(|d| !d.label.is_empty() && d.id.contains(':')), "{devices:?}");
+  }
+
+  #[test]
+  fn saved_device_matches_by_id() {
+    assert!(matches_saved_device("coreaudio:BuiltInSpeakerDevice", "coreaudio:BuiltInSpeakerDevice", "BuiltInSpeakerDevice", "MacBook Pro Speakers"));
+  }
+
+  // A preference saved under cpal 0.16 is a name, not an id. macOS and
+  // Windows reported the same string as today's label; ALSA reported the
+  // PCM id, today's id minus its "alsa:" host prefix.
+  #[test]
+  fn saved_device_from_before_ids_still_matches() {
+    assert!(matches_saved_device("MacBook Pro Speakers", "coreaudio:BuiltInSpeakerDevice", "BuiltInSpeakerDevice", "MacBook Pro Speakers"));
+    assert!(matches_saved_device("pipewire", "alsa:pipewire", "pipewire", "PipeWire Sound Server"));
+  }
+
+  #[test]
+  fn saved_device_does_not_match_a_different_device() {
+    assert!(!matches_saved_device("alsa:pulse", "alsa:pipewire", "pipewire", "PipeWire Sound Server"));
+    assert!(!matches_saved_device("", "alsa:pipewire", "pipewire", "PipeWire Sound Server"));
+  }
+
   // Exercises the real audio engine against real hardware and a real file
   // — not run by default `cargo test` (needs a working audio device and
   // LEGATO_TEST_FILE pointed at a real audio file), but this is how
@@ -832,8 +898,8 @@ mod tests {
   #[ignore]
   fn real_playback_smoke_test() {
     let path = std::env::var("LEGATO_TEST_FILE").expect("set LEGATO_TEST_FILE to a real audio file");
-    let stream = OutputStreamBuilder::open_default_stream().expect("open audio device");
-    let sink = Sink::connect_new(stream.mixer());
+    let stream = DeviceSinkBuilder::open_default_sink().expect("open audio device");
+    let sink = Player::connect_new(stream.mixer());
 
     let file = File::open(&path).expect("open test file");
     let reader = NetworkAheadReader::new(file).expect("start prefetching test file");
