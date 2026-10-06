@@ -8,18 +8,10 @@ This is a real runbook, not general Fly.io documentation. It assumes:
 
 Run all commands from this directory (`relay/`) unless noted otherwise.
 
-**Live deployment against a real Fly account has not been exercised yet.**
-Everything below is config that has been reviewed and (where possible)
-built locally, not a deploy that has actually succeeded end to end. Treat
-the first real run of these steps as the actual test of this setup.
-
-As of the Bun migration (issue #101), `docker build .` and a local
-`docker run` against a throwaway data dir both succeed — the image boots,
-`GET /health` returns `{"status":"ok"}`, and `RELAY_DATA_DIR` gets a real
-`relay.db` (WAL mode, migrations applied). `fly deploy` itself has not been
-run; that, and confirming the deployed machine passes the same checks
-against the real `legato-relay` app, is still the actual test of this
-runbook end to end.
+These steps are what the live `legato-relay` app at `auth.legato.fm` runs
+on. It was first deployed on 2026-09-29, and each release since has gone
+through steps 4 and 5 below. Steps 1–3 are one-time setup; an existing
+deployment only needs 4 and 5.
 
 ## 1. Create the app
 
@@ -93,20 +85,41 @@ remove the old one 15 minutes later. The steps are also in
 
 ## 4. Deploy
 
+`fly deploy` builds from the files on disk, not from git, so anything
+uncommitted in `relay/` ships too (`.dockerignore` only keeps out
+`.env.local` and build output). Deploy from a clean checkout of `main`:
+
 ```
+git fetch origin
+git worktree add --detach /tmp/relay-deploy origin/main
+cd /tmp/relay-deploy/relay
 fly deploy --app legato-relay
+cd - && git worktree remove /tmp/relay-deploy
 ```
+
+The rolling update replaces the one machine in place, keeping its volume,
+so `relay.db` carries over. The relay is unavailable for the few seconds
+the machine restarts.
 
 ## 5. Verify
 
 ```
 fly status --app legato-relay
+fly releases --app legato-relay
 curl https://legato-relay.fly.dev/health
+curl https://auth.legato.fm/health
 ```
 
-The curl should return `{"status":"ok"}`. In `fly status`, confirm at least
-one machine is running — `min_machines_running = 1` in `fly.toml` means it
-should never show zero.
+Both curls should return `{"status":"ok"}`: the first checks the machine,
+the second the custom domain in front of it. In `fly status`, confirm at
+least one machine is running — `min_machines_running = 1` in `fly.toml`
+means it should never show zero — and that `fly releases` shows the new
+version as `complete`.
+
+`fly logs --app legato-relay --no-tail` usually shows one failed health
+check right after the restart, logged a second before
+`Server listening at …:8901`. That's the check racing startup, not a
+problem; `fly status` should show the check passing a few seconds later.
 
 ## Notes
 
