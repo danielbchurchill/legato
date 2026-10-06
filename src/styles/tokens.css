@@ -1,8 +1,11 @@
 /* Legato design tokens.
  *
- * Every value here is measured from the Figma mockup (file NSaK1N64NwcKzlKpqaYs49,
- * frame "Desktop - 1", 1440x1024) and cross-checked against the exported render.
- * DESIGN.md explains the reasoning; this file is the machine-readable half.
+ * Every value here is measured from a design frame: the Figma mockup (file
+ * NSaK1N64NwcKzlKpqaYs49, frame "Desktop - 1" and the v2 frames, 1440x1024),
+ * cross-checked against the exported render where one exists. The library
+ * view (#263) is designed in Claude Design instead, so its values come from
+ * that frame. DESIGN.md explains the reasoning; this file is the
+ * machine-readable half.
  *
  * Tailwind v4 CSS-first config — no tailwind.config.js. Names follow Tailwind's
  * @theme namespaces so they generate utilities: --color-* -> bg-canvas / text-muted,
