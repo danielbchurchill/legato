@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { useMountFade } from './useMountFade'
-import { useTooltipGroup } from './TooltipGroup'
+import { useTooltipGroup } from './tooltipGroupContext'
 import { enterOffset, useAnchoredPosition, type Placement } from './floating'
 import { usePrefersReducedMotion } from './usePrefersReducedMotion'
 import { Kbd } from './Kbd'
@@ -107,8 +107,7 @@ export function Tooltip({ label, children, monospace = false, placement = 'botto
     // dwell window, so skip straight to showing — this is what actually
     // makes sweeping across a row of icons read as one continuous tooltip
     // rather than N independent cold-start waits (see TooltipGroup.tsx).
-    const lastDismissed = group?.current
-    if (lastDismissed != null && Date.now() - lastDismissed < DWELL_MS) {
+    if (group?.dismissedWithin(DWELL_MS)) {
       setMounted(true)
       return
     }
@@ -118,7 +117,7 @@ export function Tooltip({ label, children, monospace = false, placement = 'botto
   const hide = () => {
     clearDwell()
     setMounted(false)
-    if (group) group.current = Date.now()
+    group?.markDismissed()
   }
 
   useEffect(() => clearDwell, [])
