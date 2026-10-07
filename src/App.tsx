@@ -460,9 +460,9 @@ function Workspace({
               setSearchOpen(false)
               focusNode(id)
             }}
-            onOpenMaintenance={() => {
+            onOpenPlaylist={(playlistId) => {
               setSearchOpen(false)
-              setHygieneOpen(true)
+              setLeftView({ kind: 'playlist', playlistId })
             }}
             playback={playback}
           />
