@@ -47,11 +47,24 @@ const COLLISION_PADDING = 2
  * physics settle. */
 const REHEAT_ALPHA = 0.4
 
+/* #274: how far physics reaches around a change to a map that's already at
+ * rest. Everything further away is held where it is until the change has
+ * settled. Two hops from a new track reaches its record and artist and their
+ * other tracks: the cluster it joined. A plain reheat isn't enough, because
+ * collide's push doesn't scale with alpha the way the other forces do, so a
+ * map at rest at alpha 0.001 isn't at rest at 0.4. A global kick rearranged
+ * the whole map, however small the change. */
+const LOCAL_SETTLE_HOPS = 2
+
 export type SimNodeInput = {
   key: string
   x: number
   y: number
   radius: number
+  /** x/y is where this node came to rest on an earlier visit, saved by the
+   * server (#274), rather than a seed or a starting guess. Only read on a
+   * node's first sync. */
+  atRest?: boolean
 }
 
 export type ForceSimulationHandle = {
@@ -63,10 +76,19 @@ export type ForceSimulationHandle = {
    * current data (mirrors syncGraph's own add/update/remove diff).
    * Existing nodes keep their live x/y/vx/vy/fx/fy; only `radius` updates
    * in place (a nodes>images toggle changing a node's rendered size).
-   * Reheats with a fresh kick when the node/link set actually changed or
-   * any radius did — a plain settings refresh that changes neither is a
-   * no-op here. */
+   *
+   * #274: a first sync where every node arrives at rest runs no physics at
+   * all, so a saved layout comes back exactly as it was saved. Otherwise a
+   * node added or resized, or one that lost a neighbour, needs settling:
+   * on a map already at rest only its neighbourhood moves (see
+   * LOCAL_SETTLE_HOPS), and mid-settle the whole map gets a fresh kick as
+   * before. A plain settings refresh that changes nothing is a no-op. */
   sync(nodes: SimNodeInput[], links: { source: string; target: string }[]): void
+  /** True when the first nodes to arrive came, in whole or in part, from a
+   * saved layout. Canvas.tsx's settle-time camera fit has nothing to do for
+   * such a map: it was framed as it arrived, and whatever settles after
+   * that is a local change the camera shouldn't chase. */
+  openedOnSavedLayout(): boolean
   /** Applies new force-strength/distance settings and gives the simulation
    * a fresh kick so the change is visible immediately — a slider with no
    * visible effect until you separately nudge a node would read as broken. */
@@ -94,7 +116,9 @@ export function createForceSimulation(onTick: () => void): ForceSimulationHandle
   // degenerate line before repulsion ever got a chance to act. Centering
   // gravity on the data's own centroid instead means the "pull toward the
   // middle" force is relative to the graph, exactly what it's supposed to
-  // be, regardless of whatever absolute coordinate scale seeded it.
+  // be, regardless of whatever absolute coordinate scale seeded it. A map
+  // that opens at its saved resting spots (#274) gets the same target its
+  // last session had, since a map at rest has its centroid on the well.
   let gravityCentered = false
   // Whether the simulation has ever reached its own natural rest (alpha
   // decayed below alphaMin) at least once. Locked never means "skip physics
@@ -106,6 +130,13 @@ export function createForceSimulation(onTick: () => void): ForceSimulationHandle
   // leave that raw, heavily-overlapping seed frozen forever. See setLocked
   // and reheat below.
   let hasEverSettled = false
+  let openedOnSavedLayout = false
+  // Nodes pinned in place (fx/fy) while a local settle runs, released when
+  // it ends — see LOCAL_SETTLE_HOPS. Empty whenever the whole map is free.
+  const held = new Set<string>()
+  // Who neighboured whom as of the last sync, so a removed node's former
+  // neighbours can still be found once its links are gone.
+  let adjacency = new Map<string, string[]>()
 
   const centerX = forceX<SimNode>(0)
   const centerY = forceY<SimNode>(0)
@@ -135,16 +166,77 @@ export function createForceSimulation(onTick: () => void): ForceSimulationHandle
 
   simulation.on('end.trackSettled', () => {
     hasEverSettled = true
+    releaseHolds()
   })
 
-  function reheat(): void {
-    simulation.alpha(REHEAT_ALPHA)
+  function restartUnlessLocked(): void {
     // Runs even while locked until the very first settle — see
     // hasEverSettled above.
     if (!locked || !hasEverSettled) simulation.restart()
   }
 
+  function reheat(): void {
+    releaseHolds()
+    simulation.alpha(REHEAT_ALPHA)
+    restartUnlessLocked()
+  }
+
+  function releaseHolds(): void {
+    for (const key of held) {
+      const node = nodesByKey.get(key)
+      if (node) {
+        node.fx = null
+        node.fy = null
+      }
+    }
+    held.clear()
+  }
+
+  // A kick that only moves what's within LOCAL_SETTLE_HOPS of `around`. A
+  // second change before the first has settled widens the free area rather
+  // than starting over.
+  function settleLocally(around: Set<string>): void {
+    const free = withinHops(around, LOCAL_SETTLE_HOPS)
+    if (held.size === 0) {
+      for (const [key, node] of nodesByKey) {
+        // A node with fx already set is mid-drag; the drag owns its pin.
+        if (free.has(key) || node.fx != null) continue
+        node.fx = node.x
+        node.fy = node.y
+        held.add(key)
+      }
+    } else {
+      for (const key of free) {
+        if (!held.delete(key)) continue
+        const node = nodesByKey.get(key)!
+        node.fx = null
+        node.fy = null
+      }
+    }
+    simulation.alpha(REHEAT_ALPHA)
+    restartUnlessLocked()
+  }
+
+  function withinHops(start: Set<string>, hops: number): Set<string> {
+    const reached = new Set(start)
+    let frontier = [...start]
+    for (let hop = 0; hop < hops; hop++) {
+      const next: string[] = []
+      for (const key of frontier) {
+        for (const neighbour of adjacency.get(key) ?? []) {
+          if (reached.has(neighbour)) continue
+          reached.add(neighbour)
+          next.push(neighbour)
+        }
+      }
+      frontier = next
+    }
+    return reached
+  }
+
   function sync(wanted: SimNodeInput[], links: { source: string; target: string }[]): void {
+    const firstPopulation = nodesByKey.size === 0
+    if (firstPopulation && wanted.some((n) => n.atRest)) openedOnSavedLayout = true
     if (!gravityCentered && wanted.length > 0) {
       gravityCentered = true
       let sumX = 0
@@ -157,31 +249,39 @@ export function createForceSimulation(onTick: () => void): ForceSimulationHandle
       centerY.y(sumY / wanted.length)
     }
 
+    // Every node whose surroundings this sync changes: added, resized, or
+    // left without a neighbour it had.
+    const unsettled = new Set<string>()
     const wantedKeys = new Set(wanted.map((n) => n.key))
-    let changed = wantedKeys.size !== nodesByKey.size
 
     for (const key of [...nodesByKey.keys()]) {
       if (!wantedKeys.has(key)) {
         nodesByKey.delete(key)
-        changed = true
+        held.delete(key)
+        for (const neighbour of adjacency.get(key) ?? []) {
+          if (wantedKeys.has(neighbour)) unsettled.add(neighbour)
+        }
       }
     }
 
     for (const n of wanted) {
       const existing = nodesByKey.get(n.key)
       if (existing) {
-        if (existing.radius !== n.radius) changed = true
+        if (existing.radius !== n.radius) unsettled.add(n.key)
         existing.radius = n.radius
       } else {
         // fx/fy start unset — a node's persisted user_x/user_y is only ever
         // its *starting* x/y (baked into n.x/n.y before this is called, see
-        // Canvas.tsx's initialPosition), not a standing pin (#46: dragging
+        // savedLayout.ts's startingPositions), not a standing pin (#46: dragging
         // used to set a permanent one; a drop is now just a starting point
         // like any server seed, free to move under real physics from here).
-        // Canvas.tsx's own drag handling is the only thing that ever sets
-        // fx/fy on this object after this, for the duration of one drag.
+        // After this, only Canvas.tsx's drag handling (for one drag) and a
+        // local settle (until it ends) ever set fx/fy on this object.
         nodesByKey.set(n.key, { id: n.key, x: n.x, y: n.y, radius: n.radius })
-        changed = true
+        // A saved resting spot only counts as settled when the whole map
+        // arrives together. Joining a map that has moved on since, it's
+        // just a good place to start.
+        if (!(firstPopulation && n.atRest)) unsettled.add(n.key)
       }
     }
 
@@ -190,9 +290,32 @@ export function createForceSimulation(onTick: () => void): ForceSimulationHandle
       .filter((l) => nodesByKey.has(l.source) && nodesByKey.has(l.target))
       .map((l) => ({ source: l.source, target: l.target }))
 
+    adjacency = new Map()
+    const neighboursOf = (key: string) => {
+      let list = adjacency.get(key)
+      if (!list) adjacency.set(key, (list = []))
+      return list
+    }
+    for (const l of linksArray) {
+      neighboursOf(l.source as string).push(l.target as string)
+      neighboursOf(l.target as string).push(l.source as string)
+    }
+
     simulation.nodes(nodesArray)
     link.links(linksArray)
-    if (changed) reheat()
+
+    if (firstPopulation && wanted.length > 0 && unsettled.size === 0) {
+      // The saved layout, exactly as saved. alpha(0) rather than a bare
+      // stop, so an unlock later has nothing left over to spend.
+      simulation.alpha(0).stop()
+      hasEverSettled = true
+      return
+    }
+    if (unsettled.size === 0) return
+
+    const mapAtRest = firstPopulation ? unsettled.size < wanted.length : held.size > 0 || simulation.alpha() < simulation.alphaMin()
+    if (mapAtRest) settleLocally(unsettled)
+    else reheat()
   }
 
   function setParams(params: ForceParams): void {
@@ -213,5 +336,5 @@ export function createForceSimulation(onTick: () => void): ForceSimulationHandle
     else if (!locked) simulation.restart()
   }
 
-  return { simulation, nodesByKey, sync, setParams, setLocked }
+  return { simulation, nodesByKey, sync, openedOnSavedLayout: () => openedOnSavedLayout, setParams, setLocked }
 }

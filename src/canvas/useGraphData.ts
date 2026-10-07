@@ -18,6 +18,10 @@ export type GraphNode = {
   seed_y: number | null
   user_x: number | null
   user_y: number | null
+  /** Where this node came to rest the last time the map settled (#274),
+   * null until it has. See savedLayout.ts. */
+  settled_x: number | null
+  settled_y: number | null
   /** sha1 of the art this node displays — its own, or whatever it inherits
    * (a track's album, an artist's most-represented album). Null when there
    * is no art anywhere in that chain. Names the image rather than just
@@ -93,4 +97,20 @@ export async function patchNodePosition(nodeId: number, x: number, y: number): P
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ x, y }),
   })
+}
+
+/** One request per settle, carrying only the nodes that moved (#274).
+ * Resolves false on failure, so the caller sends those nodes again next
+ * time rather than believing them saved. */
+export async function saveSettledPositions(positions: { id: number; x: number; y: number }[]): Promise<boolean> {
+  try {
+    const res = await fetch(`${API}/layout/settled`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ positions }),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
 }

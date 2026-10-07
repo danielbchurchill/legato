@@ -3,7 +3,8 @@ import Graph from 'graphology'
 import Sigma from 'sigma'
 import { createNormalizationFunction } from 'sigma/utils'
 import type { NodeLabelDrawingFunction } from 'sigma/rendering'
-import { patchNodePosition, type GraphEdge, type GraphNode } from './useGraphData'
+import { patchNodePosition, saveSettledPositions, type GraphEdge, type GraphNode } from './useGraphData'
+import { movedSince, savedSpot, startingPositions, type Point } from './savedLayout'
 import { useGraph } from './graphContext'
 import { EDGE_COLOR } from './edgeTypes'
 import { edgeWidthPx } from './edgeWidth'
@@ -523,20 +524,19 @@ function nodeAttributes(node: GraphNode, size: number, colors: ThemeColors): Rec
   return { label: node.title, size, color: colors.node[node.type] ?? colors.node.label, type: 'circle', nodeType: node.type }
 }
 
-// A node's starting position — server seed, or wherever the user last
-// dropped it (persisted user_x/user_y). #46: a drop is a starting point, not
-// a standing pin. Only consulted for a node's first appearance.
-function initialPosition(node: GraphNode): { x: number; y: number } | null {
-  const x = node.user_x ?? node.seed_x
-  const y = node.user_y ?? node.seed_y
-  if (x == null || y == null) return null
-  return { x, y }
+function hasPosition(node: GraphNode): boolean {
+  return savedSpot(node) != null || (node.seed_x != null && node.seed_y != null)
 }
 
 /* Updates the graphology instance in place to match the latest fetch —
  * add/update/remove, never drop-and-rebuild — so the renderer subscribed to
  * it never needs tearing down for a data refresh, and the camera never
  * resets under the user.
+ *
+ * A node new to the graph starts where savedLayout.ts's startingPositions
+ * says: its saved spot, beside its placed neighbours, or its seed. Returns
+ * the ones it added at their saved resting spot (#274), which the
+ * simulation shows as they are.
  *
  * Producer and engineer credits are opt-in (#24) and are left out of the
  * graph entirely when off, physics included: they're new to an
@@ -550,10 +550,10 @@ function syncGraph(
   showCreditNodes: boolean,
   sizeOf: (node: GraphNode) => number,
   colors: ThemeColors,
-): void {
+): Map<string, Point> {
   const wantedNodes = new Map<string, GraphNode>()
   for (const node of nodes) {
-    if (initialPosition(node) == null) continue // no position yet — nothing to plot
+    if (!hasPosition(node)) continue // no position yet — nothing to plot
     if (node.type === 'credit' && !showCreditNodes) continue
     wantedNodes.set(nodeKey(node.id), node)
   }
@@ -561,14 +561,26 @@ function syncGraph(
   graph.forEachNode((key) => {
     if (!wantedNodes.has(key)) graph.dropNode(key)
   })
+  const fresh: GraphNode[] = []
   for (const [key, node] of wantedNodes) {
-    const attrs = nodeAttributes(node, sizeOf(node), colors)
     if (graph.hasNode(key)) {
-      graph.mergeNodeAttributes(key, attrs) // never x/y — see nodeAttributes above
+      graph.mergeNodeAttributes(key, nodeAttributes(node, sizeOf(node), colors)) // never x/y — see nodeAttributes above
     } else {
-      const pos = initialPosition(node)!
-      graph.addNode(key, { ...attrs, x: pos.x, y: pos.y })
+      fresh.push(node)
     }
+  }
+  const starts = startingPositions(fresh, edges, (id) => {
+    const key = nodeKey(id)
+    if (!graph.hasNode(key)) return null
+    return { x: graph.getNodeAttribute(key, 'x') as number, y: graph.getNodeAttribute(key, 'y') as number }
+  })
+  const addedAtRest = new Map<string, Point>()
+  for (const node of fresh) {
+    const start = starts.get(node.id)
+    if (!start) continue
+    const key = nodeKey(node.id)
+    graph.addNode(key, { ...nodeAttributes(node, sizeOf(node), colors), x: start.x, y: start.y })
+    if (start.atRest) addedAtRest.set(key, { x: start.x, y: start.y })
   }
 
   // Keyed by (from, to, type): two nodes can share more than one relation,
@@ -589,6 +601,7 @@ function syncGraph(
   graph.forEachEdge((edgeKey) => {
     if (!wantedEdgeKeys.has(edgeKey)) graph.dropEdge(edgeKey)
   })
+  return addedAtRest
 }
 
 type Props = {
@@ -698,6 +711,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const graphRef = useRef<Graph | null>(null)
   const rendererRef = useRef<Sigma | null>(null)
   const simulationRef = useRef<ForceSimulationHandle | null>(null)
+  // #274: where each node was last saved on the server, so a settle sends
+  // only what moved since. Keyed like the graph.
+  const savedPositionsRef = useRef(new Map<string, Point>())
   const { nodes, edges, loading, byId } = useGraph()
   const scanStatus = useScanStatus()
   const layout = useShellLayout()
@@ -1118,6 +1134,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     sim.simulation.on('end.initialFit', () => {
       if (hasFitAfterSettle || graph.order === 0) return
       hasFitAfterSettle = true
+      // A map that opened on its saved layout (#274), even with a few new
+      // nodes settling into it, was framed as it arrived. Refitting now
+      // would shift the whole map on screen to follow one cluster.
+      if (sim.openedOnSavedLayout()) return
       justRanInitialFit = true
       reframeToRobustBBox()
     })
@@ -1135,6 +1155,23 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       }
       if (!hasFitAfterSettle || graph.order === 0) return
       setMapOutOfView(graphOutOfView(renderer, graph))
+    })
+
+    // #274: every settle saves where the map came to rest, so the next visit
+    // opens on this layout rather than settling again from seeds. One
+    // request, carrying only the nodes that moved since their last save.
+    // "Lock layout" stops the simulation, so a locked map never gets here,
+    // except for its very first settle (see forceSimulation.ts's
+    // hasEverSettled); saving that one is what lets a locked map reopen the
+    // same way.
+    sim.simulation.on('end.saveLayout', () => {
+      if (graph.order === 0) return
+      const moved = movedSince(savedPositionsRef.current, sim.nodesByKey)
+      if (moved.length === 0) return
+      void saveSettledPositions(moved).then((ok) => {
+        if (!ok) return
+        for (const p of moved) savedPositionsRef.current.set(nodeKey(p.id), { x: p.x, y: p.y })
+      })
     })
 
     /* Focus. A selection focuses its cluster; with nothing selected, a
@@ -1618,6 +1655,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
             graph.removeNodeAttribute(key, 'highlighted')
             releasePin(key)
             void patchNodePosition(id, x, y)
+            savedPositionsRef.current.set(key, { x, y })
           }
         } else {
           const id = Number(draggedNode)
@@ -1627,6 +1665,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
           graph.removeNodeAttribute(draggedNode, 'highlighted')
           releasePin(draggedNode)
           void patchNodePosition(id, x, y)
+          savedPositionsRef.current.set(draggedNode, { x, y })
         }
         if (!nodesLockedRef.current) sim.simulation.alphaTarget(0)
       }
@@ -1699,14 +1738,24 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
           return OTHER_SIZE
       }
     }
-    syncGraph(graph, nodes, edges, showCreditNodes, sizeOf, themeColorsRef.current)
+    const addedAtRest = syncGraph(graph, nodes, edges, showCreditNodes, sizeOf, themeColorsRef.current)
     onStatsRef.current?.({ nodes: graph.order, edges: graph.size })
+    const saved = savedPositionsRef.current
+    for (const key of saved.keys()) if (!graph.hasNode(key)) saved.delete(key)
+    for (const [key, spot] of addedAtRest) saved.set(key, spot)
 
     // The same post-sync graph feeds the live simulation. Existing nodes
-    // keep their live position; only a new node or a changed radius reheats.
+    // keep their live position; a new node, a changed radius or a lost
+    // neighbour settles what's around it (forceSimulation.ts's sync).
     const simNodes: SimNodeInput[] = []
     graph.forEachNode((key, attrs) => {
-      simNodes.push({ key, x: attrs.x as number, y: attrs.y as number, radius: (attrs.size as number) + COLLIDE_PADDING })
+      simNodes.push({
+        key,
+        x: attrs.x as number,
+        y: attrs.y as number,
+        radius: (attrs.size as number) + COLLIDE_PADDING,
+        atRest: addedAtRest.has(key),
+      })
     })
     const simLinks: { source: string; target: string }[] = []
     graph.forEachEdge((_edgeKey, _attrs, source, target) => simLinks.push({ source, target }))

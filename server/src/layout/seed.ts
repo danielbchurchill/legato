@@ -215,8 +215,11 @@ function centroidSeeds(
   return result;
 }
 
-// user_x/user_y are never touched by this — only a PATCH /nodes/:id/position
-// request (or rebuildLayout below) writes them.
+// user_x/user_y and settled_x/settled_y are never touched by this — only
+// the client writes them (PATCH /nodes/:id/position and PUT /layout/settled),
+// and only rebuildLayout below clears them. So a scan moves no node the map
+// has already placed (#274); a new node gets a seed, which the client only
+// uses when it has no placed neighbour to start beside.
 export function recomputeAllLayouts(db: Database): void {
   recomputeTracksLayout(db);
 }
@@ -225,7 +228,10 @@ export function recomputeAllLayouts(db: Database): void {
 // whole graph's layout in place, without touching the library on disk or
 // re-scanning it. Two things a routine recompute deliberately never does:
 //
-// 1. Clears every node's user_x/user_y first. A dragged node's placement
+// 1. Clears every node's user_x/user_y first, and its settled_x/settled_y
+//    (#274), the spot the map last came to rest at. The client reads both
+//    ahead of the seed, so a rebuild that left either would reopen on the
+//    old layout. A dragged node's placement
 //    used to be a permanent physics pin (`.fx`/`.fy`, never released — see
 //    Canvas.tsx's drag handling); #46 changed that so a drop
 //    is now just a starting position a node is free to drift from
@@ -250,7 +256,10 @@ export function recomputeAllLayouts(db: Database): void {
 // (Canvas.tsx's syncGraph), which is right for every other kind of data
 // refresh but wrong for this one.
 export function rebuildLayout(db: Database): void {
-  db.prepare(`UPDATE positions SET user_x = NULL, user_y = NULL WHERE granularity = 'tracks'`).run();
+  db.prepare(
+    `UPDATE positions SET user_x = NULL, user_y = NULL, settled_x = NULL, settled_y = NULL
+      WHERE granularity = 'tracks'`,
+  ).run();
   const jitterSeed = Math.floor(Math.random() * 0xffffffff);
   recomputeTracksLayout(db, { jitterSeed, ignoreLock: true });
 }
