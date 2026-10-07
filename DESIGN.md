@@ -4,9 +4,65 @@
 
 Source of truth for the design itself: Figma file `NSaK1N64NwcKzlKpqaYs49`. The original **Desktop - 1** frame (1440 × 1024) is still ground truth for anything not called out below. **Design v2** (canvas "version 2", frames **Search**, **Music Map**, **Panel Collapse**) is a new direction, still WIP as of 2026-08-27 — sections below marked *v2* reflect decisions confirmed against it so far. A full survey of the "version 2" canvas on 2026-08-30 confirmed those three frames are the entirety of it — there is no fourth v2 frame waiting to be found, and every rail icon and shell measurement in it has now been checked. What's still open: the transport dock's v2 redesign, and the Search panel's populated-query state — both flagged where they're discussed below, not resolved.
 
-The library view is the exception. Its frame is being designed in Claude Design rather than Figma (issue #263), so the Figma file has nothing for it. Once that frame exists, it is ground truth for the library view, the same way the Figma frames are for everything else, and "Library view" below records where it lives.
+The library view is the exception. Its frame was designed in Claude Design rather than Figma (issue #263), and it arrived as part of the "Legato v2" handoff described just below, which is now ground truth for it.
 
 Every value below was measured from the relevant frame and then cross-checked against the exported render by sampling pixels, where a render exists to sample. v2 values are measured from Figma's own dev-mode output instead — no exported render to verify against yet, so treat those as provisional until one exists. Where a value disagreed with its render, the note says so.
+
+**Legato v2 supersedes much of what follows.** The Claude Design handoff "Legato v2" (October 2026; the brief lives in legato-plans/design/) redesigned every surface, and the app now follows it. Where the sections below disagree with "Legato v2" directly under this paragraph, v2 wins; the older sections stay for the reasoning that still holds (glass over a live graph, hairlines with alpha, reduced motion, the progress exceptions) and as a record of how the app got here.
+
+---
+
+## Legato v2
+
+The idea is unchanged: the graph runs edge to edge and everything floats over it in glass. What changed is hierarchy. v1 put everything at one visual weight, in too much low-contrast grey; v2 gives the app a type ramp, three ink steps, one accent, and cover colour as a real material.
+
+### Tokens
+
+`src/styles/tokens.css` holds them, per theme. The roles:
+
+- **Surfaces:** `canvas`, `surface` (glass, always behind `blur(22px) saturate(140%)` — the `glass` utility in `index.css`), `solid` (the search palette, and glass's no-blur fallback), `raised` (an active segment), `sunken` (a segmented track, an input well).
+- **Lines and washes:** `line` (hairlines, panel borders), `line-strong` (chip borders), `wash` (hover, cards), `wash-2` (selected, secondary buttons).
+- **Text:** `ink`, `ink-2`, `ink-3`, each clearing WCAG AA on canvas in both themes. Text is never alpha-muted: a quieter line is `ink-2` or `ink-3`.
+- **Accent:** `accent` is solid (accent text, rings, focus, the map's selection ring). `--accent-fill` is the legato.fm gradient (primary buttons, play, a switch that's on, progress). Text on the gradient is always the dark `on-accent`; white fails contrast on its blue end. Paper darkens the solid accent to `#7d38b0`, because `#bf68eb` can't carry text on paper.
+- **Status:** `ok`, `warn`, `bad`. The only place hue carries meaning outside the map, and always next to words that say the same thing.
+- **Map:** `edge` (every unfocused edge), `node-artist/release/recording/credit`, `halo` (the stroke behind a map label), `--map-glow`.
+
+The pre-v2 names (`muted`, `hairline`, `control`, `inset`, …) are aliases onto these roles, kept until nothing reads them.
+
+### Type
+
+Rubik for every word, music titles included — the v1 rule that titles were mono is retired. Sometype Mono for numbers, durations, counts, formats, paths and IDs, always tabular (the `mono` utility). The large stat figures in Health and node details are Rubik with tabular figures. The ramp is `text-display` 30/36, `text-title` 20/26, `text-heading` 15/20, `text-body` 14/20, `text-secondary` 13/18, `text-small` 12/16, `text-label` 12/16 500 +0.02em, `text-mono` 12/16; each utility sets size, line height, weight and tracking together. Sentence case for headings, lowercase for labels and control text.
+
+### Geometry
+
+Radii: panel 20, rail and popovers 18, card 14, control 10, cover art 6 (4 on a 36px thumbnail, 10 on a hero). Covers now have a radius and a 1px inset edge (`--shadow-art-edge`); the art itself is still never tinted or filtered.
+
+The shell floats 12px in from every edge: a 56px rail, a 320px left panel beside it, a 360px right panel, a 72px player. The capsule, player and search palette centre on the free space between the left and right occupancy, not on the window. `src/shell/layout.ts` does that arithmetic once, for the shell and for the map's camera.
+
+### Shell
+
+- **Rail:** Collections (favourites, playlists, import), Library health (database inspector, tag manager, maintenance worklists), then Settings and the avatar. Seven destinations became three; map settings moved onto the map.
+- **Capsule:** the map/library switch and the way into search (⌘K/Ctrl-K from anywhere, or `/`).
+- **Right panel:** now playing (up next, lyrics, details) or node details. It replaces the full-screen inspector modal, so the map stays visible. One right panel at a time; Escape closes it, then clears the selection, then closes the left panel.
+- **Player:** replaces the 514×121 dock. It takes a wash of the playing cover's colour from its left edge. The waveform is the server's existing loudness envelope (`/files/:id/peaks`), and a seeded shape stands in until it arrives. With nothing loaded, it's an idle pill with "Shuffle library", which queues up to 500 random tracks from the library.
+
+### The map
+
+Nodes are dots, sized and toned by type. Covers at node size made the map a mosaic rather than a graph; cover colour comes back as each artist cluster's glow, the average of its records' thumbnails, computed client-side (`src/ui/coverColor.ts`). A cluster is an artist, its tracks (by first credit) and its records (by a majority of their tracks) — `src/canvas/clusters.ts`.
+
+Selecting a node focuses its cluster and flies the camera to frame it, landing the node where its 340px card has room. Out-of-focus nodes drop to 30% (mixed toward the canvas, since sigma's node program can't composite alpha), their labels to 45%, other edges to 60%, other glows to 35%. The focused cluster's edges take their type colours. With nothing selected, a held hover focuses the hovered node's neighbours; a selection always wins over a hover.
+
+Labels: artists 13/500 ink, credits 11/400 ink-3, and the focused cluster's records 11/400 ink-2, all over a 4px halo. Two decisions the mock didn't have to make, because its nine artists never collide:
+
+- **Labels are placed greedily per frame,** focused first, then artists before credits before records, bigger dots first. A label that would overlap one already placed is skipped. "Artists are always labelled" holds wherever there's room, and zooming in reveals the rest. A real library's featured-only artists cluster tightly around the people they featured with.
+- **A glow's radius is capped by its cluster's extent.** The v2 formula, `min(w,h) × (0.08 + size × 0.012)`, alone turns two hundred artists into one wash.
+
+### What v2 asked for that isn't built
+
+- **Hover previews.** The handoff assumes an existing preview path; the player has none. The map & motion card keeps the hover setting that exists — focus on hover — under its real name, rather than a switch that does nothing.
+- **Per-track play counts** in the details panel's tracks tab ("played 31 times"), and plays for a record or artist. The data is per recording and would take a request per track. Records and artists show their size instead.
+- **A track name on a tag write.** `/tag-writes` returns a file id only, so the Tag writes worklist names each write by its id.
+- **Skip on an enrichment candidate** isn't remembered; the server has no dismissal for it, and the item returns next time.
 
 ---
 
