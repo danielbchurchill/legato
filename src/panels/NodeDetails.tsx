@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { CoverArt } from '../ui/CoverArt'
@@ -73,43 +73,15 @@ function formatAdded(value: string | undefined): string {
   return Number.isNaN(date.getTime()) ? NO_VALUE : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-/* What a node is made of, from the graph: a record's tracks, an artist's
- * tracks, or a track itself — and every person credited on them, with how
- * many of those tracks each one is on. */
-function useCredits(node: NodeDetail | null) {
-  const graph = useGraph()
-  return useMemo(() => {
-    if (!node) return { tracks: [] as number[], people: [] as { id: number; role: string; count: number }[] }
-    let tracks: number[]
-    if (node.type === 'recording') tracks = [node.id]
-    else if (node.type === 'release')
-      tracks = graph.edges.filter((e) => e.type === 'appears_on' && e.to_node === node.id).map((e) => e.from_node)
-    else if (node.type === 'artist')
-      tracks = graph.edges.filter((e) => e.type === 'performed_by' && e.to_node === node.id).map((e) => e.from_node)
-    else tracks = []
-    const trackSet = new Set(tracks)
-    const ROLE: Record<string, string> = {
-      produced_by: 'producer',
-      engineered_by: 'engineer',
-      mixed_by: 'mixing',
-      performed_by: 'artist',
-      featured_artist: 'featured',
-      performed_credit: 'performer',
-    }
-    const counts = new Map<string, { id: number; role: string; tracks: Set<number> }>()
-    for (const edge of graph.edges) {
-      const role = ROLE[edge.type]
-      if (!role || !trackSet.has(edge.from_node)) continue
-      if (node.type === 'artist' && edge.to_node === node.id) continue
-      const key = `${edge.to_node}:${role}`
-      const entry = counts.get(key) ?? { id: edge.to_node, role, tracks: new Set<number>() }
-      entry.tracks.add(edge.from_node)
-      counts.set(key, entry)
-    }
-    const people = [...counts.values()].map((e) => ({ id: e.id, role: e.role, count: e.tracks.size })).sort((a, b) => b.count - a.count)
-    return { tracks, people }
-  }, [node, graph.edges])
-}
+/* Who made a node and what it's made of, from GET /nodes/:id/credits
+ * (server/src/nodeCredits.ts): a record's tracks, an artist's tracks, or a
+ * track itself, and everyone credited on them with how many tracks each is
+ * on. Names come with it. The map's graph only has nodes with a position,
+ * and most performer and mixing credits have none, so looking names up
+ * there showed them as "?". */
+type CreditedPerson = { id: number; title: string; type: string; role: string; count: number }
+type NodeCredits = { tracks: number[]; people: CreditedPerson[] }
+const NO_CREDITS: NodeCredits = { tracks: [], people: [] }
 
 type NodeDetailsProps = {
   nodeId: number
@@ -124,7 +96,7 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
   const graph = useGraph()
   const summary = useJson<Summary>(`/nodes/${nodeId}/summary`)
   const tracklist = useJson<TracklistEntry[]>(node?.type === 'release' ? `/nodes/${nodeId}/tracklist` : null)
-  const credits = useCredits(node && node.id === nodeId ? node : null)
+  const credits = useJson<NodeCredits>(`/nodes/${nodeId}/credits`) ?? NO_CREDITS
 
   if (!node || node.id !== nodeId) return <DetailsSkeleton />
 
@@ -306,12 +278,11 @@ function Overview({
   node: NodeDetail
   summary: Summary | null
   tracklist: TracklistEntry[] | null
-  people: { id: number; role: string; count: number }[]
+  people: CreditedPerson[]
   onShowTracks: () => void
   playback: Playback
   onFocusNode: (id: number) => void
 }) {
-  const graph = useGraph()
   // Plays are counted per track; a record or an artist shows its size instead.
   const stats: [string, string][] =
     node.type === 'recording'
@@ -337,7 +308,7 @@ function Overview({
   // Connection chips: who made it and what it's part of, from the graph's
   // own edges. A person on most of a record's tracks leads.
   const chips = [
-    ...people.filter((p) => p.role !== 'artist').map((p) => ({ id: p.id, label: `${graph.byId.get(p.id)?.title ?? '?'} · ${p.role}` })),
+    ...people.filter((p) => p.role !== 'artist').map((p) => ({ id: p.id, label: `${p.title} · ${p.role}` })),
     ...node.edges
       .filter((e) => e.type === 'released_on' || e.type === 'member_of' || (node.type === 'recording' && e.type === 'appears_on'))
       .map((e) => ({
@@ -552,11 +523,10 @@ function CreditsTab({
   onFocusNode,
 }: {
   node: NodeDetail
-  people: { id: number; role: string; count: number }[]
+  people: CreditedPerson[]
   reload: () => void
   onFocusNode: (id: number) => void
 }) {
-  const graph = useGraph()
   const groups = new Map<string, typeof people>()
   for (const person of people) {
     const group = ROLE_GROUP[person.role] ?? person.role
@@ -571,7 +541,7 @@ function CreditsTab({
         <Section key={group} label={group}>
           <ul>
             {members.map((person) => {
-              const isCredit = graph.byId.get(person.id)?.type === 'credit'
+              const isCredit = person.type === 'credit'
               return (
                 <li key={`${person.id}-${person.role}`}>
                   <button
@@ -586,7 +556,7 @@ function CreditsTab({
                     )}
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
-                        {graph.byId.get(person.id)?.title ?? NO_VALUE}
+                        {person.title || NO_VALUE}
                       </span>
                       <span className="truncate text-small text-[var(--color-ink-2)]">{person.role}</span>
                     </span>
