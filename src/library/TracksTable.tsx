@@ -1,183 +1,208 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { CoverArt } from '../ui/CoverArt'
+import { Equaliser } from '../ui/Equaliser'
 import { Icon } from '../ui/Icon'
-import { ScrollingText } from '../ui/ScrollingText'
 import { formatDuration, NO_VALUE } from '../ui/format'
 import { useLibraryPage } from './useLibraryPage'
-import { TRACK_SORT_OPTIONS, type SortDir, type TrackRow, type TrackSort } from './types'
-import { Skeleton } from '../ui/Skeleton'
+import { RowsSkeleton } from './LibrarySkeleton'
+import type { SortDir, TrackRow, TrackSort } from './types'
 
-// Shared between the header row and every data row so their columns stay
-// pixel-aligned — see AlbumsGrid's own note on why this view has no Figma
-// frame yet: title/artist/album share the remaining space 3:2:2 (title
-// reads longest on average), duration/format/date added are fixed because
-// none of them benefit from growing with the window.
-const GRID_TEMPLATE = 'minmax(0,3fr) minmax(0,2fr) minmax(0,2fr) 64px 64px 96px'
-const ROW_HEIGHT = 33 // --spacing-row: DataRow's own "vertical pitch of a label/value row"
+/* Every track, as a virtualised table: #, art, title, artist, album, time,
+ * format, added. 48px rows in the library's one scroll area.
+ *
+ * The # column is the row's play control: the mono number at rest, a play
+ * glyph on hover or focus, and for the playing track the accent equaliser
+ * (with the row washed and its title in the accent). Clicking anywhere else
+ * on a row opens its details. */
+
+const COLUMNS = '36px 40px minmax(0,3fr) minmax(0,2fr) minmax(0,2fr) 64px 56px 92px'
+const ROW_HEIGHT = 48
+
+type Column = { id: TrackSort | null; label: string; align?: 'right' }
+
+const HEADER: Column[] = [
+  { id: null, label: '#', align: 'right' },
+  { id: null, label: '' },
+  { id: 'title', label: 'title' },
+  { id: 'artist', label: 'artist' },
+  { id: 'album', label: 'album' },
+  { id: 'duration', label: 'time', align: 'right' },
+  { id: 'format', label: 'format' },
+  { id: 'dateAdded', label: 'added', align: 'right' },
+]
+
+/* "Sep 16" this year, "Sep 16 2024" before it — the year only when it adds
+ * something. The server's timestamps are UTC without a zone marker. */
+function formatAdded(value: string): string {
+  const date = new Date(`${value.replace(' ', 'T')}Z`)
+  if (Number.isNaN(date.getTime())) return NO_VALUE
+  const sameYear = date.getFullYear() === new Date().getFullYear()
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) })
+}
 
 type TracksTableProps = {
-  query: string
+  scrollRef: RefObject<HTMLDivElement | null>
   sort: TrackSort
   dir: SortDir
-  onSort: (sort: TrackSort) => void
-  onSelectNode: (id: number) => void
+  onSort: (sort: TrackSort, dir: SortDir) => void
+  playingId: number | null
+  playing: boolean
+  onOpen: (id: number) => void
+  onPlay: (track: TrackRow) => void
 }
 
-function SortHeader({
-  id,
-  label,
-  align,
-  sort,
-  dir,
-  onSort,
-}: {
-  id: TrackSort
-  label: string
-  align?: 'right'
-  sort: TrackSort
-  dir: SortDir
-  onSort: (sort: TrackSort) => void
-}) {
-  const active = id === sort
-  return (
-    <button
-      type="button"
-      onClick={() => onSort(id)}
-      aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
-      className={`flex items-center gap-[var(--spacing-xs)] text-[length:var(--text-base)] leading-[24px] transition-colors duration-[var(--motion-fast)] ${
-        align === 'right' ? 'flex-row-reverse justify-end' : ''
-      } ${active ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'}`}
-    >
-      {label}
-      {active && <Icon name={dir === 'asc' ? 'chevron-up' : 'chevron-down'} size={16} />}
-    </button>
-  )
-}
+export function TracksTable({ scrollRef, sort, dir, onSort, playingId, playing, onOpen, onPlay }: TracksTableProps) {
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const [offset, setOffset] = useState(0)
+  const { rows, total, loading, waitVisible, ensureRange } = useLibraryPage<TrackRow>('library/tracks', '', sort, dir)
 
-/** Virtualized track table (issue #126): a flat list, one row per
- * recording, unlike AlbumsGrid's row-of-cells — @tanstack/react-virtual's
- * plain linear-list mode applies directly, no column-count measuring
- * needed. Same windowed useLibraryPage underneath, same "smooth at 30k"
- * reasoning as the grid.
- *
- * Clicking a header re-sorts on that column (toggling direction on a second
- * click on the same one); clicking a row selects+flies, same as every other
- * row in the app that names a node. No per-row play button — see
- * AlbumsGrid's note on why that's a deliberate follow-up, not an oversight. */
-export function TracksTable({ query, sort, dir, onSort, onSelectNode }: TracksTableProps) {
-  const parentRef = useRef<HTMLDivElement>(null)
-  const { rows, total, loading, waitVisible, waitLong, ensureRange } = useLibraryPage<TrackRow>(
-    'library/tracks',
-    query,
-    sort,
-    dir,
-  )
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    if (!body) return
+    const measure = () => setOffset(body.offsetTop)
+    measure()
+    const observer = new ResizeObserver(measure)
+    if (body.parentElement) observer.observe(body.parentElement)
+    return () => observer.disconnect()
+  }, [loading])
 
-  const rowVirtualizer = useVirtualizer({
+  const virtualizer = useVirtualizer({
     count: total,
-    getScrollElement: () => parentRef.current,
+    getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_HEIGHT,
-    overscan: 20,
+    overscan: 8,
+    scrollMargin: offset,
   })
-
-  const virtualRows = rowVirtualizer.getVirtualItems()
-  const firstIndex = virtualRows[0]?.index
-  const lastIndex = virtualRows[virtualRows.length - 1]?.index
+  const items = virtualizer.getVirtualItems()
+  const firstIndex = items[0]?.index
+  const lastIndex = items[items.length - 1]?.index
   useEffect(() => {
     if (firstIndex == null || lastIndex == null) return
     ensureRange(firstIndex, lastIndex)
   }, [firstIndex, lastIndex, ensureRange])
 
   return (
-    <div className="flex h-full flex-col">
+    <div role="table" aria-label="Tracks" aria-rowcount={total} className="mt-[24px]">
       <div
         role="row"
-        className="grid shrink-0 gap-[var(--spacing-sm)] border-b border-[var(--color-divider)] px-[var(--spacing-lg)]"
-        style={{ gridTemplateColumns: GRID_TEMPLATE, height: ROW_HEIGHT }}
+        className="grid h-[32px] items-center gap-x-[14px] border-b border-[var(--color-line)] px-[12px] text-label text-[var(--color-ink-2)]"
+        style={{ gridTemplateColumns: COLUMNS }}
       >
-        {TRACK_SORT_OPTIONS.map((option) => (
-          <SortHeader
-            key={option.id}
-            id={option.id}
-            label={option.label}
-            align={option.id === 'duration' ? 'right' : undefined}
-            sort={sort}
-            dir={dir}
-            onSort={onSort}
-          />
-        ))}
+        {HEADER.map((column, i) => {
+          const active = column.id === sort
+          if (!column.id) {
+            return (
+              <span key={i} role="columnheader" className={column.align === 'right' ? 'text-right' : ''}>
+                {column.label}
+              </span>
+            )
+          }
+          const id = column.id
+          return (
+            <span key={i} role="columnheader" aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+              <button
+                type="button"
+                onClick={() => onSort(id, active ? (dir === 'asc' ? 'desc' : 'asc') : id === 'dateAdded' ? 'desc' : 'asc')}
+                className={`flex w-full items-center gap-[4px] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-ink)] ${
+                  column.align === 'right' ? 'justify-end' : ''
+                } ${active ? 'text-[var(--color-ink)]' : ''}`}
+              >
+                {column.label}
+                {active && <Icon name={dir === 'asc' ? 'chevron-up' : 'chevron-down'} size={12} />}
+              </button>
+            </span>
+          )
+        })}
       </div>
 
       {loading ? (
-        // total === 0 while loading means "not known yet", not "empty" —
-        // see useLibraryPage's `loading` doc. Same MO-11 wait timing as
-        // AlbumsGrid: nothing under ~400ms, one non-looping colour shift
-        // past ~800ms.
-        <div className="flex flex-1 items-center justify-center">
-          {waitVisible && (
-            <p
-              className={`text-[length:var(--text-base)] transition-colors duration-[var(--motion-fast)] ${
-                waitLong ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)]'
-              }`}
-            >
-              loading tracks…
-            </p>
-          )}
-        </div>
-      ) : total === 0 ? (
-        <div className="flex flex-1 items-center justify-center">
-          <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
-            {query ? `no tracks match "${query}"` : 'no tracks yet'}
-          </p>
-        </div>
+        waitVisible && <RowsSkeleton />
       ) : (
-        <div ref={parentRef} className="relative flex-1 overflow-y-auto">
-          <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
-            {virtualRows.map((virtualRow) => {
-              const track = rows[virtualRow.index]
-              return (
-                <div
-                  key={virtualRow.key}
-                  role="row"
-                  className="absolute top-0 left-0 w-full"
-                  style={{ transform: `translateY(${virtualRow.start}px)`, height: ROW_HEIGHT }}
+        <div ref={bodyRef} className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          {items.map((item) => {
+            const track = rows[item.index]
+            const style = { transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`, gridTemplateColumns: COLUMNS }
+            if (!track) {
+              return <div key={item.key} className="absolute top-0 left-0 h-[48px] w-full" style={style} />
+            }
+            const isPlaying = track.id === playingId
+            return (
+              <div
+                key={item.key}
+                role="row"
+                aria-rowindex={item.index + 1}
+                aria-current={isPlaying ? 'true' : undefined}
+                onClick={() => onOpen(track.id)}
+                className={`group absolute top-0 left-0 grid h-[48px] w-full cursor-default items-center gap-x-[14px] rounded-[var(--radius-control)] px-[12px] transition-colors duration-[var(--motion-fast)] ${
+                  isPlaying ? 'bg-[var(--color-wash-2)]' : 'hover:bg-[var(--color-wash)]'
+                }`}
+                style={style}
+              >
+                <span role="cell" className="flex justify-end">
+                  <button
+                    type="button"
+                    aria-label={`Play ${track.title}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onPlay(track)
+                    }}
+                    className="grid h-[24px] min-w-[24px] place-items-center"
+                  >
+                    {isPlaying ? (
+                      <Equaliser playing={playing} />
+                    ) : (
+                      <>
+                        <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-3)] group-focus-within:hidden group-hover:hidden">
+                          {item.index + 1}
+                        </span>
+                        <span className="hidden text-[var(--color-ink)] group-focus-within:inline-flex group-hover:inline-flex">
+                          <Icon name="play" size={16} filled />
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </span>
+                <span role="cell">
+                  <CoverArt nodeId={track.albumId ?? track.id} size="thumb" radius="sm" className="size-[36px]" />
+                </span>
+                <span
+                  role="cell"
+                  title={track.title}
+                  className={`truncate text-[length:var(--text-body)] leading-[20px] font-medium ${isPlaying ? 'text-[var(--color-accent)]' : 'text-[var(--color-ink)]'}`}
                 >
-                  {track ? (
-                    <button
-                      type="button"
-                      onClick={() => onSelectNode(track.id)}
-                      className="grid h-full w-full items-center gap-[var(--spacing-sm)] px-[var(--spacing-lg)] text-left transition-colors duration-150 hover:bg-[var(--color-hover-wash)]"
-                      style={{ gridTemplateColumns: GRID_TEMPLATE }}
-                    >
-                      <ScrollingText
-                        text={track.title}
-                        className="min-w-0 font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]"
-                      />
-                      <ScrollingText
-                        text={track.artistName ?? NO_VALUE}
-                        className="min-w-0 font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]"
-                      />
-                      <ScrollingText
-                        text={track.albumTitle ?? NO_VALUE}
-                        className="min-w-0 font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]"
-                      />
-                      <span className="text-right font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]">
-                        {formatDuration(track.durationMs)}
-                      </span>
-                      <span className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]">
-                        {track.format ?? NO_VALUE}
-                      </span>
-                      <span className="truncate font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]">
-                        {track.dateAdded.slice(0, 10)}
-                      </span>
-                    </button>
-                  ) : (
-                    <Skeleton className="h-full w-full" />
+                  {track.title}
+                </span>
+                <span
+                  role="cell"
+                  title={track.artistName ?? undefined}
+                  className="truncate text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]"
+                >
+                  {track.artistName ?? NO_VALUE}
+                </span>
+                <span
+                  role="cell"
+                  title={track.albumTitle ?? undefined}
+                  className="truncate text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]"
+                >
+                  {track.albumTitle ?? NO_VALUE}
+                </span>
+                <span role="cell" className="mono text-right text-[length:var(--text-mono)] text-[var(--color-ink-2)]">
+                  {formatDuration(track.durationMs)}
+                </span>
+                <span role="cell">
+                  {track.format && (
+                    <span className="mono inline-block rounded-[var(--radius-small)] border border-[var(--color-line-strong)] px-[5px] py-px text-[10px] tracking-[0.04em] text-[var(--color-ink-2)]">
+                      {track.format.toUpperCase()}
+                    </span>
                   )}
-                </div>
-              )
-            })}
-          </div>
+                </span>
+                <span role="cell" className="mono text-right text-[length:var(--text-mono)] text-[var(--color-ink-3)]">
+                  {formatAdded(track.dateAdded)}
+                </span>
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

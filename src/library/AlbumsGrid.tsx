@@ -1,181 +1,199 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { CoverArt } from '../ui/CoverArt'
-import { ScrollingText } from '../ui/ScrollingText'
+import { PlayCircle } from '../ui/PlayCircle'
+import { Button } from '../ui/Button'
+import { formatCount } from '../ui/format'
+import { API_BASE as API } from '../config/serverHost'
 import { useLibraryPage } from './useLibraryPage'
+import { GridSkeleton } from './LibrarySkeleton'
 import type { AlbumRow, AlbumSort, SortDir } from './types'
-import { Skeleton } from '../ui/Skeleton'
 
-// There's no Figma frame for this view yet (issue #126 shipped ahead of the
-// design pass — same footing DESIGN.md already documents for Database
-// Inspector/Favourites/Tag Manager). These are reasoned, not measured:
-// CELL_WIDTH is sized to read a 256px cover comfortably at the panel widths
-// --panel-width already settles on around the 1440px reference, and the two
-// text-line figures mirror DataRow/SectionHeader's own `leading-[24px]`
-// rhythm rather than inventing a new one. Kept as named constants, not
-// scattered literals, specifically so the geometry has one place to correct
-// once a real frame exists.
-const CELL_WIDTH = 160
-const CELL_GAP = 20 // --spacing-lg
-const COVER_GAP = 5 // --spacing-xs, between the cover and its title/artist
-const TEXT_LINE_HEIGHT = 24 // matches DataRow/SectionHeader's leading-[24px]
-const ROW_GAP = 10 // --spacing-sm, between one row of albums and the next
-const ROW_HEIGHT = CELL_WIDTH + COVER_GAP + TEXT_LINE_HEIGHT * 2 + ROW_GAP
-const PADDING = 20 // --spacing-lg, matches the panel's own side padding rhythm
+/* Albums: a "Recently added" shelf, then every album as a cover grid.
+ *
+ * The grid is `repeat(auto-fill, minmax(168px, 1fr))` with 24px columns and
+ * 28px rows, computed here rather than left to CSS grid because it's
+ * virtualised: a library can hold tens of thousands of albums, and only the
+ * rows on screen are rendered, a page of 150 fetched at a time
+ * (useLibraryPage). The rows share the library's one scroll area with the
+ * header and the shelf above them, so the virtualiser is told how far down
+ * that scroll area the grid starts. */
+
+const MIN_CELL = 168
+const COLUMN_GAP = 24
+const ROW_GAP = 28
+const TEXT_BLOCK = 10 + 20 + 16 // gap, title line, artist line
+const SHELF_SIZE = 12
 
 type AlbumsGridProps = {
-  query: string
+  scrollRef: RefObject<HTMLDivElement | null>
   sort: AlbumSort
   dir: SortDir
-  onSelectNode: (id: number) => void
+  onOpen: (id: number) => void
+  onPlay: (id: number) => void
+  onShowRecent: () => void
 }
 
-// Selecting a cell only selects+flies — it doesn't also play (no
-// PlayNodeButton here). Out of #126's "Done when" list (the grid is
-// cover/title/artist/sort, nothing about a transport affordance per
-// cell), so it's left as a documented follow-up rather than
-// added speculatively: the map's own NodeCard already covers play-on-select
-// once a node picked here is flown to.
-function AlbumCell({ album, onSelectNode }: { album: AlbumRow; onSelectNode: (id: number) => void }) {
+function AlbumCell({ album, size, onOpen, onPlay }: { album: AlbumRow; size?: number; onOpen: () => void; onPlay: () => void }) {
+  const sub = [album.artistName, album.year].filter(Boolean).join(' · ')
   return (
-    <button
-      type="button"
-      onClick={() => onSelectNode(album.id)}
-      className="flex flex-col text-left"
-      style={{ width: CELL_WIDTH }}
-    >
-      <CoverArt
-        nodeId={album.id}
-        size="thumb"
-        className="shrink-0 rounded-[var(--radius-control)]"
-        alt={album.title}
-        style={{ width: CELL_WIDTH, height: CELL_WIDTH }}
-      />
-      {/* Title and artist: both Sometype Mono ink, no muted label — same as
-       * NodeHoverPlate's title+subtitle pair. Position (which line is
-       * first) carries the meaning here, not color, since there's no
-       * "artist:" label to mute against a value the way DataRow's
-       * panel-list rows have one. */}
-      <div style={{ marginTop: COVER_GAP }}>
-        <ScrollingText
-          text={album.title}
-          className="block font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]"
-        />
-        {album.artistName && (
-          <ScrollingText
-            text={album.artistName}
-            className="block font-[family-name:var(--font-mono)] text-[length:var(--text-base)] leading-[24px] text-[var(--color-ink)]"
+    <div className="group flex min-w-0 flex-col gap-[10px]" style={size ? { width: size } : undefined}>
+      <div className="relative transition-transform duration-[var(--motion-base)] ease-[var(--ease-out)] group-hover:-translate-y-[3px]">
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-label={`${album.title}${album.artistName ? `, ${album.artistName}` : ''}`}
+          className="block w-full"
+        >
+          <CoverArt
+            nodeId={album.id}
+            size="thumb"
+            alt=""
+            className="aspect-square w-full transition-shadow duration-[var(--motion-base)] group-hover:shadow-[var(--shadow-panel)]"
           />
-        )}
+        </button>
+        <span className="absolute right-[10px] bottom-[10px] opacity-0 transition-opacity duration-[var(--motion-fast)] group-focus-within:opacity-100 group-hover:opacity-100">
+          <PlayCircle size={40} label={`Play ${album.title}`} onClick={onPlay} />
+        </span>
       </div>
-    </button>
+      <button type="button" onClick={onOpen} tabIndex={-1} className="flex min-w-0 flex-col text-left">
+        <span title={album.title} className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
+          {album.title}
+        </span>
+        <span title={sub} className="truncate text-small text-[var(--color-ink-2)]">
+          {sub}
+        </span>
+      </button>
+    </div>
   )
 }
 
-/** Album cover grid (issue #126). Virtualized by row, not by cell — see
- * DESIGN.md "Library view" for why: @tanstack/react-virtual has no built-in
- * notion of a wrapping grid, only a linear list of items with a size, so a
- * "row" here is one virtual item containing `columnCount` cells, and
- * `columnCount` itself is recomputed from the container's measured width
- * (ResizeObserver) rather than fixed, since --panel-width already makes the
- * canvas area between the two side panels a variable width today.
- *
- * Data loads in the same windowed, incremental way the DOM virtualizes:
- * useLibraryPage only fetches the pages the currently visible row range
- * actually touches, which is the other half (alongside DOM virtualization)
- * of staying smooth at 30k albums — see that hook's own comment. */
-export function AlbumsGrid({ query, sort, dir, onSelectNode }: AlbumsGridProps) {
-  const parentRef = useRef<HTMLDivElement>(null)
-  const [columnCount, setColumnCount] = useState(1)
-  const { rows, total, loading, waitVisible, waitLong, ensureRange } = useLibraryPage<AlbumRow>(
-    'library/albums',
-    query,
-    sort,
-    dir,
-  )
-
+/* The twelve newest albums, one row of 148px covers. "see all" switches the
+ * grid below to newest-first rather than opening a second view. */
+function RecentlyAdded({
+  onOpen,
+  onPlay,
+  onShowRecent,
+}: {
+  onOpen: (id: number) => void
+  onPlay: (id: number) => void
+  onShowRecent: () => void
+}) {
+  const [albums, setAlbums] = useState<AlbumRow[] | null>(null)
   useEffect(() => {
-    const el = parentRef.current
-    if (!el) return
-    const observer = new ResizeObserver(([entry]) => {
-      const width = entry.contentRect.width - PADDING * 2
-      setColumnCount(Math.max(1, Math.floor((width + CELL_GAP) / (CELL_WIDTH + CELL_GAP))))
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
+    let cancelled = false
+    fetch(`${API}/library/albums?${new URLSearchParams({ sort: 'dateAdded', dir: 'desc', limit: String(SHELF_SIZE), offset: '0' })}`)
+      .then((r) => r.json())
+      .then((data: { items: AlbumRow[] }) => !cancelled && setAlbums(data.items))
+      .catch(() => !cancelled && setAlbums([]))
+    return () => {
+      cancelled = true
+    }
   }, [])
+  if (albums == null || albums.length === 0) return null
+  return (
+    <section className="mt-[28px] flex flex-col gap-[12px]">
+      <div className="flex items-center justify-between">
+        <h2 className="text-heading text-[var(--color-ink)]">Recently added</h2>
+        <Button onClick={onShowRecent}>see all</Button>
+      </div>
+      {/* Clipped, not scrolled: the shelf is a glance at what's new, and the
+       * grid below is the way through everything. */}
+      <div className="flex gap-[20px] overflow-hidden pt-[3px]">
+        {albums.map((album) => (
+          <div key={album.id} className="shrink-0">
+            <AlbumCell album={album} size={148} onOpen={() => onOpen(album.id)} onPlay={() => onPlay(album.id)} />
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
 
-  const rowCount = Math.ceil(total / columnCount)
-  const rowVirtualizer = useVirtualizer({
+export function AlbumsGrid({ scrollRef, sort, dir, onOpen, onPlay, onShowRecent }: AlbumsGridProps) {
+  const gridRef = useRef<HTMLDivElement>(null)
+  const [geometry, setGeometry] = useState({ columns: 1, cell: MIN_CELL, offset: 0 })
+  const { rows, total, loading, waitVisible, ensureRange } = useLibraryPage<AlbumRow>('library/albums', '', sort, dir)
+
+  // Columns from the grid's width, the same answer auto-fill would give, and
+  // the grid's distance from the top of the scroll area for the virtualiser.
+  useLayoutEffect(() => {
+    const grid = gridRef.current
+    if (!grid) return
+    const measure = () => {
+      const width = grid.clientWidth
+      const columns = Math.max(1, Math.floor((width + COLUMN_GAP) / (MIN_CELL + COLUMN_GAP)))
+      const cell = (width - COLUMN_GAP * (columns - 1)) / columns
+      setGeometry((g) =>
+        g.columns === columns && g.cell === cell && g.offset === grid.offsetTop ? g : { columns, cell, offset: grid.offsetTop },
+      )
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(grid)
+    if (grid.parentElement) observer.observe(grid.parentElement)
+    return () => observer.disconnect()
+  }, [loading])
+
+  const rowHeight = geometry.cell + TEXT_BLOCK + ROW_GAP
+  const rowCount = Math.ceil(total / geometry.columns)
+  const virtualizer = useVirtualizer({
     count: rowCount,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT + ROW_GAP,
-    overscan: 3,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => rowHeight,
+    overscan: 2,
+    scrollMargin: geometry.offset,
   })
+  useEffect(() => {
+    virtualizer.measure()
+  }, [rowHeight, virtualizer])
 
-  const virtualRows = rowVirtualizer.getVirtualItems()
-  const firstIndex = virtualRows[0]?.index
-  const lastIndex = virtualRows[virtualRows.length - 1]?.index
+  const items = virtualizer.getVirtualItems()
+  const firstIndex = items[0]?.index
+  const lastIndex = items[items.length - 1]?.index
   useEffect(() => {
     if (firstIndex == null || lastIndex == null) return
-    ensureRange(firstIndex * columnCount, Math.min(total - 1, (lastIndex + 1) * columnCount - 1))
-  }, [firstIndex, lastIndex, columnCount, total, ensureRange])
+    ensureRange(firstIndex * geometry.columns, Math.min(total - 1, (lastIndex + 1) * geometry.columns - 1))
+  }, [firstIndex, lastIndex, geometry.columns, total, ensureRange])
 
-  if (loading) {
-    // total === 0 while loading means "not known yet", not "empty" — see
-    // useLibraryPage's `loading` doc. Nothing renders under ~400ms per
-    // DESIGN.md's indeterminate-progress rule; past ~800ms one non-looping
-    // colour shift (muted -> ink) says the wait is still real.
-    return (
-      <div className="flex h-full items-center justify-center">
-        {waitVisible && (
-          <p
-            className={`text-[length:var(--text-base)] transition-colors duration-[var(--motion-fast)] ${
-              waitLong ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)]'
-            }`}
-          >
-            loading albums…
-          </p>
-        )}
-      </div>
-    )
-  }
-
-  if (total === 0) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
-          {query ? `no albums match "${query}"` : 'no albums yet'}
-        </p>
-      </div>
-    )
-  }
+  if (loading) return waitVisible ? <GridSkeleton /> : null
 
   return (
-    <div ref={parentRef} className="relative h-full overflow-y-auto">
-      <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
-        {virtualRows.map((virtualRow) => {
-          const rowStart = virtualRow.index * columnCount
+    <>
+      {sort !== 'dateAdded' && <RecentlyAdded onOpen={onOpen} onPlay={onPlay} onShowRecent={onShowRecent} />}
+      <div className="mt-[32px] flex items-center justify-between">
+        <h2 className="text-heading text-[var(--color-ink)]">{sort === 'dateAdded' && dir === 'desc' ? 'Newest first' : 'All albums'}</h2>
+        <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-2)]">{formatCount(total)}</span>
+      </div>
+      <div ref={gridRef} className="relative mt-[14px] w-full" style={{ height: virtualizer.getTotalSize() }}>
+        {items.map((item) => {
+          const start = item.index * geometry.columns
           return (
             <div
-              key={virtualRow.key}
-              className="absolute top-0 left-0 flex w-full"
-              style={{ transform: `translateY(${virtualRow.start}px)`, gap: CELL_GAP, padding: `0 ${PADDING}px` }}
+              key={item.key}
+              className="absolute top-0 left-0 grid w-full"
+              style={{
+                transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`,
+                gridTemplateColumns: `repeat(${geometry.columns}, minmax(0, 1fr))`,
+                columnGap: COLUMN_GAP,
+              }}
             >
-              {Array.from({ length: columnCount }, (_, col) => {
-                const index = rowStart + col
+              {Array.from({ length: geometry.columns }, (_, col) => {
+                const index = start + col
                 if (index >= total) return null
                 const album = rows[index]
                 return album ? (
-                  <AlbumCell key={album.id} album={album} onSelectNode={onSelectNode} />
+                  <AlbumCell key={album.id} album={album} onOpen={() => onOpen(album.id)} onPlay={() => onPlay(album.id)} />
                 ) : (
-                  <Skeleton key={index} className="shrink-0 rounded-[var(--radius-control)]" style={{ width: CELL_WIDTH, height: CELL_WIDTH }} />
+                  <div key={`pending-${index}`} className="flex flex-col gap-[10px]">
+                    <div className="aspect-square w-full rounded-[var(--radius-art)] bg-[var(--color-wash-2)]" />
+                  </div>
                 )
               })}
             </div>
           )
         })}
       </div>
-    </div>
+    </>
   )
 }

@@ -370,7 +370,13 @@ function Workspace({
             theme={resolvedTheme}
           />
         ) : (
-          <LibraryView query="" onSelectNode={openDetails} />
+          <LibraryView
+            selectedNodeId={selectedNodeId}
+            onOpenNode={openDetails}
+            playback={playback}
+            settings={settings}
+            updateSettings={updateSettings}
+          />
         )}
 
         <Rail
