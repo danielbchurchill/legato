@@ -383,6 +383,24 @@ export async function lookupReleaseGroupForRecording(mbid: string): Promise<stri
   return data.releases?.[0]?.["release-group"]?.id ?? null;
 }
 
+// Issue #272: a recording MBID a person pasted into the maintenance view,
+// checked before anything is written. Null when MusicBrainz has no such
+// recording. A merged recording's old MBID still resolves, and `mbid` is
+// whatever MusicBrainz answers with, so the node gets the current one.
+export async function lookupRecording(mbid: string): Promise<{ mbid: string; title: string } | null> {
+  await throttle();
+
+  const url = `${API_ROOT}/recording/${mbid}?fmt=json`;
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`MusicBrainz recording lookup failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = (await res.json()) as { id: string; title: string };
+  return { mbid: data.id, title: data.title };
+}
+
 export type MbArtistCandidate = {
   mbid: string;
   name: string;

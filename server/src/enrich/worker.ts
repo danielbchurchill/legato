@@ -532,9 +532,10 @@ async function processArtistImageLookup(db: Database, job: EnrichJob): Promise<v
 
   if (looksLikeMultipleArtists(node.title)) {
     // Not a failure and not retryable: "Pussy Riot; Slayyyter" is a credit
-    // line, and no name search can resolve it to one artist. Recorded so the
-    // maintenance view can show why this node has no photo.
-    recordProvenance(db, job.node_id, null, 0, "artist tag names more than one artist — no photo looked up");
+    // line, and no name search can resolve it to one artist. The done job is
+    // the whole record (enqueueOnce never asks again). This used to write a
+    // null 'mbid' provenance row, which the hygiene worklist reads as a
+    // recording MusicBrainz couldn't match (#272); 0034 removed those rows.
     finish();
     return;
   }
