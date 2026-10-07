@@ -6,6 +6,7 @@ import type { NodeLabelDrawingFunction } from 'sigma/rendering'
 import { patchNodePosition, type GraphEdge, type GraphNode } from './useGraphData'
 import { useGraph } from './graphContext'
 import { EDGE_COLOR } from './edgeTypes'
+import { edgeWidthPx } from './edgeWidth'
 import { computeClusters } from './clusters'
 import { createForceSimulation, type ForceSimulationHandle, type SimNodeInput } from './forceSimulation'
 import { useScanStatus } from '../hooks/useScanStatus'
@@ -44,11 +45,10 @@ function artistSize(releaseCount: number): number {
   return ARTIST_BASE_SIZE + Math.min(releaseCount, ARTIST_SIZE_MAX_RELEASES) * ARTIST_SIZE_PER_RELEASE
 }
 
-/* Edges are hairlines: 0.6px unfocused, 0.8px on a focused cluster, in
- * on-screen pixels at every zoom (the reducer divides out sigma's own
- * zoom scaling). */
-const EDGE_PX = 0.6
-const EDGE_FOCUSED_PX = 0.8
+/* Edges are hairlines whose on-screen width follows the zoom (edgeWidth.ts):
+ * wider at the overview, narrower up close. A focused cluster's edges draw
+ * a third wider than the rest at the same zoom. */
+const FOCUSED_EDGE_WIDTH = 4 / 3
 /* While something is focused: its cluster's edges in their type colours at
  * 85%; every other edge drops to 60% of its usual (already faint) alpha.
  * Out-of-focus nodes sit at 30%, their labels at 45%. */
@@ -581,9 +581,9 @@ function syncGraph(
     const edgeKey = `${from}->${to}::${edge.type}`
     wantedEdgeKeys.add(edgeKey)
     if (graph.hasEdge(edgeKey)) continue
-    // The colour here is only a pre-first-paint placeholder; the edge
-    // reducer recomputes it every frame from relType and focus.
-    graph.addEdgeWithKey(edgeKey, from, to, { size: EDGE_PX, color: colors.edge, relType: edge.type })
+    // The size and colour here are only pre-first-paint placeholders; the
+    // edge reducer recomputes both from the zoom, relType and focus.
+    graph.addEdgeWithKey(edgeKey, from, to, { size: 1, color: colors.edge, relType: edge.type })
   }
 
   graph.forEachEdge((edgeKey) => {
@@ -615,11 +615,12 @@ type Props = {
   /** Map options "colour edges by type": type hues on every edge, not just
    * a selection's cluster. */
   colourEdgesByType: boolean
-  /** The shipped map settings' per-type size multipliers (#29), edge
-   * thickness and user edge colours. No v2 control writes them any more,
-   * but a library that set them keeps them. */
+  /** The shipped map settings' per-type size multipliers (#29) and user
+   * edge colours. No v2 control writes them any more, but a library that
+   * set them keeps them. Their edge thickness setting isn't read: edge
+   * width follows the zoom now (edgeWidth.ts), and a stale multiplier with
+   * no control left to change it would scale that curve out of sight. */
   nodeSizeMultipliers: Record<string, number>
-  edgeThicknessMultiplier: number
   edgeColorOverrides: Record<string, string>
   /** Map options "lock layout" — freezes the live simulation, keeps drag. */
   nodesLocked: boolean
@@ -681,7 +682,6 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     showArtistLabels,
     colourEdgesByType,
     nodeSizeMultipliers,
-    edgeThicknessMultiplier,
     edgeColorOverrides,
     nodesLocked,
     forceCenterStrength,
@@ -775,7 +775,6 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     showArtistLabels,
     colourEdgesByType,
     nodeSizeMultipliers,
-    edgeThicknessMultiplier,
     edgeColorOverrides,
   })
   useEffect(() => {
@@ -786,11 +785,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       showArtistLabels,
       colourEdgesByType,
       nodeSizeMultipliers,
-      edgeThicknessMultiplier,
       edgeColorOverrides,
     }
     rendererRef.current?.refresh()
-  }, [showArtists, showReleases, showTracks, showArtistLabels, colourEdgesByType, nodeSizeMultipliers, edgeThicknessMultiplier, edgeColorOverrides])
+  }, [showArtists, showReleases, showTracks, showArtistLabels, colourEdgesByType, nodeSizeMultipliers, edgeColorOverrides])
 
   // #136: theme changes are rare, so the palette is resolved once per change
   // rather than read from the DOM per node per frame.
@@ -1226,21 +1224,37 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       if (typeHidden(graph.getNodeAttribute(source, 'nodeType') as string) || typeHidden(graph.getNodeAttribute(target, 'nodeType') as string)) {
         return { ...data, hidden: true }
       }
-      // Sigma scales edge width with zoom; dividing that back out keeps
-      // every edge the same hairline on screen at any zoom.
-      const scale = live.edgeThicknessMultiplier * Math.sqrt(renderer.getCamera().ratio)
+      // Sigma divides an edge's size by sqrt(ratio) on screen. Multiplying
+      // that back in makes `width` a width in screen pixels, which
+      // edgeWidthPx then picks for the current zoom.
+      const { ratio } = renderer.getCamera()
+      const width = edgeWidthPx(ratio) * Math.sqrt(ratio)
       const relType = data.relType as string
       const colors = themeColorsRef.current
       const focusing = currentFocus != null && focusProgress > 0
 
       if (focusing && (currentFocus!.keys.has(source) || currentFocus!.keys.has(target))) {
         const hue = edgeHue(relType, live.edgeColorOverrides, colors)
-        return { ...data, size: EDGE_FOCUSED_PX * scale, color: premultiplied(withAlphaFactor(hue, 1, FOCUSED_EDGE_ALPHA * focusProgress)) }
+        return { ...data, size: width * FOCUSED_EDGE_WIDTH, color: premultiplied(withAlphaFactor(hue, 1, FOCUSED_EDGE_ALPHA * focusProgress)) }
       }
       const base = live.colourEdgesByType ? withAlphaFactor(edgeHue(relType, live.edgeColorOverrides, colors), 1, TYPED_EDGE_ALPHA) : colors.edge
       const color = focusing ? withAlphaFactor(base, 1 - (1 - UNFOCUSED_EDGE_ALPHA) * focusProgress) : base
-      return { ...data, size: EDGE_PX * scale, color: premultiplied(color) }
+      return { ...data, size: width, color: premultiplied(color) }
     })
+
+    // Reducers only run on a refresh, and a camera move alone only
+    // re-renders. Once the layout settles nothing else refreshes, so edges
+    // would keep the width of the last tick's zoom: sigma's own scaling
+    // would then thin them as you zoom out, the opposite of edgeWidthPx. A
+    // zoom (not a pan) asks for one, batched into the next frame.
+    let lastRatio = renderer.getCamera().ratio
+    const refreshOnZoom = () => {
+      const { ratio } = renderer.getCamera()
+      if (ratio === lastRatio) return
+      lastRatio = ratio
+      renderer.scheduleRefresh()
+    }
+    renderer.getCamera().on('updated', refreshOnZoom)
 
     /* Cluster glows: a radial gradient of each artist's cover colour,
      * painted on a 2D canvas slipped in under sigma's edge layer. The radius
@@ -1645,6 +1659,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       applyFocusRef.current = () => {}
       sim.simulation.stop()
       simulationRef.current = null
+      renderer.getCamera().off('updated', refreshOnZoom)
       renderer.kill()
       rendererRef.current = null
       graphRef.current = null

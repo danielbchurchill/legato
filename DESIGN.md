@@ -52,10 +52,11 @@ Nodes are dots, sized and toned by type. Covers at node size made the map a mosa
 
 Selecting a node focuses its cluster and flies the camera to frame it, landing the node where its 340px card has room. Out-of-focus nodes drop to 30% (mixed toward the canvas, since sigma's node program can't composite alpha), their labels to 45%, other edges to 60%, other glows to 35%. The focused cluster's edges take their type colours. With nothing selected, a held hover focuses the hovered node's neighbours; a selection always wins over a hover.
 
-Labels: artists 13/500 ink, credits 11/400 ink-3, and the focused cluster's records 11/400 ink-2, all over a 4px halo. Two decisions the mock didn't have to make, because its nine artists never collide:
+Labels: artists 13/500 ink, credits 11/400 ink-3, and the focused cluster's records 11/400 ink-2, all over a 4px halo. Three decisions the mock didn't have to make, because its nine artists never collide:
 
 - **Labels are placed greedily per frame,** focused first, then artists before credits before records, bigger dots first. A label that would overlap one already placed is skipped. "Artists are always labelled" holds wherever there's room, and zooming in reveals the rest. A real library's featured-only artists cluster tightly around the people they featured with.
 - **A glow's radius is capped by its cluster's extent.** The v2 formula, `min(w,h) × (0.08 + size × 0.012)`, alone turns two hundred artists into one wash.
+- **Edges widen as you zoom out.** v2's flat 0.6px at 11% alpha can't be seen on paper, least of all at the overview, where every edge is on screen at once. Width follows the camera ratio instead (`src/canvas/edgeWidth.ts`): 1.3px framing the whole map, narrowing by the square root of the zoom to a 0.7px floor up close, capped at 1.6px zoomed out. Every step stays under v1's 1.7px. A focused cluster's edges draw a third wider. The old "links › thickness" setting isn't read any more, because nothing in v2 can change it.
 
 ### What v2 asked for that isn't built
 

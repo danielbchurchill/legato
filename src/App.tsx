@@ -181,7 +181,6 @@ function Workspace({
 
   // Map options — read live by Canvas's reducers. Memoised so their
   // identity only changes when the settings they come from do.
-  const edgeThicknessMultiplier = Number(settings.edgeThicknessMultiplier ?? '1')
   const showArtists = settings.showArtists !== 'false'
   const showReleases = settings.showReleases !== 'false'
   const showTracks = settings.showTracks !== 'false'
@@ -377,7 +376,6 @@ function Workspace({
             showArtistLabels={showArtistLabels}
             colourEdgesByType={colourEdgesByType}
             nodeSizeMultipliers={nodeSizeMultipliers}
-            edgeThicknessMultiplier={edgeThicknessMultiplier}
             edgeColorOverrides={edgeColorOverrides}
             nodesLocked={nodesLocked}
             forceCenterStrength={forceCenterStrength}
