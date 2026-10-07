@@ -56,7 +56,12 @@ export function statsRoutes(db: Database) {
           `SELECT
              (SELECT COUNT(*) FROM artists) AS artists,
              (SELECT COUNT(*) FROM albums) AS albums,
-             (SELECT COUNT(*) FROM files WHERE missing_since IS NULL) AS tracks,
+             -- Tracks, not files: one recording can have a file on two
+             -- records (the same "Yellow Submarine" on Revolver and on
+             -- its own soundtrack), and the library and the map count it
+             -- once. Bytes and duration below stay per file: that's what's
+             -- on disk.
+             (SELECT COUNT(DISTINCT recording_node_id) FROM files WHERE missing_since IS NULL) AS tracks,
              (SELECT COALESCE(SUM(file_size), 0) FROM files WHERE missing_since IS NULL) AS totalBytes,
              (SELECT COALESCE(SUM(duration_ms), 0) FROM files WHERE missing_since IS NULL) AS totalDurationMs`,
         )

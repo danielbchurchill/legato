@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Tabs } from '../ui/Tabs'
 import { ScrollArea } from '../ui/ScrollArea'
 import { plural } from '../ui/format'
@@ -8,6 +8,7 @@ import type { usePlayback } from '../playback/usePlayback'
 import type { Settings } from '../hooks/useSettings'
 import { AlbumsGrid } from './AlbumsGrid'
 import { ArtistsGrid } from './ArtistsGrid'
+import { libraryArtists } from './libraryArtists'
 import { TracksTable } from './TracksTable'
 import { SortPill, type SortKind } from './SortPill'
 import { ALBUM_SORT_OPTIONS, TRACK_SORT_OPTIONS, type AlbumSort, type SortDir, type TrackSort } from './types'
@@ -54,7 +55,7 @@ type LibraryViewProps = {
 
 export function LibraryView({ onOpenNode, playback, settings, updateSettings }: LibraryViewProps) {
   const layout = useShellLayout()
-  const { nodes, loading } = useGraph()
+  const { nodes, edges, loading } = useGraph()
   const scrollRef = useRef<HTMLDivElement>(null)
   // The layout persists like the map/library switch itself; the sort is a
   // passing choice and resets with the view.
@@ -63,8 +64,13 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings }: 
   const [trackSort, setTrackSort] = useState<{ sort: TrackSort; dir: SortDir }>({ sort: 'title', dir: 'asc' })
   const [artistDir, setArtistDir] = useState<SortDir>('asc')
 
-  const counts = { release: 0, artist: 0, recording: 0 }
-  for (const node of nodes) if (node.type in counts) counts[node.type as keyof typeof counts]++
+  const counts = useMemo(() => {
+    const byType = { release: 0, recording: 0 }
+    for (const node of nodes) if (node.type in byType) byType[node.type as keyof typeof byType]++
+    // The artists the Artists tab lists, not every artist node: featured-only
+    // credits aren't in the tab, so they aren't in the count either.
+    return { ...byType, artist: libraryArtists(nodes, edges).length }
+  }, [nodes, edges])
   const empty = !loading && nodes.length === 0
 
   const scrollToTop = () => scrollRef.current?.scrollTo({ top: 0 })
