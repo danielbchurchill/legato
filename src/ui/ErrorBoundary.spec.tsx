@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from 'react'
+import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ErrorBoundary, RenderError } from './ErrorBoundary'
@@ -8,7 +8,7 @@ let shouldThrow = true
 
 function Fragile() {
   if (shouldThrow) throw new Error('node.files is undefined')
-  return createElement('p', null, 'drawn')
+  return <p>drawn</p>
 }
 
 async function render() {
@@ -17,13 +17,14 @@ async function render() {
   let resetBoundary: () => void = () => {}
   await act(async () => {
     createRoot(container).render(
-      createElement(ErrorBoundary, {
-        fallback: (error: Error, reset: () => void) => {
+      <ErrorBoundary
+        fallback={(error, reset) => {
           resetBoundary = reset
-          return createElement(RenderError, { title: "This panel couldn't be drawn.", error })
-        },
-        children: createElement(Fragile),
-      }),
+          return <RenderError title="This panel couldn't be drawn." error={error} />
+        }}
+      >
+        <Fragile />
+      </ErrorBoundary>,
     )
   })
   return { container, reset: () => resetBoundary() }
