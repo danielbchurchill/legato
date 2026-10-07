@@ -17,6 +17,7 @@ import { SelectionRing } from './SelectionRing'
 import { MapLegend, MapToolbar } from './MapChrome'
 import { FirstScanCard, MapNotice } from './MapStates'
 import { averageColors, hashCoverUrl, sampleCoverColor } from '../ui/coverColor'
+import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
@@ -1803,15 +1804,28 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         )}
         {selectedNode && (
           <div className="pointer-events-auto">
-            <NodeCard
+            {/* A card that fails to draw shows why in its own corner, below
+             * the capsule, instead of taking the map down with it. */}
+            <ErrorBoundary
               key={selectedNode.id}
-              renderer={activeRenderer}
-              node={selectedNode}
-              nodeKey={nodeKey(selectedNode.id)}
-              layout={layout}
-              onOpenDetails={onOpenDetails}
-              playback={playback}
-            />
+              fallback={(error) => (
+                <div
+                  className="glass absolute rounded-[16px] p-[12px]"
+                  style={{ left: layout.leftOccupancy + INSET, top: INSET + CAPSULE_HEIGHT + INSET, width: NODE_CARD_WIDTH_PX }}
+                >
+                  <RenderError title={`The card for ${selectedNode.title} couldn't be drawn.`} error={error} />
+                </div>
+              )}
+            >
+              <NodeCard
+                renderer={activeRenderer}
+                node={selectedNode}
+                nodeKey={nodeKey(selectedNode.id)}
+                layout={layout}
+                onOpenDetails={onOpenDetails}
+                playback={playback}
+              />
+            </ErrorBoundary>
           </div>
         )}
       </div>

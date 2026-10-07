@@ -5,6 +5,9 @@ import App from './App.tsx'
 import { installAuthFetch } from './auth/session'
 import { registerShellWorker } from './pwa/register'
 import { holdInstallPrompt } from './pwa/installOffer'
+import { ErrorBoundary, RenderError } from './ui/ErrorBoundary'
+import { Centered } from './shell/Centered'
+import { Button } from './ui/Button'
 
 // Before the first render, so no component's first fetch goes out without
 // the owner session's bearer token (issue #112).
@@ -16,6 +19,22 @@ registerShellWorker()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary
+      fallback={(error) => (
+        <Centered>
+          <RenderError
+            title="Legato hit an error and stopped drawing the window."
+            error={error}
+            action={
+              <Button variant="secondary" onClick={() => window.location.reload()}>
+                Reload
+              </Button>
+            }
+          />
+        </Centered>
+      )}
+    >
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )
