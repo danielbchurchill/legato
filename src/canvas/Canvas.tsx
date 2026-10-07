@@ -289,11 +289,22 @@ function mixToward(color: string, toward: string, t: number): string {
   return `rgb(${Math.round(ar + (br - ar) * k)},${Math.round(ag + (bg - ag) * k)},${Math.round(ab + (bb - ab) * k)})`
 }
 
-/* Edges are drawn by sigma's line program, which does composite alpha — so
- * an edge's emphasis is its colour's own alpha, scaled here. */
+/* An edge's emphasis is its colour's own alpha, scaled here. The result
+ * still has to go through premultiplied() before sigma draws it. */
 function withAlphaFactor(color: string, factor: number, baseAlpha?: number): string {
   const [r, g, b, a] = parseColorChannels(color)
   return `rgba(${r},${g},${b},${(baseAlpha ?? a) * factor})`
+}
+
+/* Sigma blends with gl.ONE, gl.ONE_MINUS_SRC_ALPHA, the premultiplied-alpha
+ * equation, but its line shader writes a colour's channels as given. So a
+ * translucent edge colour has to arrive already multiplied by its alpha;
+ * otherwise its full-strength rgb is added over whatever is beneath. The
+ * paper theme's dark 11% hairlines came out lighter than the canvas and
+ * vanished, and the dark theme's 7.5% white ones drew as solid white. */
+function premultiplied(color: string): string {
+  const [r, g, b, a] = parseColorChannels(color)
+  return `rgba(${Math.round(r * a)},${Math.round(g * a)},${Math.round(b * a)},${a})`
 }
 
 /* The hue an edge of this type shows when it's coloured at all: the user's
@@ -1223,11 +1234,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
       if (focusing && (currentFocus!.keys.has(source) || currentFocus!.keys.has(target))) {
         const hue = edgeHue(relType, live.edgeColorOverrides, colors)
-        return { ...data, size: EDGE_FOCUSED_PX * scale, color: withAlphaFactor(hue, 1, FOCUSED_EDGE_ALPHA * focusProgress) }
+        return { ...data, size: EDGE_FOCUSED_PX * scale, color: premultiplied(withAlphaFactor(hue, 1, FOCUSED_EDGE_ALPHA * focusProgress)) }
       }
       const base = live.colourEdgesByType ? withAlphaFactor(edgeHue(relType, live.edgeColorOverrides, colors), 1, TYPED_EDGE_ALPHA) : colors.edge
       const color = focusing ? withAlphaFactor(base, 1 - (1 - UNFOCUSED_EDGE_ALPHA) * focusProgress) : base
-      return { ...data, size: EDGE_PX * scale, color }
+      return { ...data, size: EDGE_PX * scale, color: premultiplied(color) }
     })
 
     /* Cluster glows: a radial gradient of each artist's cover colour,
