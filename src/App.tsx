@@ -136,7 +136,7 @@ function Workspace({
   const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('next')
   const [detailsTab, setDetailsTab] = useState<DetailsTab>('overview')
   const [searchOpen, setSearchOpen] = useState(false)
-  const { settings, updateSettings } = useSettings()
+  const { settings, loaded: settingsLoaded, updateSettings } = useSettings()
   // #127: held here rather than inside the map options popover, which
   // unmounts whenever it closes; its undo also answers Cmd/Ctrl+Z below.
   const mapPresets = useMapPresetHistory(settings, updateSettings)
@@ -165,9 +165,15 @@ function Workspace({
 
   // #46 "rebuild map": the server reseeds every node; a full Canvas remount
   // is the simplest way to show it, since the live graph sync deliberately
-  // never moves a node it already tracks.
+  // never moves a node it already tracks. The remount waits for a refetch
+  // (#274): the graph data lives above the map, and a map remounted on the
+  // old data would reopen on the saved layout the rebuild just cleared.
   const [rebuildEpoch, setRebuildEpoch] = useState(0)
-  useWsEvent(['layout:rebuilt'], () => setRebuildEpoch((e) => e + 1))
+  const refetchGraph = graph.refetch
+  useWsEvent(['layout:rebuilt'], () => {
+    const remount = () => setRebuildEpoch((e) => e + 1)
+    void refetchGraph().then(remount, remount)
+  })
 
   const dimOnHoverEnabled = settings.hoverDimEnabled !== 'false'
   const reducedMotionForced = settings.reducedMotionForced === 'true'
@@ -359,7 +365,10 @@ function Workspace({
               }}
             />
           </div>
-        ) : viewMode === 'map' ? (
+        ) : !settingsLoaded ? null : viewMode === 'map' ? (
+          // The map waits for settings (#274): it opens on its saved layout
+          // without settling, and force settings or "show producers"
+          // arriving a moment later would set it moving again.
           <Canvas
             key={rebuildEpoch}
             ref={canvasRef}
