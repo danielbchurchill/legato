@@ -58,6 +58,15 @@ Labels: artists 13/500 ink, credits 11/400 ink-3, and the focused cluster's reco
 - **A glow's radius is capped by its cluster's extent.** The v2 formula, `min(w,h) × (0.08 + size × 0.012)`, alone turns two hundred artists into one wash.
 - **Edges widen as you zoom out.** v2's flat 0.6px at 11% alpha can't be seen on paper, least of all at the overview, where every edge is on screen at once. Width follows the camera ratio instead (`src/canvas/edgeWidth.ts`): 1.3px framing the whole map, narrowing by the square root of the zoom to a 0.7px floor up close, capped at 1.6px zoomed out. Every step stays under v1's 1.7px. A focused cluster's edges draw a third wider. The old "links › thickness" setting isn't read any more, because nothing in v2 can change it.
 
+The layout is kept (#274). The map promises this much:
+
+- **The same library opens the same way.** Each time the physics settles, the client saves where every node came to rest. A visit that finds every node at a saved spot shows them there and runs no physics, so the map, and the labels that fit on it, match the last visit exactly.
+- **A small scan moves only what it touched.** New tracks start beside the record and artist they join, and only nodes within two links of a change move while it settles. The rest of the map holds still. A new artist with nothing on the map yet starts at its seed.
+- **A drag beats anything automatic.** A drag is saved where it's dropped. Physics may carry the node on from there (#46), and it reopens where it came to rest. Lock layout freezes the physics, so nothing moves or saves until it's unlocked.
+- **Rebuild map is the fresh start.** It clears every saved spot and drag, and the map settles again from new seeds.
+
+It doesn't promise that a drag or a force slider leaves the rest of the map alone: both move everything, as live physics does, and the result is what's kept. Two clients on one server both save, and the last to settle wins.
+
 ### What v2 asked for that isn't built
 
 - **Hover previews.** The handoff assumes an existing preview path; the player has none. The map & motion card keeps the hover setting that exists — focus on hover — under its real name, rather than a switch that does nothing.
