@@ -35,6 +35,7 @@ import { useAuth } from './auth/useAuth'
 import { OwnerGate } from './auth/OwnerGate'
 import { AccountContext, initialsFor, useAccount } from './auth/accountContext'
 import { Button } from './ui/Button'
+import { ErrorBoundary, RenderError } from './ui/ErrorBoundary'
 import { useCoverColor, withAlpha } from './ui/coverColor'
 import { LAUNCHED_OFFLINE } from './pwa/register'
 import { useInstallOffer } from './pwa/installOffer'
@@ -66,6 +67,13 @@ function shuffled<T>(items: T[]): T[] {
   }
   return out
 }
+
+// A right-hand panel that fails to draw says so and leaves the rest of the
+// window running. Its boundary is keyed by the node it shows, so picking
+// another one clears the error by itself.
+const panelError = (error: Error, reset: () => void) => (
+  <RenderError title="This panel couldn't be drawn." error={error} action={<Button onClick={reset}>try again</Button>} />
+)
 
 function isTypingTarget(el: Element | null): boolean {
   if (!el) return false
@@ -408,32 +416,35 @@ function Workspace({
 
         {rightView === 'queue' && (
           <RightPanel label="Now playing" wash={rightWash}>
-            <NowPlaying
-              nodeId={playingNodeId}
-              tab={nowPlayingTab}
-              onTabChange={setNowPlayingTab}
-              playback={playback}
-              onFocusNode={focusNode}
-              onOpenDetails={openDetails}
-              onShuffleLibrary={shuffleLibrary}
-              onShowOnMap={(id) => {
-                if (viewMode !== 'map') void updateSettings({ viewMode: 'map' })
-                setSelectedNodeId(id)
-                canvasRef.current?.flyToNode(id)
-              }}
-            />
+            <ErrorBoundary key={playingNodeId} fallback={panelError}>
+              <NowPlaying
+                nodeId={playingNodeId}
+                tab={nowPlayingTab}
+                onTabChange={setNowPlayingTab}
+                playback={playback}
+                onFocusNode={focusNode}
+                onOpenDetails={openDetails}
+                onShuffleLibrary={shuffleLibrary}
+                onShowOnMap={(id) => {
+                  if (viewMode !== 'map') void updateSettings({ viewMode: 'map' })
+                  setSelectedNodeId(id)
+                  canvasRef.current?.flyToNode(id)
+                }}
+              />
+            </ErrorBoundary>
           </RightPanel>
         )}
         {rightView === 'details' && selectedNodeId != null && (
           <RightPanel label="Details" wash={rightWash}>
-            <NodeDetails
-              key={selectedNodeId}
-              nodeId={selectedNodeId}
-              tab={detailsTab}
-              onTabChange={setDetailsTab}
-              playback={playback}
-              onFocusNode={focusNode}
-            />
+            <ErrorBoundary key={selectedNodeId} fallback={panelError}>
+              <NodeDetails
+                nodeId={selectedNodeId}
+                tab={detailsTab}
+                onTabChange={setDetailsTab}
+                playback={playback}
+                onFocusNode={focusNode}
+              />
+            </ErrorBoundary>
           </RightPanel>
         )}
 

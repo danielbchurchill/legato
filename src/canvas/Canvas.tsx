@@ -17,6 +17,7 @@ import { SelectionRing } from './SelectionRing'
 import { MapLegend, MapToolbar } from './MapChrome'
 import { FirstScanCard, MapNotice } from './MapStates'
 import { averageColors, hashCoverUrl, sampleCoverColor } from '../ui/coverColor'
+import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
@@ -289,11 +290,22 @@ function mixToward(color: string, toward: string, t: number): string {
   return `rgb(${Math.round(ar + (br - ar) * k)},${Math.round(ag + (bg - ag) * k)},${Math.round(ab + (bb - ab) * k)})`
 }
 
-/* Edges are drawn by sigma's line program, which does composite alpha — so
- * an edge's emphasis is its colour's own alpha, scaled here. */
+/* An edge's emphasis is its colour's own alpha, scaled here. The result
+ * still has to go through premultiplied() before sigma draws it. */
 function withAlphaFactor(color: string, factor: number, baseAlpha?: number): string {
   const [r, g, b, a] = parseColorChannels(color)
   return `rgba(${r},${g},${b},${(baseAlpha ?? a) * factor})`
+}
+
+/* Sigma blends with gl.ONE, gl.ONE_MINUS_SRC_ALPHA, the premultiplied-alpha
+ * equation, but its line shader writes a colour's channels as given. So a
+ * translucent edge colour has to arrive already multiplied by its alpha;
+ * otherwise its full-strength rgb is added over whatever is beneath. The
+ * paper theme's dark 11% hairlines came out lighter than the canvas and
+ * vanished, and the dark theme's 7.5% white ones drew as solid white. */
+function premultiplied(color: string): string {
+  const [r, g, b, a] = parseColorChannels(color)
+  return `rgba(${Math.round(r * a)},${Math.round(g * a)},${Math.round(b * a)},${a})`
 }
 
 /* The hue an edge of this type shows when it's coloured at all: the user's
@@ -1223,11 +1235,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
       if (focusing && (currentFocus!.keys.has(source) || currentFocus!.keys.has(target))) {
         const hue = edgeHue(relType, live.edgeColorOverrides, colors)
-        return { ...data, size: EDGE_FOCUSED_PX * scale, color: withAlphaFactor(hue, 1, FOCUSED_EDGE_ALPHA * focusProgress) }
+        return { ...data, size: EDGE_FOCUSED_PX * scale, color: premultiplied(withAlphaFactor(hue, 1, FOCUSED_EDGE_ALPHA * focusProgress)) }
       }
       const base = live.colourEdgesByType ? withAlphaFactor(edgeHue(relType, live.edgeColorOverrides, colors), 1, TYPED_EDGE_ALPHA) : colors.edge
       const color = focusing ? withAlphaFactor(base, 1 - (1 - UNFOCUSED_EDGE_ALPHA) * focusProgress) : base
-      return { ...data, size: EDGE_PX * scale, color }
+      return { ...data, size: EDGE_PX * scale, color: premultiplied(color) }
     })
 
     /* Cluster glows: a radial gradient of each artist's cover colour,
@@ -1792,15 +1804,28 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         )}
         {selectedNode && (
           <div className="pointer-events-auto">
-            <NodeCard
+            {/* A card that fails to draw shows why in its own corner, below
+             * the capsule, instead of taking the map down with it. */}
+            <ErrorBoundary
               key={selectedNode.id}
-              renderer={activeRenderer}
-              node={selectedNode}
-              nodeKey={nodeKey(selectedNode.id)}
-              layout={layout}
-              onOpenDetails={onOpenDetails}
-              playback={playback}
-            />
+              fallback={(error) => (
+                <div
+                  className="glass absolute rounded-[16px] p-[12px]"
+                  style={{ left: layout.leftOccupancy + INSET, top: INSET + CAPSULE_HEIGHT + INSET, width: NODE_CARD_WIDTH_PX }}
+                >
+                  <RenderError title={`The card for ${selectedNode.title} couldn't be drawn.`} error={error} />
+                </div>
+              )}
+            >
+              <NodeCard
+                renderer={activeRenderer}
+                node={selectedNode}
+                nodeKey={nodeKey(selectedNode.id)}
+                layout={layout}
+                onOpenDetails={onOpenDetails}
+                playback={playback}
+              />
+            </ErrorBoundary>
           </div>
         )}
       </div>

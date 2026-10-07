@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -36,6 +37,12 @@ struct Shared {
   state: Mutex<PrefetchState>,
   ready: Condvar,
   len: u64,
+  // Set when the reader is dropped: the track finished, was skipped, or its
+  // session stopped. The background thread checks it between chunks and
+  // gives up, so a file nobody will play stops downloading. Without it,
+  // every queue_stop left one thread per opened track pulling its whole
+  // file over the network.
+  abandoned: AtomicBool,
 }
 
 struct PrefetchState {
@@ -59,12 +66,16 @@ impl NetworkAheadReader {
       state: Mutex::new(PrefetchState { buf: Vec::with_capacity(initial_capacity), done: None }),
       ready: Condvar::new(),
       len,
+      abandoned: AtomicBool::new(false),
     });
 
     let background = shared.clone();
     std::thread::spawn(move || {
       let mut chunk = vec![0u8; 256 * 1024];
       loop {
+        if background.abandoned.load(Ordering::Relaxed) {
+          break;
+        }
         match file.read(&mut chunk) {
           Ok(0) => {
             let mut state = background.state.lock().unwrap();
@@ -88,6 +99,12 @@ impl NetworkAheadReader {
     });
 
     Ok(NetworkAheadReader { shared, pos: 0 })
+  }
+}
+
+impl Drop for NetworkAheadReader {
+  fn drop(&mut self) {
+    self.shared.abandoned.store(true, Ordering::Relaxed);
   }
 }
 
@@ -168,7 +185,7 @@ pub enum RepeatMode {
 }
 
 /// Why a track couldn't start (issue #184). Returned as the rejection value
-/// of queue_enqueue/queue_skip, so usePlayback.ts gets a tagged object it
+/// of queue_enqueue, so usePlayback.ts gets a tagged object it
 /// can explain on screen instead of a string that only ever reached the
 /// `npx tauri dev` terminal. Three cases because each needs a different
 /// fix from the person at the keyboard: reconnect a drive, replace a file,
@@ -238,15 +255,44 @@ pub struct QueueStatus {
   pub volume: f32,
 }
 
+// How many tracks are open in the sink at once: the one playing and the
+// one after it, which is all gapless needs. Everything behind them waits
+// in Session::pending as a path and is opened by the monitor thread as
+// room frees up. Opening a track starts NetworkAheadReader downloading the
+// whole file, so opening the full queue up front (a shuffled library is
+// 700+ tracks) meant hundreds of simultaneous downloads over NFS,
+// gigabytes of buffered audio, and, while queue_enqueue still ran on the
+// main thread, a window that beachballed on every click.
+const OPEN_AHEAD: usize = 2;
+
 struct Session {
   // Held for the lifetime of playback — dropping it stops output.
   _stream: MixerDeviceSink,
   sink: Player,
+  // Which session this is. queue_stop followed straight away by a new
+  // enqueue (every play and every queue edit does that) replaces the
+  // session before the old monitor thread's next tick, so "is there still
+  // a session?" isn't enough for that thread to know it should exit. It
+  // compares this instead; before it did, each play left one more monitor
+  // running, each emitting its own position events four times a second.
+  generation: u64,
   // Tracks appended to the sink, in append order, front = currently
   // playing. rodio's Player doesn't expose "which source is this," so this
   // is what lets the monitor thread turn "sink.len() decreased" into
-  // "here's the recording_node_id that's now playing."
+  // "here's the recording_node_id that's now playing." Never longer than
+  // OPEN_AHEAD, except briefly when repeat-one re-queues a track.
   queue: VecDeque<QueueTrack>,
+  // Enqueued but not opened yet, in play order, behind everything in
+  // `queue`.
+  pending: VecDeque<QueueTrack>,
+  // True while a track taken from `pending` (or a queue_enqueue's own
+  // track) is being opened with the lock released. Anything enqueued
+  // meanwhile goes to `pending` so it can't overtake the one in flight.
+  opening: bool,
+  // The front of `queue` changed (or the session is new) and the frontend
+  // hasn't been told. Set by finished tracks and queue_skip, cleared by the
+  // monitor when it emits playback://track-changed.
+  announce_owed: bool,
   // Every track ever enqueued this session, in original append order —
   // unlike `queue`, this never shrinks as tracks finish. It's what
   // repeat-all wraps back to at the end of the queue (reconcile_repeat
@@ -287,6 +333,7 @@ pub struct PlaybackState {
   // See RepeatMode's own doc comment — outside Session for the same
   // survives-a-stop reason as volume/device_name above.
   repeat_mode: Arc<Mutex<RepeatMode>>,
+  next_generation: AtomicU64,
 }
 
 impl PlaybackState {
@@ -296,6 +343,7 @@ impl PlaybackState {
       volume: Arc::new(Mutex::new(1.0)),
       device_name: Arc::new(Mutex::new(None)),
       repeat_mode: Arc::new(Mutex::new(RepeatMode::Off)),
+      next_generation: AtomicU64::new(0),
     }
   }
 }
@@ -304,18 +352,27 @@ fn gain_db(track: &QueueTrack) -> f32 {
   track.replaygain_track_gain.unwrap_or(0.0)
 }
 
-// Decodes and appends one track to a live sink — the shared tail end of
-// both a normal queue_enqueue call and the monitor thread's own gapless
-// repeat re-enqueue (reconcile_repeat below), so there's exactly one place
-// that turns a QueueTrack into a playing source.
-fn append_track(sink: &Player, track: &QueueTrack) -> Result<(), PlaybackError> {
-  let source = open_source(&track.file_path)?;
-  sink.append(source.amplify_decibel(gain_db(track)));
-  Ok(())
+// The second half of turning a QueueTrack into a playing source, after
+// open_source. The two are separate so the open, which can take seconds
+// over NFS, runs without the session lock held, and only this quick part
+// runs under it. Shared by queue_enqueue and the monitor thread, so
+// there's one place ReplayGain is applied.
+fn append_opened(session: &mut Session, track: QueueTrack, source: Decoder<NetworkAheadReader>) {
+  session.sink.append(source.amplify_decibel(gain_db(&track)));
+  session.queue.push_back(track);
 }
 
-// Split from append_track so the open/decode classification is testable
-// without a Player (and so without an audio device).
+// The next pending track to open, if the sink has room for it under
+// OPEN_AHEAD. Free of Player and file I/O so the windowing is testable
+// without an audio device.
+fn take_next_to_open(queue: &VecDeque<QueueTrack>, pending: &mut VecDeque<QueueTrack>) -> Option<QueueTrack> {
+  if queue.len() >= OPEN_AHEAD {
+    return None;
+  }
+  pending.pop_front()
+}
+
+// Testable without a Player (and so without an audio device).
 fn open_source(path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError> {
   let file = File::open(path).map_err(|e| classify_open_error(path, &e))?;
   // See NetworkAheadReader above: confirmed live over an NFS-mounted
@@ -329,13 +386,14 @@ fn open_source(path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError>
 // Pure gapless-repeat scheduling core — given how many tracks have
 // actually finished playing since the last poll (a *natural* completion;
 // a manual queue_skip never goes through this, see its own comment) and
-// the current repeat mode, decides what needs to be re-appended to stay
-// gapless and updates `queue`'s own bookkeeping to match. Kept free of
-// Player/file I/O specifically so it's testable without a real audio device
-// — same reasoning as gain_db above, see the tests module below.
+// the current repeat mode, drops the finished tracks from `queue` and puts
+// whatever has to play again into `pending`, where the monitor's top-up
+// opens it. Kept free of Player/file I/O specifically so it's testable
+// without a real audio device — same reasoning as gain_db above, see the
+// tests module below.
 //
-// RepeatMode::One re-appends the just-finished track at the *back* of
-// `queue`/the sink rather than dropping it — because rodio's Player is
+// RepeatMode::One re-queues the just-finished track at the *back* of
+// `pending` rather than dropping it — because rodio's Player is
 // strictly FIFO by append order, this only stays correct because
 // usePlayback.ts (the Tauri path) deliberately enqueues *only* the current
 // track while repeat-one is active, never the rest of the tail behind it
@@ -345,79 +403,98 @@ fn open_source(path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError>
 // already been handed, so the frontend's enqueue policy is what actually
 // keeps repeat-one's loop uninterrupted, not this reconciliation alone.
 //
-// RepeatMode::All only wraps once `queue` is empty after popping — i.e.
-// the track that just finished was the last thing enqueued — and re-
-// appends the whole of `full_order`, the original enqueued sequence, so
-// repeat-all loops "the queue" as this session was given it.
+// RepeatMode::All only wraps once `queue` and `pending` are both empty
+// after popping — i.e. the track that just finished was the last thing
+// enqueued — and re-queues the whole of `full_order`, the original
+// enqueued sequence, so repeat-all loops "the queue" as this session was
+// given it.
 fn reconcile_repeat(
   queue: &mut VecDeque<QueueTrack>,
+  pending: &mut VecDeque<QueueTrack>,
   full_order: &[QueueTrack],
   finished_count: usize,
   repeat: RepeatMode,
-) -> Vec<QueueTrack> {
-  let mut to_append = Vec::new();
+) {
   for _ in 0..finished_count {
     let Some(finished) = queue.pop_front() else { break };
     match repeat {
-      RepeatMode::One => {
-        queue.push_back(finished.clone());
-        to_append.push(finished);
-      }
-      RepeatMode::All if queue.is_empty() => {
-        for track in full_order {
-          queue.push_back(track.clone());
-          to_append.push(track.clone());
-        }
-      }
+      RepeatMode::One => pending.push_back(finished),
+      RepeatMode::All if queue.is_empty() && pending.is_empty() => pending.extend(full_order.iter().cloned()),
       RepeatMode::All | RepeatMode::Off => {}
     }
   }
-  to_append
 }
 
 // Polls the sink's queue length to detect track boundaries — rodio has no
 // completion callback, so this is the mechanism behind playback://
-// track-changed. Exits once the session is torn down (queue_stop), rather
-// than polling forever after every stop — otherwise every play/stop cycle
-// would leak another thread.
-fn spawn_monitor(app: AppHandle, state: Arc<Mutex<Option<Session>>>, repeat_mode: Arc<Mutex<RepeatMode>>) {
-  std::thread::spawn(move || {
-    let mut last_queue_len: usize = usize::MAX;
-    loop {
-      std::thread::sleep(Duration::from_millis(250));
+// track-changed — and keeps the next pending track opened behind the one
+// playing. Exits once its session is stopped or replaced; see
+// Session::generation.
+fn spawn_monitor(
+  app: AppHandle,
+  state: Arc<Mutex<Option<Session>>>,
+  repeat_mode: Arc<Mutex<RepeatMode>>,
+  generation: u64,
+) {
+  std::thread::spawn(move || loop {
+    std::thread::sleep(Duration::from_millis(250));
+
+    // Under the lock: account for finished tracks and pick the next one to
+    // open. The open itself happens with the lock released, because over
+    // NFS it can take seconds, and play, pause and queue_status all wait
+    // on this lock.
+    let to_open = {
       let mut guard = state.lock().unwrap();
-      let Some(session) = guard.as_mut() else {
+      let Some(session) = guard.as_mut().filter(|s| s.generation == generation) else {
         break;
       };
-
-      let sink_len = session.sink.len();
-      let finished_count = session.queue.len().saturating_sub(sink_len);
+      let finished_count = session.queue.len().saturating_sub(session.sink.len());
       if finished_count > 0 {
         let repeat = *repeat_mode.lock().unwrap();
-        let to_append = reconcile_repeat(&mut session.queue, &session.full_order, finished_count, repeat);
-        for track in &to_append {
-          // Best-effort: a decode failure on the repeat path (the file
-          // went missing mid-session, say) just means the loop goes
-          // silent rather than panicking the monitor thread — same
-          // "surface it as an honest stop, not a crash" policy the rest
-          // of this module already follows.
-          let _ = append_track(&session.sink, track);
-        }
+        reconcile_repeat(&mut session.queue, &mut session.pending, &session.full_order, finished_count, repeat);
+        session.announce_owed = true;
       }
-
-      let position_ms = session.sink.get_pos().as_millis() as u64;
-      let current_node = session.queue.front().map(|t| t.recording_node_id);
-      let track_changed = session.queue.len() != last_queue_len;
-      last_queue_len = session.queue.len();
-      drop(guard);
-
-      let _ = app.emit(
-        "playback://position",
-        PositionEvent { position_ms, recording_node_id: current_node },
-      );
-      if track_changed {
-        let _ = app.emit("playback://track-changed", TrackChangedEvent { recording_node_id: current_node });
+      if session.opening {
+        None
+      } else {
+        let next = take_next_to_open(&session.queue, &mut session.pending);
+        session.opening = next.is_some();
+        next
       }
+    };
+    let opened = to_open.map(|track| {
+      let source = open_source(&track.file_path);
+      (track, source)
+    });
+
+    let mut guard = state.lock().unwrap();
+    let Some(session) = guard.as_mut().filter(|s| s.generation == generation) else {
+      break;
+    };
+    if let Some((track, source)) = opened {
+      session.opening = false;
+      match source {
+        Ok(source) => append_opened(session, track, source),
+        // Skipped, the same as a track queue_enqueue rejects is dropped
+        // from usePlayback's queue. The next tick opens the one after it.
+        Err(err) => log::warn!("[playback] skipping a track that won't open: {err:?}"),
+      }
+    }
+
+    // A finished track whose successor is still pending or mid-open leaves
+    // `queue` empty for a tick. That isn't the end of the queue, so say
+    // nothing rather than tell the frontend nothing is playing.
+    if session.queue.is_empty() && (session.opening || !session.pending.is_empty()) {
+      continue;
+    }
+    let position_ms = session.sink.get_pos().as_millis() as u64;
+    let current_node = session.queue.front().map(|t| t.recording_node_id);
+    let announce = std::mem::take(&mut session.announce_owed);
+    drop(guard);
+
+    let _ = app.emit("playback://position", PositionEvent { position_ms, recording_node_id: current_node });
+    if announce {
+      let _ = app.emit("playback://track-changed", TrackChangedEvent { recording_node_id: current_node });
     }
   });
 }
@@ -477,8 +554,20 @@ fn ensure_session<'a>(
     let stream = open_stream(&device_name).map_err(|detail| PlaybackError::NoOutputDevice { detail })?;
     let sink = Player::connect_new(stream.mixer());
     sink.set_volume(*state.volume.lock().unwrap());
-    *guard = Some(Session { _stream: stream, sink, queue: VecDeque::new(), full_order: Vec::new() });
-    spawn_monitor(app.clone(), state.session.clone(), state.repeat_mode.clone());
+    let generation = state.next_generation.fetch_add(1, Ordering::Relaxed);
+    *guard = Some(Session {
+      _stream: stream,
+      sink,
+      generation,
+      queue: VecDeque::new(),
+      pending: VecDeque::new(),
+      opening: false,
+      // A new session announces its first track, which is also how a
+      // rebuild re-announces the track that was already playing.
+      announce_owed: true,
+      full_order: Vec::new(),
+    });
+    spawn_monitor(app.clone(), state.session.clone(), state.repeat_mode.clone(), generation);
   }
   Ok(guard)
 }
@@ -511,24 +600,55 @@ pub fn queue_set_device(state: State<PlaybackState>, name: Option<String>) -> Re
   Ok(())
 }
 
-#[tauri::command]
+/// Opens the track now if it's one of the first OPEN_AHEAD, so a first
+/// track that can't play comes back as this call's error for usePlayback's
+/// showStartFailure. Anything later goes to `pending` and returns at once;
+/// the monitor thread opens it when it's next up, and skips it if it won't
+/// open.
+///
+/// `async` so it runs off the main thread: Tauri runs a plain sync command
+/// on the main thread, and an open over NFS that takes a second froze the
+/// whole window for that second, once per track.
+#[tauri::command(async)]
 pub fn queue_enqueue(app: AppHandle, state: State<PlaybackState>, track: QueueTrack) -> Result<(), PlaybackError> {
   let mut guard = ensure_session(&app, &state)?;
   let session = guard.as_mut().unwrap();
+  let generation = session.generation;
 
-  if let Err(err) = append_track(&session.sink, &track) {
-    // A session that never got a playable track would otherwise hold the
-    // output device open, and its monitor thread would announce
-    // track-changed(null) on its first tick, wiping the error usePlayback
-    // is about to show. Drop it, same as queue_stop.
-    if session.queue.is_empty() {
-      *guard = None;
-    }
-    return Err(err);
+  if session.opening || !session.pending.is_empty() || session.queue.len() >= OPEN_AHEAD {
+    session.full_order.push(track.clone());
+    session.pending.push_back(track);
+    return Ok(());
   }
-  session.full_order.push(track.clone());
-  session.queue.push_back(track);
-  Ok(())
+
+  session.opening = true;
+  drop(guard);
+  let opened = open_source(&track.file_path);
+  let mut guard = state.session.lock().unwrap();
+  // Stopped or replaced while the file was opening: whoever did that has
+  // moved on from this track, and dropping `opened` cancels its download.
+  let Some(session) = guard.as_mut().filter(|s| s.generation == generation) else {
+    return Ok(());
+  };
+  session.opening = false;
+
+  match opened {
+    Ok(source) => {
+      session.full_order.push(track.clone());
+      append_opened(session, track, source);
+      Ok(())
+    }
+    Err(err) => {
+      // A session that never got a playable track would otherwise hold the
+      // output device open, and its monitor thread would announce
+      // track-changed(null) on its first tick, wiping the error usePlayback
+      // is about to show. Drop it, same as queue_stop.
+      if session.queue.is_empty() && session.pending.is_empty() {
+        *guard = None;
+      }
+      Err(err)
+    }
+  }
 }
 
 /// #125's persisted player setting (see RepeatMode's doc comment) — applies
@@ -592,15 +712,14 @@ pub fn queue_seek(state: State<PlaybackState>, position_ms: u64) -> Result<(), S
 /// holds the single looping track while repeat-one is active — this
 /// command has nothing real behind it to skip to in that case.
 #[tauri::command]
-pub fn queue_skip(state: State<PlaybackState>) -> Result<(), PlaybackError> {
+pub fn queue_skip(state: State<PlaybackState>) -> Result<(), String> {
   if let Some(session) = state.session.lock().unwrap().as_mut() {
     session.sink.skip_one();
     session.queue.pop_front();
-    if session.queue.is_empty() && *state.repeat_mode.lock().unwrap() == RepeatMode::All {
-      for track in session.full_order.clone() {
-        append_track(&session.sink, &track)?;
-        session.queue.push_back(track);
-      }
+    session.announce_owed = true;
+    let nothing_left = session.queue.is_empty() && session.pending.is_empty() && !session.opening;
+    if nothing_left && *state.repeat_mode.lock().unwrap() == RepeatMode::All {
+      session.pending.extend(session.full_order.iter().cloned());
     }
   }
   Ok(())
@@ -662,68 +781,95 @@ mod tests {
     tracks.iter().map(|t| t.recording_node_id).collect()
   }
 
+  fn pending_of(tracks: &[QueueTrack]) -> VecDeque<QueueTrack> {
+    tracks.iter().cloned().collect()
+  }
+
   #[test]
   fn reconcile_repeat_off_just_drains_finished_tracks() {
     let mut queue = VecDeque::from([track(1), track(2)]);
-    let full_order = [track(1), track(2)];
+    let mut pending = pending_of(&[track(3)]);
+    let full_order = [track(1), track(2), track(3)];
 
-    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::Off);
+    reconcile_repeat(&mut queue, &mut pending, &full_order, 1, RepeatMode::Off);
 
     assert_eq!(ids(&Vec::from(queue)), vec![2]);
-    assert!(to_append.is_empty());
+    assert_eq!(ids(&Vec::from(pending)), vec![3]);
   }
 
   // The common repeat-one shape: usePlayback.ts only ever hands Rust the
   // single looping track while repeat-one is active (see this module's own
   // reconcile_repeat doc comment), so `queue` holds nothing else.
   #[test]
-  fn reconcile_repeat_one_reappends_the_finished_track_gaplessly() {
+  fn reconcile_repeat_one_requeues_the_finished_track() {
     let mut queue = VecDeque::from([track(7)]);
+    let mut pending = VecDeque::new();
     let full_order = [track(7)];
 
-    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::One);
+    reconcile_repeat(&mut queue, &mut pending, &full_order, 1, RepeatMode::One);
 
-    assert_eq!(ids(&Vec::from(queue)), vec![7]);
-    assert_eq!(ids(&to_append), vec![7]);
+    assert!(queue.is_empty());
+    assert_eq!(ids(&Vec::from(pending)), vec![7]);
   }
 
   // Documents the FIFO caveat reconcile_repeat's doc comment calls out:
   // if something else were already sitting behind the looping track (which
   // shouldn't happen via the real frontend policy, but this function alone
-  // can't enforce that), the repeated copy lands at the *back* of the
-  // queue, not ahead of what's already there — rodio's Player is strictly
-  // append-order, so this reconciliation has no way to jump the line.
+  // can't enforce that), the repeated copy lands *behind* it, not ahead —
+  // rodio's Player is strictly append-order, so this reconciliation has no
+  // way to jump the line.
   #[test]
   fn reconcile_repeat_one_cannot_reorder_what_is_already_queued_behind_it() {
     let mut queue = VecDeque::from([track(1), track(2)]);
+    let mut pending = VecDeque::new();
     let full_order = [track(1), track(2)];
 
-    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::One);
+    reconcile_repeat(&mut queue, &mut pending, &full_order, 1, RepeatMode::One);
 
-    assert_eq!(ids(&Vec::from(queue)), vec![2, 1]);
-    assert_eq!(ids(&to_append), vec![1]);
+    assert_eq!(ids(&Vec::from(queue)), vec![2]);
+    assert_eq!(ids(&Vec::from(pending)), vec![1]);
   }
 
+  // Only the queue is re-queued, never opened: the monitor's top-up opens
+  // the first OPEN_AHEAD of it, so a 700-track repeat-all wraps without
+  // opening 700 files.
   #[test]
-  fn reconcile_repeat_all_wraps_to_the_start_once_the_queue_drains() {
+  fn reconcile_repeat_all_wraps_to_the_start_once_everything_has_played() {
     let mut queue = VecDeque::from([track(3)]);
+    let mut pending = VecDeque::new();
     let full_order = [track(1), track(2), track(3)];
 
-    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::All);
+    reconcile_repeat(&mut queue, &mut pending, &full_order, 1, RepeatMode::All);
 
-    assert_eq!(ids(&Vec::from(queue)), vec![1, 2, 3]);
-    assert_eq!(ids(&to_append), vec![1, 2, 3]);
+    assert!(queue.is_empty());
+    assert_eq!(ids(&Vec::from(pending)), vec![1, 2, 3]);
   }
 
   #[test]
   fn reconcile_repeat_all_does_nothing_while_tracks_remain_in_the_queue() {
     let mut queue = VecDeque::from([track(2), track(3)]);
+    let mut pending = VecDeque::new();
     let full_order = [track(1), track(2), track(3)];
 
-    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::All);
+    reconcile_repeat(&mut queue, &mut pending, &full_order, 1, RepeatMode::All);
 
     assert_eq!(ids(&Vec::from(queue)), vec![3]);
-    assert!(to_append.is_empty());
+    assert!(pending.is_empty());
+  }
+
+  // The sink can run dry with tracks still unopened (one that wouldn't
+  // open, or a top-up still in flight). That isn't the end of the queue,
+  // so repeat-all mustn't wrap yet.
+  #[test]
+  fn reconcile_repeat_all_does_not_wrap_while_tracks_are_still_pending() {
+    let mut queue = VecDeque::from([track(1)]);
+    let mut pending = pending_of(&[track(2), track(3)]);
+    let full_order = [track(1), track(2), track(3)];
+
+    reconcile_repeat(&mut queue, &mut pending, &full_order, 1, RepeatMode::All);
+
+    assert!(queue.is_empty());
+    assert_eq!(ids(&Vec::from(pending)), vec![2, 3]);
   }
 
   // Two natural completions landing in the same 250ms poll (spawn_monitor
@@ -732,12 +878,13 @@ mod tests {
   #[test]
   fn reconcile_repeat_one_handles_multiple_finishes_in_one_tick() {
     let mut queue = VecDeque::from([track(9), track(9)]);
+    let mut pending = VecDeque::new();
     let full_order = [track(9)];
 
-    let to_append = reconcile_repeat(&mut queue, &full_order, 2, RepeatMode::One);
+    reconcile_repeat(&mut queue, &mut pending, &full_order, 2, RepeatMode::One);
 
-    assert_eq!(ids(&Vec::from(queue)), vec![9, 9]);
-    assert_eq!(ids(&to_append), vec![9, 9]);
+    assert!(queue.is_empty());
+    assert_eq!(ids(&Vec::from(pending)), vec![9, 9]);
   }
 
   // An empty full_order (the degenerate "nothing was ever really enqueued"
@@ -745,12 +892,34 @@ mod tests {
   #[test]
   fn reconcile_repeat_all_with_empty_full_order_wraps_to_nothing() {
     let mut queue = VecDeque::from([track(1)]);
+    let mut pending = VecDeque::new();
     let full_order: [QueueTrack; 0] = [];
 
-    let to_append = reconcile_repeat(&mut queue, &full_order, 1, RepeatMode::All);
+    reconcile_repeat(&mut queue, &mut pending, &full_order, 1, RepeatMode::All);
 
     assert!(queue.is_empty());
-    assert!(to_append.is_empty());
+    assert!(pending.is_empty());
+  }
+
+  #[test]
+  fn take_next_to_open_fills_the_sink_up_to_open_ahead() {
+    let mut queue = VecDeque::from([track(1)]);
+    let mut pending = pending_of(&[track(2), track(3)]);
+
+    let next = take_next_to_open(&queue, &mut pending).expect("room for one more");
+    assert_eq!(next.recording_node_id, 2);
+    queue.push_back(next);
+
+    assert!(take_next_to_open(&queue, &mut pending).is_none(), "the sink already holds OPEN_AHEAD tracks");
+    assert_eq!(ids(&Vec::from(pending)), vec![3]);
+  }
+
+  #[test]
+  fn take_next_to_open_with_nothing_pending_opens_nothing() {
+    let queue = VecDeque::new();
+    let mut pending = VecDeque::new();
+
+    assert!(take_next_to_open(&queue, &mut pending).is_none());
   }
 
   // A throwaway directory per test under the OS temp dir. The suffix keeps
