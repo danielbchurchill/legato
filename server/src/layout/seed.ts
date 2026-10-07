@@ -129,10 +129,15 @@ export function recomputeTracksLayout(
   // catalogue table to enumerate against, and scoping to the edges directly
   // means a credit node with only e.g. a mixed_by edge never round-trips
   // through an upsert-then-immediately-deleted cycle below.
+  //
+  // Issue #273: a producer who also performs is one artist node now, and
+  // keeps the artist seed above. Seeding it again here would move it to the
+  // middle of the records it produced instead of the ones it made.
   const creditSeeds = centroidSeeds(
     db,
     seeds,
-    "SELECT DISTINCT to_node AS node_id FROM edges WHERE type IN ('produced_by', 'engineered_by')",
+    `SELECT DISTINCT e.to_node AS node_id FROM edges e JOIN nodes n ON n.id = e.to_node AND n.type = 'credit'
+      WHERE e.type IN ('produced_by', 'engineered_by')`,
     ["produced_by", "engineered_by"],
   );
 

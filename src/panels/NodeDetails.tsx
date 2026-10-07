@@ -308,9 +308,11 @@ function Overview({
           : []
 
   // Connection chips: who made it and what it's part of, from the graph's
-  // own edges. A person on most of a record's tracks leads.
+  // own edges. A person on most of a record's tracks leads. An artist who
+  // produced their own tracks (one node since #273) isn't a connection to
+  // themselves; the credits tab lists that role.
   const chips = [
-    ...people.filter((p) => p.role !== 'artist').map((p) => ({ id: p.id, label: `${p.title} · ${p.role}` })),
+    ...people.filter((p) => p.role !== 'artist' && p.id !== node.id).map((p) => ({ id: p.id, label: `${p.title} · ${p.role}` })),
     ...node.edges
       .filter((e) => e.type === 'released_on' || e.type === 'member_of' || (node.type === 'recording' && e.type === 'appears_on'))
       .map((e) => ({
