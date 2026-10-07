@@ -1,5 +1,6 @@
 import type { Database } from "./sqlite.js";
 import { deriveLocalEdges } from "./match/edges.js";
+import { mergeDuplicatePeople } from "./match/people.js";
 import {
   enqueueArtistImageLookupIfNeeded,
   enqueueArtistMemberLookupIfNeeded,
@@ -28,6 +29,11 @@ export function recompute(db: Database): void {
   for (const { id } of files) {
     deriveLocalEdges(db, id);
   }
+
+  // Issue #273: one node per person. New credits already land on the artist
+  // (match/edges.ts's findOrCreatePerson); this catches an artist node the
+  // membership crawl created for someone who was already a credit node.
+  mergeDuplicatePeople(db);
 
   // Only recordings that have genuinely never had a lookup attempted —
   // enqueueEnrichmentIfNeeded's own queued/running check exists to stop a

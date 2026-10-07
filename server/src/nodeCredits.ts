@@ -63,8 +63,10 @@ export function nodeCredits(db: Database, nodeId: number): NodeCredits | null {
 
   const people = rows
     // An artist's own performed_by edges are what make the tracks theirs,
-    // not a credit to list under them.
-    .filter((r) => !(node.type === "artist" && r.id === nodeId))
+    // not a credit to list under them. Their other roles on those tracks
+    // are: issue #273 made Bob Dylan one node, and producing his own
+    // records is still a credit his panel shows.
+    .filter((r) => !(node.type === "artist" && r.id === nodeId && r.edgeType === "performed_by"))
     .map((r) => ({ id: r.id, title: r.title, type: r.type, role: ROLE[r.edgeType], count: r.count }))
     .sort(
       (a, b) =>

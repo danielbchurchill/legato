@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { buildRecordingQuery, parseArtistMemberRelations, parseReleaseDetail, type RawReleaseDetail } from "./mbClient.js";
+import {
+  buildRecordingQuery,
+  parseArtistCredit,
+  parseArtistMemberRelations,
+  parseReleaseDetail,
+  type RawReleaseDetail,
+} from "./mbClient.js";
 
 describe("buildRecordingQuery — M-2", () => {
   it("builds recording+artist only when nothing else is known", () => {
@@ -156,6 +162,49 @@ describe("parseReleaseDetail — M-8's wider field harvest", () => {
 // key on a group's own relations to bands *it* was in) and cross-checked
 // against George Harrison's own artist page (the same relationship comes
 // back "forward", with no direction key at all).
+// Issue #273: the shape a recording's or a track's "artist-credit" comes in.
+describe("parseArtistCredit", () => {
+  it("keeps each artist, its credited name, and the joiner after it", () => {
+    expect(
+      parseArtistCredit([
+        { name: "Beyonce", joinphrase: " & ", artist: { name: "Beyoncé" } },
+        { name: "JAY-Z", artist: { name: "JAY-Z" } },
+      ]),
+    ).toEqual([
+      { name: "Beyonce", artist: "Beyoncé", joinphrase: " & " },
+      { name: "JAY-Z", artist: "JAY-Z", joinphrase: "" },
+    ]);
+  });
+
+  it("is null when there's no credit to keep", () => {
+    expect(parseArtistCredit(undefined)).toBeNull();
+    expect(parseArtistCredit([])).toBeNull();
+    expect(parseArtistCredit([{ joinphrase: ", " }])).toBeNull();
+  });
+
+  it("takes a release track's own credit, falling back to its recording's", () => {
+    const detail = parseReleaseDetail({
+      id: "rel",
+      media: [
+        {
+          tracks: [
+            {
+              position: 1,
+              "artist-credit": [{ name: "Cage the Elephant", joinphrase: ", ", artist: { name: "Cage the Elephant" } }, { name: "Alison Mosshart", artist: { name: "Alison Mosshart" } }],
+              recording: { id: "rec-1", "artist-credit": [{ name: "Cage the Elephant", artist: { name: "Cage the Elephant" } }] },
+            },
+            { position: 2, recording: { id: "rec-2", "artist-credit": [{ name: "Cage the Elephant", artist: { name: "Cage the Elephant" } }] } },
+          ],
+        },
+      ],
+    });
+    expect(detail.tracks.map((t) => t.artistCredit?.map((c) => c.name))).toEqual([
+      ["Cage the Elephant", "Alison Mosshart"],
+      ["Cage the Elephant"],
+    ]);
+  });
+});
+
 describe("parseArtistMemberRelations — issue #61", () => {
   it("reads a group's own page: member relations come back 'backward', naming the member", () => {
     const relations = parseArtistMemberRelations([

@@ -190,6 +190,26 @@ describe("credit node seeding (#24)", () => {
 
     expect(pos(db, producer)).toBeUndefined();
   });
+
+  // Issue #273: the artist and the producer are one node now.
+  it("seeds an artist who also produced a record by the records they made, not the ones they produced", () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO library_roots (path) VALUES ('/fake')").run();
+    const { artist, recording } = buildLibrary(db);
+    const other = makeNode(db, "artist", "Billy Preston");
+    const produced = makeNode(db, "recording", "That's the Way God Planned It");
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(produced);
+    db.prepare(
+      "INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size) VALUES (?, (SELECT id FROM library_roots LIMIT 1), '/fake/p.flac', datetime('now'), 0)",
+    ).run(produced);
+    db.prepare("INSERT INTO artists (node_id, track_count, album_count) VALUES (?, 1, 0)").run(other);
+    insertEdge(db, produced, other, "performed_by");
+    insertEdge(db, produced, artist, "produced_by");
+
+    recomputeTracksLayout(db);
+
+    expect(pos(db, artist)).toEqual(pos(db, recording));
+  });
 });
 
 describe("nodePositionsLocked setting", () => {

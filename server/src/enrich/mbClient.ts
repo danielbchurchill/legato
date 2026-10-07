@@ -31,11 +31,30 @@ export type MbReleaseCandidate = {
   trackNo: number | null;
 };
 
+// Issue #273: who MusicBrainz credits a recording to, artist by artist, with
+// the text joining each to the next ("Cage the Elephant" + ", " + "Alison
+// Mosshart"). `name` is the name as credited, `artist` the artist's own,
+// which can differ ("Beyonce" credited, "Beyoncé" the artist). It's the
+// evidence that splits a tag line joined by "," or "&" (match/evidence.ts).
+export type MbArtistCredit = { name: string; artist: string; joinphrase: string }[];
+
+type RawArtistCredit = { name?: string; joinphrase?: string; artist?: { name?: string } }[];
+
+export function parseArtistCredit(raw: RawArtistCredit | undefined): MbArtistCredit | null {
+  const credit = (raw ?? []).flatMap((entry) => {
+    const name = entry.name ?? entry.artist?.name;
+    return name ? [{ name, artist: entry.artist?.name ?? name, joinphrase: entry.joinphrase ?? "" }] : [];
+  });
+  return credit.length > 0 ? credit : null;
+}
+
 export type MbRecordingCandidate = {
   mbid: string;
   score: number;
   title: string;
   artist: string | null;
+  // Optional so a candidate built by hand in a spec doesn't need one.
+  artistCredit?: MbArtistCredit | null;
   durationMs: number | null;
   releases: MbReleaseCandidate[];
 };
@@ -105,7 +124,7 @@ type RawRecording = {
   score: number;
   title: string;
   length?: number | null;
-  "artist-credit"?: { name: string }[];
+  "artist-credit"?: RawArtistCredit;
   releases?: RawRelease[];
 };
 
@@ -142,6 +161,7 @@ export async function searchRecording(input: RecordingSearchInput): Promise<MbRe
     score: r.score,
     title: r.title,
     artist: r["artist-credit"]?.[0]?.name ?? null,
+    artistCredit: parseArtistCredit(r["artist-credit"]),
     durationMs: r.length ?? null,
     releases: (r.releases ?? []).map(mapRelease),
   }));
@@ -239,6 +259,8 @@ export type MbReleaseTrack = {
   durationMs: number | null;
   isrc: string | null;
   credits: MbCredit[];
+  // Optional for the same reason as MbRecordingCandidate's.
+  artistCredit?: MbArtistCredit | null;
 };
 
 export type MbReleaseDetail = {
@@ -267,7 +289,14 @@ type RawArtistRel = {
 type RawDetailTrack = {
   position: number;
   length?: number | null;
-  recording?: { id: string; length?: number | null; isrcs?: string[]; relations?: RawArtistRel[] };
+  "artist-credit"?: RawArtistCredit;
+  recording?: {
+    id: string;
+    length?: number | null;
+    isrcs?: string[];
+    relations?: RawArtistRel[];
+    "artist-credit"?: RawArtistCredit;
+  };
 };
 type RawDetailMedium = { position?: number; format?: string | null; tracks?: RawDetailTrack[] };
 type RawLabelInfo = { "catalog-number"?: string | null; label?: { name?: string | null } };
@@ -319,6 +348,9 @@ export function parseReleaseDetail(data: RawReleaseDetail): MbReleaseDetail {
         recordingMbid,
         isrc: t.recording?.isrcs?.[0] ?? null,
         credits,
+        // The track's credit is the one printed on this release; the
+        // recording's is the fallback when a release leaves it off.
+        artistCredit: parseArtistCredit(t["artist-credit"] ?? t.recording?.["artist-credit"]),
       });
     }
   }
@@ -360,6 +392,25 @@ export async function fetchReleaseDetail(mbid: string): Promise<MbReleaseDetail 
 
   const data = (await res.json()) as RawReleaseDetail;
   return parseReleaseDetail(data);
+}
+
+// Issue #273: the artist credit for a recording this library has already
+// matched, for one matched before the credit was kept (enrich/
+// artistCredit.ts). Same host and entity as lookupReleaseGroupForRecording
+// below, asking for the credit instead of the releases. null means
+// MusicBrainz has no such recording, or no credit on it.
+export async function fetchRecordingArtistCredit(mbid: string): Promise<MbArtistCredit | null> {
+  await throttle();
+
+  const url = `${API_ROOT}/recording/${mbid}?inc=artist-credits&fmt=json`;
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`MusicBrainz recording lookup failed: ${res.status} ${res.statusText}`);
+  }
+
+  const data = (await res.json()) as { "artist-credit"?: RawArtistCredit };
+  return parseArtistCredit(data["artist-credit"]);
 }
 
 // Cover Art Archive keys images by release (or release-group), never by

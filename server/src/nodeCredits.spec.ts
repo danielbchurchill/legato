@@ -63,6 +63,24 @@ describe("nodeCredits", () => {
     expect(people).toEqual([johnston, bloomfield]);
   });
 
+  // Issue #273: the artist and producer credit are one node now, so the
+  // roles have to come from the edges, under the artist's photo.
+  it("shows an artist's other roles on their own tracks, but not the performing one", () => {
+    const { dylan, rolling, tombstone, johnston } = highway61();
+    addEdge(rolling, dylan, "produced_by", "musicbrainz");
+    addEdge(tombstone, dylan, "performed_credit", "musicbrainz");
+
+    expect(nodeCredits(db, dylan)!.people.filter((p) => p.id === dylan)).toEqual([
+      { id: dylan, title: "Bob Dylan", type: "artist", role: "producer", count: 1 },
+      { id: dylan, title: "Bob Dylan", type: "artist", role: "performer", count: 1 },
+    ]);
+    expect(nodeCredits(db, rolling)!.people.map((p) => [p.id, p.type, p.role])).toEqual([
+      [dylan, "artist", "producer"],
+      [johnston, "credit", "producer"],
+      [dylan, "artist", "artist"],
+    ]);
+  });
+
   it("keeps one row per role when a person holds two on the same tracks", () => {
     const track = makeNode("recording", "Song");
     const person = makeNode("credit", "Jon Brion");
