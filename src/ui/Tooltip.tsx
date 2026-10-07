@@ -75,7 +75,7 @@ export function TooltipBubble({
     <span
       ref={boxRef}
       role="tooltip"
-      className={`pointer-events-none fixed z-40 flex items-center gap-[var(--spacing-sm)] rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] px-[8px] py-[2px] text-[length:var(--text-sm)] whitespace-nowrap text-[var(--color-ink)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--ease-enter)] ${monospace ? 'font-[family-name:var(--font-mono)]' : ''}`}
+      className={`pointer-events-none fixed z-40 flex items-center gap-[var(--spacing-sm)] rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-solid)] px-[8px] py-[2px] text-[length:var(--text-sm)] whitespace-nowrap text-[var(--color-ink)] shadow-[var(--shadow-sm)] transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--ease-enter)] ${monospace ? 'font-[family-name:var(--font-mono)]' : ''}`}
       style={{
         opacity: shown ? 1 : 0,
         transform: shown || reduced ? 'none' : enterOffset(position.placement),

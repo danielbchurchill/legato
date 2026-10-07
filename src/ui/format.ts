@@ -28,3 +28,33 @@ export function formatLongDuration(ms: number | null | undefined): string {
   const rest = minutes % 60
   return rest === 0 ? `${hours}hr` : `${hours}hr ${rest}mins`
 }
+
+/* v2's long lengths. A record reads as a clock (51:26, or 1:07:30 past the
+ * hour) — the same shape as a track's m:ss, so a tracklist and its total
+ * line up. A playlist or a whole library reads in hours and minutes
+ * ("2 h 51 m"), where seconds would be noise. */
+export function formatClock(ms: number | null | undefined): string {
+  if (ms == null) return NO_VALUE
+  const total = Math.round(ms / 1000)
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = String(total % 60).padStart(2, '0')
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}` : `${minutes}:${seconds}`
+}
+
+export function formatHoursMinutes(ms: number | null | undefined): string {
+  if (ms == null) return NO_VALUE
+  const minutes = Math.round(ms / 60_000)
+  if (minutes < 60) return `${minutes} m`
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} m`
+}
+
+/** 13,946 — grouped, so a library-sized count reads at a glance. */
+export function formatCount(n: number): string {
+  return n.toLocaleString('en-US')
+}
+
+/** "1 track", "9 tracks". Counts are grouped. */
+export function plural(n: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${formatCount(n)} ${n === 1 ? singular : pluralForm}`
+}

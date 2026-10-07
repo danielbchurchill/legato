@@ -1,179 +1,153 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from 'react'
 import Graph from 'graphology'
 import Sigma from 'sigma'
 import { createNormalizationFunction } from 'sigma/utils'
-import { createNodeImageProgram } from '@sigma/node-image'
-import { patchNodePosition, useGraphData, type GraphEdge, type GraphNode } from './useGraphData'
+import type { NodeLabelDrawingFunction } from 'sigma/rendering'
+import { patchNodePosition, type GraphEdge, type GraphNode } from './useGraphData'
+import { useGraph } from './graphContext'
 import { EDGE_COLOR } from './edgeTypes'
+import { computeClusters } from './clusters'
 import { createForceSimulation, type ForceSimulationHandle, type SimNodeInput } from './forceSimulation'
 import { useScanStatus } from '../hooks/useScanStatus'
-import { Button } from '../ui/Button'
-import { NodeCard, NODE_CARD_COVER_CENTER_X, NODE_CARD_WIDTH_PX } from './NodeCard'
+import { NodeCard } from './NodeCard'
+import { NODE_CARD_OFFSET, NODE_CARD_WIDTH_PX } from './nodeCardGeometry'
 import { NodeHoverPlate } from './NodeHoverPlate'
 import { NodePlayingHalo } from './NodePlayingHalo'
-import { API_BASE as API } from '../config/serverHost'
-import { withMediaTicket } from '../auth/session'
+import { SelectionRing } from './SelectionRing'
+import { MapLegend, MapToolbar } from './MapChrome'
+import { FirstScanCard, MapNotice } from './MapStates'
+import { averageColors, hashCoverUrl, sampleCoverColor } from '../ui/coverColor'
+import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
 
-/* Node sizing. Sigma sizes are in its own units, not pixels — 22 renders at
- * roughly the mockup's 44px cover at the default camera. Nodes without art
- * stay small colored dots so the artwork carries the eye. */
-const ART_SIZE = 22
-
-/* Which shape a node's cover is cut to, by node type. Releases are squares —
- * an album cover is a square object, and in the albums graph the square *is*
- * the release. Everything else that carries art (a track inheriting its
- * album's cover, an artist showing a photo) stays a circle, so the two are
- * never ambiguous at a glance in the mixed tracks graph. See DESIGN.md
- * "Nodes". */
-const SQUARE_COVER_TYPES = new Set(['release'])
-
-/* Colored-dot fallback for a node with no cover art, one hue per domain
- * type — mirrors tokens.css's --color-node-* block, which is the actual
- * source of truth now (#136). Used only as resolveThemeColors' fallback, for
- * a test environment or a moment before CSS has loaded — never read
- * directly by nodeAttributes/syncGraph below. */
-const DEFAULT_NODE_COLOR: Record<string, string> = {
-  recording: '#e8e8e8',
-  artist: '#ff8a3d',
-  release: '#4da3ff',
-  label: '#c77dff',
-  year: '#5a5a5a',
-  work: '#ffd23f',
-  credit: '#4dd0a3',
-}
-
-const NODE_SIZE: Record<string, number> = {
-  recording: 3,
-  artist: 6,
-  release: 5,
-  label: 5,
-  year: 2,
-  work: 4,
-  credit: 4,
-}
-
-const DEFAULT_EDGE_COLOR_FALLBACK = 'rgba(255,255,255,0.12)'
-
-/* G-6: 26 albums carry 103 same_artist edges (21 of those albums are one
- * of two artists), so each artist's catalogue forms a near-complete
- * subgraph — every album wired to every sibling, rendering as a solid mesh
- * rather than the sparse, legible strands the mockup shows. Daniel's call:
- * keep the edges (same_artist stays a real, followable relationship,
- * unlike collapsing it to spatial-grouping-only) but mute them so density
- * reads as proximity — a soft purple region where an artist's albums
- * cluster — rather than noise. same_label is left at full strength: far
- * sparser (not quadratic in the same way), so it stays legible on its own
- * and doesn't need the same treatment. Mixed toward the dim tone once, at
- * rest, via the same opaque-mixing helper G-2's hover-dim already uses —
- * not a hover state, just a permanently quieter resting color. */
-const SAME_ARTIST_QUIET_MIX = 0.55
-
-/* Edges carry graph-space size 0.5 (syncGraph), but sigma scales rendered
- * edge thickness by its default zoomToSizeRatioFunction (Math.sqrt of the
- * camera ratio) — so as the camera ratio shrinks while zooming in, edges
- * render visibly thicker, becoming wide saturated ribbons well before
- * FLY_TO_RATIO. DESIGN.md says edges are 1px, full stop, with no exception
- * for zoom level. Recomputed live in the edgeReducer below (reading the
- * camera's current ratio, not cached) so the on-screen width stays
- * constant at every zoom, calibrated to match the original literal at
- * camera ratio 1. */
-const EDGE_WIDTH_AT_RATIO_1 = 0.5
-
-/* Hover/neighbor highlighting dims everything else instead of brightening the
- * hovered set — matches the selection ring's own "addition, not substitution"
- * rule (DESIGN.md "Nodes"): the graph's base palette never changes meaning,
- * uninvolved elements just recede.
+/* Node radii, in sigma's screen-referenced units (a size of 4 is a 4px
+ * radius at camera ratio 1, growing with the square root of zoom).
  *
- * Mirrors --color-node-dim / --color-edge-dim in tokens.css — sigma needs
- * concrete values because it renders to WebGL and never sees our CSS (same
- * reasoning as EDGE_COLOR above). These MUST be opaque: sigma's WebGL path
- * does not composite a translucent rgba() the way CSS would, so the
- * previous rgba(255,255,255,0.06) rendered as solid white — hovering blew
- * the whole graph out to a bright flash instead of dimming it. Confirmed
- * live: swapping to an opaque dark hex fixes it outright. Both themes' real
- * tokens keep this true (tokens.css's own comment on --color-node-dim /
- * --color-edge-dim repeats the same constraint for the light override). */
-const DEFAULT_DIMMED_NODE_COLOR = '#20262a'
-const DEFAULT_DIMMED_EDGE_COLOR = '#1b2023'
+ * v2 draws the map as dots, not covers. Covers at node size were the main
+ * reason the map was hard to read: a thousand 44px pictures is a mosaic, not
+ * a graph. A dot's size and tone now say what it is — an artist is the
+ * largest and brightest, its records smaller, its tracks smallest and
+ * quietest — and cover colour comes back as each cluster's glow. An artist
+ * grows a little with its number of records, capped so a box set doesn't
+ * swallow its neighbours. */
+const RELEASE_SIZE = 2.6
+const RECORDING_SIZE = 1.5
+const CREDIT_SIZE = 2.4
+const OTHER_SIZE = 2
+const ARTIST_BASE_SIZE = 3.5
+const ARTIST_SIZE_PER_RELEASE = 0.6
+const ARTIST_SIZE_MAX_RELEASES = 10
 
-/* Every color sigma draws that tokens.css now themes (#136) — resolved once
- * per theme change (resolveThemeColors below), cached in a ref, and read by
- * the reducers on every frame rather than hitting getComputedStyle per node/
- * edge. nodeAttributes/syncGraph/edgeBaseColor all take this as a plain
- * argument instead of reaching for the DOM themselves, so they stay ordinary
- * pure functions apart from this one seam. */
+function artistSize(releaseCount: number): number {
+  return ARTIST_BASE_SIZE + Math.min(releaseCount, ARTIST_SIZE_MAX_RELEASES) * ARTIST_SIZE_PER_RELEASE
+}
+
+/* Edges are hairlines: 0.6px unfocused, 0.8px on a focused cluster, in
+ * on-screen pixels at every zoom (the reducer divides out sigma's own
+ * zoom scaling). */
+const EDGE_PX = 0.6
+const EDGE_FOCUSED_PX = 0.8
+/* While something is focused: its cluster's edges in their type colours at
+ * 85%; every other edge drops to 60% of its usual (already faint) alpha.
+ * Out-of-focus nodes sit at 30%, their labels at 45%. */
+const FOCUSED_EDGE_ALPHA = 0.85
+const UNFOCUSED_EDGE_ALPHA = 0.6
+const UNFOCUSED_NODE_ALPHA = 0.3
+const UNFOCUSED_LABEL_ALPHA = 0.45
+const UNFOCUSED_GLOW_ALPHA = 0.35
+/* "Colour edges by type" off-focus: type hue, but quiet enough that the
+ * clusters still read as shapes rather than as a tangle of colour. */
+const TYPED_EDGE_ALPHA = 0.35
+
+/* Which focused edges get a type colour, and which hue: the four
+ * relationships v2's map names. member_of borrows featured-artist's green. */
+const FOCUS_EDGE_TOKEN: Record<string, string> = {
+  performed_by: 'performed_by',
+  appears_on: 'appears_on',
+  produced_by: 'produced_by',
+  member_of: 'featured_artist',
+}
+
+/* Every colour sigma draws, resolved once per theme from tokens.css (sigma
+ * renders to WebGL and never sees CSS), cached in a ref and read by the
+ * reducers and the label and glow layers every frame. */
 type ThemeColors = {
   node: Record<string, string>
-  /** The 7 curated per-type hues from edgeTypes.ts's EDGE_COLOR, resolved
-   * live — keyed the same way, so edgeBaseColor's lookup doesn't change
-   * shape, just its source. */
   edgeType: Record<string, string>
+  edge: string
   edgeFallback: string
-  nodeDim: string
-  edgeDim: string
-  placeholder: string
+  canvas: string
+  ink: string
+  ink2: string
+  ink3: string
+  halo: string
+  glowAlpha: number
 }
 
 const DEFAULT_THEME_COLORS: ThemeColors = {
-  node: DEFAULT_NODE_COLOR,
+  node: { artist: '#f2efe9', release: '#b8bcbe', recording: '#6c7174', credit: '#8fd3bd', label: '#74797c', year: '#74797c', work: '#74797c' },
   edgeType: EDGE_COLOR,
-  edgeFallback: DEFAULT_EDGE_COLOR_FALLBACK,
-  nodeDim: DEFAULT_DIMMED_NODE_COLOR,
-  edgeDim: DEFAULT_DIMMED_EDGE_COLOR,
-  placeholder: 'rgba(255,255,255,0.06)',
+  edge: 'rgba(255,255,255,0.075)',
+  edgeFallback: 'rgba(255,255,255,0.12)',
+  canvas: '#0f1214',
+  ink: '#f2efe9',
+  ink2: '#a9adaf',
+  ink3: '#74797c',
+  halo: '#0f1214',
+  glowAlpha: 0.16,
 }
 
-/** Sigma renders to WebGL and never sees CSS, so every color it draws has to
- * be resolved to a concrete string up front. Reading getComputedStyle on
- * document.documentElement picks up whichever theme tokens.css's
- * `:root[data-theme]` block currently has active — this is the one function
- * in the file that has to know that mechanism exists; everything downstream
- * just takes the result as a plain lookup table. Falls back to the
- * historical dark-mode literals if a property is somehow unset (a test
- * environment with no real stylesheet loaded). */
+/* Sigma's colour parser reads hex and comma rgb()/rgba(), not CSS4's
+ * space-separated rgb(r g b / a), which is how a browser serialises the
+ * translucent tokens. Normalise whatever getComputedStyle hands back. */
+function toSigmaColor(css: string, fallback: string): string {
+  const value = css.trim()
+  if (!value) return fallback
+  if (value.startsWith('#')) return value
+  const nums = value.match(/[\d.]+%?/g)
+  if (!nums || nums.length < 3) return fallback
+  const [r, g, b] = nums.slice(0, 3).map(Number)
+  if (nums.length < 4) return `rgb(${r},${g},${b})`
+  const a = nums[3].endsWith('%') ? Number(nums[3].slice(0, -1)) / 100 : Number(nums[3])
+  return `rgba(${r},${g},${b},${a})`
+}
+
 function resolveThemeColors(): ThemeColors {
   if (typeof document === 'undefined') return DEFAULT_THEME_COLORS
   const style = getComputedStyle(document.documentElement)
-  const read = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback
+  const read = (name: string, fallback: string) => toSigmaColor(style.getPropertyValue(name), fallback)
   const node: Record<string, string> = {}
-  for (const type of Object.keys(DEFAULT_NODE_COLOR)) {
-    node[type] = read(`--color-node-${type}`, DEFAULT_NODE_COLOR[type])
+  for (const type of Object.keys(DEFAULT_THEME_COLORS.node)) {
+    node[type] = read(`--color-node-${type}`, DEFAULT_THEME_COLORS.node[type])
   }
   const edgeType: Record<string, string> = {}
   for (const type of Object.keys(EDGE_COLOR)) {
     edgeType[type] = read(`--color-edge-${type.replace(/_/g, '-')}`, EDGE_COLOR[type])
   }
+  const glow = Number.parseFloat(style.getPropertyValue('--map-glow'))
   return {
     node,
     edgeType,
-    edgeFallback: read('--color-edge-fallback', DEFAULT_EDGE_COLOR_FALLBACK),
-    nodeDim: read('--color-node-dim', DEFAULT_DIMMED_NODE_COLOR),
-    edgeDim: read('--color-edge-dim', DEFAULT_DIMMED_EDGE_COLOR),
-    placeholder: read('--color-placeholder', DEFAULT_THEME_COLORS.placeholder),
+    edge: read('--color-edge', DEFAULT_THEME_COLORS.edge),
+    edgeFallback: read('--color-edge-fallback', DEFAULT_THEME_COLORS.edgeFallback),
+    canvas: read('--color-canvas', DEFAULT_THEME_COLORS.canvas),
+    ink: read('--color-ink', DEFAULT_THEME_COLORS.ink),
+    ink2: read('--color-ink-2', DEFAULT_THEME_COLORS.ink2),
+    ink3: read('--color-ink-3', DEFAULT_THEME_COLORS.ink3),
+    halo: read('--color-halo', DEFAULT_THEME_COLORS.halo),
+    glowAlpha: Number.isFinite(glow) ? glow : DEFAULT_THEME_COLORS.glowAlpha,
   }
 }
 
-/* How wide a node should render once the camera has flown to it.
- *
- * Stated as a size rather than as a camera ratio because the size is the
- * thing the design actually cares about — the artwork has to be big enough
- * to read as artwork, and 0.7 (the old literal) left it at 53px, barely
- * larger than the 44px it sits at when the whole graph is in frame. Selecting
- * a node was navigation that didn't visibly go anywhere.
- *
- * Sigma's item sizes are screen-referenced (itemSizesReference defaults to
- * "screen") and scale by 1/sqrt(ratio), so ART_SIZE 22 is a 44px node at
- * ratio 1 and this inverts that relationship.
- *
- * 130 rather than the 255 the Figma card draws its cover at: the deeper zoom
- * that would make a node literally 255px puts the camera at ratio 0.03, where
- * cluster-mates sit far enough apart that a selected node has no visible
- * neighbourhood left. The card's cover is deliberately about twice the size of
- * the nodes around it — see DESIGN.md "Nodes". */
-const SELECT_NODE_PX = 130
-const FLY_TO_RATIO = (2 * ART_SIZE / SELECT_NODE_PX) ** 2 // ~0.115
+/* How far in a selection flies. The camera frames the selected node's whole
+ * cluster — the point of selecting is to see a record among its siblings,
+ * not to stare at one dot — at no more than FOCUS_FILL of the free space,
+ * and never deeper than MIN_FOCUS_RATIO (a lone single would otherwise fill
+ * the screen) or shallower than the overview. */
+const FOCUS_FILL = 0.55
+const MIN_FOCUS_RATIO = 0.04
+const MAX_FOCUS_RATIO = 1
 
 /* MO-7: a flat fly duration makes a forty-pixel hop crawl and a jump across
  * the whole library feel abrupt. Sub-linear (sqrt) so a merely-far target
@@ -293,70 +267,41 @@ function animateBBox(
   return () => cancelAnimationFrame(raf)
 }
 
-function parseColorChannels(color: string): [number, number, number] {
+
+function parseColorChannels(color: string): [number, number, number, number] {
   if (color.startsWith('#')) {
-    const n = Number.parseInt(color.slice(1), 16)
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+    const n = Number.parseInt(color.slice(1, 7), 16)
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 1]
   }
-  const m = color.match(/\d+/g)
-  return m ? [Number(m[0]), Number(m[1]), Number(m[2])] : [255, 255, 255]
+  const m = color.match(/[\d.]+/g)
+  return m ? [Number(m[0]), Number(m[1]), Number(m[2]), m[3] != null ? Number(m[3]) : 1] : [255, 255, 255, 1]
 }
 
-/* Mixes toward the dim color as `t` goes 0 -> 1. Always resolves to an
- * opaque rgb() — G-2's fix depends on these values staying opaque, since
- * sigma's WebGL path renders a translucent color as solid white rather than
- * compositing it. */
-function mixTowardDim(color: string, dim: string, t: number): string {
+/* Mixes toward another colour as `t` goes 0 -> 1, always resolving to an
+ * opaque rgb(). Nodes recede this way rather than by alpha: sigma's node
+ * program draws a translucent fill as solid, so "30% opacity" is a mix
+ * toward the canvas. */
+function mixToward(color: string, toward: string, t: number): string {
   if (t <= 0) return color
-  if (t >= 1) return dim
   const [ar, ag, ab] = parseColorChannels(color)
-  const [br, bg, bb] = parseColorChannels(dim)
-  const r = Math.round(ar + (br - ar) * t)
-  const g = Math.round(ag + (bg - ag) * t)
-  const b = Math.round(ab + (bb - ab) * t)
-  return `rgb(${r},${g},${b})`
+  const [br, bg, bb] = parseColorChannels(toward)
+  const k = Math.min(1, t)
+  return `rgb(${Math.round(ar + (br - ar) * k)},${Math.round(ag + (bg - ag) * k)},${Math.round(ab + (bb - ab) * k)})`
 }
 
-/* The color an edge of this type should render at, folding in both the
- * Music Map settings panel's per-type override (src/panels/MusicMapSettings.tsx,
- * settings key `edgeColor:${type}`) and the same_artist quiet-mix above —
- * shared by syncGraph's creation-time paint and the edgeReducer's live
- * recompute below, so a color change made while looking at the canvas and a
- * freshly created edge never disagree about what "current" means. */
-function edgeBaseColor(type: string, overrides: Record<string, string>, colors: ThemeColors): string {
-  const raw = overrides[type] ?? colors.edgeType[type] ?? colors.edgeFallback
-  return type === 'same_artist' ? mixTowardDim(raw, colors.edgeDim, SAME_ARTIST_QUIET_MIX) : raw
+/* Edges are drawn by sigma's line program, which does composite alpha — so
+ * an edge's emphasis is its colour's own alpha, scaled here. */
+function withAlphaFactor(color: string, factor: number, baseAlpha?: number): string {
+  const [r, g, b, a] = parseColorChannels(color)
+  return `rgba(${r},${g},${b},${(baseAlpha ?? a) * factor})`
 }
 
-/* Atlas cell size, in texels, for one cover.
- *
- * Default NodeImageProgram sizes its cell off the source image's own
- * resolution ('auto' mode) — a cover squeezed into a much smaller cell then
- * gets minified across the atlas's 1px inter-image margin, which bleeds in as
- * a white fringe around every node. Forcing the cell removes that mismatch.
- *
- * The forced value was 64, which is where the low-resolution artwork came
- * from: a 44px node is 88 device pixels on a 2x display and grows further as
- * the camera zooms in, so 64 texels were being stretched over two to four
- * times their own size. 256 matches the cover cache's small derived size
- * exactly (server/src/cover/store.ts), so a cover is resampled once on the
- * server and copied 1:1 into the atlas here.
- *
- * Cost is real and worth naming: sigma keeps this atlas in GPU memory, at
- * 4 bytes per texel — 256KB per distinct cover. The by-hash image URL is what
- * makes that affordable, since a 12-track album is one texture rather than
- * twelve identical ones. */
-const COVER_ATLAS_PX = 256
-
-/* Two programs, same atlas configuration, differing only in the shape the
- * cover is cut to. keepWithinCircle is baked into each program's fragment
- * shader — it cannot be swapped per node by a render-time reducer, which is
- * why this is two programs rather than one attribute. */
-const NodeCoverProgram = createNodeImageProgram({ size: { mode: 'force', value: COVER_ATLAS_PX } })
-const NodeCoverSquareProgram = createNodeImageProgram({
-  size: { mode: 'force', value: COVER_ATLAS_PX },
-  keepWithinCircle: false,
-})
+/* The hue an edge of this type shows when it's coloured at all: the user's
+ * own override from the old map settings first, then the curated palette. */
+function edgeHue(type: string, overrides: Record<string, string>, colors: ThemeColors): string {
+  const token = FOCUS_EDGE_TOKEN[type] ?? type
+  return overrides[type] ?? colors.edgeType[token] ?? colors.edgeFallback
+}
 
 function nodeKey(id: number): string {
   return String(id)
@@ -407,105 +352,95 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
   }
 }
 
-/* G-8: the camera fits the given bbox to the FULL viewport, edge to edge —
- * sigma has no notion of the screen space the shell's chrome actually
- * covers. At every granularity, several nodes ended up placed permanently
- * underneath it: visible through the blur, unreachable by a click.
- *
- * v2 shell geometry (see DESIGN.md's shell section): a rail + Inspector
- * Panel on the left, a now-playing panel on the right, both docked flush to
- * their own window edge — no floating 51px inset any more, and the two
- * sides no longer reserve equal widths (350px left, 300px right). There is
- * also no continuous titlebar across the top any more — LeftPanelHeader and
- * RightPanelHeader only cover their own column, each stacked directly above
- * the rail/panel it belongs to — so nothing is reserved along the top
- * between the two side columns, and the top inset drops to 0.
- *
- * This always reserves each side's *expanded* footprint, even while that
- * side is actually collapsed — conservative in the same direction as the
- * rest of this comment already argues for: a node still ending up hidden is
- * the failure mode to avoid, a little unused canvas while collapsed is not.
- * Tracking live collapse state here to reclaim that space is a reasonable
- * follow-up, not done in this pass.
- *
- * A conservative rectangular inset rather than the true reserved shape,
- * since sigma's bbox fit only understands a rectangle anyway; erring toward
- * extra clearance is the safe direction, a node still ending up hidden is
- * not. TransportDock.tsx (121px tall, docked to the bottom) is unaffected
- * by any of this and keeps its own reservation as before.
- *
- * P-8: panel width is not a fixed pixel (tokens.css's --panel-width scales
- * with the window above 1440px) — the ratio/floor below duplicates that
- * same formula rather than reading it back from a live DOM element, the
- * same "sigma needs a concrete number, kept in sync by hand" tradeoff this
- * file already makes for EDGE_COLOR. The rail itself never scales — it is a
- * fixed 50px icon strip, not content, so widening the window has no reason
- * to widen it. */
-const RAIL_WIDTH_PX = 50
-const PANEL_WIDTH_MIN_PX = 300
-const PANEL_REFERENCE_WIDTH_PX = 1440
-const DOCK_HEIGHT_PX = 121
 
-/* The rectangle of canvas the shell leaves uncovered, in viewport pixels.
- * Both the initial bbox fit and the fly target need the same answer. */
-function shellFreeArea(renderer: Sigma): { left: number; right: number; top: number; bottom: number } {
+/* The rectangle of the window the shell leaves uncovered, in viewport px:
+ * between the left and right occupancy, below the capsule, above the
+ * player's row. The camera has to know it — sigma has no idea the glass is
+ * there, and a node fitted under a panel is visible but unreachable.
+ *
+ * Read from the live shell layout (through a ref), so opening a panel moves
+ * where the next fit or fly lands without rebuilding the renderer. */
+function freeArea(renderer: Sigma, layout: ShellLayout): { left: number; right: number; top: number; bottom: number } {
   const dims = renderer.getDimensions()
-  const panelWidthPx = Math.max(PANEL_WIDTH_MIN_PX, (dims.width * PANEL_WIDTH_MIN_PX) / PANEL_REFERENCE_WIDTH_PX)
   return {
-    left: RAIL_WIDTH_PX + panelWidthPx,
-    right: dims.width - panelWidthPx,
-    top: 0,
-    bottom: dims.height - DOCK_HEIGHT_PX,
+    left: layout.leftOccupancy,
+    right: dims.width - layout.rightOccupancy,
+    top: INSET + CAPSULE_HEIGHT + INSET,
+    bottom: dims.height - layout.floatingBottom,
   }
 }
 
-/* Where on screen a node should land when the camera flies to it.
- *
- * Not the viewport's centre, which is what this used to be. A selected node
- * grows the 665px card whose cover slot *is* that node, and the card reaches
- * ~511px to the node's right — so centring the node parked the card's entire
- * metadata column under the right-hand panel on every single selection, with
- * the edit control unreachable and the artist's name cut in half. Aiming the
- * card at the middle of the free canvas instead, and letting the node land
- * wherever that puts it, is the same fix G-8 already makes for the initial
- * bbox: sigma has no idea the panels are there, so this file has to.
- *
- * The card stays rigidly anchored to its node either way — this only chooses
- * where the node ends up. When the free strip is narrower than the card the
- * target clamps left rather than centring, which keeps the cover and the
- * start of every row on screen and lets only the far edge slide under. */
-function flyTargetViewportPoint(renderer: Sigma): { x: number; y: number } {
-  const area = shellFreeArea(renderer)
+/* Where a selected node should land: placed so the node and its card,
+ * which opens NODE_CARD_OFFSET to the node's right and above it, sit
+ * together in the middle of the free space. Clamped left when the free
+ * strip is narrower than the pair. */
+function flyLandingPoint(renderer: Sigma, layout: ShellLayout): { x: number; y: number } {
+  const area = freeArea(renderer, layout)
+  const pairWidth = NODE_CARD_OFFSET.x + NODE_CARD_WIDTH_PX
   const freeWidth = area.right - area.left
-  const cardLeft =
-    freeWidth >= NODE_CARD_WIDTH_PX ? area.left + (freeWidth - NODE_CARD_WIDTH_PX) / 2 : area.left
-  return { x: cardLeft + NODE_CARD_COVER_CENTER_X, y: (area.top + area.bottom) / 2 }
+  const x = freeWidth >= pairWidth + 80 ? area.left + (freeWidth - pairWidth) / 2 : area.left + 40
+  // The card rises NODE_CARD_OFFSET.y above the node and hangs about 140px
+  // below it; centre that span, not the node.
+  return { x, y: (area.top + area.bottom) / 2 - 50 }
 }
 
+/* The camera ratio that fits a set of nodes into FOCUS_FILL of the free
+ * area. Sigma frames graph coordinates into a unit square, and at ratio r
+ * one framed unit spans k/r viewport pixels — k measured here by asking
+ * sigma to convert two points at ratio 1, so it stays right through sigma's
+ * own padding and aspect handling. */
+function ratioToFit(renderer: Sigma, graph: Graph, keys: Iterable<string>, layout: ShellLayout): number {
+  const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
+  const normalize = createNormalizationFunction(bbox)
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const key of keys) {
+    if (!graph.hasNode(key)) continue
+    const p = normalize({ x: graph.getNodeAttribute(key, 'x') as number, y: graph.getNodeAttribute(key, 'y') as number })
+    minX = Math.min(minX, p.x)
+    maxX = Math.max(maxX, p.x)
+    minY = Math.min(minY, p.y)
+    maxY = Math.max(maxY, p.y)
+  }
+  if (!Number.isFinite(minX)) return MAX_FOCUS_RATIO
+  const unit = { cameraState: { x: 0.5, y: 0.5, ratio: 1, angle: 0 } }
+  const a = renderer.viewportToFramedGraph({ x: 0, y: 0 }, unit)
+  const b = renderer.viewportToFramedGraph({ x: 100, y: 100 }, unit)
+  const pxPerUnitX = 100 / Math.max(1e-9, Math.abs(b.x - a.x))
+  const pxPerUnitY = 100 / Math.max(1e-9, Math.abs(b.y - a.y))
+  const area = freeArea(renderer, layout)
+  const needed = Math.max(
+    ((maxX - minX) * pxPerUnitX) / (FOCUS_FILL * Math.max(1, area.right - area.left)),
+    ((maxY - minY) * pxPerUnitY) / (FOCUS_FILL * Math.max(1, area.bottom - area.top)),
+  )
+  return Math.min(MAX_FOCUS_RATIO, Math.max(MIN_FOCUS_RATIO, needed))
+}
+
+/* The initial fit and the "re-center" reframe pad the graph's bbox so that,
+ * fitted edge to edge, its content lands inside the free area instead. A
+ * rectangle, because sigma's bbox fit only understands one. */
 function insetForShell(
   renderer: Sigma,
   bbox: { x: [number, number]; y: [number, number] },
+  layout: ShellLayout,
 ): { x: [number, number]; y: [number, number] } {
   const dims = renderer.getDimensions()
-  const area = shellFreeArea(renderer)
+  const area = freeArea(renderer, layout)
   const innerW = area.right - area.left
   const innerH = area.bottom - area.top
-  if (innerW <= 0 || innerH <= 0) return bbox // window too small to inset meaningfully
+  if (innerW <= 0 || innerH <= 0) return bbox
 
   const bw = bbox.x[1] - bbox.x[0]
   const bh = bbox.y[1] - bbox.y[0]
-  // v2's two side columns reserve different widths (rail + panel on the
-  // left, panel alone on the right) — no longer the same footprint mirrored
-  // on both sides, so each edge of the bbox needs its own padding.
   const padXLeft = (area.left / innerW) * bw
   const padXRight = ((dims.width - area.right) / innerW) * bw
   const padForScreenTop = (area.top / innerH) * bh
-  const padForScreenBottom = (DOCK_HEIGHT_PX / innerH) * bh
+  const padForScreenBottom = ((dims.height - area.bottom) / innerH) * bh
 
-  // Whether increasing graph-space y maps to the top or bottom of the
-  // screen is an orientation baked into sigma's rendering matrix, not
-  // something to assume — asked directly rather than guessed, using
-  // whatever camera state already happens to be active.
+  // Whether graph y grows up or down the screen is baked into sigma's
+  // matrix, so ask rather than assume.
   const yAtScreenTop = renderer.viewportToGraph({ x: dims.width / 2, y: 0 }).y
   const yAtScreenBottom = renderer.viewportToGraph({ x: dims.width / 2, y: dims.height }).y
   const [padAtYMin, padAtYMax] =
@@ -566,62 +501,19 @@ function graphOutOfView(renderer: Sigma, graph: Graph): boolean {
   return !rangesOverlap(rect.x, [0, dims.width]) || !rangesOverlap(rect.y, [0, dims.height])
 }
 
-/* Every node that resolves to art renders as that art, at every zoom level
- * and whatever its type — a track shows its album's cover exactly the way
- * that album does, rather than a colored dot standing in for one.
- *
- * This used to be gated by zoom (art bound only past a camera threshold) for
- * one reason: art was requested per node id, so a 12-track album was 12
- * identical textures in sigma's atlas and a library's worth of tracks was
- * thousands. The by-hash cover URL removes that — the atlas now holds one
- * texture per distinct cover, no matter how many nodes display it, so there
- * is nothing left for a level-of-detail gate to protect.
- *
- * `showArt` is this node's Music Map settings "images" toggle
- * (src/panels/MusicMapSettings.tsx, one flag per node type since 2026-08-29's
- * combined graph) — off falls back to the same colored-dot treatment a node
- * with no art at all already gets.
- *
- * Deliberately no `x`/`y` here — position is syncGraph's job below, and only
- * for a node's *first* appearance. An existing node's position belongs to
- * the live force simulation (src/canvas/forceSimulation.ts) from then on;
- * folding x/y into this object would let every resync stomp the
- * simulation's own live position back to stale server truth. */
-function nodeAttributes(node: GraphNode, showArt: boolean, colors: ThemeColors): Record<string, unknown> {
-  // Carried as its own attribute rather than re-derived from sigma's own
-  // display `type` ('cover'/'coverSquare'/'circle') — nodeReducer needs the
-  // *domain* type (src/canvas/nodeTypes.ts) to look up this node's own
-  // per-type size multiplier (Music Map settings "nodes > size", #29), and
-  // display type alone can't answer that (a colored-dot fallback is 'circle'
-  // whatever its domain type is).
-  if (node.cover_hash && showArt) {
-    const square = SQUARE_COVER_TYPES.has(node.type)
-    return {
-      label: node.title,
-      size: ART_SIZE,
-      type: square ? 'coverSquare' : 'cover',
-      // `square` is carried as its own attribute rather than re-derived from
-      // `type` inside defaultDrawNodeHover: the hover layer only sees display
-      // data, and the ring has to match the shape it's drawn around.
-      square,
-      image: withMediaTicket(`${API}/covers/${node.cover_hash}?size=thumb`),
-      color: '#ffffff',
-      origSize: ART_SIZE,
-      nodeType: node.type,
-    }
-  }
-
-  const size = NODE_SIZE[node.type] ?? 3
-  const color = colors.node[node.type] ?? '#999'
-  return { label: node.title, size, color, type: 'circle', square: false, origSize: size, nodeType: node.type }
+/* A node's display attributes: a dot, sized and coloured by type. No x/y
+ * here — position is syncGraph's job, and only for a node's first
+ * appearance; after that it belongs to the live force simulation, and a
+ * resync must never stomp it back to stale server truth. `nodeType` is
+ * carried separately from sigma's display `type` because the reducers key
+ * visibility, size multipliers and labels on the domain type. */
+function nodeAttributes(node: GraphNode, size: number, colors: ThemeColors): Record<string, unknown> {
+  return { label: node.title, size, color: colors.node[node.type] ?? colors.node.label, type: 'circle', nodeType: node.type }
 }
 
 // A node's starting position — server seed, or wherever the user last
-// dropped it (persisted user_x/user_y). Only that: #46 changed dragging so
-// a drop is a starting point, not a standing pin — see the mousemovebody
-// drag recipe below for the part that used to make this permanent. Only
-// ever consulted for a node's *first* appearance in the graph; see
-// nodeAttributes above.
+// dropped it (persisted user_x/user_y). #46: a drop is a starting point, not
+// a standing pin. Only consulted for a node's first appearance.
 function initialPosition(node: GraphNode): { x: number; y: number } | null {
   const x = node.user_x ?? node.seed_x
   const y = node.user_y ?? node.seed_y
@@ -629,30 +521,27 @@ function initialPosition(node: GraphNode): { x: number; y: number } | null {
   return { x, y }
 }
 
-/* Updates the existing graphology instance in place to match the latest
- * fetched data — add/update/remove, never drop-and-rebuild — so the Sigma
- * renderer subscribed to this graph never needs to be torn down for a plain
- * data refresh. This is the actual fix for the bug that used to reset the
- * camera on every refetch: the renderer effect below only runs once per
- * mount, not on every `nodes`/`edges` change. */
+/* Updates the graphology instance in place to match the latest fetch —
+ * add/update/remove, never drop-and-rebuild — so the renderer subscribed to
+ * it never needs tearing down for a data refresh, and the camera never
+ * resets under the user.
+ *
+ * Producer and engineer credits are opt-in (#24) and are left out of the
+ * graph entirely when off, physics included: they're new to an
+ * already-tuned map. The other "show" toggles only hide nodes at render
+ * time (the node reducer), so hiding tracks doesn't change the shape of the
+ * map, only what's drawn on it. */
 function syncGraph(
   graph: Graph,
   nodes: GraphNode[],
   edges: GraphEdge[],
-  showArt: (type: string) => boolean,
   showCreditNodes: boolean,
+  sizeOf: (node: GraphNode) => number,
   colors: ThemeColors,
 ): void {
   const wantedNodes = new Map<string, GraphNode>()
   for (const node of nodes) {
     if (initialPosition(node) == null) continue // no position yet — nothing to plot
-    // Music Map settings "nodes > producers" (#24) — 'credit' nodes
-    // (producer/engineer credits) are seeded and served like any other type
-    // now, but are new to an already-tuned graph, so they're opt-in rather
-    // than appearing unannounced the moment this ships. Excluding them here
-    // (rather than server-side) also drops their produced_by/engineered_by
-    // edges for free, below: an edge is only kept when both its endpoints
-    // are in this graph.
     if (node.type === 'credit' && !showCreditNodes) continue
     wantedNodes.set(nodeKey(node.id), node)
   }
@@ -661,7 +550,7 @@ function syncGraph(
     if (!wantedNodes.has(key)) graph.dropNode(key)
   })
   for (const [key, node] of wantedNodes) {
-    const attrs = nodeAttributes(node, showArt(node.type), colors)
+    const attrs = nodeAttributes(node, sizeOf(node), colors)
     if (graph.hasNode(key)) {
       graph.mergeNodeAttributes(key, attrs) // never x/y — see nodeAttributes above
     } else {
@@ -670,12 +559,8 @@ function syncGraph(
     }
   }
 
-  // Keyed by (from, to, type) rather than just (from, to) — two albums can
-  // share both a same_artist and a same_label relation at once (confirmed on
-  // the real library: 19 of 109 album pairs do), and a plain Graph only
-  // allows one edge between a given pair. graph is constructed as a
-  // multigraph below specifically so both survive as visually distinct
-  // edges instead of one silently overwriting the other.
+  // Keyed by (from, to, type): two nodes can share more than one relation,
+  // and a plain Graph allows one edge per pair — hence the multigraph.
   const wantedEdgeKeys = new Set<string>()
   for (const edge of edges) {
     const from = nodeKey(edge.from_node)
@@ -684,11 +569,9 @@ function syncGraph(
     const edgeKey = `${from}->${to}::${edge.type}`
     wantedEdgeKeys.add(edgeKey)
     if (graph.hasEdge(edgeKey)) continue
-    // `color` here is only the pre-first-paint placeholder — the edgeReducer
-    // below is what's actually authoritative on every draw, recomputed live
-    // from `relType` so a color changed in the settings panel while looking
-    // at the canvas doesn't need this edge re-created to show up.
-    graph.addEdgeWithKey(edgeKey, from, to, { size: 0.5, color: colors.edgeType[edge.type] ?? colors.edgeFallback, relType: edge.type })
+    // The colour here is only a pre-first-paint placeholder; the edge
+    // reducer recomputes it every frame from relType and focus.
+    graph.addEdgeWithKey(edgeKey, from, to, { size: EDGE_PX, color: colors.edge, relType: edge.type })
   }
 
   graph.forEachEdge((edgeKey) => {
@@ -699,93 +582,92 @@ function syncGraph(
 type Props = {
   selectedNodeId: number | null
   onSelectNode: (id: number | null) => void
-  /** Opens the full node inspector for whatever is selected — the card is a
-   * summary, and everything deeper (facts, edges, lyrics, tag write-back)
-   * lives behind this. */
-  onOpenInspector: () => void
-  /** playNode/playAlbum are threaded straight through to NodeCard's own play
-   * button — the selection card is the one canvas surface that needs them.
-   * status is read for status.currentRecordingNodeId, to anchor the
-   * currently-playing halo (issue #85) regardless of what's selected. */
-  playback: Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum' | 'status' | 'queueBusy'>
+  /** "details ›" on the node card: opens the right-hand details panel. */
+  onOpenDetails: () => void
+  playback: Pick<ReturnType<typeof usePlayback>, 'playNode' | 'playAlbum' | 'playTracks' | 'status' | 'queueBusy'>
   onStats?: (stats: { nodes: number; edges: number }) => void
-  /** Settings "hover-dim" toggle. Gates only the neighbor-dim effect —
-   * NodeHoverPlate still shows regardless, since naming the node under the
-   * pointer is wayfinding, not the more aggressive dim-everything-else cue. */
+  /** Settings "hover-dim": a held hover focuses the hovered node's
+   * neighbourhood the way a selection focuses a cluster. */
   dimOnHoverEnabled?: boolean
-  /** Settings "reduced motion" toggle — force-on only, layered on top of the
-   * OS's own prefers-reduced-motion rather than a way to override it off. */
+  /** Settings "reduced motion" — force-on only, layered over the OS's own. */
   reducedMotionForced?: boolean
-  /** Music Map settings "nodes > images", one flag per node type in the
-   * combined graph (2026-08-29 — previously one flag per granularity tab). */
-  showArtistArt: boolean
-  showReleaseArt: boolean
-  showTrackArt: boolean
-  /** Music Map settings "nodes > producers" (#24) — whether 'credit' nodes
-   * (producer/engineer credits) are included in the graph at all. Unlike
-   * the art toggles above, this gates node *existence*, not just how a node
-   * renders — handled in syncGraph rather than a reducer. */
+  /** Map options "show": which node types are drawn. */
+  showArtists: boolean
+  showReleases: boolean
+  showTracks: boolean
+  /** Map options "show producers" (#24) — unlike the three above, this
+   * gates whether credit nodes exist in the graph at all. */
   showCreditNodes: boolean
-  /** Music Map settings "nodes > size" (#29) — one multiplier per node type
-   * (src/canvas/nodeTypes.ts), keyed by the domain type nodeAttributes
-   * stashes on each node as `nodeType`. Multiplies that node's base size
-   * (ART_SIZE or NODE_SIZE[type]) live, via nodeReducer. 1 is unchanged. */
+  /** Map options "artist labels". */
+  showArtistLabels: boolean
+  /** Map options "colour edges by type": type hues on every edge, not just
+   * a selection's cluster. */
+  colourEdgesByType: boolean
+  /** The shipped map settings' per-type size multipliers (#29), edge
+   * thickness and user edge colours. No v2 control writes them any more,
+   * but a library that set them keeps them. */
   nodeSizeMultipliers: Record<string, number>
-  /** Music Map settings "links > thickness" — multiplies EDGE_WIDTH_AT_RATIO_1
-   * live, via edgeReducer. 1 is unchanged. */
   edgeThicknessMultiplier: number
-  /** Music Map settings "links > colours" — type -> hex, for whichever types
-   * have a user override; unlisted types render at their EDGE_COLOR default.
-   * See edgeBaseColor above. */
   edgeColorOverrides: Record<string, string>
-  /** Music Map settings "nodes > lock" — freezes the live force simulation
-   * (src/canvas/forceSimulation.ts) without disabling drag; see
-   * forceSimulation.ts's setLocked. */
+  /** Map options "lock layout" — freezes the live simulation, keeps drag. */
   nodesLocked: boolean
-  /** Music Map settings "forces" + "links > distance" — live inputs to the
-   * force simulation. See forceSimulation.ts's ForceParams. */
+  /** Map options' layout presets and sliders — live simulation inputs. */
   forceCenterStrength: number
   forceRepelStrength: number
   forceLinkStrength: number
   linkDistance: number
-  /** #127/H9: "restore defaults" action offered by the out-of-view recovery
-   * banner below — the same balanced preset the Music Map settings panel's
-   * own restore-defaults button applies, threaded through from App.tsx's
-   * useMapPresetHistory rather than duplicated here. */
+  /** #127/H9: the out-of-view notice's "restore defaults". */
   onRestoreDefaults?: () => void
-  /** #136: sigma renders to WebGL and never sees CSS — every color it draws
-   * has to be resolved to a concrete string, so this is the one prop that
-   * tells the renderer-lifecycle effect's cached themeColorsRef to
-   * re-resolve and repaint. Same class of exception as LibrarySetup's and
-   * LeftPanelHeader's own theme prop (a real asset/value swap CSS can't
-   * reach), not a case of a component branching on theme itself — nothing
-   * here does `if (theme === 'light')`, it just re-reads whatever
-   * tokens.css's active `:root[data-theme]` block currently resolves to. */
+  /** The map options popover's content, opened from the map toolbar. */
+  mapOptions: ReactNode
+  /** #136: tells the renderer to re-resolve every colour it draws. */
   theme: ResolvedTheme
 }
 
 export type CanvasHandle = {
-  /** Animates the camera to center on and zoom into a node — search results,
-   * fact links, and hygiene worklist items all resolve to this so "select a
-   * node" always means "go look at it": canvas-first navigation is the
-   * actual point of a spatial layout. No-op for a
-   * node not currently in the graph. */
+  /** Selects nothing itself — animates the camera to frame the node's
+   * cluster, landing the node where its card has room. Search results,
+   * connection chips and worklist rows all come through here, so arriving
+   * from anywhere leaves the map in the same place. */
   flyToNode: (nodeId: number) => void
 }
+
+type LabelKind = 'artist' | 'release' | 'credit'
+
+/* What a selection or a held hover brings forward: a set of node keys, and
+ * — for a selection — the cluster whose glow stays at full strength. */
+type Focus = { keys: Set<string>; cluster: number | null }
+
+/* A selected node focuses its whole cluster, plus its own neighbours (so a
+ * producer, who has no cluster, focuses everything they produced). */
+function focusFor(nodeId: number, graph: Graph | null, clusterOf: Map<number, number>, members: Map<number, string[]>): Focus {
+  const key = nodeKey(nodeId)
+  const cluster = clusterOf.get(nodeId) ?? null
+  const keys = new Set<string>(cluster != null ? (members.get(cluster) ?? []) : [])
+  keys.add(key)
+  if (graph?.hasNode(key)) for (const neighbour of graph.neighbors(key)) keys.add(neighbour)
+  return { keys, cluster }
+}
+
+/* Physics keeps nodes apart by their drawn radius plus this much, so dots in
+ * a cluster sit close without overlapping. */
+const COLLIDE_PADDING = 1.5
 
 export default forwardRef<CanvasHandle, Props>(function Canvas(
   {
     selectedNodeId,
     onSelectNode,
-    onOpenInspector,
+    onOpenDetails,
     playback,
     onStats,
     dimOnHoverEnabled = true,
     reducedMotionForced = false,
-    showArtistArt,
-    showReleaseArt,
-    showTrackArt,
+    showArtists,
+    showReleases,
+    showTracks,
     showCreditNodes,
+    showArtistLabels,
+    colourEdgesByType,
     nodeSizeMultipliers,
     edgeThicknessMultiplier,
     edgeColorOverrides,
@@ -795,6 +677,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     forceLinkStrength,
     linkDistance,
     onRestoreDefaults,
+    mapOptions,
     theme,
   },
   ref,
@@ -803,13 +686,34 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const graphRef = useRef<Graph | null>(null)
   const rendererRef = useRef<Sigma | null>(null)
   const simulationRef = useRef<ForceSimulationHandle | null>(null)
-  const { nodes, edges, loading } = useGraphData()
+  const { nodes, edges, loading, byId } = useGraph()
   const scanStatus = useScanStatus()
+  const layout = useShellLayout()
+  const layoutRef = useRef(layout)
 
-  // Shared by the imperative handle and by clicking a node on the canvas —
-  // both mean "go look at this", and they must land in the same place at the
-  // same zoom or the graph would move differently depending on whether you
-  // arrived from search or from the canvas itself.
+  // Cluster membership, recomputed only when the data changes, and the
+  // reverse index (artist → member keys) the focus and the glows read.
+  const clusters = useMemo(() => computeClusters(nodes, edges), [nodes, edges])
+  const clusterMembers = useMemo(() => {
+    const members = new Map<number, string[]>()
+    for (const [id, artist] of clusters.clusterOf) {
+      const list = members.get(artist) ?? []
+      list.push(nodeKey(id))
+      members.set(artist, list)
+    }
+    return members
+  }, [clusters])
+  const clustersRef = useRef(clusters)
+  const clusterMembersRef = useRef(clusterMembers)
+  const selectionFocusRef = useRef<Focus | null>(null)
+  // Set by the renderer effect: re-evaluates which focus applies after the
+  // selection changes from outside it.
+  const applyFocusRef = useRef<() => void>(() => {})
+  // Artist id → its cluster's glow colour, filled in as covers are sampled.
+  const glowColorsRef = useRef(new Map<number, string>())
+
+  // Shared by the imperative handle and a click on the map — both mean "go
+  // look at this", and must land in the same place at the same zoom.
   const flyTo = useCallback((nodeId: number) => {
     const graph = graphRef.current
     const renderer = rendererRef.current
@@ -818,32 +722,24 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     const attrs = graph.getNodeAttributes(key)
     const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
-    const normalize = createNormalizationFunction(bbox)
-    const { x, y } = normalize({ x: attrs.x as number, y: attrs.y as number })
+    const { x, y } = createNormalizationFunction(bbox)({ x: attrs.x as number, y: attrs.y as number })
 
-    // Distance the camera is actually about to travel, in the same
-    // on-screen pixels the user perceives — where the target already
-    // sits on screen right now, relative to where it is about to sit.
-    // Graph-unit distance wouldn't mean the same thing at every zoom
-    // level; this does.
-    const landing = flyTargetViewportPoint(renderer)
+    const focus = focusFor(nodeId, graph, clustersRef.current.clusterOf, clusterMembersRef.current)
+    const ratio = ratioToFit(renderer, graph, focus.keys, layoutRef.current)
+    const landing = flyLandingPoint(renderer, layoutRef.current)
+
+    // Distance in on-screen pixels, so a fly means the same at every zoom.
     const currentViewport = renderer.graphToViewport({ x: attrs.x as number, y: attrs.y as number })
     const distancePx = Math.hypot(currentViewport.x - landing.x, currentViewport.y - landing.y)
-    const duration =
-      osPrefersReducedMotion() || reducedMotionForcedRef.current ? 0 : flyToDurationForDistance(distancePx)
+    const duration = osPrefersReducedMotion() || reducedMotionForcedRef.current ? 0 : flyToDurationForDistance(distancePx)
 
-    // The camera centres whatever it points at, and the node is not going to
-    // the centre. Ask sigma which framed-graph point *would* sit at the
-    // landing point if the camera were centred on the node, then reflect the
-    // camera through the node by that much: a point twice as far from the
-    // offending direction puts the node exactly where it is wanted. Done
-    // through viewportToFramedGraph rather than by hand so it stays correct
-    // through sigma's own padding and dimension handling.
+    // The camera centres whatever it points at, and the node isn't going to
+    // the centre. Ask sigma which framed point would sit at the landing spot
+    // with the camera centred on the node, then reflect the camera through
+    // the node by that much.
     const camera = renderer.getCamera()
-    const atLanding = renderer.viewportToFramedGraph(landing, {
-      cameraState: { x, y, ratio: FLY_TO_RATIO, angle: camera.angle },
-    })
-    void camera.animate({ x: 2 * x - atLanding.x, y: 2 * y - atLanding.y, ratio: FLY_TO_RATIO }, { duration })
+    const atLanding = renderer.viewportToFramedGraph(landing, { cameraState: { x, y, ratio, angle: camera.angle } })
+    void camera.animate({ x: 2 * x - atLanding.x, y: 2 * y - atLanding.y, ratio }, { duration })
   }, [])
 
   useImperativeHandle(ref, () => ({ flyToNode: flyTo }), [flyTo])
@@ -853,57 +749,63 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const onSelectNodeRef = useRef(onSelectNode)
   const onStatsRef = useRef(onStats)
   const flyToRef = useRef(flyTo)
-  // Read inside the renderer effect's click handler to decide whether a
-  // click is a new selection or a toggle-off of the current one. A ref, not
-  // the prop, because that effect deliberately runs once per mount —
-  // depending on selectedNodeId would tear the renderer down and reset the
-  // camera on every click.
   const selectedNodeIdRef = useRef(selectedNodeId)
-  // Read by the renderer effect's dim/fly logic below, which runs once per
-  // mount — same "ref, not the prop" reasoning as selectedNodeIdRef, so a
-  // Settings toggle change doesn't tear the renderer down.
   const dimOnHoverEnabledRef = useRef(dimOnHoverEnabled)
   const reducedMotionForcedRef = useRef(reducedMotionForced)
 
-  // Read live, every frame, by the reducers below — a slider drag fires
-  // onChange continuously, and re-running syncGraph's full node/edge diff on
-  // every intermediate value would be real cost on a library-sized graph.
-  // Refs instead of state: changing them must never re-run the renderer
-  // lifecycle effect below (which now runs once per mount, not per prop
-  // change).
-  const nodeSizeMultipliersRef = useRef(nodeSizeMultipliers)
-  const edgeThicknessMultiplierRef = useRef(edgeThicknessMultiplier)
-  const edgeColorOverridesRef = useRef(edgeColorOverrides)
+  // Read every frame by the reducers and the label drawer. Refs, not state:
+  // a slider drag fires continuously, and none of these may re-run the
+  // renderer lifecycle effect.
+  const liveRef = useRef({
+    showArtists,
+    showReleases,
+    showTracks,
+    showArtistLabels,
+    colourEdgesByType,
+    nodeSizeMultipliers,
+    edgeThicknessMultiplier,
+    edgeColorOverrides,
+  })
   useEffect(() => {
-    nodeSizeMultipliersRef.current = nodeSizeMultipliers
-    edgeThicknessMultiplierRef.current = edgeThicknessMultiplier
-    edgeColorOverridesRef.current = edgeColorOverrides
+    liveRef.current = {
+      showArtists,
+      showReleases,
+      showTracks,
+      showArtistLabels,
+      colourEdgesByType,
+      nodeSizeMultipliers,
+      edgeThicknessMultiplier,
+      edgeColorOverrides,
+    }
     rendererRef.current?.refresh()
-  }, [nodeSizeMultipliers, edgeThicknessMultiplier, edgeColorOverrides])
+  }, [showArtists, showReleases, showTracks, showArtistLabels, colourEdgesByType, nodeSizeMultipliers, edgeThicknessMultiplier, edgeColorOverrides])
 
-  // #136: same "ref read live by the reducers, refreshed on change" shape as
-  // the multipliers above. resolveThemeColors reads the DOM once here rather
-  // than per node/edge per frame — theme changes are rare (a click in
-  // Settings, or the OS firing prefers-color-scheme), so recomputing the
-  // whole palette on that instead of on every paint costs nothing real.
+  // #136: theme changes are rare, so the palette is resolved once per change
+  // rather than read from the DOM per node per frame.
   const themeColorsRef = useRef(resolveThemeColors())
   useEffect(() => {
     themeColorsRef.current = resolveThemeColors()
+    const graph = graphRef.current
+    // Base fills are baked into the graph at sync time; repaint them.
+    graph?.forEachNode((key, attrs) => {
+      graph.setNodeAttribute(key, 'color', themeColorsRef.current.node[attrs.nodeType as string] ?? themeColorsRef.current.node.label)
+    })
     rendererRef.current?.refresh()
   }, [theme])
 
-  // Read by the drag handlers below, which are set up once inside the
-  // renderer-lifecycle effect — a ref, not the prop, for the same reason as
-  // dimOnHoverEnabledRef.
+  // Opening or closing a panel changes where labels flip and where the next
+  // fly lands; repaint so the right-edge label rule follows at once.
+  useEffect(() => {
+    layoutRef.current = layout
+    rendererRef.current?.refresh()
+  }, [layout])
+
   const nodesLockedRef = useRef(nodesLocked)
   useEffect(() => {
     nodesLockedRef.current = nodesLocked
     simulationRef.current?.setLocked(nodesLocked)
   }, [nodesLocked])
 
-  // Music Map settings "forces" + "links > distance" — pushed into the live
-  // simulation on every change, same "real settings, not a re-mount" shape
-  // as the multiplier effect above.
   useEffect(() => {
     simulationRef.current?.setParams({
       centerStrength: forceCenterStrength,
@@ -913,42 +815,26 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     })
   }, [forceCenterStrength, forceRepelStrength, forceLinkStrength, linkDistance])
 
-  // Which node the hover plate is currently describing. Distinct from
-  // sigma's own hover tracking below: that fires on every enterNode, this
-  // only flips once the dwell has been held, so the plate and the dim
-  // arrive as one event rather than two.
+  // The node the hover plate names — set only once the dwell has been held,
+  // so the plate and the focus arrive as one response.
   const [hoveredNodeId, setHoveredNodeId] = useState<number | null>(null)
 
-  // The same instance rendererRef holds, exposed as state purely so the
-  // overlays below re-subscribe once the renderer-lifecycle effect below has
-  // actually built one — a ref's identity never changes, so an effect keyed
-  // on it would keep listening to a dead one.
+  // The renderer, as state, so the overlays re-subscribe once one exists.
   const [activeRenderer, setActiveRenderer] = useState<Sigma | null>(null)
 
-  // #127/H9: set only by the simulation's own `end.outOfViewCheck` listener
-  // below (never on every tick or every pan — see graphOutOfView's own
-  // comment for why), cleared by re-center/restore-defaults or by a fresh
-  // settle that lands back in view. Drives the recovery banner in the JSX
-  // below.
+  // #127/H9: set only on the simulation's own settle (see graphOutOfView).
   const [mapOutOfView, setMapOutOfView] = useState(false)
-
-  // Set by the mount effect's `end.initialFit` listener below and read back
-  // by reframeToRobustBBox itself (to interrupt an in-flight settle-refit
-  // before starting a new one) — a ref, not a local closure variable, so
-  // the recovery banner's "re-center" button can reach it from outside that
-  // effect.
   const cancelSettleFitAnimRef = useRef<(() => void) | null>(null)
 
-  // #127/H9: shared by the settle-time initial refit (`end.initialFit`
-  // below) and the recovery banner's "re-center" button — same reframe
-  // either way, the only difference is what triggers it.
+  // #127/H9: shared by the settle-time refit, the toolbar's fit button and
+  // the out-of-view notice's "re-center".
   const reframeToRobustBBox = useCallback(() => {
     const graph = graphRef.current
     const renderer = rendererRef.current
     if (!graph || !renderer) return
     const bbox = robustBBox(graph)
     if (!bbox) return
-    const target = insetForShell(renderer, bbox)
+    const target = insetForShell(renderer, bbox, layoutRef.current)
     const from = renderer.getCustomBBox() ?? renderer.getBBox()
     cancelSettleFitAnimRef.current?.()
     cancelSettleFitAnimRef.current = animateBBox(
@@ -1030,47 +916,145 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     reducedMotionForcedRef.current = reducedMotionForced
   })
 
-  // Renderer lifecycle — created once per mount (2026-08-29: used to be
-  // once per granularity, back when switching artists/albums/tracks meant a
-  // genuinely different graph; there's one combined graph now), NOT on every data refresh or settings change.
+  // A selection focuses its cluster. Recomputed when the selection or the
+  // clusters change, then handed to the renderer effect's focus logic.
+  useEffect(() => {
+    clustersRef.current = clusters
+    clusterMembersRef.current = clusterMembers
+    selectionFocusRef.current =
+      selectedNodeId != null ? focusFor(selectedNodeId, graphRef.current, clusters.clusterOf, clusterMembers) : null
+    applyFocusRef.current()
+  }, [selectedNodeId, clusters, clusterMembers])
+
+  // Renderer lifecycle — created once per mount, NOT on every data refresh
+  // or settings change.
   useEffect(() => {
     if (!containerRef.current) return
 
     // multi: true — two nodes can hold more than one edge between them (a
-    // produced_by and an engineered_by credit to the same person, say). See
-    // syncGraph's edge-keying comment.
+    // produced_by and an engineered_by credit to the same person, say).
     const graph = new Graph({ multi: true })
     graphRef.current = graph
 
     const renderer = new Sigma(graph, containerRef.current, {
-      // No labels on the canvas: the mockup identifies a node by its artwork
-      // and nothing else, and hundreds of overlapping titles bury the art
-      // they are supposed to describe. Hover labelling is handled by the
-      // reducers below instead of sigma's built-in label rendering.
-      renderLabels: false,
+      renderLabels: true,
       renderEdgeLabels: false,
       defaultEdgeType: 'line',
-      nodeProgramClasses: { cover: NodeCoverProgram, coverSquare: NodeCoverSquareProgram },
-      // Nodes with no art at all — a colored dot, and the only thing sigma's
-      // own built-in program ever draws here.
       defaultNodeType: 'circle',
-      // Kept as a no-op on purpose, and it has to stay here. Sigma routes
-      // both `highlighted:true` nodes and the live mouse-hovered node
-      // through this drawer, and without an override it falls back to a
-      // stock black-on-white label box — so deleting this function does not
-      // remove drawing from the hover layer, it restores sigma's own.
-      //
-      // Nothing is drawn on the hover canvas any more. Selection used to
-      // grow a 74px ring here; it is now the glass card in NodeCard.tsx,
-      // whose 255px cover completely covers a node and any ring around it
-      // at every zoom the app can reach. Hover is the dim reducers below
-      // plus NodeHoverPlate.tsx. Drag still sets `highlighted` (see the
-      // drag recipe further down), which is what would otherwise surface
-      // that stock label box mid-drag.
+      // Only the labels the node reducer forces are drawn: artists, credits,
+      // and a focused cluster's records. Sigma's own pick (the biggest dots
+      // that fit a density grid) would label arbitrary tracks.
+      labelRenderedSizeThreshold: 1e9,
+      // Edges are sub-pixel hairlines on purpose; sigma's default floor
+      // would draw every one at 1.7px.
+      minEdgeThickness: 0.1,
+      // Focused nodes draw above the rest (the reducer's zIndex).
+      zIndex: true,
+      // Kept as a no-op on purpose: without an override sigma draws its own
+      // black-on-white label box for hovered and dragged nodes.
       defaultDrawNodeHover: () => {},
     })
     rendererRef.current = renderer
     setActiveRenderer(renderer)
+
+    // Focus state, read by the label pass and the reducers below; see the
+    // focus comment further down for what each one means.
+    let hoverFocus: Focus | null = null
+    let hoverActive = false
+    let currentFocus: Focus | null = null
+    let focusProgress = 0
+    let dwellTimeout: ReturnType<typeof setTimeout> | null = null
+    let cancelFocusAnim: (() => void) | null = null
+
+    /* Labels, drawn on sigma's label canvas. Rubik with a 4px round-join
+     * halo in the canvas colour, so a label reads over edges and glows.
+     * Artists 13/500 ink, offset right of the dot — or left, if the right
+     * would run under the right-hand panel. Records 11/400 ink-2, credits
+     * 11/400 ink-3. Out-of-focus labels at 45%.
+     *
+     * A real library is denser than any mock: featured artists cluster
+     * around the people they featured with, and every one of them is an
+     * artist node. So labels are placed greedily once per frame — focused
+     * first, then artists before credits before records, bigger dots first
+     * — and a label that would overlap one already placed is skipped. The
+     * map stays legible at every zoom, and zooming in reveals the rest. */
+    const LABEL_STYLE: Record<LabelKind, { size: number; weight: number; rank: number }> = {
+      artist: { size: 13, weight: 500, rank: 0 },
+      credit: { size: 11, weight: 400, rank: 1 },
+      release: { size: 11, weight: 400, rank: 2 },
+    }
+    const LABEL_PAD = 3
+    const widthCache = new Map<string, number>()
+    const measure = (context: CanvasRenderingContext2D, kind: LabelKind, label: string) => {
+      const cacheKey = `${kind}\u0000${label}`
+      let width = widthCache.get(cacheKey)
+      if (width == null) {
+        const style = LABEL_STYLE[kind]
+        context.font = `${style.weight} ${style.size}px 'Rubik Variable', Rubik, system-ui, sans-serif`
+        width = context.measureText(label).width
+        widthCache.set(cacheKey, width)
+      }
+      return width
+    }
+    const labelBox = (context: CanvasRenderingContext2D, kind: LabelKind, label: string, x: number, y: number, size: number) => {
+      const style = LABEL_STYLE[kind]
+      const width = measure(context, kind, label)
+      const gap = size + 6
+      let left = x + gap
+      if (kind === 'artist') {
+        const limit = renderer.getDimensions().width - layoutRef.current.rightOccupancy - 16
+        if (left + width > limit) left = x - gap - width
+      }
+      return { left, baseline: y + style.size * 0.36, top: y - style.size * 0.6, width, height: style.size * 1.2 }
+    }
+
+    // Recomputed on the first label of each frame, dropped after the frame.
+    let placedLabels: Set<string> | null = null
+    renderer.on('afterRender', () => {
+      placedLabels = null
+    })
+    const placeLabels = (context: CanvasRenderingContext2D): Set<string> => {
+      const { width, height } = renderer.getDimensions()
+      const candidates: { key: string; kind: LabelKind; label: string; x: number; y: number; size: number; focused: boolean }[] = []
+      graph.forEachNode((key) => {
+        const display = renderer.getNodeDisplayData(key) as (ReturnType<typeof renderer.getNodeDisplayData> & { labelKind?: LabelKind }) | undefined
+        if (!display || display.hidden || !display.labelKind || !display.label) return
+        const { x, y } = renderer.framedGraphToViewport(display)
+        if (x < -200 || x > width + 200 || y < -20 || y > height + 20) return
+        candidates.push({ key, kind: display.labelKind, label: display.label, x, y, size: renderer.scaleSize(display.size), focused: display.zIndex > 0 && currentFocus != null && focusProgress > 0 })
+      })
+      candidates.sort((a, b) => Number(b.focused) - Number(a.focused) || LABEL_STYLE[a.kind].rank - LABEL_STYLE[b.kind].rank || b.size - a.size)
+      const placed = new Set<string>()
+      const boxes: { left: number; top: number; right: number; bottom: number }[] = []
+      for (const c of candidates) {
+        const box = labelBox(context, c.kind, c.label, c.x, c.y, c.size)
+        const rect = { left: box.left - LABEL_PAD, top: box.top - LABEL_PAD, right: box.left + box.width + LABEL_PAD, bottom: box.top + box.height + LABEL_PAD }
+        if (boxes.some((o) => rect.left < o.right && rect.right > o.left && rect.top < o.bottom && rect.bottom > o.top)) continue
+        boxes.push(rect)
+        placed.add(c.key)
+      }
+      return placed
+    }
+
+    const drawLabel: NodeLabelDrawingFunction = (context, data) => {
+      const kind = (data as unknown as { labelKind?: LabelKind }).labelKind
+      if (!kind || !data.label) return
+      placedLabels ??= placeLabels(context)
+      if (!placedLabels.has(data.key)) return
+      const colors = themeColorsRef.current
+      const style = LABEL_STYLE[kind]
+      const box = labelBox(context, kind, data.label, data.x, data.y, data.size)
+      context.font = `${style.weight} ${style.size}px 'Rubik Variable', Rubik, system-ui, sans-serif`
+      context.globalAlpha = (data as unknown as { labelAlpha?: number }).labelAlpha ?? 1
+      context.lineJoin = 'round'
+      context.lineWidth = 4
+      context.strokeStyle = colors.halo
+      context.strokeText(data.label, box.left, box.baseline)
+      context.fillStyle = kind === 'artist' ? colors.ink : kind === 'release' ? colors.ink2 : colors.ink3
+      context.fillText(data.label, box.left, box.baseline)
+      context.globalAlpha = 1
+    }
+    renderer.setSetting('defaultDrawNodeLabel', drawLabel)
 
     // Obsidian-style live physics (the 2026-08-29 map rework). The tick
     // callback is the one place simulation state becomes graph state: copy
@@ -1142,132 +1126,199 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       setMapOutOfView(graphOutOfView(renderer, graph))
     })
 
-    // Hover/neighbor highlighting — dims everything not connected to the
-    // hovered node, via sigma's render-time reducers rather than mutating
-    // graph attributes, so it costs nothing to undo on leaveNode.
-    //
-    // dimProgress (0-1, MO-6) gates and crossfades the effect: it only
-    // starts rising after HOVER_DWELL_MS of continuous hover, so dragging
-    // the cursor across a dense cluster doesn't strobe the whole graph on
-    // every enterNode/leaveNode, and it's mixed into the reducers' colors
-    // frame by frame rather than cut, so leaving a node doesn't snap
-    // everything back at once. hoveredNode/hoveredNeighbors are read by the
-    // reducers below but only matter while dimProgress > 0 — safe to leave
-    // pointing at a stale node between hovers, since a zero progress makes
-    // every reducer below a no-op regardless of what they reference.
-    let hoveredNode: string | null = null
-    let hoveredNeighbors: Set<string> | null = null
-    let dimProgress = 0
-    let dwellTimeout: ReturnType<typeof setTimeout> | null = null
-    let cancelDimAnim: (() => void) | null = null
+    /* Focus. A selection focuses its cluster; with nothing selected, a
+     * hover held past the dwell (with the hover-dim setting on) focuses the
+     * hovered node's neighbourhood. Whatever is focused
+     * stays as it is; everything else recedes — nodes to 30%, labels to
+     * 45%, edges to 60% of their usual faintness, other clusters' glows to
+     * 35% — while the focused cluster's edges take their type colours.
+     *
+     * focusProgress crossfades that in and out over DIM_CROSSFADE_MS (MO-6)
+     * rather than cutting, and only rises after HOVER_DWELL_MS of a held
+     * hover, so sweeping the pointer across a dense cluster doesn't strobe
+     * the map. currentFocus is kept through a fade-out so the reducers
+     * still know what is fading. */
 
-    const setDimTarget = (target: number) => {
-      cancelDimAnim?.()
-      cancelDimAnim = animateScalar(
-        dimProgress,
+    const setFocusTarget = (target: number) => {
+      cancelFocusAnim?.()
+      cancelFocusAnim = animateScalar(
+        focusProgress,
         target,
         DIM_CROSSFADE_MS,
         (v) => {
-          dimProgress = v
-          rendererRef.current?.refresh()
+          focusProgress = v
+          renderer.refresh()
         },
         osPrefersReducedMotion() || reducedMotionForcedRef.current,
+        () => {
+          if (target === 0) currentFocus = null
+        },
       )
     }
 
+    const applyFocus = () => {
+      // A selection wins: it was a click, a hover is a passing glance — and
+      // the pointer is still resting on the node the moment after it's
+      // clicked, so a hover that won would undo the selection's focus.
+      const next = selectionFocusRef.current ?? (hoverActive ? hoverFocus : null)
+      if (next) {
+        currentFocus = next
+        if (focusProgress < 1) setFocusTarget(1)
+        else renderer.refresh()
+      } else if (currentFocus) {
+        setFocusTarget(0)
+      }
+    }
+    applyFocusRef.current = applyFocus
+
+    const typeHidden = (type: string | undefined) => {
+      const live = liveRef.current
+      return (type === 'artist' && !live.showArtists) || (type === 'release' && !live.showReleases) || (type === 'recording' && !live.showTracks)
+    }
+
     renderer.setSetting('nodeReducer', (node, data) => {
-      // Music Map settings "nodes > size" — applied before anything below,
-      // to every node regardless of dim/hover state: a persistent size
-      // preference isn't a per-frame state signal, so it doesn't run into
-      // the art-preservation rule just below. One multiplier per node's own
-      // domain type (nodeAttributes' `nodeType`), #29 — a type with no
-      // override of its own reads 1 (unchanged) via
-      // resolveNodeSizeMultipliers' fallback.
-      const multiplier = nodeSizeMultipliersRef.current[data.nodeType as string] ?? 1
-      const scaled = multiplier === 1 ? data : { ...data, size: (data.size as number) * multiplier }
-      if (dimProgress <= 0 || node === hoveredNode || hoveredNeighbors?.has(node)) return scaled
-      // #13: every de-emphasized node recedes, art-bound or not — this used
-      // to leave cover/coverSquare nodes untouched here (just a `zIndex: 0`
-      // that never took effect, since sigma's `zIndex` setting defaults off
-      // and this file never turns it on), so hovering read as "everything is
-      // highlighted" rather than as a dim: an artist or release node's
-      // brightness genuinely never changed.
-      //
-      // @sigma/node-image can neither multiply-darken an opaque texture
-      // (drawingMode "background" is a no-op once texel.a is 1) nor tint one
-      // without fully replacing it (drawingMode "color" discards the image
-      // outright) — there is no continuous crossfade available for a texture
-      // the way mixTowardDim gives every flat-colored node below. #80: the
-      // earlier fix here cut straight to DIMMED_NODE_COLOR the instant
-      // dimProgress left 0, popping a full-size cover to flat grey in a
-      // single frame while every flat-colored node was still mid-fade — the
-      // mismatch read as a flicker, not a fade. Since the texture itself
-      // can't crossfade, this crossfades size instead: the cover shrinks to
-      // nothing over the first half of dimProgress, then the dim circle
-      // grows back in over the second half. The type swap still happens in
-      // one frame, but at dimProgress 0.5 the node renders at size 0 on
-      // either side of it, so the swap itself is invisible — what's left on
-      // screen is a continuous shrink-then-grow that reads as a dissolve to
-      // grey, and (since it's a pure function of dimProgress) plays the same
-      // way in reverse as the pointer leaves and dimProgress falls back to 0.
-      if (data.type === 'cover' || data.type === 'coverSquare') {
-        const size = scaled.size as number
-        if (dimProgress <= 0.5) return { ...scaled, size: size * (1 - dimProgress / 0.5) }
-        return { ...scaled, type: 'circle', square: false, color: themeColorsRef.current.nodeDim, size: size * ((dimProgress - 0.5) / 0.5) }
+      const live = liveRef.current
+      const type = data.nodeType as string
+      if (typeHidden(type)) return { ...data, hidden: true }
+
+      const size = (data.size as number) * (live.nodeSizeMultipliers[type] ?? 1)
+      const focused = currentFocus == null || focusProgress <= 0 || currentFocus.keys.has(node)
+      const t = focused ? 0 : focusProgress
+      const colors = themeColorsRef.current
+      const color = t > 0 ? mixToward(data.color as string, colors.canvas, (1 - UNFOCUSED_NODE_ALPHA) * t) : (data.color as string)
+
+      // The selected node is named by its card, so it gets no label of its own.
+      const selectedId = selectedNodeIdRef.current
+      let labelKind: LabelKind | null = null
+      if (selectedId == null || node !== nodeKey(selectedId)) {
+        if (type === 'artist') labelKind = live.showArtistLabels ? 'artist' : null
+        else if (type === 'credit') labelKind = 'credit'
+        else if (type === 'release' && currentFocus != null && focusProgress > 0 && currentFocus.keys.has(node)) labelKind = 'release'
       }
-      // Every other type has no art to protect, so its color crossfades
-      // toward the dim tone continuously. `square` is cleared alongside
-      // `type`: nothing downstream should be told a node is still a square
-      // cover while it is being drawn as a plain dot.
+
       return {
-        ...scaled,
-        type: 'circle',
-        square: false,
-        color: mixTowardDim(scaled.color, themeColorsRef.current.nodeDim, dimProgress),
+        ...data,
+        size,
+        color,
+        label: labelKind ? (data.label as string) : null,
+        forceLabel: labelKind != null,
+        labelKind,
+        labelAlpha: 1 - (1 - UNFOCUSED_LABEL_ALPHA) * t,
+        zIndex: focused ? 1 : 0,
       }
     })
+
     renderer.setSetting('edgeReducer', (edge, data) => {
-      const size = EDGE_WIDTH_AT_RATIO_1 * edgeThicknessMultiplierRef.current * Math.sqrt(renderer.getCamera().ratio)
-      const relType = data.relType as string | undefined
-      const baseColor = relType
-        ? edgeBaseColor(relType, edgeColorOverridesRef.current, themeColorsRef.current)
-        : (data.color as string)
-      if (dimProgress <= 0) return { ...data, size, color: baseColor }
+      const live = liveRef.current
       const [source, target] = graph.extremities(edge)
-      if (source === hoveredNode || target === hoveredNode) return { ...data, size, color: baseColor }
-      return { ...data, size, color: mixTowardDim(baseColor, themeColorsRef.current.edgeDim, dimProgress) }
+      if (typeHidden(graph.getNodeAttribute(source, 'nodeType') as string) || typeHidden(graph.getNodeAttribute(target, 'nodeType') as string)) {
+        return { ...data, hidden: true }
+      }
+      // Sigma scales edge width with zoom; dividing that back out keeps
+      // every edge the same hairline on screen at any zoom.
+      const scale = live.edgeThicknessMultiplier * Math.sqrt(renderer.getCamera().ratio)
+      const relType = data.relType as string
+      const colors = themeColorsRef.current
+      const focusing = currentFocus != null && focusProgress > 0
+
+      if (focusing && (currentFocus!.keys.has(source) || currentFocus!.keys.has(target))) {
+        const hue = edgeHue(relType, live.edgeColorOverrides, colors)
+        return { ...data, size: EDGE_FOCUSED_PX * scale, color: withAlphaFactor(hue, 1, FOCUSED_EDGE_ALPHA * focusProgress) }
+      }
+      const base = live.colourEdgesByType ? withAlphaFactor(edgeHue(relType, live.edgeColorOverrides, colors), 1, TYPED_EDGE_ALPHA) : colors.edge
+      const color = focusing ? withAlphaFactor(base, 1 - (1 - UNFOCUSED_EDGE_ALPHA) * focusProgress) : base
+      return { ...data, size: EDGE_PX * scale, color }
     })
+
+    /* Cluster glows: a radial gradient of each artist's cover colour,
+     * painted on a 2D canvas slipped in under sigma's edge layer. The radius
+     * follows the v2 rule — min(w, h) × (0.08 + size × 0.012), growing
+     * gently with zoom like the dots — but never much wider than the cluster
+     * it sits behind, so a library of two hundred artists doesn't melt into
+     * one wash. */
+    const glowCanvas = renderer.createCanvas('glows', { beforeLayer: 'edges' })
+    glowCanvas.style.position = 'absolute'
+    glowCanvas.style.inset = '0'
+    glowCanvas.style.pointerEvents = 'none'
+    const glowContext = glowCanvas.getContext('2d')
+    const drawGlows = () => {
+      if (!glowContext) return
+      const { width, height } = renderer.getDimensions()
+      const dpr = window.devicePixelRatio || 1
+      const pixelWidth = Math.round(width * dpr)
+      const pixelHeight = Math.round(height * dpr)
+      if (glowCanvas.width !== pixelWidth || glowCanvas.height !== pixelHeight) {
+        glowCanvas.width = pixelWidth
+        glowCanvas.height = pixelHeight
+        glowCanvas.style.width = `${width}px`
+        glowCanvas.style.height = `${height}px`
+      }
+      glowContext.setTransform(dpr, 0, 0, dpr, 0, 0)
+      glowContext.clearRect(0, 0, width, height)
+
+      const colors = themeColorsRef.current
+      const zoom = Math.sqrt(renderer.getCamera().ratio)
+      const focusCluster = currentFocus != null && focusProgress > 0 ? currentFocus.cluster : null
+      const shortSide = Math.min(width, height)
+      for (const [artistId, hex] of glowColorsRef.current) {
+        const key = nodeKey(artistId)
+        const display = renderer.getNodeDisplayData(key)
+        if (!display) continue
+        const centre = renderer.framedGraphToViewport(display)
+        let extent = 0
+        for (const member of clusterMembersRef.current.get(artistId) ?? []) {
+          const memberDisplay = renderer.getNodeDisplayData(member)
+          if (!memberDisplay) continue
+          const p = renderer.framedGraphToViewport(memberDisplay)
+          extent = Math.max(extent, Math.hypot(p.x - centre.x, p.y - centre.y))
+        }
+        const size = graph.getNodeAttribute(key, 'size') as number
+        const specRadius = (shortSide * (0.08 + size * 0.012)) / zoom
+        const radius = Math.max(24, Math.min(specRadius, extent * 1.6 + 30))
+        if (centre.x + radius < 0 || centre.x - radius > width || centre.y + radius < 0 || centre.y - radius > height) continue
+        const dimmed = focusCluster != null && focusCluster !== artistId
+        const alpha = colors.glowAlpha * (dimmed ? 1 - (1 - UNFOCUSED_GLOW_ALPHA) * focusProgress : 1)
+        const gradient = glowContext.createRadialGradient(centre.x, centre.y, 0, centre.x, centre.y, radius)
+        gradient.addColorStop(0, withAlphaFactor(hex, 1, alpha))
+        gradient.addColorStop(1, withAlphaFactor(hex, 1, 0))
+        glowContext.fillStyle = gradient
+        glowContext.beginPath()
+        glowContext.arc(centre.x, centre.y, radius, 0, Math.PI * 2)
+        glowContext.fill()
+      }
+    }
+    renderer.on('afterRender', drawGlows)
 
     renderer.on('enterNode', ({ node }) => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
-      hoveredNode = node
-      hoveredNeighbors = new Set(graph.neighbors(node))
+      const keys = new Set(graph.neighbors(node))
+      keys.add(node)
+      hoverFocus = { keys, cluster: null }
       dwellTimeout = setTimeout(() => {
         dwellTimeout = null
-        // The Settings hover-dim toggle gates only this — the plate below
-        // still names the node regardless, since that's wayfinding, not the
-        // more aggressive "recede everything else" effect being toggled.
-        if (dimOnHoverEnabledRef.current) setDimTarget(1)
-        // The plate rides the same dwell as the dim rather than getting its
-        // own threshold: they are one response to one gesture, and staggering
-        // them would read as two things happening.
+        // The setting gates only the focus; the plate still names the node,
+        // since that's wayfinding rather than the stronger "recede
+        // everything else".
+        if (dimOnHoverEnabledRef.current) {
+          hoverActive = true
+          applyFocus()
+        }
         setHoveredNodeId(Number(node))
       }, HOVER_DWELL_MS)
     })
     renderer.on('leaveNode', () => {
-      // Unconditional, unlike the dim below — a plate that was never shown
-      // costs nothing to hide, and this is also the path out of a hover that
-      // ended because the node was dragged or the graph resynced.
       setHoveredNodeId(null)
       if (dwellTimeout != null) {
-        // Dwell never engaged — nothing was ever dimmed, so there is
-        // nothing to reverse. This is what stops a cursor sweeping across
-        // a cluster from strobing it.
+        // The dwell never engaged, so nothing was focused: nothing to undo.
+        // This is what stops a sweep across a cluster from strobing it.
         clearTimeout(dwellTimeout)
         dwellTimeout = null
         return
       }
-      if (dimOnHoverEnabledRef.current) setDimTarget(0)
+      if (hoverActive) {
+        hoverActive = false
+        applyFocus()
+      }
     })
 
     // Standard sigma.js drag-node recipe: track the dragged node across
@@ -1577,8 +1628,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     return () => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
-      cancelDimAnim?.()
+      cancelFocusAnim?.()
       cancelSettleFitAnimRef.current?.()
+      applyFocusRef.current = () => {}
       sim.simulation.stop()
       simulationRef.current = null
       renderer.kill()
@@ -1586,10 +1638,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       graphRef.current = null
       setActiveRenderer(null)
     }
-    // Deliberately [] — runs once per mount, not on data or settings
-    // changes. onSelectNode/onStats/nodes and every live setting are read
-    // through refs; force params/lock have their own sync effects above
-    // that push into simulationRef without re-running this one.
+    // Deliberately [] — runs once per mount. Everything live is read
+    // through refs; force params and lock have their own sync effects.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1601,92 +1651,136 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     if (!graph || !renderer || loading) return
 
     const hadNoNodes = graph.order === 0
-    const showArt = (type: string) =>
-      type === 'artist' ? showArtistArt : type === 'release' ? showReleaseArt : type === 'recording' ? showTrackArt : true
-    syncGraph(graph, nodes, edges, showArt, showCreditNodes, themeColorsRef.current)
+    const sizeOf = (node: GraphNode) => {
+      switch (node.type) {
+        case 'artist':
+          return artistSize(clusters.releasesOf.get(node.id)?.length ?? 0)
+        case 'release':
+          return RELEASE_SIZE
+        case 'recording':
+          return RECORDING_SIZE
+        case 'credit':
+          return CREDIT_SIZE
+        default:
+          return OTHER_SIZE
+      }
+    }
+    syncGraph(graph, nodes, edges, showCreditNodes, sizeOf, themeColorsRef.current)
     onStatsRef.current?.({ nodes: graph.order, edges: graph.size })
 
-    // Feeds the same post-sync graph state into the live simulation —
-    // existing nodes keep their live position (nodeAttributes never writes
-    // x/y for one, see its own comment), only a genuinely new node or a
-    // changed radius (an images toggle) causes forceSimulation.ts to reheat.
+    // The same post-sync graph feeds the live simulation. Existing nodes
+    // keep their live position; only a new node or a changed radius reheats.
     const simNodes: SimNodeInput[] = []
     graph.forEachNode((key, attrs) => {
-      simNodes.push({ key, x: attrs.x as number, y: attrs.y as number, radius: attrs.size as number })
+      simNodes.push({ key, x: attrs.x as number, y: attrs.y as number, radius: (attrs.size as number) + COLLIDE_PADDING })
     })
     const simLinks: { source: string; target: string }[] = []
     graph.forEachEdge((_edgeKey, _attrs, source, target) => simLinks.push({ source, target }))
     simulationRef.current?.sync(simNodes, simLinks)
 
-    // Only fit the camera to the data on the graph's first population for
-    // this renderer (a fresh mount) — a background refresh of the same
-    // graph must never move the viewport out from under whatever the user
-    // is currently looking at.
+    // Fit the camera only on this renderer's first population — a
+    // background refresh must never move the view out from under the user.
     if (hadNoNodes) {
       const bbox = robustBBox(graph)
-      if (bbox) {
-        renderer.setCustomBBox(insetForShell(renderer, bbox))
+      if (bbox) renderer.setCustomBBox(insetForShell(renderer, bbox, layoutRef.current))
+    }
+  }, [nodes, edges, loading, showCreditNodes, clusters])
+
+  // Each artist's glow colour: the average of its records' cover colours
+  // (eight at most — enough to find the mean), or its own photo's for an
+  // artist with no records on the map. Sampled a few artists at a time and
+  // cached across refetches; the map repaints in batches as they land.
+  useEffect(() => {
+    let cancelled = false
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleRefresh = () => {
+      if (refreshTimer != null) return
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null
+        rendererRef.current?.refresh()
+      }, 200)
+    }
+    const queue = nodes.filter((n) => n.type === 'artist' && !glowColorsRef.current.has(n.id))
+    const work = async () => {
+      while (!cancelled && queue.length > 0) {
+        const artist = queue.shift()!
+        const hashes = [
+          ...new Set(
+            (clusters.releasesOf.get(artist.id) ?? []).map((id) => byId.get(id)?.cover_hash).filter((h): h is string => h != null),
+          ),
+        ].slice(0, 8)
+        if (hashes.length === 0 && artist.cover_hash) hashes.push(artist.cover_hash)
+        if (hashes.length === 0) continue
+        const sampled = await Promise.all(hashes.map((hash) => sampleCoverColor(hashCoverUrl(hash))))
+        const mean = averageColors(sampled.filter((c): c is string => c != null))
+        if (mean && !cancelled) {
+          glowColorsRef.current.set(artist.id, mean)
+          scheduleRefresh()
+        }
       }
     }
-    // The showArt flags and showCreditNodes are plain dependencies, not refs
-    // like the settings above — toggling one is a discrete click, not a
-    // continuous drag, so re-running the full node diff once per toggle
-    // (rather than every frame) is the cheaper and simpler of the two
-    // options.
-  }, [nodes, edges, loading, showArtistArt, showReleaseArt, showTrackArt, showCreditNodes])
+    for (let i = 0; i < 4; i++) void work()
+    return () => {
+      cancelled = true
+      if (refreshTimer != null) clearTimeout(refreshTimer)
+    }
+  }, [nodes, clusters, byId])
 
-  // One sentence, muted, centered, no illustration — DESIGN.md's empty-state
-  // rule. Ordered error > scanning > plain-empty: a failed scan is the most
-  // specific and actionable thing to tell someone, an in-progress one at
-  // least explains why the graph is still blank, and a real empty result
-  // (a library that scanned clean with nothing in it) is the fallback.
-  const showEmptyState = !loading && nodes.length === 0
-
-  // The two in-place node states. Both are DOM rather than anything sigma
-  // draws, because both are glass and backdrop-filter has no equivalent
-  // inside a WebGL renderer — they sit in a layer over the canvas and are
-  // pinned to their node by useNodeAnchor.
-  //
-  // Looked up from the fetched node list rather than from graphology so the
-  // card and plate read the same title/subtitle the rest of the app does; a
-  // few hundred nodes makes find() the cheaper of the two anyway.
-  const selectedNode = selectedNodeId != null ? nodes.find((n) => n.id === selectedNodeId) : undefined
-  // A node showing its card does not also get a plate: it already says what
-  // it is, in more detail, in the same place.
-  const hoveredNode =
-    hoveredNodeId != null && hoveredNodeId !== selectedNodeId ? nodes.find((n) => n.id === hoveredNodeId) : undefined
-  // Issue #85: independent of both of the above — whatever the transport has
-  // loaded, on the canvas, whether or not it's the thing selected or
-  // hovered. Looked up against the fetched node list rather than assumed
-  // present: a track can finish resolving on the transport before its node
-  // has arrived in this graph's current fetch.
+  const selectedNode = selectedNodeId != null ? byId.get(selectedNodeId) : undefined
+  // A node showing its card doesn't also get a plate: the card says more.
+  const hoveredNode = hoveredNodeId != null && hoveredNodeId !== selectedNodeId ? byId.get(hoveredNodeId) : undefined
+  // Issue #85: whatever is playing, wherever it is — independent of both.
   const playingNodeId = playback.status.currentRecordingNodeId
-  const playingNode = playingNodeId != null ? nodes.find((n) => n.id === playingNodeId) : undefined
+  const playingNode = playingNodeId != null ? byId.get(playingNodeId) : undefined
+
+  const counts = useMemo(() => {
+    const byType = { artist: 0, release: 0, recording: 0, credit: 0 }
+    for (const node of nodes) if (node.type in byType) byType[node.type as keyof typeof byType]++
+    return byType
+  }, [nodes])
+
+  const reduced = () => osPrefersReducedMotion() || reducedMotionForcedRef.current
+  const zoomBy = (direction: 'in' | 'out') => {
+    const camera = rendererRef.current?.getCamera()
+    if (!camera) return
+    const duration = reduced() ? 0 : 180
+    if (direction === 'in') void camera.animatedZoom({ duration })
+    else void camera.animatedUnzoom({ duration })
+  }
+  const fitMap = () => {
+    const camera = rendererRef.current?.getCamera()
+    if (!camera) return
+    reframeToRobustBBox()
+    void camera.animatedReset({ duration: reduced() ? 0 : SETTLE_REFIT_DURATION_MS })
+  }
+
+  // Ordered error > building > empty: a failed scan is the most actionable
+  // thing to say, a first scan explains a sparse map, and a scan that came
+  // back empty is the fallback.
+  const showEmptyState = !loading && nodes.length === 0
+  const building = scanStatus.scanning && scanStatus.firstScan
 
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="absolute inset-0" />
 
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        {/* #23: the rectangle itself, live while shift-dragging on empty
-         * canvas — see the mousemovebody handler in the renderer effect
-         * above. Hidden by default; shown/sized via direct style writes,
-         * not React state, since it has to track every pointer move. */}
+      {/* Above the map's own notices and chrome (z-10): a selection's card
+       * must never sit under the first-scan card. */}
+      <div className="pointer-events-none absolute inset-0 z-[15] overflow-hidden">
+        {/* #23: the shift-drag marquee, sized by direct style writes. */}
         <div
           ref={marqueeRef}
-          className="absolute top-0 left-0 rounded-[4px] border border-[var(--color-hairline)] bg-[var(--color-placeholder)]"
+          className="absolute top-0 left-0 rounded-[4px] border border-[var(--color-line-strong)] bg-[var(--color-wash)]"
           style={{ visibility: 'hidden' }}
         />
-        {/* The one visual sign a group of nodes is currently multiselected —
-         * see the outline-tracking effect above. Node rendering itself never
-         * changes (DESIGN.md "Nodes"): this is a surface next to the group,
-         * the same idea as the hover plate and selection card. */}
+        {/* The one sign a group is multiselected: a surface around it. */}
         <div
           ref={multiSelectOutlineRef}
-          className="absolute top-0 left-0 rounded-[12px] border border-[var(--color-hairline)]"
+          className="absolute top-0 left-0 rounded-[12px] border border-[var(--color-line-strong)]"
           style={{ visibility: 'hidden' }}
         />
         {playingNode && <NodePlayingHalo key={playingNode.id} renderer={activeRenderer} nodeKey={nodeKey(playingNode.id)} />}
+        {selectedNode && <SelectionRing key={selectedNode.id} renderer={activeRenderer} nodeKey={nodeKey(selectedNode.id)} />}
         {hoveredNode && (
           <NodeHoverPlate
             key={hoveredNode.id}
@@ -1701,63 +1795,46 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
             <NodeCard
               key={selectedNode.id}
               renderer={activeRenderer}
-              nodeId={selectedNode.id}
+              node={selectedNode}
               nodeKey={nodeKey(selectedNode.id)}
-              type={selectedNode.type}
-              title={selectedNode.title}
-              subtitle={selectedNode.subtitle}
-              onOpenInspector={onOpenInspector}
+              layout={layout}
+              onOpenDetails={onOpenDetails}
               playback={playback}
             />
           </div>
         )}
       </div>
-      {showEmptyState && (
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-[12px] text-center">
-          {scanStatus.error ? (
-            <>
-              <p className="max-w-[420px] text-[length:var(--text-base)] text-[var(--color-muted)]">
-                scan failed: {scanStatus.error}
-              </p>
-              <Button onClick={scanStatus.retry} className="pointer-events-auto">
-                retry
-              </Button>
-            </>
-          ) : scanStatus.scanning ? (
-            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">scanning your library…</p>
-          ) : (
-            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">nothing to show yet</p>
-          )}
-        </div>
-      )}
-      {/* #127/H9: "the map spread out of view" — same empty-state shape as
-       * above (muted centered text, no illustration), two actions instead
-       * of one. Can't coexist with showEmptyState in practice (robustBBox
-       * returns null, so graphOutOfView is never true, on an empty graph)
-       * but the guard costs nothing and keeps that assumption from being
-       * load-bearing. */}
-      {mapOutOfView && !showEmptyState && (
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-[12px] text-center">
-          <p className="max-w-[420px] text-[length:var(--text-base)] text-[var(--color-muted)]">the map spread out of view</p>
-          <div className="pointer-events-auto flex gap-[16px]">
-            <Button onClick={reframeToRobustBBox}>re-center</Button>
-            <Button
-              onClick={() => {
+
+      {!showEmptyState && <MapLegend counts={counts} showProducers={showCreditNodes} />}
+      {!showEmptyState && <MapToolbar onZoomIn={() => zoomBy('in')} onZoomOut={() => zoomBy('out')} onFit={fitMap} options={mapOptions} />}
+
+      {building ? (
+        <FirstScanCard progress={scanStatus.progress} />
+      ) : scanStatus.error && showEmptyState ? (
+        <MapNotice title="The scan stopped" body={scanStatus.error} actions={[{ label: 'Try again', onClick: scanStatus.retry, primary: true }]} />
+      ) : showEmptyState ? (
+        <MapNotice title={scanStatus.scanning ? 'Reading your library' : 'Nothing on the map yet'} body={
+          scanStatus.scanning ? 'Nodes appear here as tracks are matched.' : 'Add a music folder in Settings and Legato draws the map from it.'
+        } />
+      ) : mapOutOfView ? (
+        <MapNotice
+          title="The map spread out of view"
+          body="The layout pushed everything past the edge of the window."
+          actions={[
+            { label: 'Re-center', onClick: reframeToRobustBBox, primary: true },
+            {
+              label: 'Restore defaults',
+              onClick: () => {
                 onRestoreDefaults?.()
-                // Optimistic: the setting change itself only reheats the
-                // simulation, which resettles (and re-checks) some time
-                // later. Restoring balanced forces reliably pulls the graph
-                // back in over that window, so there's no reason to leave
-                // the banner up in the meantime — end.outOfViewCheck will
-                // put it right back if that assumption is ever wrong.
+                // Optimistic: restoring balanced forces reliably pulls the
+                // map back as it resettles, and the settle check puts this
+                // notice back if that's ever wrong.
                 setMapOutOfView(false)
-              }}
-            >
-              restore defaults
-            </Button>
-          </div>
-        </div>
-      )}
+              },
+            },
+          ]}
+        />
+      ) : null}
     </div>
   )
 })

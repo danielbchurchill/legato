@@ -32,6 +32,15 @@ import { usePrefersReducedMotion } from './usePrefersReducedMotion'
 
 export type TabOption<T extends string> = { value: T; label: string; icon?: IconName }
 
+export type TabsSize = 'xs' | 'sm' | 'md' | 'lg'
+
+const SEGMENT_HEIGHT: Record<TabsSize, string> = {
+  xs: 'h-[20px] px-[8px]',
+  sm: 'h-[24px] px-[10px]',
+  md: 'h-[26px] px-[12px]',
+  lg: 'h-[32px] px-[14px]',
+}
+
 type TabsProps<T extends string> = {
   options: readonly TabOption<T>[]
   value: T
@@ -41,8 +50,9 @@ type TabsProps<T extends string> = {
   variant?: 'segmented' | 'underline'
   /** `segmented` only: skip the inset well, for a caller drawing its own. */
   bare?: boolean
-  /** --text-sm for control chrome (default), --text-base for shell chrome. */
-  size?: 'sm' | 'base'
+  /** Segmented heights, v2: 24 (xs), 28 (sm, default), 30 (md), 36 (lg —
+   * the capsule's map/library switch). Underline tabs ignore it. */
+  size?: TabsSize
   className?: string
 }
 
@@ -63,15 +73,19 @@ export function Tabs<T extends string>({
   // zero; only a change of tab after that animates.
   const [settled, setSettled] = useState(false)
   const reduced = usePrefersReducedMotion()
-  const activeIndex = Math.max(
-    0,
-    options.findIndex((o) => o.value === value),
-  )
+  // -1 when the value matches no option — the map's layout control after
+  // the sliders have moved off every preset. Nothing is drawn as active, and
+  // the first tab takes keyboard focus.
+  const activeIndex = options.findIndex((o) => o.value === value)
+  const focusIndex = Math.max(0, activeIndex)
 
   useLayoutEffect(() => {
     const tab = tabRefs.current[activeIndex]
     const list = listRef.current
-    if (!tab || !list) return
+    if (!tab || !list) {
+      setIndicator(null)
+      return
+    }
     const measure = () => setIndicator({ left: tab.offsetLeft, width: tab.offsetWidth })
     measure()
     const observer = new ResizeObserver(measure)
@@ -95,8 +109,8 @@ export function Tabs<T extends string>({
   const handleKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
     const last = options.length - 1
     let next: number | null = null
-    if (e.key === 'ArrowRight') next = activeIndex === last ? 0 : activeIndex + 1
-    else if (e.key === 'ArrowLeft') next = activeIndex === 0 ? last : activeIndex - 1
+    if (e.key === 'ArrowRight') next = focusIndex === last ? 0 : focusIndex + 1
+    else if (e.key === 'ArrowLeft') next = focusIndex === 0 ? last : focusIndex - 1
     else if (e.key === 'Home') next = 0
     else if (e.key === 'End') next = last
     if (next == null) return
@@ -105,20 +119,15 @@ export function Tabs<T extends string>({
   }
 
   const segmented = variant === 'segmented'
-  const textSize = size === 'base' ? 'text-[length:var(--text-base)]' : 'text-[length:var(--text-sm)]'
-  const iconSize = size === 'base' ? 18 : 14
+  const iconSize = size === 'lg' ? 18 : 14
 
   return (
     <div
       ref={listRef}
       role="tablist"
       aria-label={label}
-      className={`relative inline-flex items-center ${
-        segmented
-          ? bare
-            ? 'gap-[2px] p-[2px]'
-            : 'gap-[2px] rounded-full border border-[var(--color-hairline)] bg-[var(--color-inset)] p-[2px]'
-          : 'gap-[var(--spacing-lg)]'
+      className={`relative inline-flex shrink-0 items-center ${
+        segmented ? (bare ? 'gap-[2px] p-[2px]' : 'gap-[2px] rounded-full bg-[var(--color-sunken)] p-[2px]') : 'gap-[20px]'
       } ${className}`}
     >
       {indicator && (
@@ -128,7 +137,7 @@ export function Tabs<T extends string>({
             settled && !reduced ? 'transition-[transform,width] duration-[var(--motion-spring)] ease-[var(--ease-spring)]' : ''
           } ${
             segmented
-              ? 'inset-y-[2px] rounded-full border border-[var(--color-hairline)] bg-[var(--color-surface-flat)] shadow-[var(--shadow-surface)]'
+              ? 'inset-y-[2px] rounded-full bg-[var(--color-raised)] shadow-[var(--shadow-sm)]'
               : 'bottom-0 h-[2px] rounded-full bg-[var(--color-ink)]'
           }`}
           style={{ transform: `translateX(${indicator.left}px)`, width: `${indicator.width}px` }}
@@ -145,12 +154,12 @@ export function Tabs<T extends string>({
             type="button"
             role="tab"
             aria-selected={active}
-            tabIndex={active ? 0 : -1}
+            tabIndex={index === focusIndex ? 0 : -1}
             onClick={() => onChange(option.value)}
             onKeyDown={handleKeyDown}
-            className={`relative z-[1] flex items-center gap-[var(--spacing-xs)] leading-none transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${textSize} ${
-              segmented ? (size === 'base' ? 'h-[31px] rounded-full px-[14px]' : 'h-[24px] rounded-full px-[10px]') : 'pb-[6px]'
-            } ${active ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-control)] hover:text-[var(--color-muted-hi)]'}`}
+            className={`relative z-[1] flex items-center gap-[6px] text-[length:var(--text-secondary)] leading-none font-medium whitespace-nowrap transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
+              segmented ? `rounded-full ${SEGMENT_HEIGHT[size]}` : 'pb-[9px]'
+            } ${active ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-ink-2)] hover:text-[var(--color-ink)]'}`}
           >
             {option.icon && <Icon name={option.icon} size={iconSize} />}
             {option.label}

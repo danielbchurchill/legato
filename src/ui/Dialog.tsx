@@ -144,13 +144,13 @@ export function Dialog({
         aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
-        className={`flex max-h-[calc(100vh-var(--spacing-lg)*4)] flex-col gap-[var(--spacing-lg)] rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] p-[var(--spacing-panel)] outline-none backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-transform ${
+        className={`flex max-h-[calc(100vh-var(--spacing-lg)*4)] flex-col gap-[var(--spacing-lg)] rounded-[var(--radius-panel)] glass p-[var(--spacing-panel)] outline-none transition-transform ${
           shown ? 'duration-[var(--motion-base)] ease-[var(--ease-enter)]' : 'duration-[var(--motion-exit)] ease-[var(--ease-exit)]'
         } ${className}`}
         style={{ transform: shown || reduced ? 'none' : 'translateY(var(--distance-medium))' }}
       >
         <div className="flex flex-col gap-[var(--spacing-sm)]">
-          <h2 id={titleId} className="text-[length:var(--text-base)] font-normal text-[var(--color-ink)]">
+          <h2 id={titleId} className="text-heading text-[var(--color-ink)]">
             {content.current.title}
           </h2>
           {content.current.description && (
@@ -209,10 +209,10 @@ export function AlertDialog({
       initialFocus={cancelRef}
       footer={
         <>
-          <Button ref={cancelRef} onClick={onCancel}>
+          <Button ref={cancelRef} variant="secondary" onClick={onCancel}>
             {cancelLabel}
           </Button>
-          <Button variant={destructive ? 'destructive' : 'link'} onClick={onConfirm} disabled={busy}>
+          <Button variant={destructive ? 'destructive' : 'primary'} onClick={onConfirm} disabled={busy}>
             {confirmLabel}
           </Button>
         </>

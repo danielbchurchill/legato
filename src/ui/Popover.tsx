@@ -121,7 +121,7 @@ export function Popover({
             role="dialog"
             aria-label={label}
             tabIndex={-1}
-            className={`fixed z-40 rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] text-[length:var(--text-base)] text-[var(--color-muted)] outline-none backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--ease-enter)] ${className}`}
+            className={`fixed z-40 rounded-[var(--radius-rail)] glass text-[length:var(--text-base)] text-[var(--color-muted)] outline-none transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--ease-enter)] ${className}`}
             style={{
               opacity: shown ? 1 : 0,
               transform: shown || reduced ? 'none' : enterOffset(position.placement),

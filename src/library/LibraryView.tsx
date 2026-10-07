@@ -1,124 +1,170 @@
-import { useState } from 'react'
-import { Icon } from '../ui/Icon'
+import { useRef, useState } from 'react'
 import { Tabs } from '../ui/Tabs'
+import { ScrollArea } from '../ui/ScrollArea'
+import { plural } from '../ui/format'
+import { useGraph } from '../canvas/graphContext'
+import { useShellLayout } from '../shell/layout'
+import type { usePlayback } from '../playback/usePlayback'
+import type { Settings } from '../hooks/useSettings'
 import { AlbumsGrid } from './AlbumsGrid'
+import { ArtistsGrid } from './ArtistsGrid'
 import { TracksTable } from './TracksTable'
-import { ALBUM_SORT_OPTIONS, type AlbumSort, type SortDir, type TrackSort } from './types'
+import { SortPill, type SortKind } from './SortPill'
+import { ALBUM_SORT_OPTIONS, TRACK_SORT_OPTIONS, type AlbumSort, type SortDir, type TrackSort } from './types'
 
-/* The library view's own container (issue #126 — see DESIGN.md
- * "Library view"). Takes over the same full-bleed stage Canvas occupies in
- * AppShell (App.tsx renders one or the other, never both), so it inherits
- * the same "runs edge to edge, chrome floats over it" relationship with the
- * rail/panels — a row can legitimately scroll in and out from behind the
- * Inspector Panel's glass exactly the way a graph node already does.
+/* The library: the map's other view of the same music, as covers and rows.
+ * Issue #126's map/library switch, now in the capsule.
  *
- * Only --rail-width is reserved as real padding: the rail itself (unlike
- * the Inspector Panel it opens) has no glass background and is always
- * present, so content starting underneath it would be genuinely hidden, not
- * just visually layered. */
+ * It takes over the stage between the side panels, so a panel opening
+ * narrows it rather than covering it, and starts below the capsule. One
+ * scroll area holds the header and whichever layout is showing; its last
+ * 120px fade out under the player, so rows slide away beneath the glass
+ * instead of being cut off by it.
+ *
+ * Opening anything here — a cover, a row, an artist — opens its details in
+ * the right panel: there's no node card to show off the map. */
 
-type LibraryEntity = 'albums' | 'tracks'
+export type LibraryEntity = 'albums' | 'artists' | 'tracks'
 
 const ENTITIES = [
   { value: 'albums', label: 'albums' },
+  { value: 'artists', label: 'artists' },
   { value: 'tracks', label: 'tracks' },
 ] as const satisfies readonly { value: LibraryEntity; label: string }[]
 
-const HEADER_ROW_HEIGHT = 33 // --spacing-row, same rhythm TracksTable's own column headers use
+const ARTIST_SORT = [{ id: 'name', label: 'name' }] as const
 
-// Tabs' underline variant since the gpui-kit port: the same muted -> ink
-// labels as before, with a sliding rule under the active one and arrow keys.
-function EntitySwitch({ value, onChange }: { value: LibraryEntity; onChange: (value: LibraryEntity) => void }) {
-  return <Tabs label="library layout" variant="underline" size="base" options={ENTITIES} value={value} onChange={onChange} />
-}
-
-// AlbumsGrid has no column headers to sort from (a grid of cells, not a
-// table), so it gets this instead — same active/muted + direction-chevron
-// language TracksTable's SortHeader uses, just laid out as one row of
-// options rather than one button per column.
-function AlbumSortBar({
-  sort,
-  dir,
-  onSort,
-}: {
-  sort: AlbumSort
-  dir: SortDir
-  onSort: (sort: AlbumSort) => void
-}) {
-  return (
-    <div className="flex items-center gap-[var(--spacing-lg)]">
-      {ALBUM_SORT_OPTIONS.map((option) => {
-        const active = option.id === sort
-        return (
-          <button
-            key={option.id}
-            type="button"
-            onClick={() => onSort(option.id)}
-            aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
-            className={`flex items-center gap-[var(--spacing-xs)] text-[length:var(--text-base)] leading-[24px] transition-colors duration-[var(--motion-fast)] ${
-              active ? 'text-[var(--color-ink)]' : 'text-[var(--color-muted)] hover:text-[var(--color-muted-hi)]'
-            }`}
-          >
-            {option.label}
-            {active && <Icon name={dir === 'asc' ? 'chevron-up' : 'chevron-down'} size={16} />}
-          </button>
-        )
-      })}
-    </div>
-  )
+const ALBUM_KIND: Record<AlbumSort, SortKind> = { artist: 'text', title: 'text', year: 'number', dateAdded: 'date', recentlyPlayed: 'date' }
+const TRACK_KIND: Record<TrackSort, SortKind> = {
+  title: 'text',
+  artist: 'text',
+  album: 'text',
+  duration: 'number',
+  format: 'text',
+  dateAdded: 'date',
 }
 
 type LibraryViewProps = {
-  /** Shared with the map's own search field (App.tsx lifts it) — typing here
-   * or there filters/updates the same query, and it survives switching
-   * views. See DESIGN.md "Library view" for why this, and not a second,
-   * independent filter concept, is what "shared search/filters" means here. */
-  query: string
-  onSelectNode: (id: number) => void
+  selectedNodeId: number | null
+  onOpenNode: (id: number) => void
+  playback: ReturnType<typeof usePlayback>
+  settings: Settings
+  updateSettings: (partial: Settings) => Promise<void>
 }
 
-export function LibraryView({ query, onSelectNode }: LibraryViewProps) {
-  const [entity, setEntity] = useState<LibraryEntity>('albums')
-  const [albumSort, setAlbumSort] = useState<AlbumSort>('artist')
-  const [albumDir, setAlbumDir] = useState<SortDir>('asc')
-  const [trackSort, setTrackSort] = useState<TrackSort>('title')
-  const [trackDir, setTrackDir] = useState<SortDir>('asc')
+export function LibraryView({ onOpenNode, playback, settings, updateSettings }: LibraryViewProps) {
+  const layout = useShellLayout()
+  const { nodes, loading } = useGraph()
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // The layout persists like the map/library switch itself; the sort is a
+  // passing choice and resets with the view.
+  const entity = (settings.libraryEntity as LibraryEntity) || 'albums'
+  const [albumSort, setAlbumSort] = useState<{ sort: AlbumSort; dir: SortDir }>({ sort: 'artist', dir: 'asc' })
+  const [trackSort, setTrackSort] = useState<{ sort: TrackSort; dir: SortDir }>({ sort: 'title', dir: 'asc' })
+  const [artistDir, setArtistDir] = useState<SortDir>('asc')
 
-  // Clicking the already-active sort option flips direction, matching
-  // TracksTable's own column-header behavior — one gesture for both "sort
-  // by this" and "the other way round" rather than a separate control.
-  const onAlbumSort = (id: AlbumSort) => {
-    if (id === albumSort) setAlbumDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    else {
-      setAlbumSort(id)
-      setAlbumDir('asc')
-    }
-  }
-  const onTrackSort = (id: TrackSort) => {
-    if (id === trackSort) setTrackDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    else {
-      setTrackSort(id)
-      setTrackDir('asc')
-    }
-  }
+  const counts = { release: 0, artist: 0, recording: 0 }
+  for (const node of nodes) if (node.type in counts) counts[node.type as keyof typeof counts]++
+  const empty = !loading && nodes.length === 0
+
+  const scrollToTop = () => scrollRef.current?.scrollTo({ top: 0 })
 
   return (
-    <div className="absolute inset-0 flex flex-col" style={{ paddingLeft: 'var(--rail-width)' }}>
-      <div
-        className="flex shrink-0 items-center justify-between px-[var(--spacing-lg)]"
-        style={{ height: HEADER_ROW_HEIGHT, marginTop: 'calc(var(--header-height) + 41px + var(--spacing-lg) * 2)' }}
-      >
-        <EntitySwitch value={entity} onChange={setEntity} />
-        {entity === 'albums' && <AlbumSortBar sort={albumSort} dir={albumDir} onSort={onAlbumSort} />}
-      </div>
-
-      <div className="min-h-0 flex-1">
-        {entity === 'albums' ? (
-          <AlbumsGrid query={query} sort={albumSort} dir={albumDir} onSelectNode={onSelectNode} />
+    <div
+      className="absolute inset-y-0 [mask-image:linear-gradient(to_bottom,#000_calc(100%-120px),transparent)]"
+      style={{ left: layout.leftOccupancy, right: layout.rightOccupancy }}
+    >
+      <ScrollArea viewportRef={scrollRef} className="h-full" contentClassName="px-[32px] pt-[88px] pb-[160px]">
+        {empty ? (
+          // A folder is set but nothing has been matched yet: the first
+          // scan is still running, or the folder holds nothing Legato reads.
+          <div className="mx-auto mt-[120px] flex max-w-[440px] flex-col items-center gap-[10px] text-center">
+            <h1 className="text-title text-[var(--color-ink)]">Nothing here yet</h1>
+            <p className="text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]">
+              Albums appear as your folders are read. If a scan has finished and this is still empty, check the folder in Settings.
+            </p>
+          </div>
         ) : (
-          <TracksTable query={query} sort={trackSort} dir={trackDir} onSort={onTrackSort} onSelectNode={onSelectNode} />
+          <>
+            <header className="flex flex-wrap items-end justify-between gap-[24px]">
+              <div className="flex flex-col gap-[4px]">
+                <h1 className="text-display text-[var(--color-ink)]">Library</h1>
+                <span className="text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]">
+                  {loading
+                    ? 'Loading…'
+                    : `${plural(counts.release, 'album')} · ${plural(counts.artist, 'artist')} · ${plural(counts.recording, 'track')}`}
+                </span>
+              </div>
+              <div className="flex items-center gap-[10px]">
+                <Tabs
+                  label="library layout"
+                  size="md"
+                  options={ENTITIES}
+                  value={entity}
+                  onChange={(value) => {
+                    scrollToTop()
+                    void updateSettings({ libraryEntity: value })
+                  }}
+                />
+                {entity === 'albums' && (
+                  <SortPill
+                    options={ALBUM_SORT_OPTIONS}
+                    value={albumSort.sort}
+                    dir={albumSort.dir}
+                    kindOf={(id) => ALBUM_KIND[id]}
+                    onChange={(sort, dir) => setAlbumSort({ sort, dir })}
+                  />
+                )}
+                {entity === 'tracks' && (
+                  <SortPill
+                    options={TRACK_SORT_OPTIONS}
+                    value={trackSort.sort}
+                    dir={trackSort.dir}
+                    kindOf={(id) => TRACK_KIND[id]}
+                    onChange={(sort, dir) => setTrackSort({ sort, dir })}
+                  />
+                )}
+                {entity === 'artists' && (
+                  <SortPill
+                    options={ARTIST_SORT}
+                    value="name"
+                    dir={artistDir}
+                    kindOf={() => 'text'}
+                    onChange={(_, dir) => setArtistDir(dir)}
+                  />
+                )}
+              </div>
+            </header>
+
+            {entity === 'albums' && (
+              <AlbumsGrid
+                scrollRef={scrollRef}
+                sort={albumSort.sort}
+                dir={albumSort.dir}
+                onOpen={onOpenNode}
+                onPlay={(id) => void playback.playAlbum(id)}
+                onShowRecent={() => {
+                  scrollToTop()
+                  setAlbumSort({ sort: 'dateAdded', dir: 'desc' })
+                }}
+              />
+            )}
+            {entity === 'artists' && <ArtistsGrid sortDir={artistDir} onOpen={onOpenNode} />}
+            {entity === 'tracks' && (
+              <TracksTable
+                scrollRef={scrollRef}
+                sort={trackSort.sort}
+                dir={trackSort.dir}
+                onSort={(sort, dir) => setTrackSort({ sort, dir })}
+                playingId={playback.status.currentRecordingNodeId}
+                playing={playback.status.playing}
+                onOpen={onOpenNode}
+                onPlay={(track) => void playback.playNode(track.id, track.title)}
+              />
+            )}
+          </>
         )}
-      </div>
+      </ScrollArea>
     </div>
   )
 }

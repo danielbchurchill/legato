@@ -31,6 +31,10 @@ src-tauri/binaries/*
 # pointers. The shared conventions are in AGENTS.md.
 CLAUDE.local.md
 
+# Claude Design handoff bundles: HTML references to rebuild in src/, never
+# shipped. The briefs live in legato-plans/design/.
+design/
+
 # `bun build --compile` (server/scripts/compile.ts, issue #102) leaves a
 # temp `.<hash>-<n>.bun-build` file next to wherever it's invoked from on
 # top of the real dist/ output above.

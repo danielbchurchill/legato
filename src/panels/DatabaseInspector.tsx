@@ -1,69 +1,12 @@
-import { useEffect, useState } from 'react'
 import { DataRow, SectionHeader } from '../ui/DataRow'
-import { InfoPopover } from '../ui/Popover'
-import { useWsEvent } from '../hooks/useWs'
-import { formatBytes, formatDurationHours } from './format'
-import { API_BASE as API } from '../config/serverHost'
+import { formatBytes } from './format'
 
-/* The Database Inspector. OverviewBlock (issue #83: moved here from
- * CollectionPanel.tsx, now this panel's top element) answers "what's in my
- * collection" from /stats — a curatorial view; everything below it answers
- * "is the pipeline healthy and what does the raw schema actually hold" from
- * /db-inspector — the numbers Daniel currently has to open `sqlite3` by
- * hand to see. Mounted by App.tsx into InspectorPanel's 'database' rail
- * destination. Every value renders in mono ink via DataRow — this is all
- * data about the library, not control chrome, so DESIGN.md's "one rule"
- * applies with no Rubik-control exception. */
-
-type Stats = {
-  artists: number
-  albums: number
-  tracks: number
-  totalBytes: number
-  totalDurationMs: number
-  topArtist: { id: number; title: string } | null
-  topAlbum: { id: number; title: string } | null
-  topTrack: { id: number; title: string } | null
-}
-
-function OverviewBlock() {
-  const [stats, setStats] = useState<Stats | null>(null)
-
-  useEffect(() => {
-    fetch(`${API}/stats`)
-      .then((r) => r.json())
-      .then(setStats)
-      .catch(() => setStats(null))
-  }, [])
-
-  // Absent rather than stubbed while loading or on failure — a row of
-  // dashes reads as broken, not as "still loading."
-  if (!stats) return null
-
-  return (
-    <>
-      <SectionHeader
-        title="overview"
-        action={
-          <InfoPopover label="About these stats">
-            Top artist/album/track are based on real play history — 50% of a track&rsquo;s duration or 4 minutes
-            listened, whichever comes first.
-          </InfoPopover>
-        }
-      />
-      <div className="mt-[8px]">
-        <DataRow label="artists" value={stats.artists.toLocaleString()} />
-        <DataRow label="albums" value={stats.albums.toLocaleString()} />
-        <DataRow label="tracks" value={stats.tracks.toLocaleString()} />
-        <DataRow label="size" value={formatBytes(stats.totalBytes)} />
-        <DataRow label="duration" value={formatDurationHours(stats.totalDurationMs)} />
-        {stats.topArtist && <DataRow label="top artist" value={stats.topArtist.title} />}
-        {stats.topAlbum && <DataRow label="top album" value={stats.topAlbum.title} />}
-        {stats.topTrack && <DataRow label="top track" value={stats.topTrack.title} />}
-      </div>
-    </>
-  )
-}
+/* The database inspector's internals — the scan pipeline, the raw schema
+ * counts, storage — kept as the "under the hood" disclosure at the foot of
+ * Library health (HealthPanel.tsx). Everything a person acts on moved up
+ * into Health itself; these are the numbers someone debugging the pipeline
+ * would otherwise open sqlite3 for. Mono ink values through DataRow: it's
+ * all data about the library. */
 
 type LatestScan = {
   id: number
@@ -76,7 +19,7 @@ type LatestScan = {
   finishedAt: string | null
 } | null
 
-type DbInspectorSnapshot = {
+export type DbInspectorSnapshot = {
   pipeline: {
     latestScan: LatestScan
     enrichJobs: { status: string; count: number }[]
@@ -99,7 +42,7 @@ type DbInspectorSnapshot = {
   }
 }
 
-function PipelineSection({ pipeline }: { pipeline: DbInspectorSnapshot['pipeline'] }) {
+export function PipelineSection({ pipeline }: { pipeline: DbInspectorSnapshot['pipeline'] }) {
   const { latestScan, enrichJobs } = pipeline
   return (
     <>
@@ -126,24 +69,7 @@ function PipelineSection({ pipeline }: { pipeline: DbInspectorSnapshot['pipeline
   )
 }
 
-function MatchQualitySection({ matchQuality }: { matchQuality: DbInspectorSnapshot['matchQuality'] }) {
-  return (
-    <>
-      <SectionHeader title="match quality" />
-      <div className="mt-[8px]">
-        {matchQuality.length === 0 ? (
-          <DataRow label="tracks" value="none scanned yet" />
-        ) : (
-          matchQuality.map((row) => (
-            <DataRow key={row.source} label={row.source} value={`${row.count.toLocaleString()} (${Math.round(row.share * 100)}%)`} />
-          ))
-        )}
-      </div>
-    </>
-  )
-}
-
-function SchemaSection({ schema }: { schema: DbInspectorSnapshot['schema'] }) {
+export function SchemaSection({ schema }: { schema: DbInspectorSnapshot['schema'] }) {
   return (
     <>
       <SectionHeader title="schema" />
@@ -166,7 +92,7 @@ function SchemaSection({ schema }: { schema: DbInspectorSnapshot['schema'] }) {
   )
 }
 
-function StorageSection({ storage }: { storage: DbInspectorSnapshot['storage'] }) {
+export function StorageSection({ storage }: { storage: DbInspectorSnapshot['storage'] }) {
   return (
     <>
       <SectionHeader title="storage" />
@@ -175,38 +101,5 @@ function StorageSection({ storage }: { storage: DbInspectorSnapshot['storage'] }
         <DataRow label="cover cache" value={`${formatBytes(storage.coverCache.totalBytes)} (${storage.coverCache.fileCount.toLocaleString()} files)`} />
       </div>
     </>
-  )
-}
-
-export function DatabaseInspector() {
-  const [snapshot, setSnapshot] = useState<DbInspectorSnapshot | null>(null)
-
-  const load = () => {
-    fetch(`${API}/db-inspector`)
-      .then((r) => r.json())
-      .then(setSnapshot)
-      .catch(() => setSnapshot(null))
-  }
-
-  useEffect(load, [])
-  // A snapshot/aggregate view, not a single-entity subscription — any event
-  // that can move these counts is worth a cheap refetch rather than a new
-  // dedicated event.
-  useWsEvent(['scan:done', 'scan:file', 'hygiene:changed', 'tag-write:written'], load)
-
-  return (
-    <div className="flex flex-col">
-      <OverviewBlock />
-      {snapshot === null ? (
-        <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">loading…</p>
-      ) : (
-        <>
-          <PipelineSection pipeline={snapshot.pipeline} />
-          <MatchQualitySection matchQuality={snapshot.matchQuality} />
-          <SchemaSection schema={snapshot.schema} />
-          <StorageSection storage={snapshot.storage} />
-        </>
-      )}
-    </div>
   )
 }

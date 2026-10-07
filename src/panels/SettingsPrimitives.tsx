@@ -1,30 +1,18 @@
 import type { ReactNode } from 'react'
+import { SectionLabel } from '../ui/SectionLabel'
 
-/* Shared layout primitives for the app's settings surfaces — Music Map
- * settings (MusicMapSettings.tsx) and Legato settings (LegatoSettings.tsx).
- * See DESIGN.md "Controls" -> "The gpui-kit control set": every group is a
- * muted --text-base title over a stack of --text-sm label/control rows. */
+/* Settings layout, v2: a stack of cards (--color-wash, 14px corners and
+ * padding, 10px between rows), each headed by a lowercase section label.
+ * A row is a body-size label on the left and its control on the right,
+ * or — for a control that wraps (a folder list, a long select) — the
+ * label above it. */
 
-export function GroupHeader({ title, action }: { title: string; action?: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between">
-      <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{title}</p>
-      {action}
-    </div>
-  )
-}
-
-/* A settings group's title plus the rest of its rows, closed off by the
- * divider Figma draws at the bottom of every group ("nodes", "links",
- * "forces", and Legato Settings' own groups alike) to separate it from the
- * next — confirmed against the Music Map settings frame, node 58:2, where
- * each group is one bordered/pb-[15px] block, not a bare header. */
 export function SettingsGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-[var(--spacing-sm)] border-b border-[var(--color-divider)] pb-[15px]">
-      <GroupHeader title={title} action={action} />
+    <section className="flex flex-col gap-[10px] rounded-[var(--radius-card)] bg-[var(--color-wash)] p-[14px]">
+      <SectionLabel action={action}>{title}</SectionLabel>
       {children}
-    </div>
+    </section>
   )
 }
 
@@ -34,18 +22,22 @@ export function SettingsRow({
   children,
 }: {
   label: string
-  /** 'start' for a row whose control can wrap to more than one line (color
-   * swatches, a folder list) — 'center' would otherwise vertically center the
-   * label against the whole wrapped block instead of its first line. */
+  /** 'start' stacks the label over a control that can wrap to several lines. */
   align?: 'center' | 'start'
   children: ReactNode
 }) {
+  if (align === 'start') {
+    return (
+      <div className="flex flex-col gap-[6px]">
+        <span className="text-[length:var(--text-body)] leading-[20px] text-[var(--color-ink)]">{label}</span>
+        <div className="min-w-0">{children}</div>
+      </div>
+    )
+  }
   return (
-    <div className={`flex gap-[var(--spacing-sm)] ${align === 'center' ? 'items-center' : 'items-start'}`}>
-      <span className="w-[68px] shrink-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-        {label}
-      </span>
-      <div className="min-w-0 flex-1">{children}</div>
+    <div className="flex min-h-[32px] items-center justify-between gap-[12px]">
+      <span className="min-w-0 text-[length:var(--text-body)] leading-[20px] text-[var(--color-ink)]">{label}</span>
+      <div className="flex min-w-0 shrink-0 justify-end">{children}</div>
     </div>
   )
 }

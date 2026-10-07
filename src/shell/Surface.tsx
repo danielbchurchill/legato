@@ -1,50 +1,26 @@
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties, ReactNode, Ref } from 'react'
 
-/* The one glass recipe every raised surface in the app shares. See DESIGN.md
- * "Glass" — panels, the toggle pill, the titlebar and the transport dock are
- * all this, differing only in which edges and corners they keep.
+/* A floating glass surface: the rail, both side panels, the capsule, the
+ * player, the map's card, toolbar and legend. The material is the `glass`
+ * utility (index.css); everything about shape — radius, padding, position —
+ * is the caller's, because v2's surfaces share a material, not a geometry.
  *
- * Blur is load-bearing here, not decoration: the graph running underneath the
- * panels is the whole concept, so these never become opaque. If backdrop-filter
- * has to be dropped for performance, it degrades to --color-surface-flat, which
- * is the same perceived color without the compositing cost. */
-
-export type SurfaceEdges = 'all' | 'bottom' | 'top-dock' | 'right' | 'left' | 'bottom-right' | 'bottom-left'
-
-const EDGE_CLASSES: Record<SurfaceEdges, string> = {
-  // A floating panel: every edge, fully rounded.
-  all: 'rounded-[var(--radius-surface)] border',
-  // The titlebar: spans the window, so only its inner edge is real.
-  bottom: 'border-b',
-  // The transport: docked to the window's bottom edge, so its bottom border
-  // and bottom corners would sit outside the window.
-  'top-dock':
-    'rounded-t-[var(--radius-surface)] border-t border-l border-r',
-  // v2's rail and left Inspector Panel: docked flush to the window's left
-  // edge and full height, so only the inner (right) edge is real — no
-  // radius, same reasoning as the titlebar spanning the window.
-  right: 'border-r',
-  // v2's right (now-playing) panel: the mirror image, docked flush right.
-  left: 'border-l',
-  // v2's Left Panel Header: docked to the top-left corner.
-  'bottom-right': 'border-b border-r',
-  // v2's Right Panel Header: docked to the top-right corner.
-  'bottom-left': 'border-b border-l',
-}
+ * Blur is load-bearing, not decoration: the map running underneath is the
+ * whole concept, so these never become opaque. See DESIGN.md "Glass". */
 
 type SurfaceProps = {
   children?: ReactNode
-  edges?: SurfaceEdges
   className?: string
   style?: CSSProperties
+  ref?: Ref<HTMLDivElement>
+  /** Landmark role for the shell's own regions (`navigation`, `complementary`). */
+  role?: string
+  'aria-label'?: string
 }
 
-export function Surface({ children, edges = 'all', className = '', style }: SurfaceProps) {
+export function Surface({ children, className = '', style, ref, role, 'aria-label': ariaLabel }: SurfaceProps) {
   return (
-    <div
-      className={`border-[var(--color-hairline)] bg-[var(--color-surface)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] ${EDGE_CLASSES[edges]} ${className}`}
-      style={style}
-    >
+    <div ref={ref} role={role} aria-label={ariaLabel} className={`glass ${className}`} style={style}>
       {children}
     </div>
   )

@@ -1,45 +1,45 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import LibrarySetup, { Centered } from './LibrarySetup'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Centered } from './shell/Centered'
 import { useServerReady } from './hooks/useServerReady'
 import { ServerUpdateNotice } from './shell/ServerUpdateNotice'
 import { ToastProvider } from './ui/Toast'
 import { useWsEvent } from './hooks/useWs'
 import Canvas, { type CanvasHandle } from './canvas/Canvas'
+import { GraphDataProvider } from './canvas/graphData'
+import { useGraph } from './canvas/graphContext'
 import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
 import { resolveNodeSizeMultipliers } from './canvas/nodeTypes'
 import { usePlayback } from './playback/usePlayback'
-import HygieneView from './hygiene/HygieneView'
 import { AppShell } from './shell/AppShell'
-import { TransportDock } from './shell/TransportDock'
-import { CollectionPanel, type CollectionPanelHandle } from './panels/CollectionPanel'
-import { MusicMapSettings } from './panels/MusicMapSettings'
-import { LegatoSettings } from './panels/LegatoSettings'
-import { DatabaseInspector } from './panels/DatabaseInspector'
-import { TagManager } from './panels/TagManager'
-import { Favourites } from './panels/Favourites'
-import { Playlists } from './panels/Playlists'
+import { Rail } from './shell/Rail'
+import { Capsule, type ViewMode } from './shell/Capsule'
+import { IdlePlayer, Player } from './shell/Player'
+import { LeftPanel, RightPanel } from './shell/SidePanel'
+import { ShellLayoutContext, computeShellLayout, useWindowSize } from './shell/layout'
+import { railOwner, type DetailsTab, type LeftView, type NowPlayingTab, type RailItem, type RightView } from './shell/panels'
+import { MapOptions } from './panels/MapOptions'
+import { CollectionsPanel } from './panels/CollectionsPanel'
+import { HealthPanel } from './panels/HealthPanel'
+import { SettingsPanel } from './panels/SettingsPanel'
+import { NowPlaying } from './panels/NowPlaying'
+import { NodeDetails } from './panels/NodeDetails'
+import { SearchPalette } from './search/SearchPalette'
 import { API_BASE } from './config/serverHost'
-import { NowPlayingPanel } from './panels/NowPlayingPanel'
-import { NodeInspector } from './panels/NodeInspector'
 import { useSettings } from './hooks/useSettings'
-import { useTheme } from './hooks/useTheme'
+import { useTheme, type ResolvedTheme, type ThemePreference } from './hooks/useTheme'
 import { useMapPresetHistory } from './hooks/useMapPresetHistory'
 import type { ReplayGainMode, RepeatMode } from './playback/usePlayback'
-import { LeftPanelHeader } from './shell/LeftPanelHeader'
-import { RightPanelHeader } from './shell/RightPanelHeader'
-import { InspectorRail } from './shell/InspectorRail'
-import { InspectorPanel } from './shell/InspectorPanel'
-import { RightPanel } from './shell/RightPanel'
-import { ViewSwitch, type ViewMode } from './shell/ViewSwitch'
-import type { RailDestination } from './shell/rail'
 import { LibraryView } from './library/LibraryView'
+import { AddMusic } from './library/AddMusic'
 import { useAuth } from './auth/useAuth'
 import { OwnerGate } from './auth/OwnerGate'
+import { AccountContext, initialsFor, useAccount } from './auth/accountContext'
 import { Button } from './ui/Button'
+import { useCoverColor, withAlpha } from './ui/coverColor'
 import { LAUNCHED_OFFLINE } from './pwa/register'
 import { useInstallOffer } from './pwa/installOffer'
 
-// #125: off -> all -> one -> off. The dock's single repeat button cycles
+// #125: off -> all -> one -> off. The player's single repeat button cycles
 // through this rather than exposing three separate controls.
 const NEXT_REPEAT_MODE: Record<RepeatMode, RepeatMode> = {
   off: 'all',
@@ -47,232 +47,40 @@ const NEXT_REPEAT_MODE: Record<RepeatMode, RepeatMode> = {
   one: 'off',
 }
 
-// Once a library root is configured, the canvas is the front door — matches
-// LibrarySetup's own scope note (M0's job is just proving the folder-picker
-// round trip; the canvas taking over from there is M3's).
+/* "Shuffle library" queues this many tracks at most. The whole library would
+ * mean resolving thousands of files before the first note; a few hundred is
+ * hours of music and resolves at once. */
+const SHUFFLE_LIBRARY_SIZE = 500
+
+const PANEL_LABEL: Record<RailItem, string> = {
+  collections: 'Collections',
+  health: 'Library health',
+  settings: 'Settings',
+}
+
+function shuffled<T>(items: T[]): T[] {
+  const out = [...items]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
+}
+
+function isTypingTarget(el: Element | null): boolean {
+  if (!el) return false
+  if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(el.tagName)) return true
+  return (el as HTMLElement).isContentEditable
+}
+
+// The shell is the front door, first run included: with no music folder
+// yet, its stage asks for one.
 function MainApp() {
-  // #136: per-device, applies (and keeps applying — system-theme and
-  // Tauri window-theme changes) as a side effect of the hook itself. See
-  // useTheme.ts. resolvedTheme threads down to the two surfaces that still
-  // need to know which theme is active for a reason CSS tokens can't cover
-  // on their own — swapping an <img> wordmark source — everything else goes
-  // through var(--color-*) instead.
-  const { preference: themePreference, resolvedTheme, setPreference: setThemePreference } = useTheme()
+  // #136: per-device theme, applied (and kept applied) by the hook itself.
+  // resolvedTheme threads down only to the places that swap a whole asset
+  // (the logo) or have to repaint WebGL (the map).
+  const theme = useTheme()
   const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
-  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
-  const [hygieneOpen, setHygieneOpen] = useState(false)
-  const [inspectorOpen, setInspectorOpen] = useState(false)
-  // Set only by TagManager's "edit" action (issue #65) — the inspector
-  // consumes it once, on the node it was requested for, and clears it, so
-  // navigating elsewhere inside an already-open inspector never re-triggers
-  // edit mode on a node nobody asked to edit.
-  const [autoEditNodeId, setAutoEditNodeId] = useState<number | null>(null)
-  // The rail's own selection doubles as the left shell's expand/collapse
-  // state — "exactly one active at a time, or none when collapsed" is
-  // literally what DESIGN.md's shell section specifies, so there is no
-  // separate boolean to keep in sync with it. The right (now-playing) side
-  // collapses independently, via its own header icon — the two sides never
-  // shared a single collapse state in the mockup to begin with, only a
-  // shared *concept* of one. Both default open, matching today's baseline.
-  const [activeRailDestination, setActiveRailDestination] = useState<RailDestination | null>('search')
-  // Starts false, not true: usePlayback's own status always starts at
-  // currentRecordingNodeId: null (nothing resumes synchronously on mount),
-  // so the hasQueuedContent effect below would immediately correct a `true`
-  // default back to false anyway — starting here avoids a one-frame flash
-  // of the idle "nothing playing" panel on every launch.
-  const [rightPanelExpanded, setRightPanelExpanded] = useState(false)
-  // The left header's collapsed-state expand icon (Figma's later "Panel
-  // Collapse" revision, node 66:85 — see DESIGN.md "Panel collapsed (v2)")
-  // has no destination of its own to open, unlike a rail icon click. This
-  // remembers whichever destination was active before collapsing so the
-  // header button restores it, rather than forcing back to 'search' every
-  // time.
-  const lastRailDestinationRef = useRef<RailDestination>('search')
-  const { settings, updateSettings } = useSettings()
-  // #127: held here rather than inside MusicMapSettings.tsx itself, which
-  // unmounts every time the rail switches to another destination — see
-  // useMapPresetHistory's own comment. Its undo also answers the window's
-  // Cmd/Ctrl+Z below, so it has to live somewhere that outlives the panel
-  // regardless.
-  const mapPresets = useMapPresetHistory(settings, updateSettings)
-  // Issue #126: the map/library switch persists like every other
-  // settings-backed toggle in the app (hoverDimEnabled, replaygainMode,
-  // etc.) rather than resetting to the map on every launch.
-  const viewMode = (settings.viewMode as ViewMode) || 'map'
-  // Lifted out of CollectionPanel's SearchField (which used to own this as
-  // local state) so the library view can filter against the exact same
-  // text — "shared search" per the issue means one query, not two search
-  // boxes that happen to agree by coincidence.
-  const [libraryQuery, setLibraryQuery] = useState('')
-  const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
-  // #125: repeat is a persisted player setting (unlike shuffle, which lives
-  // entirely inside usePlayback's own playSequence/originalOrder), so it
-  // reads from the same settings store as replaygainMode rather than being
-  // hook-internal state.
-  const repeatMode = (settings.repeatMode as RepeatMode) || 'off'
-  const playback = usePlayback(replaygainMode, repeatMode)
-  // #128: the install offer, shown once after the first track plays.
-  useInstallOffer()
-  const canvasRef = useRef<CanvasHandle>(null)
-  const collectionPanelRef = useRef<CollectionPanelHandle>(null)
-
-  // #87: the now-playing panel auto-expands the moment something starts
-  // playing and auto-collapses the moment playback goes idle again — but
-  // only as a one-shot nudge on that transition, not a standing override.
-  // Keyed on the has-content boolean rather than the raw node id so it
-  // fires once per transition instead of once per track change. Because
-  // this only *sets* rightPanelExpanded rather than masking it at render
-  // time (the old `rightPanelExpanded && currentRecordingNodeId != null`
-  // approach), an explicit collapse/expand click while the transition
-  // hasn't fired again — including expanding the panel by hand while
-  // nothing is queued, to reach NowPlayingPanel's "nothing playing"
-  // quick-play state — sticks until the next transition.
-  const hasQueuedContent = playback.status.currentRecordingNodeId != null
-  useEffect(() => {
-    setRightPanelExpanded(hasQueuedContent)
-  }, [hasQueuedContent])
-
-  // #46 "rebuild map" (LegatoSettings' "canvas" group): the server clears
-  // every node's manual placement and reseeds with fresh jitter, but
-  // Canvas.tsx's own graph sync deliberately never moves an already-tracked
-  // node's x/y (right for every other kind of data refresh — enrichment,
-  // scan — wrong for this one). A full remount is the simplest way to
-  // actually show it: bumping this key tears down and rebuilds the whole
-  // graphology/Sigma/force-simulation stack from scratch, so every node's
-  // initial position comes fresh from the now-rebuilt seed/user_x columns.
-  const [rebuildEpoch, setRebuildEpoch] = useState(0)
-  useWsEvent(['layout:rebuilt'], () => setRebuildEpoch((e) => e + 1))
-
-  // Settings gating Canvas's hover-dim effect and reduced-motion override —
-  // string flags, matching the store's existing string-only convention
-  // (enrichmentEnabled above uses the same '!== "false"' idiom).
-  const dimOnHoverEnabled = settings.hoverDimEnabled !== 'false'
-  const reducedMotionForced = settings.reducedMotionForced === 'true'
-
-  // CSS-driven motion (see src/index.css) has no access to a React prop, so
-  // the force-on override is mirrored onto the root element as a data
-  // attribute the base reduced-motion layer also matches against.
-  useEffect(() => {
-    if (reducedMotionForced) document.documentElement.dataset.reducedMotion = 'true'
-    else delete document.documentElement.dataset.reducedMotion
-  }, [reducedMotionForced])
-
-  // Music Map settings' "nodes > size" / "links > thickness" / "links >
-  // colours" — read live by Canvas.tsx's reducers, so a change made while
-  // looking at the canvas shows up immediately. edgeColorOverrides and
-  // nodeSizeMultipliers are both memoized so their identity is stable
-  // across renders that don't touch any edgeColor:*/nodeSize:* key — Canvas
-  // re-reads them (and calls renderer.refresh()) on every identity change.
-  const edgeThicknessMultiplier = Number(settings.edgeThicknessMultiplier ?? '1')
-  const showArtistArt = settings.showImagesArtists !== 'false'
-  const showReleaseArt = settings.showImagesAlbums !== 'false'
-  const showTrackArt = settings.showImagesTracks !== 'false'
-  // Music Map settings' "nodes > producers" (#24) — 'credit' nodes
-  // (producer/engineer credits) are opt-in, off by default, since they're
-  // new to an already-tuned graph. See Canvas.tsx's syncGraph.
-  const showCreditNodes = settings.showCreditNodes === 'true'
-  const edgeColorOverrides = useMemo(() => resolveEdgeColorOverrides(settings), [settings])
-  const nodeSizeMultipliers = useMemo(() => resolveNodeSizeMultipliers(settings), [settings])
-
-  // Music Map settings' "nodes > lock" and "forces" + "links > distance" —
-  // real live physics inputs since the 2026-08-29 map rework, read the same
-  // live way as the multipliers above.
-  const nodesLocked = settings.nodePositionsLocked === 'true'
-  const forceCenterStrength = Number(settings.forceCenterStrength ?? '0.03')
-  const forceRepelStrength = Number(settings.forceRepelStrength ?? '150')
-  const forceLinkStrength = Number(settings.forceLinkStrength ?? '0.15')
-  const linkDistance = Number(settings.linkDistance ?? '80')
-
-  // Applies a saved device preference on launch (Rust's own device_name
-  // starts at None every fresh process) and again on any change made from
-  // the settings screen — see playback.rs's open_stream for the "falls
-  // back to default if the device is gone" half of this contract.
-  useEffect(() => {
-    if (settings.audioDevice) void playback.setAudioDevice(settings.audioDevice)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.audioDevice])
-
-  // Every "go to this node" action in the app — search, similarity
-  // thumbnails, fact links, hygiene worklist items — resolves through here,
-  // so selecting is always also navigating. Canvas-first spatial navigation
-  // is the actual point of a map, not a side effect of clicking a node
-  // directly on the graph.
-  const selectAndFly = (id: number) => {
-    setSelectedNodeId(id)
-    canvasRef.current?.flyToNode(id)
-  }
-
-  // TagManager's "edit" action (issue #65): select, fly, open the
-  // inspector, and mark this node as the one to drop straight into edit
-  // mode on — rather than the user hunting for the pencil icon themselves.
-  const selectFlyAndEdit = (id: number) => {
-    selectAndFly(id)
-    setInspectorOpen(true)
-    setAutoEditNodeId(id)
-  }
-
-  // Escape unwinds one layer at a time. The inspector owns its own Escape
-  // handling (useModalTransition), so this only has to cover the layer under
-  // it — clearing a selection, and with it the canvas card. Guarded on the
-  // modal being shut so one press never does both.
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key !== 'Escape' || inspectorOpen || hygieneOpen) return
-      setSelectedNodeId(null)
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [inspectorOpen, hygieneOpen])
-
-  // Core shortcuts (documented in the Settings "shortcuts" section, so none
-  // of this is hidden): Space toggles playback, "/" focuses search.
-  // Suppressed while any modal is open — they'd either do nothing useful
-  // behind it or double up with the modal's own controls — and while focus
-  // is on an element that already has its own meaning for these keys
-  // (typing, or a focused control's native Space-to-activate).
-  useEffect(() => {
-    function isTypingTarget(el: Element | null): boolean {
-      if (!el) return false
-      if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(el.tagName)) return true
-      return (el as HTMLElement).isContentEditable
-    }
-
-    function handleShortcut(e: KeyboardEvent) {
-      if (inspectorOpen || hygieneOpen) return
-
-      // #127: the map's session undo. Checked before the Space/"/" guard
-      // below rather than sharing it — isTypingTarget also treats a focused
-      // <button> as "typing" (so Space doesn't fire its native click), which
-      // would otherwise swallow the exact "click a preset, immediately
-      // Cmd+Z it" gesture this shortcut exists for. Undo only yields to
-      // actual text editing.
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
-        const activeEl = document.activeElement as HTMLElement | null
-        const editingText = activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA' || activeEl?.isContentEditable === true
-        if (!editingText) {
-          e.preventDefault()
-          mapPresets.undo()
-        }
-        return
-      }
-
-      if (isTypingTarget(document.activeElement)) return
-
-      if (e.code === 'Space') {
-        e.preventDefault()
-        if (playback.currentTitle == null) return
-        if (playback.status.playing) playback.pause()
-        else playback.resume()
-        return
-      }
-      if (e.key === '/') {
-        e.preventDefault()
-        collectionPanelRef.current?.focusSearch()
-      }
-    }
-    window.addEventListener('keydown', handleShortcut)
-    return () => window.removeEventListener('keydown', handleShortcut)
-  }, [inspectorOpen, hygieneOpen, playback, mapPresets])
 
   useEffect(() => {
     fetch(`${API_BASE}/library-roots`)
@@ -281,191 +89,398 @@ function MainApp() {
   }, [])
 
   if (hasLibrary === null) return <Centered>loading library…</Centered>
-  if (!hasLibrary) return <LibrarySetup onLibraryReady={() => setHasLibrary(true)} theme={resolvedTheme} />
-
-  // #87: no more render-time override here — rightPanelExpanded (nudged by
-  // the hasQueuedContent effect above, otherwise set only by the user's own
-  // collapse/expand clicks) is the whole answer now. It used to be
-  // `rightPanelExpanded && currentRecordingNodeId != null`, which forced the
-  // panel collapsed any time playback was idle regardless of what the user
-  // had just clicked — the mechanism NowPlayingCollapsed's quick-play
-  // suggestion leaned on to stay reachable, at the cost of that same
-  // suggestion floating over the canvas unasked for any time playback was
-  // idle. NowPlayingPanel now renders its own "nothing playing" + quick-play
-  // state when explicitly expanded with nothing queued, so there's nothing
-  // left for a render-time override to protect against.
-  const rightPanelDisplayExpanded = rightPanelExpanded
 
   return (
-    <AppShell>
-      {viewMode === 'map' ? (
-        <Canvas
-          key={rebuildEpoch}
-          ref={canvasRef}
-          selectedNodeId={selectedNodeId}
-          onSelectNode={(id) => {
-            setSelectedNodeId(id)
-            // Deselecting has to take the inspector with it — it is a view of
-            // the selected node, and there would be nothing behind it.
-            if (id == null) setInspectorOpen(false)
-          }}
-          onOpenInspector={() => setInspectorOpen(true)}
-          playback={playback}
-          dimOnHoverEnabled={dimOnHoverEnabled}
-          reducedMotionForced={reducedMotionForced}
-          showArtistArt={showArtistArt}
-          showReleaseArt={showReleaseArt}
-          showTrackArt={showTrackArt}
-          showCreditNodes={showCreditNodes}
-          nodeSizeMultipliers={nodeSizeMultipliers}
-          edgeThicknessMultiplier={edgeThicknessMultiplier}
-          edgeColorOverrides={edgeColorOverrides}
-          nodesLocked={nodesLocked}
-          forceCenterStrength={forceCenterStrength}
-          forceRepelStrength={forceRepelStrength}
-          forceLinkStrength={forceLinkStrength}
-          linkDistance={linkDistance}
-          onRestoreDefaults={mapPresets.restoreDefaults}
-          theme={resolvedTheme}
-        />
-      ) : (
-        // Selecting a row here reuses the exact same selectAndFly the
-        // canvas's own node click uses — flyToNode on canvasRef is a no-op
-        // while Canvas is unmounted (the ref is null), so the selection
-        // itself carries over but the camera move is deferred rather than
-        // queued: switching back to the map does not re-fly to whatever was
-        // last picked here. Documented scope boundary, not a bug — see
-        // DESIGN.md "Library view".
-        <LibraryView query={libraryQuery} onSelectNode={selectAndFly} />
-      )}
-
-      <ViewSwitch value={viewMode} onChange={(mode) => void updateSettings({ viewMode: mode })} />
-
-      <LeftPanelHeader
-        expanded={activeRailDestination != null}
-        onCollapse={() => setActiveRailDestination(null)}
-        onExpand={() => setActiveRailDestination(lastRailDestinationRef.current)}
-        theme={resolvedTheme}
+    <GraphDataProvider>
+      <Workspace
+        hasLibrary={hasLibrary}
+        onLibraryAdded={() => setHasLibrary(true)}
+        resolvedTheme={theme.resolvedTheme}
+        themePreference={theme.preference}
+        onSetThemePreference={theme.setPreference}
       />
-      <InspectorRail
-        active={activeRailDestination}
-        onSelect={(id) => {
-          lastRailDestinationRef.current = id
-          setActiveRailDestination(id)
-        }}
-      />
-      {activeRailDestination && (
-        <InspectorPanel
-          active={activeRailDestination}
-          graphContent={<MusicMapSettings settings={settings} updateSettings={updateSettings} mapPresets={mapPresets} />}
-          settingsContent={
-            <LegatoSettings
-              settings={settings}
-              updateSettings={updateSettings}
-              onSetAudioDevice={playback.setAudioDevice}
-              themePreference={themePreference}
-              onSetThemePreference={setThemePreference}
-            />
-          }
-          tagsContent={<TagManager onSelectNode={selectAndFly} onEditNode={selectFlyAndEdit} />}
-          databaseContent={<DatabaseInspector />}
-          favouritesContent={<Favourites onSelectNode={selectAndFly} playback={playback} />}
-          playlistsContent={<Playlists playback={playback} />}
-        >
-          <CollectionPanel
-            ref={collectionPanelRef}
-            onSelectNode={selectAndFly}
-            onOpenMaintenance={() => setHygieneOpen(true)}
-            playback={playback}
-            query={libraryQuery}
-            onQueryChange={setLibraryQuery}
+    </GraphDataProvider>
+  )
+}
+
+/* Everything on screen once there's a library: the stage (map or library),
+ * and the shell floating over it — rail, capsule, the two side panels, the
+ * player and the search palette. This owns which of those are open; each
+ * one owns what's inside it. */
+function Workspace({
+  hasLibrary,
+  onLibraryAdded,
+  resolvedTheme,
+  themePreference,
+  onSetThemePreference,
+}: {
+  hasLibrary: boolean
+  onLibraryAdded: () => void
+  resolvedTheme: ResolvedTheme
+  themePreference: ThemePreference
+  onSetThemePreference: (preference: ThemePreference) => void
+}) {
+  const graph = useGraph()
+  const account = useAccount()
+  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
+  const [leftView, setLeftView] = useState<LeftView | null>(null)
+  const [rightView, setRightView] = useState<RightView | null>(null)
+  const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('next')
+  const [detailsTab, setDetailsTab] = useState<DetailsTab>('overview')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const { settings, updateSettings } = useSettings()
+  // #127: held here rather than inside the map options popover, which
+  // unmounts whenever it closes; its undo also answers Cmd/Ctrl+Z below.
+  const mapPresets = useMapPresetHistory(settings, updateSettings)
+  // #126: the map/library switch persists like every other settings toggle.
+  const viewMode = (settings.viewMode as ViewMode) || 'map'
+  const replaygainMode = (settings.replaygainMode as ReplayGainMode) || 'track'
+  // #125: repeat is a persisted player setting; shuffle is per-queue and
+  // lives inside usePlayback.
+  const repeatMode = (settings.repeatMode as RepeatMode) || 'off'
+  const playback = usePlayback(replaygainMode, repeatMode)
+  // #128: the install offer, shown once after the first track plays.
+  useInstallOffer()
+  const canvasRef = useRef<CanvasHandle>(null)
+
+  const windowSize = useWindowSize()
+  const playerVisible = playback.currentTitle != null
+  const layout = useMemo(
+    () =>
+      computeShellLayout(windowSize.width, windowSize.height, {
+        leftOpen: leftView != null,
+        rightOpen: rightView != null,
+        playerVisible,
+      }),
+    [windowSize.width, windowSize.height, leftView, rightView, playerVisible],
+  )
+
+  // #46 "rebuild map": the server reseeds every node; a full Canvas remount
+  // is the simplest way to show it, since the live graph sync deliberately
+  // never moves a node it already tracks.
+  const [rebuildEpoch, setRebuildEpoch] = useState(0)
+  useWsEvent(['layout:rebuilt'], () => setRebuildEpoch((e) => e + 1))
+
+  const dimOnHoverEnabled = settings.hoverDimEnabled !== 'false'
+  const reducedMotionForced = settings.reducedMotionForced === 'true'
+
+  // CSS motion has no access to a React setting, so the force-on override
+  // is mirrored onto the root element for index.css to match against.
+  useEffect(() => {
+    if (reducedMotionForced) document.documentElement.dataset.reducedMotion = 'true'
+    else delete document.documentElement.dataset.reducedMotion
+  }, [reducedMotionForced])
+
+  // Map options — read live by Canvas's reducers. Memoised so their
+  // identity only changes when the settings they come from do.
+  const edgeThicknessMultiplier = Number(settings.edgeThicknessMultiplier ?? '1')
+  const showArtists = settings.showArtists !== 'false'
+  const showReleases = settings.showReleases !== 'false'
+  const showTracks = settings.showTracks !== 'false'
+  // Producer/engineer credits are opt-in (#24): new to an already-tuned map.
+  const showCreditNodes = settings.showCreditNodes === 'true'
+  const showArtistLabels = settings.showArtistLabels !== 'false'
+  const colourEdgesByType = settings.colourEdgesByType === 'true'
+  const edgeColorOverrides = useMemo(() => resolveEdgeColorOverrides(settings), [settings])
+  const nodeSizeMultipliers = useMemo(() => resolveNodeSizeMultipliers(settings), [settings])
+  const nodesLocked = settings.nodePositionsLocked === 'true'
+  const forceCenterStrength = Number(settings.forceCenterStrength ?? '0.03')
+  const forceRepelStrength = Number(settings.forceRepelStrength ?? '150')
+  const forceLinkStrength = Number(settings.forceLinkStrength ?? '0.15')
+  const linkDistance = Number(settings.linkDistance ?? '80')
+
+  // A saved output device is applied on launch and on any change; Rust
+  // falls back to the default device if the saved one is gone.
+  useEffect(() => {
+    if (settings.audioDevice) void playback.setAudioDevice(settings.audioDevice)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.audioDevice])
+
+  const playingNodeId = playback.status.currentRecordingNodeId
+  const playingArtist = playingNodeId != null ? (graph.byId.get(playingNodeId)?.subtitle ?? null) : null
+
+  const shuffleLibrary = useCallback(() => {
+    const ids = graph.nodes.filter((n) => n.type === 'recording').map((n) => n.id)
+    if (ids.length === 0) return
+    void playback.playTracks(shuffled(ids).slice(0, SHUFFLE_LIBRARY_SIZE), 0, '')
+  }, [graph.nodes, playback])
+
+  const openDetails = useCallback((id: number, tab: DetailsTab = 'overview') => {
+    setSelectedNodeId(id)
+    setDetailsTab(tab)
+    setRightView('details')
+  }, [])
+
+  // Every "go to this" in the app — a search result, a connection chip, a
+  // worklist row — lands here. On the map that means select and fly, and
+  // the card does the rest; in the library there's no card to show, so the
+  // details panel opens instead.
+  const focusNode = useCallback(
+    (id: number) => {
+      if (viewMode === 'map') {
+        setSelectedNodeId(id)
+        canvasRef.current?.flyToNode(id)
+      } else {
+        openDetails(id)
+      }
+    },
+    [viewMode, openDetails],
+  )
+
+  const toggleRail = (item: RailItem) => setLeftView((current) => (railOwner(current) === item ? null : { kind: item }))
+  const toggleQueue = () => {
+    setRightView((current) => (current === 'queue' ? null : 'queue'))
+    setNowPlayingTab('next')
+  }
+
+  const selectNode = (id: number | null) => {
+    setSelectedNodeId(id)
+    // The details panel is a view of the selection; with nothing selected
+    // there's nothing behind it.
+    if (id == null) setRightView((current) => (current === 'details' ? null : current))
+  }
+
+  // Escape unwinds one layer at a time: the right panel, then the
+  // selection, then the left panel. The search palette and dialogs own
+  // their own Escape and stop it before it gets here.
+  const escapeRef = useRef<() => void>(() => {})
+  escapeRef.current = () => {
+    if (rightView != null) setRightView(null)
+    else if (selectedNodeId != null) setSelectedNodeId(null)
+    else if (leftView != null) setLeftView(null)
+  }
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // ⌘K / Ctrl-K opens search from anywhere, mid-typing included — it's
+      // the one shortcut whose whole point is not having to go find a field.
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen(true)
+        return
+      }
+      if (searchOpen || e.defaultPrevented) return
+      if (document.querySelector('[role="dialog"][aria-modal="true"], [role="alertdialog"]')) return
+
+      // #127: the map's session undo. Yields to real text editing only —
+      // a focused button must not swallow "click a preset, Cmd+Z it".
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        const el = document.activeElement as HTMLElement | null
+        const editingText = el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA' || el?.isContentEditable === true
+        if (!editingText) {
+          e.preventDefault()
+          mapPresets.undo()
+        }
+        return
+      }
+
+      if (e.key === 'Escape') {
+        if (document.activeElement && isTypingTarget(document.activeElement) && document.activeElement.tagName !== 'BUTTON') return
+        escapeRef.current()
+        return
+      }
+
+      if (isTypingTarget(document.activeElement)) return
+
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (playback.currentTitle == null) {
+          shuffleLibrary()
+          return
+        }
+        if (playback.status.playing) playback.pause()
+        else playback.resume()
+        return
+      }
+      if (e.key === '/') {
+        e.preventDefault()
+        setSearchOpen(true)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [searchOpen, playback, mapPresets, shuffleLibrary])
+
+  // The right panel's wash: the playing cover for now playing, the
+  // selected node's for details. Fades out down the panel so the content
+  // below the header sits on plain glass.
+  const rightNodeId = rightView === 'details' ? selectedNodeId : playingNodeId
+  const rightColor = useCoverColor(rightView != null ? rightNodeId : null)
+  const rightWash =
+    rightColor == null
+      ? undefined
+      : rightView === 'details'
+        ? `linear-gradient(180deg, ${withAlpha(rightColor, 0.22)}, ${withAlpha(rightColor, 0)} 420px)`
+        : `linear-gradient(180deg, ${withAlpha(rightColor, 0.42)}, ${withAlpha(rightColor, 0.12)} 340px, ${withAlpha(rightColor, 0)} 520px)`
+
+  const owner = railOwner(leftView)
+  const leftContent = (() => {
+    if (leftView == null) return null
+    switch (leftView.kind) {
+      case 'collections':
+      case 'playlist':
+      case 'import':
+        return <CollectionsPanel view={leftView} onNavigate={setLeftView} onFocusNode={focusNode} playback={playback} />
+      case 'health':
+      case 'worklist':
+        return <HealthPanel view={leftView} onNavigate={setLeftView} onFocusNode={focusNode} />
+      case 'settings':
+        return (
+          <SettingsPanel
+            settings={settings}
+            updateSettings={updateSettings}
+            onSetAudioDevice={playback.setAudioDevice}
+            themePreference={themePreference}
+            onSetThemePreference={onSetThemePreference}
           />
-        </InspectorPanel>
-      )}
+        )
+    }
+  })()
 
-      <RightPanelHeader
-        expanded={rightPanelDisplayExpanded}
-        onCollapse={() => setRightPanelExpanded(false)}
-        onExpand={() => setRightPanelExpanded(true)}
-      />
-      {/* Now playing, and only now playing. Selection used to take this
-       * panel over (P-5's "one node-detail surface"), which meant looking at
-       * anything cost you sight of what was playing; the selected node now
-       * has its own surface on the canvas, and the deeper half of P-5's
-       * argument survives as shared logic (panels/MetadataFields.tsx,
-       * ConnectionsContent.tsx, useLyrics.ts, useMetadataEditing.ts) behind
-       * two different layouts — this panel's stacked disclosures
-       * (NowPlayingSections.tsx) and the inspector's unchanged pager
-       * (NodeDetailPages.tsx). */}
-      <RightPanel
-        expanded={rightPanelDisplayExpanded}
-        collapsedNodeId={playback.status.currentRecordingNodeId ?? null}
-        onExpand={() => setRightPanelExpanded(true)}
-      >
-        <NowPlayingPanel
-          nodeId={playback.status.currentRecordingNodeId ?? null}
-          isPlaying={playback.status.currentRecordingNodeId != null}
-          upNext={playback.upNext}
-          queueBusy={playback.queueBusy}
-          onSelectNode={selectAndFly}
-          onPlay={playback.playNode}
-          queuePlayback={playback}
-          onQuickPlay={() => void playback.playRandom()}
-        />
-      </RightPanel>
+  const mapOptions = <MapOptions settings={settings} updateSettings={updateSettings} mapPresets={mapPresets} />
 
-      {/* #50: structural chrome only while there's something to transport —
-       * hidden outright rather than shown inert with every control disabled. */}
-      {playback.currentTitle != null && (
-        <TransportDock
-          status={playback.status}
-          shuffled={playback.shuffled}
-          queueBusy={playback.queueBusy}
-          repeatMode={repeatMode}
-          problem={playback.problem}
-          onResolveProblem={() => void playback.resolveProblem()}
-          onPause={playback.pause}
-          onResume={playback.resume}
-          onSeek={playback.seek}
-          onSetVolume={playback.setVolume}
-          onNext={playback.next}
-          onPrevious={playback.previous}
-          onToggleShuffle={playback.toggleShuffle}
-          onCycleRepeat={() => void updateSettings({ repeatMode: NEXT_REPEAT_MODE[repeatMode] })}
-        />
-      )}
+  return (
+    <ShellLayoutContext.Provider value={layout}>
+      <AppShell>
+        {!hasLibrary ? (
+          <div className="absolute inset-y-0" style={{ left: layout.leftOccupancy, right: layout.rightOccupancy }}>
+            <AddMusic
+              onAdded={() => {
+                onLibraryAdded()
+                // The first scan is drawn on the map as it runs.
+                void updateSettings({ viewMode: 'map' })
+              }}
+            />
+          </div>
+        ) : viewMode === 'map' ? (
+          <Canvas
+            key={rebuildEpoch}
+            ref={canvasRef}
+            selectedNodeId={selectedNodeId}
+            onSelectNode={selectNode}
+            onOpenDetails={() => selectedNodeId != null && openDetails(selectedNodeId)}
+            playback={playback}
+            dimOnHoverEnabled={dimOnHoverEnabled}
+            reducedMotionForced={reducedMotionForced}
+            showArtists={showArtists}
+            showReleases={showReleases}
+            showTracks={showTracks}
+            showCreditNodes={showCreditNodes}
+            showArtistLabels={showArtistLabels}
+            colourEdgesByType={colourEdgesByType}
+            nodeSizeMultipliers={nodeSizeMultipliers}
+            edgeThicknessMultiplier={edgeThicknessMultiplier}
+            edgeColorOverrides={edgeColorOverrides}
+            nodesLocked={nodesLocked}
+            forceCenterStrength={forceCenterStrength}
+            forceRepelStrength={forceRepelStrength}
+            forceLinkStrength={forceLinkStrength}
+            linkDistance={linkDistance}
+            onRestoreDefaults={mapPresets.restoreDefaults}
+            mapOptions={mapOptions}
+            theme={resolvedTheme}
+          />
+        ) : (
+          <LibraryView
+            selectedNodeId={selectedNodeId}
+            onOpenNode={openDetails}
+            playback={playback}
+            settings={settings}
+            updateSettings={updateSettings}
+          />
+        )}
 
-      {inspectorOpen && selectedNodeId != null && (
-        <NodeInspector
-          nodeId={selectedNodeId}
-          isPlaying={selectedNodeId === playback.status.currentRecordingNodeId}
-          queueBusy={playback.queueBusy}
-          autoEditNodeId={autoEditNodeId}
-          onAutoEditConsumed={() => setAutoEditNodeId(null)}
-          onSelectNode={(id) => {
-            // Following a fact or edge link inside the inspector moves the
-            // selection — and the canvas underneath — rather than opening a
-            // second inspector on top of the first.
-            selectAndFly(id)
-          }}
-          onPlay={playback.playNode}
-          onClose={() => {
-            setInspectorOpen(false)
-            setAutoEditNodeId(null)
-          }}
+        <Rail
+          active={owner}
+          onToggle={toggleRail}
+          theme={resolvedTheme}
+          initials={initialsFor(account)}
+          accountLabel={account?.displayName ?? account?.email ?? 'Account'}
         />
-      )}
+        {leftView != null && owner != null && <LeftPanel label={PANEL_LABEL[owner]}>{leftContent}</LeftPanel>}
 
-      {hygieneOpen && (
-        <HygieneView
-          onSelectNode={(id) => {
-            selectAndFly(id)
-            setHygieneOpen(false)
-          }}
-          onClose={() => setHygieneOpen(false)}
+        <Capsule
+          view={viewMode}
+          onViewChange={(mode) => void updateSettings({ viewMode: mode })}
+          onOpenSearch={() => setSearchOpen(true)}
+          hidden={searchOpen}
         />
-      )}
-    </AppShell>
+
+        {rightView === 'queue' && (
+          <RightPanel label="Now playing" wash={rightWash}>
+            <NowPlaying
+              nodeId={playingNodeId}
+              tab={nowPlayingTab}
+              onTabChange={setNowPlayingTab}
+              playback={playback}
+              onFocusNode={focusNode}
+              onOpenDetails={openDetails}
+              onShuffleLibrary={shuffleLibrary}
+              onShowOnMap={(id) => {
+                if (viewMode !== 'map') void updateSettings({ viewMode: 'map' })
+                setSelectedNodeId(id)
+                canvasRef.current?.flyToNode(id)
+              }}
+            />
+          </RightPanel>
+        )}
+        {rightView === 'details' && selectedNodeId != null && (
+          <RightPanel label="Details" wash={rightWash}>
+            <NodeDetails
+              key={selectedNodeId}
+              nodeId={selectedNodeId}
+              tab={detailsTab}
+              onTabChange={setDetailsTab}
+              playback={playback}
+              onFocusNode={focusNode}
+            />
+          </RightPanel>
+        )}
+
+        {playerVisible ? (
+          <Player
+            title={playback.currentTitle ?? ''}
+            artist={playingArtist}
+            status={playback.status}
+            shuffled={playback.shuffled}
+            queueBusy={playback.queueBusy}
+            repeatMode={repeatMode}
+            problem={playback.problem}
+            queueOpen={rightView === 'queue'}
+            onToggleQueue={toggleQueue}
+            onResolveProblem={() => void playback.resolveProblem()}
+            onPause={playback.pause}
+            onResume={playback.resume}
+            onSeek={playback.seek}
+            onSetVolume={playback.setVolume}
+            onNext={playback.next}
+            onPrevious={playback.previous}
+            onToggleShuffle={playback.toggleShuffle}
+            onCycleRepeat={() => void updateSettings({ repeatMode: NEXT_REPEAT_MODE[repeatMode] })}
+          />
+        ) : (
+          // Hidden while the map is still empty: there's nothing to
+          // shuffle yet, and the first-scan card owns the bottom of the
+          // screen's attention.
+          graph.nodes.some((n) => n.type === 'recording') && <IdlePlayer onShuffleLibrary={shuffleLibrary} busy={playback.queueBusy} />
+        )}
+
+        {searchOpen && (
+          <SearchPalette
+            onClose={() => setSearchOpen(false)}
+            onOpen={(id) => {
+              setSearchOpen(false)
+              focusNode(id)
+            }}
+            onOpenPlaylist={(playlistId) => {
+              setSearchOpen(false)
+              setLeftView({ kind: 'playlist', playlistId })
+            }}
+            playback={playback}
+          />
+        )}
+      </AppShell>
+    </ShellLayoutContext.Provider>
   )
 }
 
@@ -509,10 +524,12 @@ function OwnerGated({ children }: { children: ReactNode }) {
     case 'unreachable':
       return (
         <Centered>
-          <p className="max-w-[420px] text-[var(--color-muted)]">
+          <p className="max-w-[420px] text-[var(--color-ink-2)]">
             The server is running but didn't answer the sign-in check ({state.message}).
           </p>
-          <Button onClick={() => void refresh()}>try again</Button>
+          <Button variant="secondary" onClick={() => void refresh()}>
+            Try again
+          </Button>
         </Centered>
       )
     case 'needs-owner':
@@ -520,6 +537,6 @@ function OwnerGated({ children }: { children: ReactNode }) {
     case 'needs-sign-in':
       return <OwnerGate mode="sign-in" status={state.status} theme={resolvedTheme} onSession={acceptSession} />
     case 'signed-in':
-      return children
+      return <AccountContext.Provider value={state.status.user}>{children}</AccountContext.Provider>
   }
 }

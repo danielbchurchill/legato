@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import whiteWordmarkSrc from '../assets/brand/white-wordmark.svg'
 import blackWordmarkSrc from '../assets/brand/black-wordmark.svg'
-import { Centered } from '../LibrarySetup'
+import { Centered } from '../shell/Centered'
 import { Button } from '../ui/Button'
 import { API_BASE } from '../config/serverHost'
 import type { ResolvedTheme } from '../hooks/useTheme'
@@ -167,7 +167,7 @@ export function OwnerGate({
             </p>
             <p
               aria-live="polite"
-              className="font-[family-name:var(--font-mono)] text-[length:var(--text-wordmark-header)] tracking-[0.08em] text-[var(--color-ink)]"
+              className="font-[family-name:var(--font-mono)] text-[length:var(--text-display)] tracking-[0.08em] text-[var(--color-ink)]"
             >
               {shownCode.code}
             </p>

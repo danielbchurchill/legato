@@ -41,6 +41,8 @@ export type NodeDetail = {
   type: string
   title: string
   mbid: string | null
+  /** When the node first appeared in the library (nodes.created_at, UTC). */
+  created_at?: string
   recording: { canonical_duration_ms: number | null } | null
   files: FileRow[]
   edges: Edge[]

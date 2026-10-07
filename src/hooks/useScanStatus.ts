@@ -8,6 +8,11 @@ type ScanJob = {
 }
 type ScanStatus = { scanning: boolean; error: string | null }
 
+/* The scan:progress payload (server/src/scan/scanner.ts's ScanProgress), the
+ * fields the map's first-scan card reads. */
+export type ScanStage = 'discover' | 'read_tags' | 'match' | 'collapse' | 'layout' | 'enrich_queued'
+export type ScanProgress = { stage: ScanStage; filesScanned: number; filesTotal: number }
+
 // The canvas's "why is this empty" signal — DESIGN.md's empty-state
 // catalogue splits "scan running, no nodes yet" from "scan failed" from a
 // plain empty library, and all three need to be told apart from one
@@ -15,14 +20,20 @@ type ScanStatus = { scanning: boolean; error: string | null }
 // rather than per-root: the canvas shows one graph, not one per root, so
 // "is anything explaining the empty graph happening right now" is
 // necessarily a single answer too.
-export function useScanStatus(): ScanStatus & { retry: () => void } {
+export function useScanStatus(): ScanStatus & { retry: () => void; progress: ScanProgress | null; firstScan: boolean } {
   const [status, setStatus] = useState<ScanStatus>({ scanning: false, error: null })
+  const [progress, setProgress] = useState<ScanProgress | null>(null)
+  // A library whose scans have never once finished is still being built for
+  // the first time: the map shows what's matched so far under a progress
+  // card, rather than presenting a half-drawn map as the whole library.
+  const [firstScan, setFirstScan] = useState(false)
 
   const checkLatest = () => {
     fetch(`${API}/scan-jobs`)
       .then((r) => r.json())
       .then((jobs: ScanJob[]) => {
         const latest = jobs[0]
+        setFirstScan(!jobs.some((job) => job.status === 'done'))
         if (!latest) {
           setStatus({ scanning: false, error: null })
           return
@@ -36,12 +47,20 @@ export function useScanStatus(): ScanStatus & { retry: () => void } {
   }
 
   useEffect(checkLatest, [])
-  useWsEvent(['scan:progress'], () => setStatus({ scanning: true, error: null }))
+  useWsEvent(['scan:progress'], (payload) => {
+    setStatus({ scanning: true, error: null })
+    setProgress(payload as ScanProgress)
+  })
+  useWsEvent(['scan:done'], () => {
+    setStatus({ scanning: false, error: null })
+    setProgress(null)
+    setFirstScan(false)
+  })
   // Issue #123: a paused or canceled run also stops without ever reaching
   // scan:done (that event means the pipeline actually finished) — without
   // this, the canvas's "scan running, no nodes yet" empty state would stay
   // stuck showing forever after a pause.
-  useWsEvent(['scan:done', 'scan:paused', 'scan:canceled'], () => setStatus({ scanning: false, error: null }))
+  useWsEvent(['scan:paused', 'scan:canceled'], () => setStatus({ scanning: false, error: null }))
   useWsEvent(['scan:error'], (payload) => {
     const p = payload as { error: string }
     setStatus({ scanning: false, error: p.error })
@@ -54,5 +73,5 @@ export function useScanStatus(): ScanStatus & { retry: () => void } {
     )
   }
 
-  return { ...status, retry }
+  return { ...status, retry, progress, firstScan }
 }

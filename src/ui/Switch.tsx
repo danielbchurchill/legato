@@ -31,9 +31,12 @@ import { Tooltip } from './Tooltip'
 
 export type SwitchSize = 'sm' | 'md' | 'lg'
 
+/* v2: md is 34×20 with a 16px knob travelling 14px. On is the accent
+ * gradient with an on-accent knob; off is a --color-wash-2 track with an
+ * ink-2 knob, so off reads as a recess rather than as a second colour. */
 const GEOMETRY: Record<SwitchSize, { track: string; thumb: string; travel: number }> = {
   sm: { track: 'h-[16px] w-[28px]', thumb: 'size-[12px]', travel: 28 - 12 - 4 },
-  md: { track: 'h-[20px] w-[36px]', thumb: 'size-[16px]', travel: 36 - 16 - 4 },
+  md: { track: 'h-[20px] w-[34px]', thumb: 'size-[16px]', travel: 34 - 16 - 4 },
   lg: { track: 'h-[24px] w-[44px]', thumb: 'size-[20px]', travel: 44 - 20 - 4 },
 }
 
@@ -81,18 +84,20 @@ export function Switch({
     >
       <span
         className={`focus-ring-part flex shrink-0 items-center rounded-full border border-transparent p-[1px] transition-[background-color,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)] ${geometry.track} ${
-          checked ? 'bg-[var(--color-ink)]' : 'bg-[var(--color-control)]'
+          checked ? 'bg-[image:var(--accent-fill)]' : 'bg-[var(--color-wash-2)]'
         } ${disabled ? 'opacity-50' : ''}`}
       >
         <span
-          className={`rounded-full bg-[var(--color-canvas)] transition-transform duration-[var(--motion-spring)] ease-[var(--ease-spring)] ${geometry.thumb}`}
+          className={`rounded-full transition-[transform,background-color] duration-[var(--motion-spring)] ease-[var(--ease-spring)] ${geometry.thumb} ${
+            checked ? 'bg-[var(--color-on-accent)]' : 'bg-[var(--color-ink-2)]'
+          }`}
           style={{ transform: `translateX(${checked ? geometry.travel : 0}px)` }}
         />
       </span>
       {label && (
         <span
-          className={`min-w-0 text-left text-[length:var(--text-sm)] ${
-            disabled ? 'text-[color:var(--color-muted)]' : 'text-[color:var(--color-control)]'
+          className={`min-w-0 text-left text-[length:var(--text-secondary)] ${
+            disabled ? 'text-[color:var(--color-ink-3)]' : 'text-[color:var(--color-ink)]'
           }`}
         >
           {label}
