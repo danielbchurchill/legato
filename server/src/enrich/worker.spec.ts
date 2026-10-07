@@ -4,6 +4,7 @@ import { openDb } from "../db.js";
 import { mocked } from "../testing.js";
 import * as mbClient from "./mbClient.js";
 import * as coverArchive from "./coverArchive.js";
+import * as deezer from "./deezer.js";
 import * as fingerprint from "../match/fingerprint.js";
 import * as acoustid from "./acoustid.js";
 
@@ -14,6 +15,7 @@ mock.module("./mbClient.js", () => ({
   fetchArtistMemberRelations: mock(),
 }));
 mock.module("./coverArchive.js", () => ({ fetchCaaFrontImage: mock() }));
+mock.module("./deezer.js", () => ({ fetchArtistImage: mock() }));
 // Real storeCover shells out to ffmpeg to produce resized JPEGs — not
 // interesting to this suite, which only cares whether a CAA hit gets
 // recorded as a cover_art row at all.
@@ -462,6 +464,23 @@ describe("processArtistMemberLookup — issue #61", () => {
 
     expect(mbClient.searchArtist).not.toHaveBeenCalled();
     expect(mbClient.fetchArtistMemberRelations).not.toHaveBeenCalled();
+    const job = db.prepare("SELECT status FROM enrich_jobs WHERE node_id = ?").get(node) as { status: string };
+    expect(job.status).toBe("done");
+  });
+});
+
+// Issue #272.
+describe("processArtistImageLookup", () => {
+  it("skips a credit-line title without writing an mbid row the hygiene worklist would list", async () => {
+    const node = (db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get("Pussy Riot; Slayyyter") as {
+      id: number;
+    }).id;
+    db.prepare("INSERT INTO enrich_jobs (node_id, job_type, status) VALUES (?, 'artist_image_lookup', 'queued')").run(node);
+
+    await runDueJobs(db);
+
+    expect(deezer.fetchArtistImage).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT field FROM field_provenance WHERE node_id = ?").all(node)).toEqual([]);
     const job = db.prepare("SELECT status FROM enrich_jobs WHERE node_id = ?").get(node) as { status: string };
     expect(job.status).toBe("done");
   });

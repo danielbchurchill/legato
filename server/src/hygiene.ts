@@ -63,12 +63,19 @@ export function getWorklist(db: Database, typeFilter?: string): WorklistItem[] {
     // would flag most real matches as needing attention. applyMatch always
     // writes a real mbid as `value`; every "needs a human" outcome
     // (ambiguous/no_match/malformed tag/no artist tag) always writes null.
+    //
+    // #272: only recordings, and only ones still without an MBID. This list
+    // is for matching tracks, so an artist or release node has nothing to
+    // act on here, and a recording that has since got nodes.mbid (a rescan
+    // that read an MBID tag, say) is already matched whatever its last
+    // enrichment attempt said.
     const rows = db
       .prepare(
         `SELECT fp.node_id, n.title AS node_title, fp.note, fp.updated_at
          FROM field_provenance fp
          JOIN nodes n ON n.id = fp.node_id
          WHERE fp.field = 'mbid' AND fp.value IS NULL
+           AND n.type = 'recording' AND n.mbid IS NULL
            AND fp.id = (
              SELECT MAX(fp2.id) FROM field_provenance fp2
              WHERE fp2.node_id = fp.node_id AND fp2.field = 'mbid'
