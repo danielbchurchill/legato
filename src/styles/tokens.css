@@ -1,280 +1,223 @@
-/* Legato design tokens.
+/* Legato design tokens, v2.
  *
- * Every value here is measured from a design frame: the Figma mockup (file
- * NSaK1N64NwcKzlKpqaYs49, frame "Desktop - 1" and the v2 frames, 1440x1024),
- * cross-checked against the exported render where one exists. The library
- * view (#263) is designed in Claude Design instead, so its values come from
- * that frame. DESIGN.md explains the reasoning; this file is the
+ * Source: the Claude Design handoff "Legato v2" (tokens-v2.css), which
+ * evolves the Figma-era set: same families, but with a real hierarchy — three
+ * ink steps instead of one ink and one grey, a solid accent for text and
+ * focus, the legato.fm gradient for primary actions, and separate washes for
+ * hover and selection. DESIGN.md explains the reasoning; this file is the
  * machine-readable half.
  *
  * Tailwind v4 CSS-first config — no tailwind.config.js. Names follow Tailwind's
- * @theme namespaces so they generate utilities: --color-* -> bg-canvas / text-muted,
- * --radius-* -> rounded-surface, and so on.
+ * @theme namespaces so they generate utilities: --color-* -> bg-canvas /
+ * text-ink-2, --text-* -> text-title (size, line height, weight and tracking
+ * together), --radius-* -> rounded-panel, and so on.
  *
- * Issue #136: two themes now, not one. This @theme block stays the dark
- * default (unchanged values: the dark theme stays exactly as it is).
- * The light ("paper") theme lives in the
- * `:root[data-theme="light"]` block near the bottom of this file, overriding
- * the same custom properties rather than introducing new ones — components
- * read `var(--color-*)` either way and never branch on which theme is active.
- * The paper values are the table Daniel signed off on in issue #104,
- * copied verbatim; anything in that block NOT sourced from that table is
- * called out inline as a derived extension, not an approved design value. */
+ * Two themes. This @theme block is dark, the default everywhere with no
+ * stored preference; `:root[data-theme="light"]` below is paper, overriding
+ * the same names. Components read var(--color-*) and never branch on which
+ * theme is active. Every text token clears WCAG AA against canvas in both
+ * themes (ratios inline), which is why nothing alpha-mutes text: a quieter
+ * line is ink-2 or ink-3, never ink at 60%. */
 
 @theme {
   /* ---- Surfaces ------------------------------------------------------- */
 
-  /* The app backdrop. Also the fill of inset controls: a search field is a hole
-   * punched back through the glass to this layer, not a lighter shade on top of
-   * it. That equivalence is deliberate — keep the two values identical. */
-  --color-canvas: #14181a;
-  --color-inset: #14181a;
+  /* The window, and the map's ground. */
+  --color-canvas: #0f1214;
+  /* Glass panels, always with the blur in the `glass` utility (index.css). */
+  --color-surface: rgb(22 26 29 / 0.74);
+  /* Opaque surface for things that must not let the map through: the search
+   * palette, and glass's no-blur fallback. */
+  --color-solid: #171b1e;
+  /* Lifted above a surface: the active segment of a segmented control, the
+   * avatar. */
+  --color-raised: #22282c;
+  /* Punched down into a surface: a segmented control's track, input wells. */
+  --color-sunken: rgb(0 0 0 / 0.28);
 
-  /* Floating glass panels. Composites to #1C2124 over --color-canvas, which is
-   * exactly what the mockup render measures. */
-  --color-surface: rgb(30 36 38 / 0.8);
+  /* ---- Lines and washes ----------------------------------------------- */
 
-  /* Opaque fallback for contexts where backdrop-filter is unavailable or too
-   * expensive — same perceived color, no blur cost. See DESIGN.md "Glass". */
-  --color-surface-flat: #1c2124;
-
-  /* ---- Lines ---------------------------------------------------------- */
-
-  /* Figma draws panel edges as 0.25px pure white. A quarter pixel is not a real
-   * width — it vanishes or snaps to 1px depending on DPI. 1px at 30% alpha
-   * composites to rgb(96), which is what the 0.25px line actually measures in
-   * the render, and it renders identically at every scale factor. */
-  --color-hairline: rgb(255 255 255 / 0.3);
-
-  /* In-panel rules under section headers. Same reasoning as the hairline —
-   * 1px at 35% alpha standing in for a sub-pixel line — with a base value
-   * that now tracks --color-muted's own shift (design v2, 2026-08-27). */
-  --color-divider: rgb(100 100 100 / 0.35);
-
-  /* A quiet neutral wash — the no-art cover fallback (CoverArt.tsx,
-   * AlbumsGrid.tsx's skeleton grid), TracksTable.tsx's own unloaded-row
-   * skeleton (was a separate, near-identical `bg-white/4` — folded into this
-   * token rather than kept as a second one-off shade), and the canvas's
-   * shift-drag marquee fill (Canvas.tsx). Was a bare `bg-white/6` in most of
-   * these spots (#126's own placeholder, plus the marquee) until #136
-   * converted it: not part of the #104 table, same hairline-style white/
-   * near-black flip for the light override below. */
-  --color-placeholder: rgb(255 255 255 / 0.06);
-
-  /* The interactive hover wash for a control with no other hover treatment
-   * of its own — the destructive button, a highlighted search result row,
-   * a preset pill. Distinct token from --color-placeholder even though both
-   * start from the same base white: this one needs its own light-mode value
-   * tuned for contrast against a hovered *foreground* (ink or control text
-   * sitting on top of it), not against bare canvas. Was a bare `bg-white/8`
-   * in every one of these spots until #136 converted it. */
-  --color-hover-wash: rgb(255 255 255 / 0.08);
+  /* Hairlines and panel borders. Always 1px with alpha doing the work —
+   * never a sub-pixel width (DESIGN.md "Glass"). */
+  --color-line: rgb(255 255 255 / 0.09);
+  /* Chip and pill borders, dividers that have to read on their own. */
+  --color-line-strong: rgb(255 255 255 / 0.16);
+  /* Hover rows, cards. */
+  --color-wash: rgb(255 255 255 / 0.05);
+  /* Selected rows, secondary buttons, the unplayed half of the waveform. */
+  --color-wash-2: rgb(255 255 255 / 0.09);
 
   /* ---- Text ----------------------------------------------------------- */
 
-  /* Design v2 (2026-08-27): the mockup's two near-identical greys — a label
-   * color and a separate control-chrome color — turned out to be the exact
-   * same hex. Collapsed to one: --color-muted is the only muted text tone
-   * now. --color-ink also shifted off pure white; #fefefe reads identically
-   * but keeps the app off the one true-black-on-true-white pair, which was
-   * never a deliberate choice, just Figma's default. */
-  --color-ink: #fefefe;
-  --color-muted: #646464;
+  --color-ink: #f2efe9; /*   primary text      15.9:1 on canvas */
+  --color-ink-2: #a9adaf; /* secondary text     8.1:1 */
+  --color-ink-3: #74797c; /* hints, row numbers 4.5:1 */
 
-  /* Hover's own step (C-2) — of 23 hover rules in the app, 20 jumped straight
-   * to --color-ink, which is also the color of every value in the panels, so
-   * hovering a label briefly made it look like data. A lifted grey reads
-   * clearly against --color-muted without colliding with a value; full white
-   * stays reserved for genuinely active state (the current tab, the current
-   * filter). See DESIGN.md's type rule. */
-  --color-muted-hi: #a0a0a0;
+  /* ---- Accent --------------------------------------------------------- */
 
-  /* Interactive control chrome — toggle tracks, slider tracks, radio dots,
-   * swatch borders — in their default/inactive state. Same hex as
-   * --color-muted today, kept as its own token on purpose: a text color and
-   * a control's resting color are different roles that happen to agree
-   * right now, the same reasoning --color-inset stays separate from
-   * --color-canvas. See DESIGN.md "Controls". */
-  --color-control: #646464;
+  /* Solid accent: accent text (the playing title), rings, focus, the map's
+   * selection ring. 5.4:1 on canvas. */
+  --color-accent: #bf68eb;
+  /* Text and icons sitting on --accent-fill. Always dark: white fails
+   * contrast on the gradient's blue end. */
+  --color-on-accent: #15111c;
 
-  /* gpui-kit's focus ring. Its own `ring` token is a mid neutral (neutral-500
-   * in dark, neutral-400 in light), which is --color-muted-hi's job here
-   * already, so this aliases rather than adds a hex. The ring itself is
-   * drawn at 50% of this, 3px wide — gpui-kit's FOCUS_RING_OPACITY. Aliasing
-   * through var() means the paper theme's own --color-muted-hi carries it
-   * with no light override of its own. */
-  --color-ring: var(--color-muted-hi);
+  /* ---- Status --------------------------------------------------------- */
 
-  /* ---- Graph ---------------------------------------------------------- */
+  --color-ok: oklch(0.78 0.12 150); /*   up to date, written */
+  --color-warn: oklch(0.8 0.14 72); /*   needs a look */
+  --color-bad: oklch(0.7 0.16 28); /*    missing */
 
-  /* Edge color encodes relationship type. One family: identical saturation and
-   * lightness (76%/66%) for every edge type, at any hue — never a darker tone
-   * for "weaker" or a grey for "structural". See DESIGN.md "Edge palette" for
-   * the full spacing rationale (session 4 widened this from 3 types to 10,
-   * grouped by which graph each type actually renders in). */
-  --color-edge-performed-by: #bf68eb; /*    283deg 76% 66% — tracks */
-  --color-edge-appears-on: #68b6eb; /*      203deg 76% 66% — tracks */
-  --color-edge-released-in: #68eb79; /*     115deg 76% 66% — tracks */
-  --color-edge-released-on: #ea66a6; /*     331deg 76% 66% — tracks */
-  --color-edge-produced-by: #ea9066; /*      19deg 76% 66% — tracks */
-  --color-edge-engineered-by: #dbea66; /*    67deg 76% 66% — tracks */
-  --color-edge-featured-artist: #66eabc; /* 159deg 76% 66% — tracks */
-  --color-edge-same-artist: #7166ea; /*     245deg 76% 66% — albums */
-  --color-edge-same-label: #ea667c; /*      350deg 76% 66% — albums */
-  --color-edge-collaborated-with: #ea8766; /* 15deg 76% 66% — artists */
+  /* ---- Map ------------------------------------------------------------ */
 
-  /* Hover dimming for uninvolved nodes/edges. Must be opaque — sigma's WebGL
-   * path renders a translucent rgba() as solid white rather than compositing
-   * it, so these can never be alpha values no matter how tempting that reads
-   * next to --color-canvas. Canvas.tsx reads these (and every --color-edge-*
-   * / --color-node-* token below) live via getComputedStyle rather than
-   * duplicating them as hardcoded hex — sigma still never sees CSS directly,
-   * but the resolved value now tracks whichever theme is active instead of
-   * needing hand-kept dark-only copies (#136). */
-  --color-node-dim: #20262a;
-  --color-edge-dim: #1b2023;
+  /* Every unfocused edge, whatever its type. Type colour only appears on the
+   * focused cluster's edges once something is selected (--color-edge-*). */
+  --color-edge: rgb(255 255 255 / 0.075);
+  /* Node fills, one per type. The map draws dots, not covers: a cover is
+   * illegible at the size a dot needs to be for the graph to read. */
+  --color-node-artist: #f2efe9;
+  --color-node-release: #b8bcbe;
+  --color-node-recording: #6c7174;
+  --color-node-credit: #8fd3bd;
+  /* Types the v2 map has no fill for. They rarely reach the graph; when they
+   * do they sit with the quietest tone rather than inventing a hue. */
+  --color-node-label: #74797c;
+  --color-node-year: #74797c;
+  --color-node-work: #74797c;
+  /* The 4px stroke behind every map label, so a label stays legible over
+   * edges and glows. Always the canvas. */
+  --color-halo: #0f1214;
 
-  /* Uncurated edge types (performed_credit, mixed_by, member_of — see
-   * edgeTypes.ts) fall back to this rather than a curated hue. A translucent
-   * wash, not opaque — unlike node-dim/edge-dim above this is never mixed
-   * through mixTowardDim, so sigma's line program (not the WebGL node-image
-   * path) renders the alpha fine. */
+  /* Edge colour encodes relationship type, shown on a selection's cluster.
+   * One family: identical saturation and lightness (76%/66%) for every hue.
+   * See DESIGN.md "Edge palette". */
+  --color-edge-performed-by: #bf68eb; /*    283deg */
+  --color-edge-appears-on: #68b6eb; /*      203deg */
+  --color-edge-released-in: #68eb79; /*     115deg */
+  --color-edge-released-on: #ea66a6; /*     331deg */
+  --color-edge-produced-by: #ea9066; /*      19deg */
+  --color-edge-engineered-by: #dbea66; /*    67deg */
+  --color-edge-featured-artist: #66eabc; /* 159deg */
+  --color-edge-same-artist: #7166ea; /*     245deg */
+  --color-edge-same-label: #ea667c; /*      350deg */
+  --color-edge-collaborated-with: #ea8766; /* 15deg */
+  /* Uncurated edge types (performed_credit, mixed_by — see edgeTypes.ts). */
   --color-edge-fallback: rgb(255 255 255 / 0.12);
 
-  /* Colored-dot fallback for a node with no cover art (or art toggled off),
-   * one hue per domain type — see Canvas.tsx's NODE_COLOR. Not part of the
-   * palette table Daniel signed off in issue #104 (that table covers
-   * canvas/surface/text/edge tokens only); these are today's existing
-   * dark-mode values, now named as tokens instead of inline literals per
-   * #136's "convert remaining inline colours" requirement. See the light
-   * override below for why several of these needed real light values, not
-   * just a token name. */
-  --color-node-recording: #e8e8e8;
-  --color-node-artist: #ff8a3d;
-  --color-node-release: #4da3ff;
-  --color-node-label: #c77dff;
-  --color-node-year: #5a5a5a;
-  --color-node-work: #ffd23f;
-  --color-node-credit: #4dd0a3;
+  /* ---- Pre-v2 names ----------------------------------------------------
+   * Aliases onto the roles above, so a surface that hasn't been rebuilt yet
+   * still reads as v2 rather than as a second palette. New code uses the
+   * names above; these go once nothing reads them. Aliased through var()
+   * rather than copied, so the paper block below carries them for free. */
+  --color-inset: var(--color-sunken);
+  --color-surface-flat: var(--color-solid);
+  --color-hairline: var(--color-line);
+  --color-divider: var(--color-line);
+  --color-placeholder: var(--color-wash);
+  --color-hover-wash: var(--color-wash);
+  --color-muted: var(--color-ink-2);
+  --color-muted-hi: var(--color-ink);
+  --color-control: var(--color-ink-3);
+  --color-signal: var(--color-ink);
+  /* Canvas.tsx's hover dim: mixed toward the canvas so a dimmed node still
+   * sits on the map's own ground. */
+  --color-node-dim: var(--color-canvas);
+  --color-edge-dim: var(--color-canvas);
 
-  /* ---- Controls ------------------------------------------------------- */
-
-  /* Waveform bars and the now-playing page dots share one value. The
-   * canvas's currently-playing halo (NodePlayingHalo.tsx, issue #85) reuses
-   * it too — one hue for "this is what's playing", wherever it shows up. */
-  --color-signal: #d9d9d9;
+  /* gpui-kit's focus ring, drawn at 50% and 3px wide (index.css). v2 makes
+   * focus the accent's job. */
+  --color-ring: var(--color-accent);
 
   /* ---- Type ----------------------------------------------------------- */
 
+  /* Rubik for every word, music titles included. Sometype Mono only for
+   * numbers, durations, counts, formats, paths and IDs, always tabular. */
   --font-ui: 'Rubik Variable', system-ui, sans-serif;
   --font-mono: 'Sometype Mono Variable', ui-monospace, monospace;
 
-  /* Design v2 (2026-08-27): a second size, for control chrome — settings
-   * labels, sub-labels, slider/toggle readouts. --text-base stays what it
-   * was: the one size for library data and UI prose. See DESIGN.md "Size". */
-  --text-base: 16px;
+  /* The ramp. Each role carries its own line height, weight and tracking, so
+   * `text-title` is the whole style, not just a size. Colour stays separate:
+   * a role says how big and heavy, ink/ink-2/ink-3 says how loud. Sentence
+   * case for headings, lowercase for labels and control text. */
+  --text-display: 30px;
+  --text-display--line-height: 36px;
+  --text-display--font-weight: 500;
+  --text-display--letter-spacing: -0.015em;
+  --text-title: 20px;
+  --text-title--line-height: 26px;
+  --text-title--font-weight: 500;
+  --text-title--letter-spacing: -0.01em;
+  --text-heading: 15px;
+  --text-heading--line-height: 20px;
+  --text-heading--font-weight: 500;
+  --text-body: 14px;
+  --text-body--line-height: 20px;
+  --text-secondary: 13px;
+  --text-secondary--line-height: 18px;
+  --text-small: 12px;
+  --text-small--line-height: 16px;
+  --text-label: 12px;
+  --text-label--line-height: 16px;
+  --text-label--font-weight: 500;
+  --text-label--letter-spacing: 0.02em;
+  /* Sometype Mono runs wide; 12px sits level with 13–14px Rubik beside it. */
+  --text-mono: 12px;
+  --text-mono--line-height: 16px;
+
+  /* Pre-v2 sizes, aliased onto the ramp: base was every panel value at
+   * 16px, and v2's body is 14. */
+  --text-base: 14px;
   --text-sm: 12px;
-
-  /* P-8-style scaling (see --panel-width below): the wordmark is 40px at the
-   * 1440px reference and grows past it rather than staying pinned while the
-   * rest of the chrome grows around it. */
   --text-wordmark: max(40px, calc(100vw * 40 / 1440));
-
-  /* v2's Left Panel Header wordmark, measured at 32px in the raw Figma
-   * export against a much shorter, tightly-padded header than the old
-   * 61px-tall titlebar --text-wordmark was sized for. Kept as its own token
-   * rather than shrinking --text-wordmark itself, since LibrarySetup.tsx's
-   * splash screen still wants the full 40px. See DESIGN.md's shell section. */
-  --text-wordmark-header: 32px;
-
-  /* Issue #64 experiment: swapping the Left Panel Header's wordmark for the
-   * square logomark (white-logo.png). The PNG carries real transparent
-   * padding around the glyph (unlike the tightly-cropped wordmark SVG), so
-   * matching --text-wordmark-header's 32px box would read visually smaller
-   * than the wordmark did — sized up to compensate rather than reusing that
-   * token. Not committed to a keep; see PR description. */
-  --logo-header: 40px;
 
   /* ---- Geometry ------------------------------------------------------- */
 
-  --radius-surface: 25px;
+  --radius-panel: 20px; /*  glass panels, the player */
+  --radius-rail: 18px; /*   the rail, popovers */
+  --radius-card: 14px; /*   cards inside a panel, the map toolbar */
+  --radius-control: 10px; /* selects, input wells, row highlights */
+  --radius-art: 6px; /*     cover art */
+  --radius-art-sm: 4px; /*  36px row thumbnails */
+  --radius-small: 4px; /*   checkbox, format badge */
+  --radius-surface: var(--radius-panel);
 
-  /* Design v2 (2026-08-27): a second radius tier for bordered control wells
-   * — the search field today, any future bordered input. Glass surfaces
-   * keep --radius-surface; this is for things that punch through the glass
-   * rather than float on it. */
-  --radius-control: 15px;
-
-  /* gpui-kit's small-control corner: a checkbox caps at 4px whatever the
-   * theme radius is (checkbox.rs: `theme.radius.min(px(4.))`) — rounder and
-   * a checked box reads as a radio — and a Kbd keycap takes half the theme
-   * radius, which lands within a pixel of the same value. The one
-   * square-ish shape in the control set. */
-  --radius-small: 4px;
-
-  /* P-8: panel width is measured at the mockup's 1440px reference only —
-   * floated as a literal pixel, a real 2560px window becomes a narrow
-   * ribbon with a lot of empty canvas next to it. Daniel's call: panels
-   * grow with the window rather than the canvas taking the slack. Scales by
-   * the exact 1440-reference ratio above its fixed value, which stays the
-   * floor for anything at or below 1440 wide — max() rather than a bare vw
-   * unit, so a narrow window never drops under the design's own minimum.
-   *
-   * v2 (2026-08-27): 300px, down from 360 — both the Inspector Panel (left,
-   * next to the rail) and the now-playing panel (right) share this one
-   * value. v2 also drops the old 51px side inset entirely: panels dock
-   * flush to the window edge now instead of floating with a gap, so there
-   * is no --panel-inset token any more — see DESIGN.md's shell section. */
-  --panel-width: max(300px, calc(100vw * 300 / 1440));
-
-  /* v2: the right panel's collapsed width (DESIGN.md "Panel collapsed
-   * (v2)": 300px -> 214px). Scaled the same way --panel-width is, for the
-   * same reason — a wide window shouldn't strand a fixed-pixel ribbon. */
-  --panel-width-collapsed: max(214px, calc(100vw * 214 / 1440));
-
-  /* v2: the left icon rail. Fixed, never scales — it holds six 24px icons
-   * and nothing else, so a wider window has no reason to widen it. */
+  /* The v1 shell's geometry: two header bars, a rail and panels docked to
+   * the window edges, panels that grow past the 1440px reference. It goes
+   * when the shell itself is rebuilt on the v2 layout. */
   --rail-width: 50px;
-
-  /* v2: both LeftPanelHeader and RightPanelHeader, one shared height so
-   * their bottom edges (and the rail/panels docked below them) line up.
-   * Fixed like the old titlebar's 61px was — headers hold fixed-size
-   * content (a 32px wordmark, 24px icons, a 29.5px avatar), not anything
-   * that scales with the window. 50px, not 52 — confirmed against the
-   * "Header" frame's own dev-mode CSS (a 50px-tall parent, h-full content,
-   * p-[10px] on each side) on all three v2 frames; the app ran 2px taller
-   * than the mockup here until this correction. */
   --header-height: 50px;
+  --panel-width: max(300px, calc(100vw * 300 / 1440));
+  --panel-width-collapsed: max(214px, calc(100vw * 214 / 1440));
+  --logo-header: 40px;
+  --text-wordmark-header: 32px;
 
-  /* Panels are 360 wide with 24px of side padding, giving 312 of content.
-   * The mockup drifts between 20 and 26; 24 is the value that reconciles it.
-   * Side padding itself stays fixed — the panel growing is what gives its
-   * content more room, not a second scaling rule on top of the first. */
-  --spacing-panel: 24px;
-
-  /* Vertical pitch of a label/value row. Consistent across the overview list
-   * and the metadata list, so it is a real rhythm rather than a coincidence. */
-  --spacing-row: 33px;
-
-  /* Section header -> divider -> first row. */
-  --spacing-header-rule: 31px;
-  --spacing-rule-body: 16px;
-
-  /* Design v2 (2026-08-27): a generic scale for control-density UI — the
-   * Music Map settings panel and anything built like it — which runs
-   * tighter than the panel rhythm above. Purpose-named tokens still win
-   * wherever a purpose-named one already exists; reach for these only in
-   * new control chrome, not as a substitute for --spacing-row et al.
-   * Retrofitting the existing panel rhythm to run tighter overall is a
-   * separate, deliberate pass — not done here. See DESIGN.md "Geometry". */
+  /* The control-density scale (DESIGN.md "Control density"), still used by
+   * settings rows. */
   --spacing-xs: 5px;
   --spacing-sm: 10px;
   --spacing-lg: 20px;
+  --spacing-panel: 20px;
+  --spacing-row: 33px;
+  --spacing-header-rule: 31px;
+  --spacing-rule-body: 16px;
 
   /* ---- Depth ---------------------------------------------------------- */
 
-  --blur-glass: 6.5px;
-  --shadow-surface: 0 4px 4px rgb(0 0 0 / 0.25);
+  /* Glass: --color-surface behind blur(22px) saturate(140%). The saturate
+   * keeps covers and cluster glows showing through as colour, not grey. */
+  --blur-glass: 22px;
+  --shadow-panel: 0 24px 60px rgb(0 0 0 / 0.45), 0 2px 6px rgb(0 0 0 / 0.3);
+  --shadow-sm: 0 6px 18px rgb(0 0 0 / 0.35);
+  --shadow-surface: var(--shadow-panel);
+  /* A 1px inset edge on every cover, so a black cover keeps an edge on dark
+   * and a white one on paper. */
+  --shadow-art-edge: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+
+  /* The legato.fm gradient: primary buttons, the play button, switches that
+   * are on, progress. Not a colour, so it lives outside --color-*. */
+  --accent-fill: linear-gradient(135deg, #bf68eb, #68b6eb);
+  /* Peak alpha of a cluster's cover-colour glow on the map. */
+  --map-glow: 0.16;
 
   /* ---- Motion ----------------------------------------------------------
    * DESIGN.md's Motion section states the four principles these serve;
@@ -339,8 +282,7 @@
    * deceleration and leaves on an acceleration, so it's gone before it's
    * noticed going. */
   --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
-}
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);}
 
 @supports (transition-timing-function: linear(0, 1)) {
   :root {
@@ -349,59 +291,54 @@
   }
 }
 
-/* Tells the platform which native chrome palette to draw — scrollbar
- * thumbs/tracks, the default <select> popup, form control affordances —
- * before Legato's own tokens ever enter the picture. `color-scheme` isn't a
- * design token (not a --color-* custom property, nothing Tailwind's @theme
- * would generate a utility from), so it lives here as a plain rule rather
- * than inside the @theme block above. The light override sits alongside its
- * own token overrides just below. */
+/* Native chrome palette (scrollbars, form-control affordances) follows the
+ * theme. Not a token, so it sits outside @theme. */
 :root {
   color-scheme: dark;
 }
 
-/* ---- Light theme ("paper") — issue #136 ----------------------------------
+/* ---- Paper ---------------------------------------------------------------
  *
- * "Sheet music in colour and contrast": warm paper that reads as engraving
- * paper under daylight, not parchment, with pen-ink black text and
- * staff-line-gray dividers (#136). Overrides the same
- * custom properties the @theme block above defines — never new names, so
- * every `bg-canvas`/`text-ink`/etc utility Tailwind generated from that block
- * already works unchanged here. Applied via a `data-theme="light"` attribute
- * on <html>, set before first paint by index.html's inline boot script (no
- * dark flash) and kept live afterward by useTheme.ts.
- *
- * Values through --color-edge-collaborated-with below are the exact table
- * Daniel signed off in issue #104 — every one already hits the
- * required contrast (3:1 for lines, 4.5:1 wherever an edge colour is also
- * used as text; ink/muted/muted-hi/control/signal all clear 4.5:1 against
- * canvas, surface, and inset — see that issue's approval comment for the
- * full per-pair table). Everything from --color-node-recording onward is
- * NOT part of that table — #104's review only covered surface/text/edge
- * tokens — and is instead a mechanical extension of the same technique
- * (same hue, desaturated, lightness tuned to clear 3:1 against
- * --color-canvas) applied to color literals #136 also had to convert to
- * tokens. Flagged in the PR for design review; not Daniel-approved the way
- * the rest of this block is. */
+ * Warm paper and pen ink, not an inverted dark theme. Lines and washes are
+ * warm brown at low alpha rather than black, so they read as engraving on
+ * paper rather than as grey film. The solid accent darkens to #7d38b0:
+ * #bf68eb is too light to carry text on paper (4.9:1 here). The gradient
+ * stays the same, with dark ink on it in both themes. */
 :root[data-theme='light'] {
-  --color-canvas: #f6f4ef;
-  --color-inset: #ece9e2;
-  --color-surface: rgb(252 251 248 / 0.85);
-  --color-surface-flat: #fcfbf8;
+  --color-canvas: #ebe6dc;
+  --color-surface: rgb(251 249 245 / 0.82);
+  --color-solid: #fbf9f5;
+  --color-raised: #ffffff;
+  --color-sunken: rgb(60 44 28 / 0.07);
 
-  --color-hairline: rgb(28 29 33 / 0.22);
-  --color-divider: rgb(138 135 130 / 0.5);
+  --color-line: rgb(60 44 28 / 0.12);
+  --color-line-strong: rgb(60 44 28 / 0.22);
+  --color-wash: rgb(60 44 28 / 0.045);
+  --color-wash-2: rgb(60 44 28 / 0.085);
 
-  --color-ink: #1c1d21;
-  --color-muted: #6b6862;
-  --color-muted-hi: #46443f;
-  --color-control: #807c75;
+  --color-ink: #1c1915; /*   15.2:1 */
+  --color-ink-2: #57514a; /*  6.9:1 */
+  --color-ink-3: #7d766d; /*  4.5:1 */
 
-  --color-signal: #3a3b40;
+  --color-accent: #7d38b0;
+  --color-on-accent: #15111c;
 
-  --color-node-dim: #e4e1d9;
-  --color-edge-dim: #e9e6df;
+  --color-ok: oklch(0.55 0.12 150);
+  --color-warn: oklch(0.6 0.15 60);
+  --color-bad: oklch(0.55 0.17 28);
 
+  --color-edge: rgb(60 44 28 / 0.11);
+  --color-node-artist: #1c1915;
+  --color-node-release: #6e665c;
+  --color-node-recording: #a39b90;
+  --color-node-credit: #1d8a66;
+  --color-node-label: #7d766d;
+  --color-node-year: #7d766d;
+  --color-node-work: #7d766d;
+  --color-halo: #ebe6dc;
+
+  /* Edge hues darkened to clear 3:1 against paper, each still recognisable
+   * next to its dark-theme counterpart (issue #104's signed-off table). */
   --color-edge-performed-by: #a325d4;
   --color-edge-appears-on: #1c6ea0;
   --color-edge-released-in: #1e7915;
@@ -412,35 +349,12 @@
   --color-edge-same-artist: #5d52e0;
   --color-edge-same-label: #c8233f;
   --color-edge-collaborated-with: #b34420;
+  --color-edge-fallback: rgb(60 44 28 / 0.14);
 
-  /* Derived, not from #104's table — see this block's own header comment. */
-  --color-edge-fallback: rgb(28 29 33 / 0.12);
-  --color-placeholder: rgb(28 29 33 / 0.06);
-  --color-hover-wash: rgb(28 29 33 / 0.08);
-
-  /* #e8e8e8 (dark's near-white "recording" dot) measures 1.11:1 against
-   * paper canvas — effectively invisible, not just low-contrast. Desaturated
-   * to a plain graphite rather than picking a new hue: this is the
-   * "everything else" dot color (nodeAttributes' NODE_COLOR fallback), so it
-   * reads as neutral chrome the same way it does against dark canvas. Same
-   * darken-for-paper approach as the approved edge table, tuned to clear
-   * 3:1 against --color-canvas (computed, see PR description): recording
-   * 3.23:1, artist 3.21:1, release 3.22:1, label 3.22:1, work 3.21:1, credit
-   * 3.23:1. --color-node-year is untouched: #5a5a5a already clears 6.27:1
-   * against paper unchanged. */
-  --color-node-recording: #888888;
-  --color-node-artist: #d36c28;
-  --color-node-release: #418bdb;
-  --color-node-label: #ae69e3;
-  --color-node-work: #a4851f;
-  --color-node-credit: #1d9a70;
-
-  /* A softer, shorter, lower-alpha shadow than dark mode's, for
-   * frosted-paper glass. Dark mode's is `0 4px 4px rgb(0 0 0 / 0.25)`, so
-   * this halves the offset/blur and cuts the alpha by more than half. A
-   * qualitative call, not a measured value (no light-mode render exists to
-   * sample yet). */
-  --shadow-surface: 0 2px 3px rgb(0 0 0 / 0.1);
+  --shadow-panel: 0 22px 50px rgb(80 56 30 / 0.16), 0 2px 6px rgb(80 56 30 / 0.08);
+  --shadow-sm: 0 6px 16px rgb(80 56 30 / 0.12);
+  --shadow-art-edge: inset 0 0 0 1px rgb(60 44 28 / 0.14);
+  --map-glow: 0.24;
 
   color-scheme: light;
 }
@@ -513,5 +427,16 @@
   }
   to {
     background-position: 0% 0;
+  }
+}
+
+/* Equaliser.tsx's playing bars. A scale, not a height change, so it stays on
+ * the compositor; each bar runs the same curve from a different phase. */
+@keyframes equaliser-bar {
+  from {
+    transform: scaleY(1);
+  }
+  to {
+    transform: scaleY(0.35);
   }
 }

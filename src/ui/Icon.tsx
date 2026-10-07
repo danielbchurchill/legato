@@ -104,6 +104,12 @@ const GLYPHS = {
 
 export type IconName = keyof typeof GLYPHS
 
+/* Glyphs whose outline is a closed shape, so filling it draws a solid version
+ * of the same glyph. Filling an open path (arrow-swap's arrows, add's cross)
+ * would flood the space between strokes instead, so `filled` is a no-op for
+ * everything else and callers can pass it without checking. */
+const FILLABLE = new Set<IconName>(['play', 'pause', 'heart'])
+
 type IconProps = {
   name: IconName
   /** Rendered box in px. The source SVGs are sized in em, so this drives
@@ -124,7 +130,7 @@ type IconProps = {
 }
 
 export function Icon({ name, size = 24, className, title, filled }: IconProps) {
-  const markup = filled ? GLYPHS[name].replaceAll('fill="none"', 'fill="currentColor"') : GLYPHS[name]
+  const markup = filled && FILLABLE.has(name) ? GLYPHS[name].replaceAll('fill="none"', 'fill="currentColor"') : GLYPHS[name]
   return (
     <span
       className={className}

@@ -2,7 +2,7 @@ import { SERVER_HOST } from '../config/serverHost'
 import type { ServerVersion } from '../hooks/useServerReady'
 
 const PILL =
-  'fixed top-[var(--spacing-panel)] left-1/2 z-20 -translate-x-1/2 rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] px-[16px] py-[6px] text-[length:var(--text-base)] whitespace-nowrap text-[var(--color-muted)] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)]'
+  'fixed top-[var(--spacing-panel)] left-1/2 z-20 -translate-x-1/2 rounded-full glass px-[16px] py-[6px] text-[length:var(--text-base)] whitespace-nowrap text-[var(--color-muted)]'
 
 /* The one line that says this client needs a newer server (issue #193),
  * or that a newer release is out (issue #110). Both share this one spot

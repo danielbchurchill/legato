@@ -1,52 +1,79 @@
 import type { ReactNode, Ref } from 'react'
+import { Icon, type IconName } from './Icon'
 
-/* Two control shapes (C-3). Every button in the app used to be underlined
- * text regardless of what it did — "approve — write to file", the one
- * irreversible action in the product, looked exactly like "cancel". See
- * DESIGN.md "Controls".
+/* Text buttons, v2. Four shapes, by how much the action matters:
  *
- * The split is by consequence, not by prominence: `link` covers anything
- * reversible — navigation, retry, resubmit, undo itself — and `destructive`
- * is for the rare action with no undo. It's distinguished by shape, not
- * color: DESIGN.md's palette has no danger token, deliberately (the same
- * constraint NowPlayingPanel's error text already respects), so a bordered
- * pill carries the weight color can't.
+ *  - `primary`: the legato.fm gradient, dark on-accent text. The one thing a
+ *    surface is for — play, Write to 9 files, Add connection. At most one per
+ *    group.
+ *  - `secondary`: a --color-wash-2 pill in ink. Its sibling — shuffle,
+ *    cancel-shaped actions that still deserve a button.
+ *  - `link`: 13/500 ink-2 text stepping to ink on hover. Navigation and small
+ *    reversible actions: "see all", "clear", "details ›".
+ *  - `destructive`: the pre-v2 name for a consequential action that isn't
+ *    the primary one. v2 has no separate destructive shape, so it renders as
+ *    secondary; kept so older call sites keep a meaningful name.
  *
- * `link` no longer underlines (#30) — the underline read badly wherever it
- * appeared, and every other "click this text" affordance in the app had
- * already settled on a plain hover color-shift with no underline (see
- * DESIGN.md "v2: panels without a frame"), so this brings the shared
- * component in line with its own siblings rather than inventing a new
- * treatment. The color shift already here is the real state feedback. */
+ * Pills at 32px (28 inside a dense row, 36 for a hero action), 13/500, with an optional 16px icon —
+ * filled, since an outline glyph on the gradient reads as a hole. */
 
-type ButtonVariant = 'link' | 'destructive'
+type ButtonVariant = 'primary' | 'secondary' | 'link' | 'destructive'
+type ButtonSize = 'sm' | 'md' | 'lg'
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
-  link: 'text-[var(--color-ink)] hover:text-[var(--color-muted-hi)]',
-  destructive:
-    'rounded-full border border-[var(--color-hairline)] px-[14px] py-[4px] text-[var(--color-ink)] hover:bg-[var(--color-hover-wash)]',
+  primary: 'rounded-full bg-[image:var(--accent-fill)] text-[var(--color-on-accent)] hover:brightness-110 disabled:opacity-40',
+  secondary: 'rounded-full bg-[var(--color-wash-2)] text-[var(--color-ink)] hover:bg-[var(--color-line-strong)] disabled:opacity-40',
+  destructive: 'rounded-full bg-[var(--color-wash-2)] text-[var(--color-ink)] hover:bg-[var(--color-line-strong)] disabled:opacity-40',
+  link: 'text-[var(--color-ink-2)] hover:text-[var(--color-ink)] disabled:opacity-40',
+}
+
+const SIZE_CLASSES: Record<ButtonSize, string> = {
+  sm: 'h-[28px]',
+  md: 'h-[32px]',
+  lg: 'h-[36px]',
 }
 
 type ButtonProps = {
   variant?: ButtonVariant
+  size?: ButtonSize
+  /** Leading glyph, drawn filled at 16px. */
+  icon?: IconName
   type?: 'button' | 'submit'
   onClick?: () => void
   disabled?: boolean
   className?: string
   children: ReactNode
+  'aria-label'?: string
   /** AlertDialog points its initial focus at its cancel button. */
   ref?: Ref<HTMLButtonElement>
 }
 
-export function Button({ variant = 'link', type = 'button', onClick, disabled, className = '', children, ref }: ButtonProps) {
+export function Button({
+  variant = 'link',
+  size = 'md',
+  icon,
+  type = 'button',
+  onClick,
+  disabled,
+  className = '',
+  children,
+  'aria-label': ariaLabel,
+  ref,
+}: ButtonProps) {
+  const pill = variant !== 'link'
+  const padding = pill ? (icon ? 'pl-[10px] pr-[14px]' : 'px-[16px]') : ''
   return (
     <button
       ref={ref}
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`text-[length:var(--text-base)] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] disabled:pointer-events-none disabled:opacity-40 ${VARIANT_CLASSES[variant]} ${className}`}
+      aria-label={ariaLabel}
+      className={`inline-flex shrink-0 items-center justify-center gap-[6px] text-[length:var(--text-secondary)] leading-none font-medium whitespace-nowrap transition-[color,background-color,filter] duration-[var(--motion-fast)] ease-[var(--ease-out)] disabled:pointer-events-none ${
+        pill ? SIZE_CLASSES[size] : ''
+      } ${padding} ${VARIANT_CLASSES[variant]} ${className}`}
     >
+      {icon && <Icon name={icon} size={16} filled={variant === 'primary'} />}
       {children}
     </button>
   )

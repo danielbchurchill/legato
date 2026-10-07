@@ -42,7 +42,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastEntry; onDismiss: (id: nu
   return (
     <div
       role="status"
-      className={`pointer-events-auto flex w-[320px] items-start gap-[var(--spacing-sm)] rounded-[var(--radius-control)] border border-[var(--color-hairline)] bg-[var(--color-surface)] p-[14px] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-[opacity,transform] ${
+      className={`pointer-events-auto flex w-[320px] items-start gap-[var(--spacing-sm)] rounded-[var(--radius-card)] glass p-[14px] transition-[opacity,transform] ${
         toast.leaving ? 'duration-[var(--motion-exit)] ease-[var(--ease-exit)]' : 'duration-[var(--motion-slow)] ease-[var(--ease-enter)]'
       }`}
       style={{ opacity: visible ? 1 : 0, transform: shown || reduced ? 'none' : 'translateX(var(--distance-medium))' }}

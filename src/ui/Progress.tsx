@@ -1,6 +1,7 @@
 /* Progress — hand ports of gpui-kit's Progress and ProgressCircle
  * (crates/component/src/progress/). See DESIGN.md Motion, "A bounded
- * exception: progress".
+ * exception: progress". v2 fills the bar with the accent gradient over a
+ * --color-wash-2 track.
  *
  * Determinate is the default and the one to reach for: a scan knows its
  * file count, the enrichment queue knows its remaining jobs, and DESIGN.md
@@ -37,15 +38,15 @@ export function Progress({ value, label, size = 'md', className = '' }: Progress
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={determinate ? Math.round(pct) : undefined}
-      className={`relative w-full overflow-hidden rounded-full bg-[color-mix(in_srgb,var(--color-ink)_20%,transparent)] ${BAR_HEIGHT[size]} ${className}`}
+      className={`relative w-full overflow-hidden rounded-full bg-[var(--color-wash-2)] ${BAR_HEIGHT[size]} ${className}`}
     >
       {determinate ? (
         <div
-          className="h-full rounded-full bg-[var(--color-ink)] transition-[width] duration-[var(--motion-base)] ease-[var(--ease-out)]"
+          className="h-full rounded-full bg-[image:var(--accent-fill)] transition-[width] duration-[var(--motion-base)] ease-[var(--ease-out)]"
           style={{ width: `${pct}%` }}
         />
       ) : (
-        <div className="h-full w-[40%] rounded-full bg-[var(--color-ink)] animate-[progress-sweep_var(--motion-progress)_var(--ease-inout)_infinite]" />
+        <div className="h-full w-[40%] rounded-full bg-[image:var(--accent-fill)] animate-[progress-sweep_var(--motion-progress)_var(--ease-inout)_infinite]" />
       )}
     </div>
   )

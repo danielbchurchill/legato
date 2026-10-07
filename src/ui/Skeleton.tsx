@@ -8,15 +8,24 @@ import type { CSSProperties } from 'react'
  * of them is decoration — each stands in for something the user asked for
  * and is waiting on. */
 
-/* A block the shape of what will load: --color-placeholder (the wash
- * CoverArt and the library view's unloaded rows already used), breathing
- * between full and half opacity over --motion-skeleton. Size and shape come
- * from className — a square cover, a line of text. */
-export function Skeleton({ className = '', style }: { className?: string; style?: CSSProperties }) {
+/* A block the shape of what will load, breathing between full and half
+ * opacity over --motion-skeleton. Size and shape come from className — a
+ * square cover, a line of text. v2 draws the primary parts of a placeholder
+ * (a cover, a title) in --color-wash-2 and the secondary ones (an artist
+ * line) in the fainter --color-wash: `tone="faint"`. */
+export function Skeleton({
+  className = '',
+  style,
+  tone = 'default',
+}: {
+  className?: string
+  style?: CSSProperties
+  tone?: 'default' | 'faint'
+}) {
   return (
     <div
       aria-hidden="true"
-      className={`bg-[var(--color-placeholder)] animate-[skeleton-pulse_var(--motion-skeleton)_var(--ease-inout)_infinite] ${className}`}
+      className={`${tone === 'faint' ? 'bg-[var(--color-wash)]' : 'bg-[var(--color-wash-2)]'} animate-[skeleton-pulse_var(--motion-skeleton)_var(--ease-inout)_infinite] ${className}`}
       style={style}
     />
   )

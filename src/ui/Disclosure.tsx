@@ -29,6 +29,8 @@ import { usePrefersReducedMotion } from './usePrefersReducedMotion'
 
 type DisclosureProps = {
   title: string
+  /** A one-line hint after the title, ellipsised rather than wrapped. */
+  description?: string
   defaultOpen?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
@@ -36,7 +38,7 @@ type DisclosureProps = {
   children: ReactNode
 }
 
-export function Disclosure({ title, defaultOpen = false, open: openProp, onOpenChange, action, children }: DisclosureProps) {
+export function Disclosure({ title, description, defaultOpen = false, open: openProp, onOpenChange, action, children }: DisclosureProps) {
   const [openState, setOpenState] = useState(defaultOpen)
   const open = openProp ?? openState
   const reducedMotion = usePrefersReducedMotion()
@@ -53,13 +55,17 @@ export function Disclosure({ title, defaultOpen = false, open: openProp, onOpenC
         <button type="button" onClick={toggle} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-[10px]">
           <Icon
             name="chevron-down"
-            className={`shrink-0 text-[var(--color-muted)] transition-transform duration-[var(--motion-base)] ease-[var(--ease-out)] ${
+            size={16}
+            className={`shrink-0 text-[var(--color-ink-2)] transition-transform duration-[var(--motion-base)] ease-[var(--ease-out)] ${
               open ? '' : '-rotate-90'
             }`}
           />
-          <span className="truncate text-[length:var(--text-base)] text-[var(--color-muted)]" title={title}>
-            {title}
-          </span>
+          <span className="shrink-0 text-label whitespace-nowrap text-[var(--color-ink-2)]">{title}</span>
+          {description && (
+            <span className="min-w-0 truncate text-small text-[var(--color-ink-3)]" title={description}>
+              {description}
+            </span>
+          )}
         </button>
         {action}
       </div>

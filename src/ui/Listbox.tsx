@@ -71,7 +71,7 @@ export function Listbox<T extends string>({
       // A press on the list must not blur the trigger before the click
       // lands, or Combobox's input would close the list out from under it.
       onPointerDown={(e) => e.preventDefault()}
-      className="fixed z-40 max-h-[240px] overflow-y-auto rounded-[var(--radius-control)] border border-[var(--color-hairline)] bg-[var(--color-surface)] p-[4px] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)] transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--ease-enter)]"
+      className="fixed z-40 max-h-[240px] overflow-y-auto rounded-[var(--radius-control)] glass p-[4px] transition-[opacity,transform] duration-[var(--motion-fast)] ease-[var(--ease-enter)]"
       style={{
         opacity: shown ? 1 : 0,
         transform: shown || reduced ? 'none' : enterOffset(position.placement),

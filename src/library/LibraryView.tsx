@@ -29,7 +29,7 @@ const HEADER_ROW_HEIGHT = 33 // --spacing-row, same rhythm TracksTable's own col
 // Tabs' underline variant since the gpui-kit port: the same muted -> ink
 // labels as before, with a sliding rule under the active one and arrow keys.
 function EntitySwitch({ value, onChange }: { value: LibraryEntity; onChange: (value: LibraryEntity) => void }) {
-  return <Tabs label="library layout" variant="underline" size="base" options={ENTITIES} value={value} onChange={onChange} />
+  return <Tabs label="library layout" variant="underline" size="md" options={ENTITIES} value={value} onChange={onChange} />
 }
 
 // AlbumsGrid has no column headers to sort from (a grid of cells, not a

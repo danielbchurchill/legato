@@ -34,7 +34,7 @@ export function ViewSwitch({ value, onChange }: ViewSwitchProps) {
       style={{ zIndex: 10 }}
     >
       <div className="flex h-full items-center px-[3px]">
-        <Tabs label="view" variant="segmented" bare size="base" options={VIEWS} value={value} onChange={onChange} />
+        <Tabs label="view" variant="segmented" bare size="lg" options={VIEWS} value={value} onChange={onChange} />
       </div>
     </Surface>
   )

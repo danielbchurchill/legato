@@ -156,7 +156,7 @@ export function Select<T extends string>({
         }}
         onKeyDown={handleKeyDown}
         onBlur={() => setOpen(false)}
-        className={`flex h-[32px] w-full min-w-0 items-center justify-between gap-[var(--spacing-sm)] rounded-[var(--radius-control)] border border-[var(--color-hairline)] bg-[var(--color-inset)] px-[12px] text-left text-[length:var(--text-sm)] disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+        className={`flex h-[32px] w-full min-w-0 items-center justify-between gap-[var(--spacing-sm)] rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-wash)] px-[12px] text-left text-[length:var(--text-sm)] disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
       >
         <span
           className={`min-w-0 truncate ${current ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-muted)]'} ${

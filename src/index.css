@@ -25,7 +25,8 @@
     background: var(--color-canvas);
     color: var(--color-ink);
     font-family: var(--font-ui);
-    font-size: var(--text-base);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
 
     /* Rubik and Sometype Mono are both variable fonts; let the real weight axis
      * do the work rather than letting the renderer fake one. */
@@ -48,12 +49,39 @@
 
   /* The platform scrollbar is a pale grey track and thumb sitting on top of
    * the frosted glass — the one place native chrome shows through the
-   * design. --color-hairline is already the panel border's translucent
-   * white, so a scrolling thumb reads as part of the same surface. */
+   * design. --color-line-strong is the chip border's translucent tone, so a
+   * scrolling thumb reads as part of the same surface. */
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--color-hairline) transparent;
+    scrollbar-color: var(--color-line-strong) transparent;
   }
+}
+
+/* The one glass recipe every floating surface shares: the rail, both panels,
+ * the capsule, the player, cards and popovers. Shape (radius, padding) is the
+ * caller's; this is only the material. The saturate keeps the cluster glows
+ * and covers under a panel reading as colour rather than grey.
+ *
+ * Blur over a live WebGL canvas is the most expensive thing in the design.
+ * Where backdrop-filter is unsupported, the surface falls back to the opaque
+ * --color-solid, never to a different colour. */
+@utility glass {
+  background: var(--color-surface);
+  backdrop-filter: blur(var(--blur-glass)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(140%);
+  border: 1px solid var(--color-line);
+  box-shadow: var(--shadow-panel);
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    background: var(--color-solid);
+  }
+}
+
+/* Numbers, durations, counts, formats, paths and IDs: Sometype Mono with
+ * tabular figures, so a column of durations lines up digit for digit. */
+@utility mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Reduced motion means less movement, not less feedback (DESIGN.md, Motion).
@@ -139,8 +167,9 @@
   opacity: 0.7;
 }
 /* gpui-kit's focus ring (styled.rs `focus_style`), replacing MO-2's 1px
- * hairline outline: 3px of --color-ring at 50%, hugging the element's own
- * corners — outline follows border-radius in every engine this app runs on.
+ * hairline outline: 3px of --color-ring (the accent, since v2) at 50%,
+ * hugging the element's own corners — outline follows border-radius in
+ * every engine this app runs on.
  *
  * A control whose focusable root isn't the shape a ring should hug (a
  * switch, whose ring belongs on the track rather than around track and
@@ -164,10 +193,12 @@
 
 /* A text field's ring belongs on its well, not the bare <input> inside it —
  * the well is the shape the eye reads as the control (Combobox,
- * NumberInput, the search field). Text inputs always match :focus-visible
- * once focused, pointer or not, which is the right call for a field: a
- * caret alone is easy to lose. */
+ * NumberInput, TextField). Text inputs always match :focus-visible once
+ * focused, pointer or not, which is the right call for a field: a caret
+ * alone is easy to lose. v2's input well: the border itself turns accent and
+ * a quieter 25% ring sits outside it. */
 .focus-ring-well:focus-within {
-  outline: 3px solid color-mix(in srgb, var(--color-ring) 50%, transparent);
+  border-color: var(--color-accent);
+  outline: 3px solid color-mix(in srgb, var(--color-accent) 25%, transparent);
   outline-offset: 0;
 }

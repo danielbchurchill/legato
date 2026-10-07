@@ -206,14 +206,12 @@ export function Slider<V extends SliderValue>({
         onPointerCancel={endDrag}
         className={`relative flex ${vertical ? 'h-full w-[24px] justify-center' : 'h-[24px] w-full items-center'}`}
       >
+        {/* v2: a 4px --color-wash-2 track with an ink fill — the slider is
+         * a quantity, not an on/off, so it stays out of the accent. */}
         <div
           className={`relative rounded-full transition-colors duration-[var(--motion-fast)] ${
-            vertical ? 'h-full w-[6px]' : 'h-[6px] w-full'
-          } ${
-            dragging != null
-              ? 'bg-[color-mix(in_srgb,var(--color-ink)_40%,transparent)]'
-              : 'bg-[color-mix(in_srgb,var(--color-ink)_20%,transparent)]'
-          }`}
+            vertical ? 'h-full w-[4px]' : 'h-[4px] w-full'
+          } ${dragging != null ? 'bg-[var(--color-line-strong)]' : 'bg-[var(--color-wash-2)]'}`}
         >
           <div
             className={`absolute rounded-full bg-[var(--color-ink)] ${vertical ? 'inset-x-0' : 'inset-y-0'}`}
@@ -252,7 +250,7 @@ export function Slider<V extends SliderValue>({
                 if (e.currentTarget.matches(':focus-visible')) setFocused(thumb)
               }}
               onBlur={() => setFocused((f) => (f === thumb ? null : f))}
-              className="absolute size-[16px] rounded-full"
+              className="absolute size-[14px] rounded-full"
               style={
                 vertical
                   ? { bottom: `${fraction * 100}%`, left: '50%', transform: 'translate(-50%, 50%)' }
@@ -263,14 +261,12 @@ export function Slider<V extends SliderValue>({
                * focus, gpui-kit's ThumbRing. Outline rather than a bordered
                * overlay so it never changes the thumb's own box. */}
               <span
-                className={`focus-ring-part block size-full rounded-full bg-[color-mix(in_srgb,var(--color-ink)_50%,transparent)] p-[1px] transition-[outline-width] duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
+                className={`focus-ring-part block size-full rounded-full bg-[var(--color-ink)] shadow-[0_1px_3px_rgb(0_0_0/0.35)] transition-[outline-width] duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
                   active && !disabled
                     ? 'outline-[3px] outline-solid outline-[color-mix(in_srgb,var(--color-ring)_50%,transparent)]'
                     : 'outline-0 outline-solid outline-transparent'
                 }`}
-              >
-                <span className="block size-full rounded-full bg-[var(--color-canvas)]" />
-              </span>
+              />
               <TooltipBubble
                 open={active && !disabled}
                 anchorRef={ref}
