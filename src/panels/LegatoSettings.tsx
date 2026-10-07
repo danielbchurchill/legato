@@ -7,6 +7,7 @@ import { Switch } from '../ui/Switch'
 import { Tabs } from '../ui/Tabs'
 import { Select } from '../ui/Select'
 import { Kbd } from '../ui/Kbd'
+import { MOD_KEY_LABEL } from '../shell/keys'
 import { Progress } from '../ui/Progress'
 import { Skeleton, Shimmer } from '../ui/Skeleton'
 import { AlertDialog } from '../ui/Dialog'
@@ -27,13 +28,9 @@ import { LegatoAccountRow } from './LegatoAccountRow'
 import { ServingGroup } from './ServingGroup'
 import { deviceForSaved, type AudioDevice } from '../playback/audioDevices'
 
-/* The Legato settings panel — DESIGN.md's "The gpui-kit control set",
- * restyled onto the same GroupHeader/SettingsRow geometry MusicMapSettings.tsx
- * uses. Mounted by App.tsx into InspectorPanel's 'settings' rail destination,
- * replacing the old settings-gear modal (src/settings/SettingsView.tsx) —
- * DESIGN.md used to flag two settings entry points, one real and one
- * placeholder-only, as an open seam; this closes it by giving the real
- * content a home behind the rail's `sliders` destination instead. */
+/* Settings, as v2's stack of cards: appearance, library, playback, map &
+ * motion, shortcuts, then the server and account cards. Mounted by
+ * SettingsPanel.tsx in the left panel behind the rail's Settings item. */
 
 // watch_status/watch_fallback_reason are issue #122's fields — the watcher
 // (server/src/scan/watcher.ts) writes them straight onto the row it
@@ -104,9 +101,70 @@ const REPLAYGAIN_OPTIONS = [
 // currently leans.
 const THEME_OPTIONS = [
   { value: 'dark', label: 'dark' },
-  { value: 'light', label: 'light' },
+  { value: 'light', label: 'paper' },
   { value: 'system', label: 'system' },
 ] as const satisfies readonly { value: ThemePreference; label: string }[]
+
+/* A theme is easier to pick by sight than by name: each tile is a tiny
+ * window in that theme — its canvas, a panel, a line of ink — and system
+ * is split down the middle. The colours are the tiles' own, not tokens: a
+ * preview of paper has to stay paper while the app is dark. */
+const TILE: Record<'dark' | 'light', { canvas: string; panel: string; ink: string }> = {
+  dark: { canvas: '#0f1214', panel: '#22282c', ink: '#f2efe9' },
+  light: { canvas: '#ebe6dc', panel: '#fbf9f5', ink: '#1c1915' },
+}
+
+function ThemeSwatch({ theme }: { theme: 'dark' | 'light' }) {
+  const c = TILE[theme]
+  return (
+    <span className="absolute inset-0 p-[8px]" style={{ background: c.canvas }}>
+      <span className="flex h-full w-[60%] flex-col gap-[4px] rounded-[4px] p-[6px]" style={{ background: c.panel }}>
+        <span className="h-[3px] w-[70%] rounded-full" style={{ background: c.ink }} />
+        <span className="h-[3px] w-[45%] rounded-full opacity-50" style={{ background: c.ink }} />
+      </span>
+    </span>
+  )
+}
+
+function ThemeTiles({ value, onChange }: { value: ThemePreference; onChange: (value: ThemePreference) => void }) {
+  return (
+    <div role="radiogroup" aria-label="Theme" className="flex gap-[10px]">
+      {THEME_OPTIONS.map((option) => {
+        const selected = option.value === value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onChange(option.value)}
+            className="flex flex-col items-center gap-[6px]"
+          >
+            <span
+              className={`relative h-[54px] w-[78px] overflow-hidden rounded-[10px] shadow-[var(--shadow-art-edge)] transition-[outline-color] duration-[var(--motion-fast)] ${
+                selected ? 'outline-2 outline-offset-2 outline-[var(--color-accent)] outline-solid' : 'outline-2 outline-offset-2 outline-transparent outline-solid'
+              }`}
+            >
+              {option.value === 'system' ? (
+                <>
+                  <ThemeSwatch theme="dark" />
+                  <span className="absolute inset-y-0 right-0 w-1/2 overflow-hidden">
+                    <span className="absolute inset-y-0 right-0 w-[78px]">
+                      <ThemeSwatch theme="light" />
+                    </span>
+                  </span>
+                </>
+              ) : (
+                <ThemeSwatch theme={option.value} />
+              )}
+            </span>
+            <span className={`text-small ${selected ? 'text-[var(--color-ink)]' : 'text-[var(--color-ink-2)]'}`}>{option.label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 // A keybinding is the answer to the row's own question, so it's ink — in a
 // Kbd keycap since the gpui-kit port, still Rubik rather than mono: it's the
@@ -114,7 +172,7 @@ const THEME_OPTIONS = [
 function ShortcutRow({ action, keys }: { action: string; keys: string }) {
   return (
     <div className="flex items-center justify-between">
-      <span className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{action}</span>
+      <span className="text-[length:var(--text-body)] leading-[20px] text-[var(--color-ink)]">{action}</span>
       <Kbd>{keys}</Kbd>
     </div>
   )
@@ -164,7 +222,7 @@ function AccountGroup() {
             <p className="truncate text-[length:var(--text-sm)] text-[var(--color-ink)]" title={name}>
               {name}
             </p>
-            <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+            <p className="text-small text-[var(--color-ink-2)]">
               {user?.role === 'owner' ? "this server's owner" : `signed in with ${user?.provider ?? 'unknown'}`}
             </p>
           </div>
@@ -374,19 +432,12 @@ export function LegatoSettings({
   const reducedMotionForced = settings.reducedMotionForced === 'true'
 
   return (
-    <div className="flex flex-col gap-[var(--spacing-sm)]">
+    <div className="flex flex-col gap-[10px]">
       <SettingsGroup title="appearance">
-        <SettingsRow label="theme">
-          <Tabs label="theme" options={THEME_OPTIONS} value={themePreference} onChange={onSetThemePreference} />
-        </SettingsRow>
+        <ThemeTiles value={themePreference} onChange={onSetThemePreference} />
       </SettingsGroup>
 
-      <SettingsGroup
-        title="library"
-        action={
-          <Button onClick={() => void addFolder()}>+ add folder</Button>
-        }
-      >
+      <SettingsGroup title="library">
         <ServerFolderPicker
           open={folderPickerOpen}
           onClose={() => setFolderPickerOpen(false)}
@@ -401,7 +452,7 @@ export function LegatoSettings({
             <Skeleton className="h-[12px] w-[160px] rounded-full" />
           </div>
         ) : roots.length === 0 ? (
-          <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">no folders configured</p>
+          <p className="text-small text-[var(--color-ink-2)]">no folders configured</p>
         ) : (
           <ul className="flex flex-col gap-[var(--spacing-sm)]">
             {roots.map((r) => {
@@ -409,8 +460,9 @@ export function LegatoSettings({
               const errors = scanErrors[r.id]
               return (
                 <li key={r.id} className="flex flex-col gap-[var(--spacing-xs)]">
-                  <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
-                    <div className="min-w-0">
+                  <div className="flex items-start justify-between gap-[var(--spacing-sm)]">
+                    <Icon name="database" size={18} className="mt-[1px] shrink-0 text-[var(--color-ink-2)]" />
+                    <div className="min-w-0 flex-1">
                       {/* The full path, not the label, in the title: a
                        * label is the short name the user chose, the path is
                        * what's actually cut off and what you'd need to read. */}
@@ -427,7 +479,7 @@ export function LegatoSettings({
                            * stage in ink, everything else in control-color —
                            * same active/inactive contrast the theme and
                            * replaygain Tabs above use. */}
-                          <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                          <p className="text-small text-[var(--color-ink-2)]">
                             {SCAN_STAGES.map((stage, i) => (
                               <span key={stage}>
                                 {i > 0 && ' → '}
@@ -442,7 +494,7 @@ export function LegatoSettings({
                             ))}
                           </p>
                           <div className="flex items-center gap-[var(--spacing-xs)]">
-                            <p className="shrink-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                            <p className="shrink-0 text-small text-[var(--color-ink-2)]">
                               {run.progress.stageDone}
                               {run.progress.stageTotal != null ? `/${run.progress.stageTotal}` : ''}
                             </p>
@@ -461,7 +513,7 @@ export function LegatoSettings({
                               className="flex-1"
                             />
                           </div>
-                          <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                          <p className="text-small text-[var(--color-ink-2)]">
                             {run.paused
                               ? 'paused'
                               : run.progress.rate != null
@@ -476,14 +528,14 @@ export function LegatoSettings({
                        * shape as this group's own error paragraph below,
                        * carries this the same way. */}
                       {r.watch_status === 'fallback' && (
-                        <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                        <p className="text-small text-[var(--color-ink-2)]">
                           Watching for changes isn't available on this system, so Legato checks every 30
                           minutes.{' '}
                           <a
                             href={WATCH_LIMIT_DOCS_URL}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-muted-hi)]"
+                            className="text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-ink)]"
                           >
                             Raise the limit
                           </a>
@@ -495,12 +547,12 @@ export function LegatoSettings({
                           {/* H9: per-file problems the scan moved past rather
                            * than stopping for — named with a reason, not just
                            * a count, once expanded. */}
-                          <summary className="cursor-pointer text-[length:var(--text-sm)] text-[color:var(--color-control)] hover:text-[var(--color-muted-hi)]">
+                          <summary className="cursor-pointer text-small text-[var(--color-ink-2)] hover:text-[var(--color-ink)]">
                             {errors.length} file{errors.length === 1 ? '' : 's'} couldn't be read
                           </summary>
                           <ul className="flex flex-col gap-[2px] pt-[2px]">
                             {errors.map((e, i) => (
-                              <li key={i} className="wrap-anywhere text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+                              <li key={i} className="wrap-anywhere text-small text-[var(--color-ink-2)]">
                                 <span className="font-[family-name:var(--font-mono)]">{e.file_path}</span> —{' '}
                                 {e.reason}
                               </li>
@@ -522,7 +574,7 @@ export function LegatoSettings({
                                 ? `Resume scanning ${r.label ?? r.path}`
                                 : `Pause scanning ${r.label ?? r.path}`
                             }
-                            className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                            className="text-[var(--color-ink-2)] transition-colors duration-150 hover:text-[var(--color-ink)]"
                           >
                             <Icon name={run.paused ? 'play' : 'pause'} size={16} />
                           </button>
@@ -530,7 +582,7 @@ export function LegatoSettings({
                             type="button"
                             onClick={() => void cancelScan(run.progress.jobId)}
                             aria-label={`Cancel scanning ${r.label ?? r.path}`}
-                            className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                            className="text-[var(--color-ink-2)] transition-colors duration-150 hover:text-[var(--color-ink)]"
                           >
                             <Icon name="cancel" size={16} />
                           </button>
@@ -540,12 +592,14 @@ export function LegatoSettings({
                           {r.watch_status === 'fallback' && (
                             <Button onClick={() => void checkForNewMusic(r.id)}>check for new music</Button>
                           )}
-                          <Button onClick={() => void rescanRoot(r.id)}>rescan</Button>
+                          <Button variant="secondary" size="sm" onClick={() => void rescanRoot(r.id)}>
+                            rescan
+                          </Button>
                           <button
                             type="button"
                             onClick={() => setConfirmingRemoveId(r.id)}
                             aria-label={`Remove ${r.label ?? r.path}`}
-                            className="text-[var(--color-control)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                            className="text-[var(--color-ink-2)] transition-colors duration-150 hover:text-[var(--color-ink)]"
                           >
                             <Icon name="cancel" size={16} />
                           </button>
@@ -558,9 +612,10 @@ export function LegatoSettings({
             })}
           </ul>
         )}
-        {/* DESIGN.md's error-state rule is deliberately quiet — Rubik muted,
-         * one sentence — not a red/alert color the tokens don't define. */}
-        {error && <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{error}</p>}
+        <Button onClick={() => void addFolder()} className="self-start">
+          + add folder
+        </Button>
+        {error && <p className="text-small text-[var(--color-bad)]">{error}</p>}
         {/* Was an inline sentence swapped into the folder's own row; an
          * AlertDialog since the gpui-kit port — removing a watched folder is
          * the kind of question gpui-kit asks in one. The sentence is
@@ -585,18 +640,8 @@ export function LegatoSettings({
 
       <ServingGroup />
 
-      <SettingsGroup title="enrichment">
-        <SettingsRow label="lookup">
-          <Switch
-            checked={enrichmentEnabled}
-            onChange={(v) => void updateSettings({ enrichmentEnabled: v ? 'true' : 'false' })}
-            accessibilityLabel="look up MusicBrainz metadata and cover art automatically"
-          />
-        </SettingsRow>
-      </SettingsGroup>
-
       <SettingsGroup title="playback">
-        <SettingsRow label="gain">
+        <SettingsRow label="Volume levelling">
           <Tabs
             label="replaygain"
             options={REPLAYGAIN_OPTIONS}
@@ -605,7 +650,7 @@ export function LegatoSettings({
           />
         </SettingsRow>
         <StreamQualityRow />
-        <SettingsRow label="device">
+        <SettingsRow label="Output" align="start">
           {IS_TAURI ? (
             <Select
               label="audio output device"
@@ -619,35 +664,46 @@ export function LegatoSettings({
               }}
             />
           ) : (
-            <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+            <p className="text-small text-[var(--color-ink-2)]">
               Audio device selection is only available in the desktop app.
             </p>
           )}
         </SettingsRow>
       </SettingsGroup>
 
-      <SettingsGroup title="canvas">
-        <SettingsRow label="hover">
+      {/* v2 draws a "hover previews" switch here, for playing a snippet of
+       * whatever the pointer rests on. There's no preview path in the
+       * player to drive it yet, so this slot keeps the hover setting that
+       * does exist, under its real name. */}
+      <SettingsGroup title="map & motion">
+        <SettingsRow label="Focus on hover">
           <Switch
             checked={hoverDimEnabled}
             onChange={(v) => void updateSettings({ hoverDimEnabled: v ? 'true' : 'false' })}
-            accessibilityLabel="dim other nodes on hover"
+            accessibilityLabel="Focus the hovered node's neighbours on the map"
           />
         </SettingsRow>
-        <SettingsRow label="motion">
+        <SettingsRow label="Reduce motion">
           <Switch
             checked={reducedMotionForced}
             onChange={(v) => void updateSettings({ reducedMotionForced: v ? 'true' : 'false' })}
-            accessibilityLabel="reduce motion, regardless of system setting"
+            accessibilityLabel="Reduce motion, whatever the system setting"
           />
         </SettingsRow>
-        <SettingsRow label="layout" align="start">
+        <SettingsRow label="Look up metadata online">
+          <Switch
+            checked={enrichmentEnabled}
+            onChange={(v) => void updateSettings({ enrichmentEnabled: v ? 'true' : 'false' })}
+            accessibilityLabel="Look up MusicBrainz metadata and cover art automatically"
+          />
+        </SettingsRow>
+        <div className="pt-[2px]">
           {/* The rebuild confirmation was an inline paragraph in this row;
            * an AlertDialog since the gpui-kit port, same sentence. While it
            * runs, the label shimmers — an indeterminate, often multi-second
            * wait (DESIGN.md Motion, "Indeterminate and long"). */}
-          <Button onClick={() => setConfirmingRebuild(true)} disabled={rebuilding}>
-            {rebuilding ? <Shimmer>rebuilding…</Shimmer> : 'rebuild map'}
+          <Button variant="secondary" onClick={() => setConfirmingRebuild(true)} disabled={rebuilding}>
+            {rebuilding ? <Shimmer>Rebuilding…</Shimmer> : 'Rebuild map layout'}
           </Button>
           <AlertDialog
             open={confirmingRebuild}
@@ -655,16 +711,16 @@ export function LegatoSettings({
             onConfirm={() => void rebuildMap()}
             title="rebuild the map"
             description="Every node gets freshly placed, including anywhere you've dragged one — that placement is gone. Your library on disk is untouched."
-            confirmLabel="rebuild"
+            confirmLabel="Rebuild"
             destructive
           />
-        </SettingsRow>
+        </div>
       </SettingsGroup>
 
       <SettingsGroup title="shortcuts">
-        <ShortcutRow action="play / pause" keys="space" />
-        <ShortcutRow action="focus search" keys="/" />
-        <ShortcutRow action="deselect / close" keys="esc" />
+        <ShortcutRow action="Play / pause" keys="space" />
+        <ShortcutRow action="Search" keys={`${MOD_KEY_LABEL}K`} />
+        <ShortcutRow action="Close" keys="esc" />
       </SettingsGroup>
 
       <AccountGroup />

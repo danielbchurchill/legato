@@ -23,7 +23,7 @@ export function StreamQualityRow() {
   if (IS_TAURI) return null
 
   return (
-    <SettingsRow label="quality">
+    <SettingsRow label="Stream quality">
       <Select
         label="stream quality"
         value={preference}

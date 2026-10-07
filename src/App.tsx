@@ -24,7 +24,6 @@ import { SettingsPanel } from './panels/SettingsPanel'
 import { NowPlaying } from './panels/NowPlaying'
 import { NodeDetails } from './panels/NodeDetails'
 import { SearchPalette } from './search/SearchPalette'
-import HygieneView from './hygiene/HygieneView'
 import { API_BASE } from './config/serverHost'
 import { useSettings } from './hooks/useSettings'
 import { useTheme, type ResolvedTheme, type ThemePreference } from './hooks/useTheme'
@@ -118,7 +117,6 @@ function Workspace({
   const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('next')
   const [detailsTab, setDetailsTab] = useState<DetailsTab>('overview')
   const [searchOpen, setSearchOpen] = useState(false)
-  const [hygieneOpen, setHygieneOpen] = useState(false)
   const { settings, updateSettings } = useSettings()
   // #127: held here rather than inside the map options popover, which
   // unmounts whenever it closes; its undo also answers Cmd/Ctrl+Z below.
@@ -250,7 +248,7 @@ function Workspace({
         setSearchOpen(true)
         return
       }
-      if (searchOpen || hygieneOpen || e.defaultPrevented) return
+      if (searchOpen || e.defaultPrevented) return
       if (document.querySelector('[role="dialog"][aria-modal="true"], [role="alertdialog"]')) return
 
       // #127: the map's session undo. Yields to real text editing only —
@@ -290,7 +288,7 @@ function Workspace({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [searchOpen, hygieneOpen, playback, mapPresets, shuffleLibrary])
+  }, [searchOpen, playback, mapPresets, shuffleLibrary])
 
   // The right panel's wash: the playing cover for now playing, the
   // selected node's for details. Fades out down the panel so the content
@@ -314,15 +312,7 @@ function Workspace({
         return <CollectionsPanel view={leftView} onNavigate={setLeftView} onFocusNode={focusNode} playback={playback} />
       case 'health':
       case 'worklist':
-        return (
-          <HealthPanel
-            view={leftView}
-            onNavigate={setLeftView}
-            onFocusNode={focusNode}
-            onEditNode={(id) => openDetails(id, 'metadata')}
-            onOpenMaintenance={() => setHygieneOpen(true)}
-          />
-        )
+        return <HealthPanel view={leftView} onNavigate={setLeftView} onFocusNode={focusNode} />
       case 'settings':
         return (
           <SettingsPanel
@@ -465,16 +455,6 @@ function Workspace({
               setLeftView({ kind: 'playlist', playlistId })
             }}
             playback={playback}
-          />
-        )}
-
-        {hygieneOpen && (
-          <HygieneView
-            onSelectNode={(id) => {
-              setHygieneOpen(false)
-              focusNode(id)
-            }}
-            onClose={() => setHygieneOpen(false)}
           />
         )}
       </AppShell>
