@@ -42,20 +42,22 @@ const TYPE_WORD: Record<string, string> = { artist: 'artist', release: 'album', 
 
 const OVERVIEW_TRACKS = 5
 
-function useJson<T>(path: string | null): T | null {
-  const [state, setState] = useState<{ path: string; value: T | null } | null>(null)
+// `version` refetches the same path when it changes: the Metadata tab passes
+// the node, which is a new object after every reload.
+function useJson<T>(path: string | null, version?: unknown): T | null {
+  const [state, setState] = useState<{ path: string; version: unknown; value: T | null } | null>(null)
   useEffect(() => {
     if (!path) return
     let cancelled = false
     fetch(`${API}${path}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((value: T | null) => !cancelled && setState({ path, value }))
-      .catch(() => !cancelled && setState({ path, value: null }))
+      .then((value: T | null) => !cancelled && setState({ path, version, value }))
+      .catch(() => !cancelled && setState({ path, version, value: null }))
     return () => {
       cancelled = true
     }
-  }, [path])
-  return state && state.path === path ? state.value : null
+  }, [path, version])
+  return state && state.path === path && state.version === version ? state.value : null
 }
 
 function shuffle<T>(items: T[]): T[] {
@@ -721,6 +723,23 @@ function NewConnection({ fromId, onDone, onCancel }: { fromId: number; onDone: (
 
 /* ---- Metadata, edit, review ---------------------------------------------------- */
 
+type MetadataValue = { value: string; source: 'tags' | 'musicbrainz' }
+type NodeMetadata = Record<'releaseDate' | 'releaseType' | 'label' | 'mbid', MetadataValue | null>
+
+// A value from the files' own tags reads as plain text. One only
+// MusicBrainz has is marked, so it's never taken for something the files
+// already say; editing a field writes a tag, and that tag is empty.
+function metadataValue(entry: MetadataValue | null): ReactNode {
+  if (!entry) return NO_VALUE
+  if (entry.source === 'tags') return entry.value
+  return (
+    <span className="flex min-w-0 items-baseline gap-[6px]" title="From MusicBrainz. Not in this file's tags.">
+      <span className="truncate">{entry.value}</span>
+      <span className="shrink-0 text-small text-[var(--color-ink-3)]">MusicBrainz</span>
+    </span>
+  )
+}
+
 function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Summary | null; reload: () => void }) {
   const edit = useTagEdit(node, reload)
   const file = node.files[0]
@@ -731,11 +750,17 @@ function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Sum
         ? ['releaseDate', 'releaseType', 'label']
         : []
 
-  const current: Record<EditableKey, string | null> = {
-    releaseDate: file?.release_date ?? (summary && 'releaseDate' in summary ? summary.releaseDate : null),
-    releaseType: file?.release_type ?? null,
-    label: file?.label ?? null,
-    bpm: file?.bpm != null ? String(file.bpm) : null,
+  // Release date, type and label as GET /nodes/:id/metadata resolves them
+  // (server/src/nodeMetadata.ts): a record's first track's tags, falling
+  // back to what MusicBrainz matched where a tag is empty. bpm is a track's
+  // own tag, read straight off its file. Refetched after a write, when the
+  // node reloads.
+  const metadata = useJson<NodeMetadata>(`/nodes/${node.id}/metadata`, node)
+  const resolved: Record<EditableKey, MetadataValue | null> = {
+    releaseDate: metadata?.releaseDate ?? null,
+    releaseType: metadata?.releaseType ?? null,
+    label: metadata?.label ?? null,
+    bpm: file?.bpm != null ? { value: String(file.bpm), source: 'tags' } : null,
   }
   const fixed: { label: string; value: ReactNode }[] = [
     ...(node.type === 'release' && summary?.kind === 'release' ? [{ label: 'tracks', value: summary.tracks }] : []),
@@ -745,7 +770,7 @@ function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Sum
           { label: 'length', value: formatDuration(node.recording?.canonical_duration_ms) },
         ]
       : []),
-    { label: 'mbid', value: node.mbid ?? NO_VALUE },
+    { label: 'mbid', value: metadataValue(metadata?.mbid ?? null) },
   ]
 
   if (edit.phase === 'review' && edit.review) {
@@ -799,7 +824,17 @@ function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Sum
               label={LABELS[key]}
               value={edit.draft[key] ?? ''}
               onChange={(v) => edit.update(key, v)}
-              placeholder={key === 'releaseDate' ? 'YYYY-MM-DD' : key === 'bpm' ? '120' : undefined}
+              // A value only MusicBrainz has is offered, not filled in:
+              // the field shows what the file says, which is nothing.
+              placeholder={
+                resolved[key]?.source === 'musicbrainz'
+                  ? resolved[key].value
+                  : key === 'releaseDate'
+                    ? 'YYYY-MM-DD'
+                    : key === 'bpm'
+                      ? '120'
+                      : undefined
+              }
               inputMode={key === 'bpm' ? 'numeric' : undefined}
               onEnter={edit.submit}
               onEscape={edit.cancel}
@@ -823,7 +858,7 @@ function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Sum
   const rows = [
     ...editable
       .filter((k) => k !== 'bpm' || node.type === 'recording')
-      .map((key) => ({ label: LABELS[key], value: current[key] ?? NO_VALUE })),
+      .map((key) => ({ label: LABELS[key], value: metadataValue(resolved[key]) })),
     ...fixed,
   ]
   const folder = file?.file_path ? file.file_path.slice(0, file.file_path.lastIndexOf('/') + 1) : null

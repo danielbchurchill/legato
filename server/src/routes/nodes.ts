@@ -7,6 +7,7 @@ import { generateFacts } from "../facts.js";
 import { rescanNode } from "../scan/scanner.js";
 import { nodeSummary } from "../summary.js";
 import { nodeCredits } from "../nodeCredits.js";
+import { nodeMetadata } from "../nodeMetadata.js";
 import { broadcast } from "../ws.js";
 
 // The one combined graph is always 'tracks' now (since the 2026-08-29 map
@@ -194,9 +195,9 @@ export function nodesRoutes(db: Database) {
       return summary;
     });
 
-    // The details panel's people (nodeCredits.ts). Separate from GET
-    // /nodes/:id for the same reason the summary is: it's asked for by the
-    // tabs that list people, not every open.
+    // The details panel's people (nodeCredits.ts) and its Metadata tab
+    // (nodeMetadata.ts). Separate from GET /nodes/:id for the same reason
+    // the summary is: each is asked for by one tab, not every open.
     app.get<{ Params: { id: string } }>("/nodes/:id/credits", async (request, reply) => {
       const credits = nodeCredits(db, Number(request.params.id));
       if (!credits) {
@@ -204,6 +205,15 @@ export function nodesRoutes(db: Database) {
         return { error: "not found" };
       }
       return credits;
+    });
+
+    app.get<{ Params: { id: string } }>("/nodes/:id/metadata", async (request, reply) => {
+      const metadata = nodeMetadata(db, Number(request.params.id));
+      if (!metadata) {
+        reply.code(404);
+        return { error: "not found" };
+      }
+      return metadata;
     });
 
     // Per-node "rescan this file" (issue #65) — Tag Manager lists tracks
