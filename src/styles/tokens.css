@@ -181,15 +181,15 @@
   --radius-small: 4px; /*   checkbox, format badge */
   --radius-surface: var(--radius-panel);
 
-  /* The v1 shell's geometry: two header bars, a rail and panels docked to
-   * the window edges, panels that grow past the 1440px reference. It goes
-   * when the shell itself is rebuilt on the v2 layout. */
-  --rail-width: 50px;
-  --header-height: 50px;
-  --panel-width: max(300px, calc(100vw * 300 / 1440));
-  --panel-width-collapsed: max(214px, calc(100vw * 214 / 1440));
-  --logo-header: 40px;
-  --text-wordmark-header: 32px;
+  /* The shell. Everything floats --inset from the window edge; the free
+   * space between the left and right occupancy is what the capsule, player
+   * and search palette centre on (src/shell/layout.ts does the arithmetic). */
+  --inset: 12px;
+  --rail-width: 56px;
+  --left-panel-width: 320px;
+  --right-panel-width: 360px;
+  --player-height: 72px;
+  --capsule-height: 48px;
 
   /* The control-density scale (DESIGN.md "Control density"), still used by
    * settings rows. */

@@ -167,7 +167,7 @@ export function OwnerGate({
             </p>
             <p
               aria-live="polite"
-              className="font-[family-name:var(--font-mono)] text-[length:var(--text-wordmark-header)] tracking-[0.08em] text-[var(--color-ink)]"
+              className="font-[family-name:var(--font-mono)] text-[length:var(--text-display)] tracking-[0.08em] text-[var(--color-ink)]"
             >
               {shownCode.code}
             </p>

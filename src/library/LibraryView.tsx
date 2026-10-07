@@ -106,7 +106,7 @@ export function LibraryView({ query, onSelectNode }: LibraryViewProps) {
     <div className="absolute inset-0 flex flex-col" style={{ paddingLeft: 'var(--rail-width)' }}>
       <div
         className="flex shrink-0 items-center justify-between px-[var(--spacing-lg)]"
-        style={{ height: HEADER_ROW_HEIGHT, marginTop: 'calc(var(--header-height) + 41px + var(--spacing-lg) * 2)' }}
+        style={{ height: HEADER_ROW_HEIGHT, marginTop: 'calc(var(--inset) + var(--capsule-height) + var(--spacing-lg))' }}
       >
         <EntitySwitch value={entity} onChange={setEntity} />
         {entity === 'albums' && <AlbumSortBar sort={albumSort} dir={albumDir} onSort={onAlbumSort} />}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Icon } from '../ui/Icon'
+import { IconButton } from '../ui/IconButton'
 import { ScrollingText } from '../ui/ScrollingText'
-import { Tooltip } from '../ui/Tooltip'
+import { TextField } from '../ui/TextField'
 import { API_BASE as API } from '../config/serverHost'
 
 type PlaylistListItem = { id: number; name: string; track_count: number }
@@ -13,7 +13,7 @@ type PlaylistListItem = { id: number; name: string; track_count: number }
  * submits. Fetches fresh every time it opens rather than subscribing to
  * playlist:changed — it's a few-hundred-ms-lived popover, not a standing
  * surface, so there's nothing to keep in sync between opens. */
-export function AddToPlaylistButton({ nodeId, size = 24 }: { nodeId: number; size?: number }) {
+export function AddToPlaylistButton({ nodeId, size = 32 }: { nodeId: number; size?: number }) {
   const [open, setOpen] = useState(false)
   const [playlists, setPlaylists] = useState<PlaylistListItem[] | null>(null)
   const [newName, setNewName] = useState('')
@@ -72,27 +72,17 @@ export function AddToPlaylistButton({ nodeId, size = 24 }: { nodeId: number; siz
 
   return (
     <div ref={rootRef} className="relative inline-flex">
-      <Tooltip label="Add to playlist">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-label="Add to playlist"
-          aria-expanded={open}
-          className="shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-        >
-          <Icon name="add" size={size} />
-        </button>
-      </Tooltip>
+      <IconButton icon="add" label="Add to playlist" size={size} active={open} aria-expanded={open} onClick={() => setOpen((v) => !v)} />
       {open && (
         <div
           role="dialog"
           aria-label="Add to playlist"
-          className="absolute top-full right-0 z-30 mt-[6px] w-[220px] rounded-[var(--radius-surface)] border border-[var(--color-hairline)] bg-[var(--color-surface)] p-[12px] backdrop-blur-[var(--blur-glass)] shadow-[var(--shadow-surface)]"
+          className="absolute top-full right-0 z-30 mt-[6px] w-[240px] rounded-[var(--radius-card)] glass p-[8px]"
         >
           {playlists === null ? (
-            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">loading…</p>
+            <p className="text-[length:var(--text-secondary)] text-[var(--color-ink-3)]">loading…</p>
           ) : playlists.length === 0 ? (
-            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">no playlists yet</p>
+            <p className="text-[length:var(--text-secondary)] text-[var(--color-ink-3)]">No playlists yet</p>
           ) : (
             <ul className="flex max-h-[180px] flex-col overflow-y-auto">
               {playlists.map((p) => (
@@ -100,10 +90,10 @@ export function AddToPlaylistButton({ nodeId, size = 24 }: { nodeId: number; siz
                   <button
                     type="button"
                     onClick={() => void addTo(p.id)}
-                    className="flex w-full items-baseline gap-[4px] py-[4px] text-left text-[var(--color-ink)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
+                    className="flex h-[32px] w-full items-center gap-[4px] rounded-[8px] px-[8px] text-left text-[var(--color-ink)] transition-colors duration-150 hover:bg-[var(--color-wash)]"
                   >
-                    <ScrollingText text={p.name} className="min-w-0 flex-1 text-[length:var(--text-base)]" />
-                    {justAdded === p.id && <span className="shrink-0 text-[length:var(--text-base)] text-[var(--color-muted)]">added</span>}
+                    <ScrollingText text={p.name} className="min-w-0 flex-1 text-[length:var(--text-secondary)]" />
+                    {justAdded === p.id && <span className="shrink-0 text-small text-[var(--color-ok)]">added</span>}
                   </button>
                 </li>
               ))}
@@ -114,22 +104,17 @@ export function AddToPlaylistButton({ nodeId, size = 24 }: { nodeId: number; siz
               e.preventDefault()
               void createAndAdd()
             }}
-            className="mt-[8px] flex items-center gap-[6px] border-t border-[var(--color-divider)] pt-[8px]"
+            className="mt-[8px] flex items-center gap-[6px] border-t border-[var(--color-line)] pt-[8px]"
           >
-            <input
+            <TextField
+              prose
               value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="new playlist…"
-              aria-label="New playlist name"
-              className="min-w-0 flex-1 bg-transparent text-[length:var(--text-base)] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]"
+              onChange={setNewName}
+              placeholder="New playlist…"
+              label="New playlist name"
+              className="flex-1"
             />
-            <button
-              type="submit"
-              aria-label="Create playlist and add"
-              className="shrink-0 text-[var(--color-muted)] transition-colors duration-150 hover:text-[var(--color-muted-hi)]"
-            >
-              <Icon name="add" size={16} />
-            </button>
+            <IconButton icon="add" label="Create playlist and add" onClick={() => void createAndAdd()} />
           </form>
         </div>
       )}

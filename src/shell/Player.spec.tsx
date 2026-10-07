@@ -2,11 +2,14 @@
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { TransportDock } from './TransportDock'
+import { Player } from './Player'
 import type { PlaybackProblem } from '../playback/playbackError'
 
 beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ peaks: [] }) }) as unknown as Response))
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({ json: async () => ({ peaks: [] }) }) as unknown as Response),
+  )
   // jsdom has no matchMedia; the volume Popover asks it about reduced motion.
   vi.stubGlobal(
     'matchMedia',
@@ -19,13 +22,17 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-function renderDock(problem: PlaybackProblem | null, onResolveProblem = () => undefined) {
+function renderPlayer(problem: PlaybackProblem | null, onResolveProblem = () => undefined) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const noop = () => undefined
   act(() => {
     createRoot(container).render(
-      createElement(TransportDock, {
+      createElement(Player, {
+        title: 'Song',
+        artist: 'Someone',
+        queueOpen: false,
+        onToggleQueue: noop,
         status: {
           playing: false,
           positionMs: 0,
@@ -53,10 +60,10 @@ function renderDock(problem: PlaybackProblem | null, onResolveProblem = () => un
   return container
 }
 
-describe('TransportDock playback problem (#184)', () => {
+describe('Player playback problem (#184)', () => {
   it('replaces the waveform with the message and its one action', () => {
     const onResolveProblem = vi.fn()
-    const container = renderDock(
+    const container = renderPlayer(
       {
         headline: 'The library drive looks disconnected on this machine',
         detail: 'Nothing is at /mnt/music, where “Song” should be. Reconnect or mount the drive, then try again.',
@@ -78,12 +85,12 @@ describe('TransportDock playback problem (#184)', () => {
   })
 
   it('labels the action Skip track for a file that is simply gone', () => {
-    const container = renderDock({ headline: "Can't open “Song”", detail: 'missing', action: 'skip' })
+    const container = renderPlayer({ headline: "Can't open “Song”", detail: 'missing', action: 'skip' })
     expect(container.querySelector('[role="alert"] button')?.textContent).toBe('Skip track')
   })
 
   it('shows the waveform scrubber when nothing is wrong', () => {
-    const container = renderDock(null)
+    const container = renderPlayer(null)
     expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(container.querySelector('[aria-label="Seek"]')).not.toBeNull()
   })

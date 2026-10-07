@@ -16,3 +16,13 @@ export function formatDurationHours(ms: number): string {
   if (hours < 1) return `${Math.round(ms / 60_000)}m`
   return `~${hours.toFixed(1)}h`
 }
+
+/* A file's bitrate in kbps and its container in capitals, for the metadata
+ * views. Null when the file doesn't say, so callers can drop the part. */
+export function formatBitrate(bitsPerSecond: number | null | undefined): string | null {
+  return bitsPerSecond ? `${Math.round(bitsPerSecond / 1000)} kbps` : null
+}
+
+export function formatFormat(format: string | null | undefined): string | null {
+  return format ? format.toUpperCase() : null
+}

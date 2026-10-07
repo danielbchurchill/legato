@@ -8,7 +8,7 @@ import { usePrefersReducedMotion } from './usePrefersReducedMotion'
  * src/notification.rs) on Legato's glass. See DESIGN.md "Controls".
  *
  * A transient sentence about something that just happened, stacked at the
- * top right under the right-hand header, newest on top. Rubik throughout:
+ * top right at the window's inset, newest on top. Rubik throughout:
  * a toast is the app talking, not library data. No success/warning/error
  * colours — the palette has no semantic hues (DESIGN.md "Controls" on why
  * there's no danger token), and gpui-kit's per-kind icon is a colour cue
@@ -147,7 +147,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           aria-live="polite"
           onPointerEnter={pause}
           onPointerLeave={resume}
-          className="pointer-events-none fixed top-[calc(var(--header-height)+var(--spacing-lg))] right-[var(--spacing-lg)] z-50 flex flex-col gap-[var(--spacing-sm)]"
+          className="pointer-events-none fixed top-[var(--inset)] right-[var(--inset)] z-50 flex flex-col gap-[var(--spacing-sm)]"
         >
           {toasts.slice(0, MAX_VISIBLE).map((toast) => (
             <ToastItem key={toast.id} toast={toast} onDismiss={remove} />

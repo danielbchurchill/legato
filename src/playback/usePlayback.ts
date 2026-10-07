@@ -26,6 +26,12 @@ type ResolvedTrack = {
 }
 
 export type QueueEntry = { recordingNodeId: number; title: string; durationMs: number | null }
+
+/* Where the current queue came from, for the now-playing panel's "Playing
+ * from …" line. Set by the entry points that know (an album, a playlist,
+ * the shuffled library); a bare playTracks with no source says nothing
+ * rather than guessing. */
+export type QueueSource = { kind: 'release'; nodeId: number } | { kind: 'playlist'; playlistId: number } | { kind: 'library' }
 export type ReplayGainMode = 'track' | 'album' | 'off'
 // Issue #125: off -> all -> one, a persisted
 // player setting (App.tsx reads/writes it via useSettings, same as
@@ -116,25 +122,29 @@ type PlaylistTrackEntry = { id: number; title: string }
 // A single click on a track queues the rest of its album, in album order —
 // not just that one track. Loose files with no release (or a release with
 // no other tracks after this one) queue alone, same as before.
-async function resolveQueueContext(recordingNodeId: number, fallbackTitle: string): Promise<QueueEntry[]> {
+async function resolveQueueContext(
+  recordingNodeId: number,
+  fallbackTitle: string,
+): Promise<{ entries: QueueEntry[]; releaseId: number | null }> {
   try {
     const node = (await fetch(`${API}/nodes/${recordingNodeId}`).then((r) => r.json())) as NodeDetail
     const releaseEdge = node.edges.find((e) => e.direction === 'out' && e.type === 'appears_on')
-    if (!releaseEdge) return [{ recordingNodeId, title: node.title, durationMs: null }]
+    if (!releaseEdge) return { entries: [{ recordingNodeId, title: node.title, durationMs: null }], releaseId: null }
 
     const tracklist = (await fetch(`${API}/nodes/${releaseEdge.other_id}/tracklist`).then((r) =>
       r.json(),
     )) as TracklistEntry[]
     const startIndex = tracklist.findIndex((t) => t.id === recordingNodeId)
-    if (startIndex === -1) return [{ recordingNodeId, title: node.title, durationMs: null }]
+    if (startIndex === -1) return { entries: [{ recordingNodeId, title: node.title, durationMs: null }], releaseId: releaseEdge.other_id }
 
-    return tracklist
-      .slice(startIndex)
-      .map((t) => ({ recordingNodeId: t.id, title: t.title, durationMs: t.canonical_duration_ms }))
+    return {
+      entries: tracklist.slice(startIndex).map((t) => ({ recordingNodeId: t.id, title: t.title, durationMs: t.canonical_duration_ms })),
+      releaseId: releaseEdge.other_id,
+    }
   } catch {
     // Context resolution is an enhancement, not a requirement — a network
     // hiccup here shouldn't block playing the one track the user clicked.
-    return [{ recordingNodeId, title: fallbackTitle, durationMs: null }]
+    return { entries: [{ recordingNodeId, title: fallbackTitle, durationMs: null }], releaseId: null }
   }
 }
 
@@ -196,6 +206,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   })
   const [currentTitle, setCurrentTitle] = useState<string | null>(null)
   const [upNext, setUpNext] = useState<QueueEntry[]>([])
+  const [queueSource, setQueueSource] = useState<QueueSource | null>(null)
   const [shuffled, setShuffled] = useState(false)
   // Issue #184: why the last start attempt didn't play, for the transport
   // to show. failedStart mirrors it for the imperative callbacks below,
@@ -657,17 +668,24 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   )
 
   const playTracks = useCallback(
-    (recordingNodeIds: number[], startIndex: number, title: string) =>
-      serialized(() => playTracksCore(recordingNodeIds, startIndex, title)),
+    (recordingNodeIds: number[], startIndex: number, title: string, source: QueueSource | null = null) => {
+      setQueueSource(source)
+      return serialized(() => playTracksCore(recordingNodeIds, startIndex, title))
+    },
     [playTracksCore, serialized],
   )
 
   const playNode = useCallback(
     async (recordingNodeId: number, title: string) => {
-      const context = await resolveQueueContext(recordingNodeId, title)
-      for (const entry of context) titleCache.current.set(entry.recordingNodeId, entry.title)
-      const startIndex = context.findIndex((c) => c.recordingNodeId === recordingNodeId)
-      await playTracks(context.map((c) => c.recordingNodeId), startIndex === -1 ? 0 : startIndex, title)
+      const { entries, releaseId } = await resolveQueueContext(recordingNodeId, title)
+      for (const entry of entries) titleCache.current.set(entry.recordingNodeId, entry.title)
+      const startIndex = entries.findIndex((c) => c.recordingNodeId === recordingNodeId)
+      await playTracks(
+        entries.map((c) => c.recordingNodeId),
+        startIndex === -1 ? 0 : startIndex,
+        title,
+        releaseId != null ? { kind: 'release', nodeId: releaseId } : null,
+      )
     },
     [playTracks],
   )
@@ -701,6 +719,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
           tracklist.map((t) => t.id),
           0,
           '',
+          { kind: 'release', nodeId: releaseId },
         )
       } catch {
         // A resolution hiccup here just means playback doesn't start —
@@ -835,6 +854,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
           tracks.map((t) => t.id),
           0,
           '',
+          { kind: 'playlist', playlistId },
         )
         if (shuffled) await toggleShuffle()
       } catch {
@@ -1013,38 +1033,77 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     return resume()
   }, [next, resume])
 
-  const reorderQueue = useCallback(
-    (fromIndex: number, toIndex: number) =>
-      serialized(async () => {
-        if (fromIndex <= currentIndex.current || toIndex <= currentIndex.current) return
-        if (fromIndex < 0 || fromIndex >= playSequence.current.length) return
-        if (toIndex < 0 || toIndex >= playSequence.current.length) return
-        if (fromIndex === toIndex) return
+  // Both queue edits take an index into the whole play sequence, which only
+  // this hook knows the current position in. The *Core forms do the edit
+  // with no lock; the exported forms run them inside `serialized`, either
+  // with absolute indices (reorderQueue/removeFromQueue) or with indices
+  // into upNext, resolved against currentIndex only once the lock is held
+  // (moveUpNext/removeUpNext) — so a track advancing between a click and
+  // its turn in the queue can't shift which row the edit lands on.
+  const reorderQueueCore = useCallback(
+    async (fromIndex: number, toIndex: number) => {
+      if (fromIndex <= currentIndex.current || toIndex <= currentIndex.current) return
+      if (fromIndex < 0 || fromIndex >= playSequence.current.length) return
+      if (toIndex < 0 || toIndex >= playSequence.current.length) return
+      if (fromIndex === toIndex) return
 
-        const reordered = playSequence.current.slice()
-        const [moved] = reordered.splice(fromIndex, 1)
-        reordered.splice(toIndex, 0, moved)
-        playSequence.current = reordered
+      const reordered = playSequence.current.slice()
+      const [moved] = reordered.splice(fromIndex, 1)
+      reordered.splice(toIndex, 0, moved)
+      playSequence.current = reordered
 
-        if (!IS_TAURI) {
-          setUpNext(playSequence.current.slice(currentIndex.current + 1))
-          return
-        }
-        await rebuildTauriQueueInPlace()
-      }),
-    [rebuildTauriQueueInPlace, serialized],
+      if (!IS_TAURI) {
+        setUpNext(playSequence.current.slice(currentIndex.current + 1))
+        return
+      }
+      await rebuildTauriQueueInPlace()
+    },
+    [rebuildTauriQueueInPlace],
   )
 
-  const removeFromQueue = useCallback(
-    (index: number) =>
+  const removeFromQueueCore = useCallback(
+    async (index: number) => {
+      if (index <= currentIndex.current) return
+      if (index < 0 || index >= playSequence.current.length) return
+
+      playSequence.current = playSequence.current.filter((_, i) => i !== index)
+
+      if (!IS_TAURI) {
+        setUpNext(playSequence.current.slice(currentIndex.current + 1))
+        return
+      }
+      await rebuildTauriQueueInPlace()
+    },
+    [rebuildTauriQueueInPlace],
+  )
+
+  const reorderQueue = useCallback(
+    (fromIndex: number, toIndex: number) => serialized(() => reorderQueueCore(fromIndex, toIndex)),
+    [reorderQueueCore, serialized],
+  )
+
+  const removeFromQueue = useCallback((index: number) => serialized(() => removeFromQueueCore(index)), [removeFromQueueCore, serialized])
+
+  const moveUpNext = useCallback(
+    (from: number, to: number) =>
+      serialized(() => reorderQueueCore(currentIndex.current + 1 + from, currentIndex.current + 1 + to)),
+    [reorderQueueCore, serialized],
+  )
+
+  const removeUpNext = useCallback(
+    (index: number) => serialized(() => removeFromQueueCore(currentIndex.current + 1 + index)),
+    [removeFromQueueCore, serialized],
+  )
+
+  // Drops everything after the current track; the current one keeps playing.
+  const clearUpNext = useCallback(
+    () =>
       serialized(async () => {
-        if (index <= currentIndex.current) return
-        if (index < 0 || index >= playSequence.current.length) return
-
-        playSequence.current = playSequence.current.filter((_, i) => i !== index)
-
+        if (currentIndex.current < 0) return
+        if (playSequence.current.length <= currentIndex.current + 1) return
+        playSequence.current = playSequence.current.slice(0, currentIndex.current + 1)
         if (!IS_TAURI) {
-          setUpNext(playSequence.current.slice(currentIndex.current + 1))
+          setUpNext([])
           return
         }
         await rebuildTauriQueueInPlace()
@@ -1154,6 +1213,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     status,
     currentTitle,
     upNext,
+    queueSource,
     shuffled,
     // True whenever a playTracks/next/previous/toggleShuffle/reorderQueue/
     // removeFromQueue/addToQueue/playNext/pause/resume call is running or
@@ -1178,6 +1238,9 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     playNext,
     reorderQueue,
     removeFromQueue,
+    moveUpNext,
+    removeUpNext,
+    clearUpNext,
     toggleShuffle,
     next,
     previous,
