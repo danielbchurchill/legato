@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { recomputeAllLayouts, rebuildLayout } from "../layout/seed.js";
+import { isSettledPositionList, saveSettledPositions } from "../layout/settled.js";
 import { broadcast } from "../ws.js";
 
 export function layoutRoutes(db: Database) {
@@ -24,5 +25,22 @@ export function layoutRoutes(db: Database) {
       broadcast("layout:rebuilt", {});
       return { ok: true };
     });
+
+    // #274: where the map came to rest, saved once per settle by the client
+    // (layout/settled.ts). Its own body limit: /nodes serves up to 20,000
+    // nodes, and a first settle sends all of them at about 60 bytes each,
+    // which would go past Fastify's 1 MiB default.
+    app.put<{ Body: { positions?: unknown } }>(
+      "/layout/settled",
+      { bodyLimit: 4 * 1024 * 1024 },
+      async (request, reply) => {
+        const positions = request.body?.positions;
+        if (!isSettledPositionList(positions)) {
+          reply.code(400);
+          return { error: "positions must be a list of { id, x, y } with finite numbers" };
+        }
+        return { saved: saveSettledPositions(db, positions) };
+      },
+    );
   };
 }

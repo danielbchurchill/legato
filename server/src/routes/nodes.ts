@@ -68,7 +68,7 @@ export function nodesRoutes(db: Database) {
       const rows = db
         .prepare(
           `SELECT n.id, n.type, n.title, n.mbid, r.canonical_duration_ms,
-                  p.seed_x, p.seed_y, p.user_x, p.user_y,
+                  p.seed_x, p.seed_y, p.user_x, p.user_y, p.settled_x, p.settled_y,
                   COALESCE(
                     (SELECT an.title FROM nodes an WHERE an.id = al.primary_artist_node_id),
                     (SELECT an.title
@@ -247,17 +247,23 @@ export function nodesRoutes(db: Database) {
       return { results };
     });
 
-    // Writes user_x/user_y only — seed_x/seed_y are derived and only ever
-    // touched by layout/seed.ts's recompute. A user's drag never gets
-    // auto-moved back by anything routine (routes/layout.ts's explicit
-    // "rebuild map" is the one deliberate, user-triggered exception —
-    // layout/seed.ts's rebuildLayout, #46).
+    // Writes user_x/user_y, and the same spot as settled_x/settled_y (#274),
+    // so a node dropped while "lock layout" holds the physics still reopens
+    // where it was dropped. seed_x/seed_y are derived and only ever touched
+    // by layout/seed.ts's recompute. A user's drag never gets auto-moved
+    // back by anything routine (routes/layout.ts's explicit "rebuild map" is
+    // the one deliberate, user-triggered exception — layout/seed.ts's
+    // rebuildLayout, #46).
     app.patch<{ Params: { id: string }; Body: { x: number; y: number } }>(
       "/nodes/:id/position",
       async (request, reply) => {
+        const { x, y } = request.body;
         const result = db
-          .prepare("UPDATE positions SET user_x = ?, user_y = ? WHERE node_id = ? AND granularity = ?")
-          .run(request.body.x, request.body.y, request.params.id, GRANULARITY);
+          .prepare(
+            `UPDATE positions SET user_x = ?, user_y = ?, settled_x = ?, settled_y = ?
+              WHERE node_id = ? AND granularity = ?`,
+          )
+          .run(x, y, x, y, request.params.id, GRANULARITY);
         if (result.changes === 0) {
           reply.code(404);
           return { error: "not found" };

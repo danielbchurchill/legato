@@ -35,6 +35,7 @@ import m0029_local_owner from "./0029_local_owner.sql" with { type: "text" };
 import m0030_nodes_title_lookup_index from "./0030_nodes_title_lookup_index.sql" with { type: "text" };
 import m0032_legato_identity from "./0032_legato_identity.sql" with { type: "text" };
 import m0034_drop_artist_photo_mbid_flags from "./0034_drop_artist_photo_mbid_flags.sql" with { type: "text" };
+import m0036_settled_positions from "./0036_settled_positions.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -75,4 +76,5 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 30, file: "0030_nodes_title_lookup_index.sql", sql: m0030_nodes_title_lookup_index },
   { version: 32, file: "0032_legato_identity.sql", sql: m0032_legato_identity },
   { version: 34, file: "0034_drop_artist_photo_mbid_flags.sql", sql: m0034_drop_artist_photo_mbid_flags },
+  { version: 36, file: "0036_settled_positions.sql", sql: m0036_settled_positions },
 ];
