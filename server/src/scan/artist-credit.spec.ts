@@ -65,6 +65,71 @@ describe("splitArtistCredit", () => {
   });
 });
 
+// Issue #273: "," and "&" split only when the file or MusicBrainz names
+// each artist on its own.
+describe("splitArtistCredit with evidence", () => {
+  it("splits a comma-joined line its ARTISTS tag lists separately", () => {
+    expect(
+      splitArtistCredit("Cage The Elephant, Alison Mosshart", ["Cage The Elephant", "Alison Mosshart"]),
+    ).toEqual(["Cage The Elephant", "Alison Mosshart"]);
+  });
+
+  it("splits a line of commas and an ampersand, keeping the tag's spelling and order", () => {
+    expect(
+      splitArtistCredit("Fiona Apple, Sebastian Steinberg, David Garza & Amy Aileen Wood", [
+        "Amy Aileen Wood",
+        "fiona apple",
+        "David Garza",
+        "Sebastian Steinberg",
+      ]),
+    ).toEqual(["Fiona Apple", "Sebastian Steinberg", "David Garza", "Amy Aileen Wood"]);
+  });
+
+  it("leaves a duo whole when the evidence names the duo", () => {
+    expect(splitArtistCredit("Simon & Garfunkel", ["Simon & Garfunkel"])).toEqual(["Simon & Garfunkel"]);
+    expect(splitArtistCredit("Crosby, Stills & Nash", ["Crosby, Stills & Nash", "Neil Young"])).toEqual([
+      "Crosby, Stills & Nash",
+    ]);
+  });
+
+  // MusicBrainz relations name Paul Simon and Art Garfunkel as performers on
+  // Simon & Garfunkel records. Neither is spelled "Simon" or "Garfunkel".
+  it("leaves a line whole when the evidence doesn't account for every name", () => {
+    expect(splitArtistCredit("Simon & Garfunkel", ["Paul Simon", "Art Garfunkel"])).toEqual([
+      "Simon & Garfunkel",
+    ]);
+    expect(splitArtistCredit("Cage The Elephant, Alison Mosshart", ["Cage The Elephant"])).toEqual([
+      "Cage The Elephant, Alison Mosshart",
+    ]);
+  });
+
+  it("keeps a name that contains a joiner whole while splitting around it", () => {
+    expect(splitArtistCredit("Earth, Wind & Fire & The Emotions", ["Earth, Wind & Fire", "The Emotions"])).toEqual([
+      "Earth, Wind & Fire",
+      "The Emotions",
+    ]);
+  });
+
+  it("splits only on comma and ampersand, never on and", () => {
+    expect(
+      splitArtistCredit("George Martin and His Orchestra", ["George Martin", "His Orchestra"]),
+    ).toEqual(["George Martin and His Orchestra"]);
+    expect(splitArtistCredit("Peter Bjorn and John", ["Peter", "Bjorn", "John"])).toEqual(["Peter Bjorn and John"]);
+  });
+
+  it("won't leave a possessive name standing alone", () => {
+    expect(splitArtistCredit("Joe Loss & His Orchestra", ["Joe Loss", "His Orchestra"])).toEqual([
+      "Joe Loss & His Orchestra",
+    ]);
+  });
+
+  it("applies evidence to each part after the separators split", () => {
+    expect(
+      splitArtistCredit("Cage The Elephant, Alison Mosshart feat. Beck", ["Cage The Elephant", "Alison Mosshart"]),
+    ).toEqual(["Cage The Elephant", "Alison Mosshart", "Beck"]);
+  });
+});
+
 describe("extraCreditedArtists", () => {
   it("drops ARTISTS entries that decompose an ensemble the credit keeps whole", () => {
     expect(

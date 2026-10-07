@@ -45,6 +45,13 @@ export type NormalizedTags = {
   // MusicBrainz Picard) uses for it. See scan/artist-credit.ts for why the
   // subtraction is by mention rather than exact string equality.
   featuredArtists: string[] | null;
+  // The same list whole, when it names more than one artist. Issue #273:
+  // it's the evidence that splits an ARTIST of "Cage The Elephant, Alison
+  // Mosshart" into two artists, and featuredArtists has already dropped
+  // both of them for being mentioned in the credit. The key is written
+  // even when null, which is how enrich/artistCredit.ts tells a file read
+  // since this field existed from one that needs reading again.
+  artists: string[] | null;
 };
 
 // Split out from parseTags() so the mapping logic is unit-testable without
@@ -85,6 +92,7 @@ export function normalizeTags(common: ICommonTagsResult, format: IFormat): Norma
     producer: common.producer && common.producer.length > 0 ? common.producer : null,
     engineer: common.engineer && common.engineer.length > 0 ? common.engineer : null,
     featuredArtists: emptyToNull(extraCreditedArtists(common.artist, common.artists)),
+    artists: common.artists && common.artists.length > 1 ? common.artists : null,
   };
 }
 

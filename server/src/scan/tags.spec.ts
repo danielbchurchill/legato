@@ -70,6 +70,7 @@ describe("normalizeTags", () => {
       producer: ["George Martin"],
       engineer: ["Geoff Emerick"],
       featuredArtists: ["Billy Preston"],
+      artists: ["The Beatles", "Billy Preston"],
     });
   });
 
@@ -105,6 +106,21 @@ describe("normalizeTags", () => {
 
     const noArtistsField = normalizeTags(common({ artist: "The Beatles" }), format());
     expect(noArtistsField.featuredArtists).toBeNull();
+  });
+
+  // Issue #273: featuredArtists drops every name the credit mentions, so the
+  // ARTISTS list that would split "Cage The Elephant, Alison Mosshart" has to
+  // be kept whole alongside it.
+  it("keeps the full ARTISTS list when it names more than one artist", () => {
+    const joined = normalizeTags(
+      common({ artist: "Cage The Elephant, Alison Mosshart", artists: ["Cage The Elephant", "Alison Mosshart"] }),
+      format(),
+    );
+    expect(joined.artists).toEqual(["Cage The Elephant", "Alison Mosshart"]);
+    expect(joined.featuredArtists).toBeNull();
+
+    expect(normalizeTags(common({ artist: "The Beatles", artists: ["The Beatles"] }), format()).artists).toBeNull();
+    expect(JSON.parse(JSON.stringify(normalizeTags(common(), format())))).toHaveProperty("artists", null);
   });
 
   it("falls back through originaldate -> releasedate -> date -> year (M-7: original release wins)", () => {
