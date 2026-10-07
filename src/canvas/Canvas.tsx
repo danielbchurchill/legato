@@ -15,7 +15,7 @@ import { NodeHoverPlate } from './NodeHoverPlate'
 import { NodePlayingHalo } from './NodePlayingHalo'
 import { SelectionRing } from './SelectionRing'
 import { MapLegend, MapToolbar } from './MapChrome'
-import { MapNotice } from './MapStates'
+import { FirstScanCard, MapNotice } from './MapStates'
 import { averageColors, hashCoverUrl, sampleCoverColor } from '../ui/coverColor'
 import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
 import type { usePlayback } from '../playback/usePlayback'
@@ -1754,9 +1754,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     void camera.animatedReset({ duration: reduced() ? 0 : SETTLE_REFIT_DURATION_MS })
   }
 
-  // Ordered error > empty: a failed scan is the more actionable thing to
-  // say, and a scan that came back empty is the fallback.
+  // Ordered error > building > empty: a failed scan is the most actionable
+  // thing to say, a first scan explains a sparse map, and a scan that came
+  // back empty is the fallback.
   const showEmptyState = !loading && nodes.length === 0
+  const building = scanStatus.scanning && scanStatus.firstScan
 
   return (
     <div className="absolute inset-0">
@@ -1806,7 +1808,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       {!showEmptyState && <MapLegend counts={counts} showProducers={showCreditNodes} />}
       {!showEmptyState && <MapToolbar onZoomIn={() => zoomBy('in')} onZoomOut={() => zoomBy('out')} onFit={fitMap} options={mapOptions} />}
 
-      {scanStatus.error && showEmptyState ? (
+      {building ? (
+        <FirstScanCard progress={scanStatus.progress} />
+      ) : scanStatus.error && showEmptyState ? (
         <MapNotice title="The scan stopped" body={scanStatus.error} actions={[{ label: 'Try again', onClick: scanStatus.retry, primary: true }]} />
       ) : showEmptyState ? (
         <MapNotice title={scanStatus.scanning ? 'Reading your library' : 'Nothing on the map yet'} body={

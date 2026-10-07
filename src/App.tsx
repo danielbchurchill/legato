@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import LibrarySetup, { Centered } from './LibrarySetup'
+import { Centered } from './shell/Centered'
 import { useServerReady } from './hooks/useServerReady'
 import { ServerUpdateNotice } from './shell/ServerUpdateNotice'
 import { ToastProvider } from './ui/Toast'
@@ -30,6 +30,7 @@ import { useTheme, type ResolvedTheme, type ThemePreference } from './hooks/useT
 import { useMapPresetHistory } from './hooks/useMapPresetHistory'
 import type { ReplayGainMode, RepeatMode } from './playback/usePlayback'
 import { LibraryView } from './library/LibraryView'
+import { AddMusic } from './library/AddMusic'
 import { useAuth } from './auth/useAuth'
 import { OwnerGate } from './auth/OwnerGate'
 import { AccountContext, initialsFor, useAccount } from './auth/accountContext'
@@ -72,7 +73,8 @@ function isTypingTarget(el: Element | null): boolean {
   return (el as HTMLElement).isContentEditable
 }
 
-// Once a library root is configured, the shell is the front door.
+// The shell is the front door, first run included: with no music folder
+// yet, its stage asks for one.
 function MainApp() {
   // #136: per-device theme, applied (and kept applied) by the hook itself.
   // resolvedTheme threads down only to the places that swap a whole asset
@@ -87,11 +89,16 @@ function MainApp() {
   }, [])
 
   if (hasLibrary === null) return <Centered>loading library…</Centered>
-  if (!hasLibrary) return <LibrarySetup onLibraryReady={() => setHasLibrary(true)} theme={theme.resolvedTheme} />
 
   return (
     <GraphDataProvider>
-      <Workspace resolvedTheme={theme.resolvedTheme} themePreference={theme.preference} onSetThemePreference={theme.setPreference} />
+      <Workspace
+        hasLibrary={hasLibrary}
+        onLibraryAdded={() => setHasLibrary(true)}
+        resolvedTheme={theme.resolvedTheme}
+        themePreference={theme.preference}
+        onSetThemePreference={theme.setPreference}
+      />
     </GraphDataProvider>
   )
 }
@@ -101,10 +108,14 @@ function MainApp() {
  * player and the search palette. This owns which of those are open; each
  * one owns what's inside it. */
 function Workspace({
+  hasLibrary,
+  onLibraryAdded,
   resolvedTheme,
   themePreference,
   onSetThemePreference,
 }: {
+  hasLibrary: boolean
+  onLibraryAdded: () => void
   resolvedTheme: ResolvedTheme
   themePreference: ThemePreference
   onSetThemePreference: (preference: ThemePreference) => void
@@ -331,7 +342,17 @@ function Workspace({
   return (
     <ShellLayoutContext.Provider value={layout}>
       <AppShell>
-        {viewMode === 'map' ? (
+        {!hasLibrary ? (
+          <div className="absolute inset-y-0" style={{ left: layout.leftOccupancy, right: layout.rightOccupancy }}>
+            <AddMusic
+              onAdded={() => {
+                onLibraryAdded()
+                // The first scan is drawn on the map as it runs.
+                void updateSettings({ viewMode: 'map' })
+              }}
+            />
+          </div>
+        ) : viewMode === 'map' ? (
           <Canvas
             key={rebuildEpoch}
             ref={canvasRef}
@@ -439,7 +460,8 @@ function Workspace({
           />
         ) : (
           // Hidden while the map is still empty: there's nothing to
-          // shuffle yet.
+          // shuffle yet, and the first-scan card owns the bottom of the
+          // screen's attention.
           graph.nodes.some((n) => n.type === 'recording') && <IdlePlayer onShuffleLibrary={shuffleLibrary} busy={playback.queueBusy} />
         )}
 

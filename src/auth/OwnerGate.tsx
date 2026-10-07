@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import whiteWordmarkSrc from '../assets/brand/white-wordmark.svg'
 import blackWordmarkSrc from '../assets/brand/black-wordmark.svg'
-import { Centered } from '../LibrarySetup'
+import { Centered } from '../shell/Centered'
 import { Button } from '../ui/Button'
 import { API_BASE } from '../config/serverHost'
 import type { ResolvedTheme } from '../hooks/useTheme'
