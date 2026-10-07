@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged by the Tauri CLI into the Info.plist it generates for the macOS bundle. -->
+<plist version="1.0">
+<dict>
+	<!-- A packaged .app gets App Transport Security's default, which only lets the
+	     webview make plain http:// requests to loopback. A Legato server elsewhere
+	     (the Pi at http://100.88.83.70:8899, a LAN box at musicbox.local or a
+	     MagicDNS name) is reached over http, so every /health poll failed with
+	     NSURLErrorDomain -1022 and the window sat on "starting legato-server…".
+	     `tauri dev` never showed it: that page comes from Vite on 127.0.0.1.
+	     Scoped to web content because the webview is the only thing that talks
+	     to a server; the Rust side's networking doesn't go through ATS. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
+</dict>
+</plist>
