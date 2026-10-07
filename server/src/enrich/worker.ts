@@ -22,6 +22,7 @@ import {
 } from "./mbClient.js";
 import { fetchDescriptionFromRelations } from "./wikipedia.js";
 import { applyCredits, recordIsrc, recordReleaseFields } from "./credits.js";
+import { applyMatchedArtistCredit, processArtistCreditLookup } from "./artistCredit.js";
 import { applyMemberRelations } from "./members.js";
 import {
   enqueueArtistImageLookupIfNeeded,
@@ -58,7 +59,8 @@ type EnrichJobType =
   | "cover_art_lookup"
   | "artist_image_lookup"
   | "description_lookup"
-  | "artist_member_lookup";
+  | "artist_member_lookup"
+  | "artist_credit_lookup";
 
 type EnrichJob = { id: number; node_id: number; job_type: EnrichJobType; attempts: number };
 
@@ -289,6 +291,9 @@ async function tryAlbumMatch(db: Database, targetNodeId: number, input: SearchIn
     if (track) {
       applyCredits(db, nodeId, track.credits);
       recordIsrc(db, nodeId, track.isrc);
+      // Issue #273: the artist credit and the credits just applied are what
+      // split a line like "Cage The Elephant, Alison Mosshart".
+      applyMatchedArtistCredit(db, recordingMbid, track.artistCredit);
     }
     if (releaseNodeId == null) {
       const resolved = coverTargetNode(db, nodeId);
@@ -371,6 +376,7 @@ async function processRecordingLookup(db: Database, job: EnrichJob): Promise<voi
 
   if (result.outcome === "matched") {
     applyMatch(db, job.node_id, result.mbid, result.confidence);
+    applyMatchedArtistCredit(db, result.mbid, candidates.find((c) => c.mbid === result.mbid)?.artistCredit);
   } else if (result.outcome === "ambiguous") {
     // M-5: candidates go in a real table the maintenance view can act on,
     // not just named in the note — the note keeps the count for the log
@@ -677,6 +683,8 @@ async function processJob(db: Database, job: EnrichJob): Promise<void> {
       await processDescriptionLookup(db, job);
     } else if (job.job_type === "artist_member_lookup") {
       await processArtistMemberLookup(db, job);
+    } else if (job.job_type === "artist_credit_lookup") {
+      await processArtistCreditLookup(db, job);
     } else {
       await processRecordingLookup(db, job);
     }

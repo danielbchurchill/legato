@@ -16,6 +16,7 @@ import { watchLibraryRoot } from "./scan/watcher.js";
 import { reconcileInterruptedScans } from "./scan/scanner.js";
 import { backfillFuzzyIndex } from "./match/backfill-fuzzy-index.js";
 import { mergeDuplicatePeople } from "./match/people.js";
+import { enqueueArtistCreditLookups } from "./enrich/artistCredit.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 import { startUpdateChecks } from "./update/check.js";
@@ -125,11 +126,16 @@ if (!ownerExists(db)) {
 }
 
 // Issue #273: a library from before this has the same person as both an
-// artist node and a credit node. They're merged here, at once, and it's a
-// no-op on a library that's caught up.
+// artist node and a credit node, and credit lines joined by "," or "&" that
+// were never split. The merge is done here, at once. The split needs each
+// file's ARTISTS tag read again and, for a matched recording, MusicBrainz's
+// artist credit, so it's queued for the enrichment worker
+// (enrich/artistCredit.ts). Both are no-ops on a library that's caught up.
 {
   const merged = mergeDuplicatePeople(db);
   if (merged > 0) app.log.info(`people: merged ${merged} credit node(s) into the artist of the same name`);
+  const queued = enqueueArtistCreditLookups(db);
+  if (queued > 0) app.log.info(`people: queued ${queued} recording(s) to split credit lines joined by "," or "&"`);
 }
 
 // Same one-line-diagnosis reasoning as the database log above: if a

@@ -29,6 +29,7 @@ mock.module("../match/fingerprint.js", () => ({ computeFingerprint: mock() }));
 mock.module("./acoustid.js", () => ({ lookupFingerprint: mock() }));
 
 const { runDueJobs, applyMatch, tryFingerprintMatch } = await import("./worker.js");
+const { deriveLocalEdges } = await import("../match/edges.js");
 
 let db: Database;
 
@@ -230,6 +231,42 @@ describe("runDueJobs", () => {
       .prepare("SELECT next_attempt_at <= datetime('now', '+1 hour') AS due FROM enrich_jobs WHERE node_id = ?")
       .get(nodeId) as { due: number };
     expect(willBecomeDue.due).toBe(1);
+  });
+
+  // Issue #273: the credit a search match comes with is kept, and splits the
+  // line straight away rather than at the next start.
+  it("keeps a match's artist credit and splits the joined line it explains", async () => {
+    const nodeId = insertNode("It's Just Forever", "Cage The Elephant, Alison Mosshart", 200000);
+    const { id: fileId } = db.prepare("SELECT id FROM files WHERE recording_node_id = ?").get(nodeId) as { id: number };
+    deriveLocalEdges(db, fileId);
+    enqueue(nodeId);
+    mocked(mbClient.searchRecording).mockResolvedValue([
+      {
+        mbid: "mb-forever",
+        score: 100,
+        title: "It's Just Forever",
+        artist: "Cage the Elephant",
+        artistCredit: [
+          { name: "Cage the Elephant", artist: "Cage the Elephant", joinphrase: " feat. " },
+          { name: "Alison Mosshart", artist: "Alison Mosshart", joinphrase: "" },
+        ],
+        durationMs: 200000,
+        releases: [],
+      },
+    ]);
+
+    await runDueJobs(db);
+
+    const performers = db
+      .prepare(
+        `SELECT n.title FROM edges e JOIN nodes n ON n.id = e.to_node
+          WHERE e.from_node = ? AND e.type = 'performed_by' ORDER BY e.id`,
+      )
+      .all(nodeId) as { title: string }[];
+    expect(performers.map((p) => p.title)).toEqual(["Cage The Elephant", "Alison Mosshart"]);
+    expect(
+      db.prepare("SELECT value FROM field_provenance WHERE node_id = ? AND field = 'artist_credit'").get(nodeId),
+    ).toBeDefined();
   });
 
   it("queues and resolves a Cover Art Archive lookup for a matched recording's art-less release", async () => {
