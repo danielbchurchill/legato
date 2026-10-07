@@ -286,46 +286,107 @@ function EnrichmentItem({
         )}
       </button>
       {candidates && candidates.length > 0 ? (
-        <div role="radiogroup" aria-label={`Releases for ${item.nodeTitle}`} className="flex flex-col gap-[6px]">
-          {candidates.map((c) => {
-            const selected = c.mbid === chosen
-            return (
-              <button
-                key={c.mbid}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => setChosen(c.mbid)}
-                className={`flex flex-col rounded-[var(--radius-control)] border px-[10px] py-[8px] text-left transition-colors duration-[var(--motion-fast)] ${
-                  selected
-                    ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]'
-                    : 'border-[var(--color-line)] hover:bg-[var(--color-wash)]'
-                }`}
-              >
-                <span className="text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
-                  {c.release_title ?? c.mbid}
-                </span>
-                <span className="mono text-[11px] text-[var(--color-ink-2)]">
-                  {[c.release_date?.slice(0, 4), `${Math.round(c.score * 100)}% match`, formatDelta(c.duration_delta_ms)]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </span>
-              </button>
-            )
-          })}
-        </div>
+        <>
+          <div role="radiogroup" aria-label={`Releases for ${item.nodeTitle}`} className="flex flex-col gap-[6px]">
+            {candidates.map((c) => {
+              const selected = c.mbid === chosen
+              return (
+                <button
+                  key={c.mbid}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => setChosen(c.mbid)}
+                  className={`flex flex-col rounded-[var(--radius-control)] border px-[10px] py-[8px] text-left transition-colors duration-[var(--motion-fast)] ${
+                    selected
+                      ? 'border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)]'
+                      : 'border-[var(--color-line)] hover:bg-[var(--color-wash)]'
+                  }`}
+                >
+                  <span className="text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
+                    {c.release_title ?? c.mbid}
+                  </span>
+                  <span className="mono text-[11px] text-[var(--color-ink-2)]">
+                    {[c.release_date?.slice(0, 4), `${Math.round(c.score * 100)}% match`, formatDelta(c.duration_delta_ms)]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          <div className="flex gap-[8px]">
+            <Button variant="primary" disabled={!chosen} onClick={() => void use()}>
+              Use this release
+            </Button>
+            <Button variant="secondary" onClick={onDone}>
+              Skip
+            </Button>
+          </div>
+        </>
       ) : (
-        candidates && <span className="text-small text-[var(--color-ink-2)]">No candidates were saved for this one.</span>
+        candidates && <ManualMatch nodeId={item.nodeId} onDone={onDone} />
       )}
+    </Card>
+  )
+}
+
+/* A track MusicBrainz found nothing for has no candidates to pick from
+ * (#272). The way out is the recording's own MusicBrainz link: the server
+ * looks it up once and applies it like any other match. Its error says
+ * what to paste instead, so it's shown as it comes. */
+function ManualMatch({ nodeId, onDone }: { nodeId: number; onDone: () => void }) {
+  const [reference, setReference] = useState('')
+  const [pending, setPending] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const submit = async () => {
+    const value = reference.trim()
+    if (!value || pending) return
+    setPending(true)
+    setProblem(null)
+    try {
+      const res = await fetch(`${API}/hygiene/manual-match/${nodeId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reference: value }),
+      })
+      if (res.ok) {
+        onDone()
+        return
+      }
+      const body = (await res.json().catch(() => null)) as { error?: string } | null
+      setProblem(body?.error ?? "That didn't match. Try the link again.")
+    } catch {
+      setProblem("Couldn't reach the Legato server.")
+    } finally {
+      setPending(false)
+    }
+  }
+  return (
+    <form
+      className="flex flex-col gap-[8px]"
+      onSubmit={(e) => {
+        e.preventDefault()
+        void submit()
+      }}
+    >
+      <span className="text-small text-[var(--color-ink-2)]">Nothing to pick from. Paste the track's MusicBrainz recording link.</span>
+      <TextField
+        label="MusicBrainz recording link or ID"
+        placeholder="musicbrainz.org/recording/…"
+        value={reference}
+        onChange={setReference}
+      />
+      {problem && <p className="text-small [overflow-wrap:anywhere] text-[var(--color-bad)]">{problem}</p>}
       <div className="flex gap-[8px]">
-        <Button variant="primary" disabled={!chosen} onClick={() => void use()}>
-          Use this release
+        <Button variant="primary" type="submit" disabled={!reference.trim() || pending}>
+          {pending ? 'Matching…' : 'Match'}
         </Button>
         <Button variant="secondary" onClick={onDone}>
           Skip
         </Button>
       </div>
-    </Card>
+    </form>
   )
 }
 
@@ -340,7 +401,7 @@ function EnrichmentToConfirm({ onFocusNode }: { onFocusNode: (id: number) => voi
   return (
     <>
       <Heading title="Enrichment to confirm" count={data ? items.length : null}>
-        More than one MusicBrainz release fits. Pick the one you own.
+        Tracks MusicBrainz couldn't match on its own. Pick the release you own, or paste the track's MusicBrainz link.
       </Heading>
       <div className="flex flex-col gap-[10px]">
         {items.map((item) => (

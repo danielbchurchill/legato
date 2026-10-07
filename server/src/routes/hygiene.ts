@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { getWorklist } from "../hygiene.js";
+import { matchRecordingByHand } from "../enrich/manualMatch.js";
 import { applyMatch } from "../enrich/worker.js";
 import { broadcast } from "../ws.js";
 
@@ -48,6 +49,37 @@ export function hygieneRoutes(db: Database) {
         }
 
         applyMatch(db, nodeId, candidate.mbid, candidate.score);
+        broadcast("hygiene:changed", { nodeId });
+        reply.code(204);
+      },
+    );
+
+    // #272: a no-match item has no candidates to resolve, so the person
+    // pastes the recording's MusicBrainz link instead. This is the only
+    // place that lookup happens, so MusicBrainz is asked only on that click.
+    app.post<{ Params: { nodeId: string }; Body: { reference?: string } | undefined }>(
+      "/hygiene/manual-match/:nodeId",
+      async (request, reply) => {
+        const nodeId = Number(request.params.nodeId);
+        const node = db.prepare("SELECT id FROM nodes WHERE id = ? AND type = 'recording'").get(nodeId);
+        if (!node) {
+          reply.code(404);
+          return { error: "not found" };
+        }
+
+        let result;
+        try {
+          result = await matchRecordingByHand(db, nodeId, String(request.body?.reference ?? ""));
+        } catch (err) {
+          request.log.error(err);
+          reply.code(502);
+          return { error: "Couldn't reach MusicBrainz. Try again in a moment." };
+        }
+        if (!result.ok) {
+          reply.code(result.status);
+          return { error: result.error };
+        }
+
         broadcast("hygiene:changed", { nodeId });
         reply.code(204);
       },
