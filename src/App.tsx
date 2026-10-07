@@ -17,6 +17,7 @@ import { IdlePlayer, Player } from './shell/Player'
 import { LeftPanel, RightPanel } from './shell/SidePanel'
 import { ShellLayoutContext, computeShellLayout, useWindowSize } from './shell/layout'
 import { railOwner, type DetailsTab, type LeftView, type NowPlayingTab, type RailItem, type RightView } from './shell/panels'
+import { MapOptions } from './panels/MapOptions'
 import { CollectionsPanel } from './panels/CollectionsPanel'
 import { HealthPanel } from './panels/HealthPanel'
 import { SettingsPanel } from './panels/SettingsPanel'
@@ -164,11 +165,13 @@ function Workspace({
   // Map options — read live by Canvas's reducers. Memoised so their
   // identity only changes when the settings they come from do.
   const edgeThicknessMultiplier = Number(settings.edgeThicknessMultiplier ?? '1')
-  const showArtistArt = settings.showImagesArtists !== 'false'
-  const showReleaseArt = settings.showImagesAlbums !== 'false'
-  const showTrackArt = settings.showImagesTracks !== 'false'
+  const showArtists = settings.showArtists !== 'false'
+  const showReleases = settings.showReleases !== 'false'
+  const showTracks = settings.showTracks !== 'false'
   // Producer/engineer credits are opt-in (#24): new to an already-tuned map.
   const showCreditNodes = settings.showCreditNodes === 'true'
+  const showArtistLabels = settings.showArtistLabels !== 'false'
+  const colourEdgesByType = settings.colourEdgesByType === 'true'
   const edgeColorOverrides = useMemo(() => resolveEdgeColorOverrides(settings), [settings])
   const nodeSizeMultipliers = useMemo(() => resolveNodeSizeMultipliers(settings), [settings])
   const nodesLocked = settings.nodePositionsLocked === 'true'
@@ -328,11 +331,12 @@ function Workspace({
             onSetAudioDevice={playback.setAudioDevice}
             themePreference={themePreference}
             onSetThemePreference={onSetThemePreference}
-            mapPresets={mapPresets}
           />
         )
     }
   })()
+
+  const mapOptions = <MapOptions settings={settings} updateSettings={updateSettings} mapPresets={mapPresets} />
 
   return (
     <ShellLayoutContext.Provider value={layout}>
@@ -343,14 +347,16 @@ function Workspace({
             ref={canvasRef}
             selectedNodeId={selectedNodeId}
             onSelectNode={selectNode}
-            onOpenInspector={() => selectedNodeId != null && openDetails(selectedNodeId)}
+            onOpenDetails={() => selectedNodeId != null && openDetails(selectedNodeId)}
             playback={playback}
             dimOnHoverEnabled={dimOnHoverEnabled}
             reducedMotionForced={reducedMotionForced}
-            showArtistArt={showArtistArt}
-            showReleaseArt={showReleaseArt}
-            showTrackArt={showTrackArt}
+            showArtists={showArtists}
+            showReleases={showReleases}
+            showTracks={showTracks}
             showCreditNodes={showCreditNodes}
+            showArtistLabels={showArtistLabels}
+            colourEdgesByType={colourEdgesByType}
             nodeSizeMultipliers={nodeSizeMultipliers}
             edgeThicknessMultiplier={edgeThicknessMultiplier}
             edgeColorOverrides={edgeColorOverrides}
@@ -360,6 +366,7 @@ function Workspace({
             forceLinkStrength={forceLinkStrength}
             linkDistance={linkDistance}
             onRestoreDefaults={mapPresets.restoreDefaults}
+            mapOptions={mapOptions}
             theme={resolvedTheme}
           />
         ) : (
