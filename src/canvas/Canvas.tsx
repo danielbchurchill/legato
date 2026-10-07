@@ -973,6 +973,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     let hoverActive = false
     let currentFocus: Focus | null = null
     let focusProgress = 0
+    let focusTarget = 0
     let dwellTimeout: ReturnType<typeof setTimeout> | null = null
     let cancelFocusAnim: (() => void) | null = null
 
@@ -1147,9 +1148,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
      * rather than cutting, and only rises after HOVER_DWELL_MS of a held
      * hover, so sweeping the pointer across a dense cluster doesn't strobe
      * the map. currentFocus is kept through a fade-out so the reducers
-     * still know what is fading. */
+     * still know what is fading, and focusTarget says which way the
+     * crossfade is heading. */
 
     const setFocusTarget = (target: number) => {
+      focusTarget = target
       cancelFocusAnim?.()
       cancelFocusAnim = animateScalar(
         focusProgress,
@@ -1173,7 +1176,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       const next = selectionFocusRef.current ?? (hoverActive ? hoverFocus : null)
       if (next) {
         currentFocus = next
-        if (focusProgress < 1) setFocusTarget(1)
+        // Progress alone can't say focus is settled. Deselecting and
+        // reselecting before the next frame (at any pace, in a window whose
+        // frames are throttled) leaves a fade-out queued that still reads 1,
+        // and left to finish it clears the focus just applied (#275).
+        if (focusProgress < 1 || focusTarget !== 1) setFocusTarget(1)
         else renderer.refresh()
       } else if (currentFocus) {
         setFocusTarget(0)
