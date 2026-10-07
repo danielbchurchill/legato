@@ -2,17 +2,15 @@ import { useMemo } from 'react'
 import { CoverArt } from '../ui/CoverArt'
 import { formatCount, plural } from '../ui/format'
 import { useGraph } from '../canvas/graphContext'
-import { computeClusters } from '../canvas/clusters'
+import { libraryArtists } from './libraryArtists'
 
 /* Artists: the same cover grid as albums, with round photos — on the map a
  * circle is an artist and a square a record, and the library keeps that.
  *
  * There is no artists endpoint; every artist is already in the graph the
- * map draws, with its records counted by the same cluster logic the map
- * uses, so this reads from that. A library's artists number in the
- * hundreds, not the tens of thousands albums can, so it isn't virtualised.
- * Artists with no records of their own (featured-only credits) are left
- * out: they'd fill the grid with names that lead nowhere. */
+ * map draws, so this reads from that, through libraryArtists (which also
+ * gives the Library header its count). A library's artists number in the
+ * hundreds, not the tens of thousands albums can, so it isn't virtualised. */
 
 type ArtistsGridProps = {
   sortDir: 'asc' | 'desc'
@@ -22,11 +20,7 @@ type ArtistsGridProps = {
 export function ArtistsGrid({ sortDir, onOpen }: ArtistsGridProps) {
   const { nodes, edges } = useGraph()
   const artists = useMemo(() => {
-    const { releasesOf } = computeClusters(nodes, edges)
-    const list = nodes
-      .filter((n) => n.type === 'artist' && (releasesOf.get(n.id)?.length ?? 0) > 0)
-      .map((n) => ({ id: n.id, name: n.title, releases: releasesOf.get(n.id)?.length ?? 0 }))
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+    const list = libraryArtists(nodes, edges)
     return sortDir === 'asc' ? list : list.reverse()
   }, [nodes, edges, sortDir])
 

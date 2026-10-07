@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { CoverArt } from '../ui/CoverArt'
@@ -42,20 +42,22 @@ const TYPE_WORD: Record<string, string> = { artist: 'artist', release: 'album', 
 
 const OVERVIEW_TRACKS = 5
 
-function useJson<T>(path: string | null): T | null {
-  const [state, setState] = useState<{ path: string; value: T | null } | null>(null)
+// `version` refetches the same path when it changes: the Metadata tab passes
+// the node, which is a new object after every reload.
+function useJson<T>(path: string | null, version?: unknown): T | null {
+  const [state, setState] = useState<{ path: string; version: unknown; value: T | null } | null>(null)
   useEffect(() => {
     if (!path) return
     let cancelled = false
     fetch(`${API}${path}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((value: T | null) => !cancelled && setState({ path, value }))
-      .catch(() => !cancelled && setState({ path, value: null }))
+      .then((value: T | null) => !cancelled && setState({ path, version, value }))
+      .catch(() => !cancelled && setState({ path, version, value: null }))
     return () => {
       cancelled = true
     }
-  }, [path])
-  return state && state.path === path ? state.value : null
+  }, [path, version])
+  return state && state.path === path && state.version === version ? state.value : null
 }
 
 function shuffle<T>(items: T[]): T[] {
@@ -73,43 +75,15 @@ function formatAdded(value: string | undefined): string {
   return Number.isNaN(date.getTime()) ? NO_VALUE : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-/* What a node is made of, from the graph: a record's tracks, an artist's
- * tracks, or a track itself — and every person credited on them, with how
- * many of those tracks each one is on. */
-function useCredits(node: NodeDetail | null) {
-  const graph = useGraph()
-  return useMemo(() => {
-    if (!node) return { tracks: [] as number[], people: [] as { id: number; role: string; count: number }[] }
-    let tracks: number[]
-    if (node.type === 'recording') tracks = [node.id]
-    else if (node.type === 'release')
-      tracks = graph.edges.filter((e) => e.type === 'appears_on' && e.to_node === node.id).map((e) => e.from_node)
-    else if (node.type === 'artist')
-      tracks = graph.edges.filter((e) => e.type === 'performed_by' && e.to_node === node.id).map((e) => e.from_node)
-    else tracks = []
-    const trackSet = new Set(tracks)
-    const ROLE: Record<string, string> = {
-      produced_by: 'producer',
-      engineered_by: 'engineer',
-      mixed_by: 'mixing',
-      performed_by: 'artist',
-      featured_artist: 'featured',
-      performed_credit: 'performer',
-    }
-    const counts = new Map<string, { id: number; role: string; tracks: Set<number> }>()
-    for (const edge of graph.edges) {
-      const role = ROLE[edge.type]
-      if (!role || !trackSet.has(edge.from_node)) continue
-      if (node.type === 'artist' && edge.to_node === node.id) continue
-      const key = `${edge.to_node}:${role}`
-      const entry = counts.get(key) ?? { id: edge.to_node, role, tracks: new Set<number>() }
-      entry.tracks.add(edge.from_node)
-      counts.set(key, entry)
-    }
-    const people = [...counts.values()].map((e) => ({ id: e.id, role: e.role, count: e.tracks.size })).sort((a, b) => b.count - a.count)
-    return { tracks, people }
-  }, [node, graph.edges])
-}
+/* Who made a node and what it's made of, from GET /nodes/:id/credits
+ * (server/src/nodeCredits.ts): a record's tracks, an artist's tracks, or a
+ * track itself, and everyone credited on them with how many tracks each is
+ * on. Names come with it. The map's graph only has nodes with a position,
+ * and most performer and mixing credits have none, so looking names up
+ * there showed them as "?". */
+type CreditedPerson = { id: number; title: string; type: string; role: string; count: number }
+type NodeCredits = { tracks: number[]; people: CreditedPerson[] }
+const NO_CREDITS: NodeCredits = { tracks: [], people: [] }
 
 type NodeDetailsProps = {
   nodeId: number
@@ -124,7 +98,7 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
   const graph = useGraph()
   const summary = useJson<Summary>(`/nodes/${nodeId}/summary`)
   const tracklist = useJson<TracklistEntry[]>(node?.type === 'release' ? `/nodes/${nodeId}/tracklist` : null)
-  const credits = useCredits(node && node.id === nodeId ? node : null)
+  const credits = useJson<NodeCredits>(`/nodes/${nodeId}/credits`) ?? NO_CREDITS
 
   if (!node || node.id !== nodeId) return <DetailsSkeleton />
 
@@ -306,12 +280,11 @@ function Overview({
   node: NodeDetail
   summary: Summary | null
   tracklist: TracklistEntry[] | null
-  people: { id: number; role: string; count: number }[]
+  people: CreditedPerson[]
   onShowTracks: () => void
   playback: Playback
   onFocusNode: (id: number) => void
 }) {
-  const graph = useGraph()
   // Plays are counted per track; a record or an artist shows its size instead.
   const stats: [string, string][] =
     node.type === 'recording'
@@ -337,7 +310,7 @@ function Overview({
   // Connection chips: who made it and what it's part of, from the graph's
   // own edges. A person on most of a record's tracks leads.
   const chips = [
-    ...people.filter((p) => p.role !== 'artist').map((p) => ({ id: p.id, label: `${graph.byId.get(p.id)?.title ?? '?'} · ${p.role}` })),
+    ...people.filter((p) => p.role !== 'artist').map((p) => ({ id: p.id, label: `${p.title} · ${p.role}` })),
     ...node.edges
       .filter((e) => e.type === 'released_on' || e.type === 'member_of' || (node.type === 'recording' && e.type === 'appears_on'))
       .map((e) => ({
@@ -552,11 +525,10 @@ function CreditsTab({
   onFocusNode,
 }: {
   node: NodeDetail
-  people: { id: number; role: string; count: number }[]
+  people: CreditedPerson[]
   reload: () => void
   onFocusNode: (id: number) => void
 }) {
-  const graph = useGraph()
   const groups = new Map<string, typeof people>()
   for (const person of people) {
     const group = ROLE_GROUP[person.role] ?? person.role
@@ -571,7 +543,7 @@ function CreditsTab({
         <Section key={group} label={group}>
           <ul>
             {members.map((person) => {
-              const isCredit = graph.byId.get(person.id)?.type === 'credit'
+              const isCredit = person.type === 'credit'
               return (
                 <li key={`${person.id}-${person.role}`}>
                   <button
@@ -586,7 +558,7 @@ function CreditsTab({
                     )}
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
-                        {graph.byId.get(person.id)?.title ?? NO_VALUE}
+                        {person.title || NO_VALUE}
                       </span>
                       <span className="truncate text-small text-[var(--color-ink-2)]">{person.role}</span>
                     </span>
@@ -751,6 +723,23 @@ function NewConnection({ fromId, onDone, onCancel }: { fromId: number; onDone: (
 
 /* ---- Metadata, edit, review ---------------------------------------------------- */
 
+type MetadataValue = { value: string; source: 'tags' | 'musicbrainz' }
+type NodeMetadata = Record<'releaseDate' | 'releaseType' | 'label' | 'mbid', MetadataValue | null>
+
+// A value from the files' own tags reads as plain text. One only
+// MusicBrainz has is marked, so it's never taken for something the files
+// already say; editing a field writes a tag, and that tag is empty.
+function metadataValue(entry: MetadataValue | null): ReactNode {
+  if (!entry) return NO_VALUE
+  if (entry.source === 'tags') return entry.value
+  return (
+    <span className="flex min-w-0 items-baseline gap-[6px]" title="From MusicBrainz. Not in this file's tags.">
+      <span className="truncate">{entry.value}</span>
+      <span className="shrink-0 text-small text-[var(--color-ink-3)]">MusicBrainz</span>
+    </span>
+  )
+}
+
 function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Summary | null; reload: () => void }) {
   const edit = useTagEdit(node, reload)
   const file = node.files[0]
@@ -761,11 +750,17 @@ function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Sum
         ? ['releaseDate', 'releaseType', 'label']
         : []
 
-  const current: Record<EditableKey, string | null> = {
-    releaseDate: file?.release_date ?? (summary && 'releaseDate' in summary ? summary.releaseDate : null),
-    releaseType: file?.release_type ?? null,
-    label: file?.label ?? null,
-    bpm: file?.bpm != null ? String(file.bpm) : null,
+  // Release date, type and label as GET /nodes/:id/metadata resolves them
+  // (server/src/nodeMetadata.ts): a record's first track's tags, falling
+  // back to what MusicBrainz matched where a tag is empty. bpm is a track's
+  // own tag, read straight off its file. Refetched after a write, when the
+  // node reloads.
+  const metadata = useJson<NodeMetadata>(`/nodes/${node.id}/metadata`, node)
+  const resolved: Record<EditableKey, MetadataValue | null> = {
+    releaseDate: metadata?.releaseDate ?? null,
+    releaseType: metadata?.releaseType ?? null,
+    label: metadata?.label ?? null,
+    bpm: file?.bpm != null ? { value: String(file.bpm), source: 'tags' } : null,
   }
   const fixed: { label: string; value: ReactNode }[] = [
     ...(node.type === 'release' && summary?.kind === 'release' ? [{ label: 'tracks', value: summary.tracks }] : []),
@@ -775,7 +770,7 @@ function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Sum
           { label: 'length', value: formatDuration(node.recording?.canonical_duration_ms) },
         ]
       : []),
-    { label: 'mbid', value: node.mbid ?? NO_VALUE },
+    { label: 'mbid', value: metadataValue(metadata?.mbid ?? null) },
   ]
 
   if (edit.phase === 'review' && edit.review) {
@@ -829,7 +824,17 @@ function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Sum
               label={LABELS[key]}
               value={edit.draft[key] ?? ''}
               onChange={(v) => edit.update(key, v)}
-              placeholder={key === 'releaseDate' ? 'YYYY-MM-DD' : key === 'bpm' ? '120' : undefined}
+              // A value only MusicBrainz has is offered, not filled in:
+              // the field shows what the file says, which is nothing.
+              placeholder={
+                resolved[key]?.source === 'musicbrainz'
+                  ? resolved[key].value
+                  : key === 'releaseDate'
+                    ? 'YYYY-MM-DD'
+                    : key === 'bpm'
+                      ? '120'
+                      : undefined
+              }
               inputMode={key === 'bpm' ? 'numeric' : undefined}
               onEnter={edit.submit}
               onEscape={edit.cancel}
@@ -853,7 +858,7 @@ function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Sum
   const rows = [
     ...editable
       .filter((k) => k !== 'bpm' || node.type === 'recording')
-      .map((key) => ({ label: LABELS[key], value: current[key] ?? NO_VALUE })),
+      .map((key) => ({ label: LABELS[key], value: metadataValue(resolved[key]) })),
     ...fixed,
   ]
   const folder = file?.file_path ? file.file_path.slice(0, file.file_path.lastIndexOf('/') + 1) : null
