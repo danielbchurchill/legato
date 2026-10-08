@@ -79,21 +79,29 @@ function lookup(db: Database, column: Column, credential: string): { user: Sessi
   if (!credential) return null;
   const row = db
     .prepare(
-      `SELECT s.token_hash, u.id, u.provider, u.role, u.email, u.display_name, u.avatar_url
+      `SELECT s.token_hash, s.refreshed_at < datetime('now', ?) AND s.legato_account_id IS NULL AS due,
+              u.id, u.provider, u.role, u.email, u.display_name, u.avatar_url
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.${column} = ? AND s.expires_at > datetime('now')`,
     )
-    .get(hashToken(credential)) as (SessionUser & { token_hash: string }) | undefined;
+    .get(REFRESH_EVERY, hashToken(credential)) as (SessionUser & { token_hash: string; due: number }) | undefined;
   if (!row) return null;
 
   // A legato.fm session keeps the expiry it was issued with (below).
-  db.prepare(
-    `UPDATE sessions SET expires_at = datetime('now', ?), refreshed_at = datetime('now')
-     WHERE token_hash = ? AND refreshed_at < datetime('now', ?) AND legato_account_id IS NULL`,
-  ).run(`+${SESSION_TTL_DAYS} days`, row.token_hash, REFRESH_EVERY);
+  //
+  // Issue #281: an UPDATE takes the write lock even when it matches no row,
+  // and while recompute's worker holds it (recompute.ts), every request
+  // would wait here. So it only runs when the refresh is due, which a
+  // legato.fm session never is.
+  if (row.due) {
+    db.prepare(
+      `UPDATE sessions SET expires_at = datetime('now', ?), refreshed_at = datetime('now')
+       WHERE token_hash = ? AND refreshed_at < datetime('now', ?) AND legato_account_id IS NULL`,
+    ).run(`+${SESSION_TTL_DAYS} days`, row.token_hash, REFRESH_EVERY);
+  }
 
-  const { token_hash, ...user } = row;
+  const { token_hash, due: _due, ...user } = row;
   return { user, tokenHash: token_hash };
 }
 
