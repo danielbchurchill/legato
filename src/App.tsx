@@ -24,7 +24,7 @@ import { SettingsPanel } from './panels/SettingsPanel'
 import { NowPlaying } from './panels/NowPlaying'
 import { NodeDetails } from './panels/NodeDetails'
 import { SearchPalette } from './search/SearchPalette'
-import { API_BASE } from './config/serverHost'
+import { API_BASE, DEFAULT_SERVER_ORIGIN, SERVER_ORIGIN } from './config/serverHost'
 import { useSettings } from './hooks/useSettings'
 import { useTheme, type ResolvedTheme, type ThemePreference } from './hooks/useTheme'
 import { useMapPresetHistory } from './hooks/useMapPresetHistory'
@@ -38,6 +38,9 @@ import { Button } from './ui/Button'
 import { ErrorBoundary, RenderError } from './ui/ErrorBoundary'
 import { useCoverColor, withAlpha } from './ui/coverColor'
 import { LAUNCHED_OFFLINE } from './pwa/register'
+import { ConnectScreen } from './connect/ConnectScreen'
+import { useLegatoRenewal } from './connect/hooks'
+import { OPEN_CONNECT_EVENT, openConnectScreen, type ConnectReason } from './connect/openConnect'
 import { useInstallOffer } from './pwa/installOffer'
 
 // #125: off -> all -> one -> off. The player's single repeat button cycles
@@ -519,8 +522,43 @@ function Workspace({
   )
 }
 
+// Issue #117: how long "starting legato-server…" waits before it offers
+// another server. The desktop app's own server is usually up in a second or
+// two, and a link there from the first frame would be noise.
+const OFFER_ANOTHER_SERVER_MS = 5000
+
+function useConnectScreen(): { reason: ConnectReason | null; close: () => void } {
+  const [reason, setReason] = useState<ConnectReason | null>(null)
+  useEffect(() => {
+    const open = (event: Event) => setReason((event as CustomEvent<ConnectReason>).detail ?? 'switch')
+    window.addEventListener(OPEN_CONNECT_EVENT, open)
+    return () => window.removeEventListener(OPEN_CONNECT_EVENT, open)
+  }, [])
+  return { reason, close: () => setReason(null) }
+}
+
+function useAfter(ms: number, active: boolean): boolean {
+  const [elapsed, setElapsed] = useState(false)
+  useEffect(() => {
+    if (!active) return
+    const timer = setTimeout(() => setElapsed(true), ms)
+    return () => clearTimeout(timer)
+  }, [ms, active])
+  return elapsed
+}
+
 export default function App() {
   const { ready, everConnected, server } = useServerReady()
+  const connect = useConnectScreen()
+  const { resolvedTheme } = useTheme()
+  const chosen = SERVER_ORIGIN !== DEFAULT_SERVER_ORIGIN
+  const offerAnother = useAfter(OFFER_ANOTHER_SERVER_MS, !ready) || chosen || everConnected || LAUNCHED_OFFLINE
+
+  if (connect.reason) {
+    // Back goes to whatever was there before: the app, a sign-in screen,
+    // or the wait for a server that isn't answering.
+    return <ConnectScreen theme={resolvedTheme} reason={connect.reason} onClose={connect.close} />
+  }
 
   if (!ready) {
     // #128: an installed web app launched with the server out of reach
@@ -529,10 +567,17 @@ export default function App() {
     // comes up by itself once the server answers.
     const waiting = everConnected
       ? 'lost connection to legato-server…'
-      : LAUNCHED_OFFLINE
+      : LAUNCHED_OFFLINE || chosen
         ? "can't reach legato-server…"
         : 'starting legato-server…'
-    return <Centered>{waiting}</Centered>
+    // #117: the way out when the server this client points at isn't there.
+    // The real unreachable state is #119's.
+    return (
+      <Centered>
+        {waiting}
+        {offerAnother && <Button onClick={() => openConnectScreen('unreachable')}>connect to a different server</Button>}
+      </Centered>
+    )
   }
 
   const app = <MainApp />
@@ -554,6 +599,7 @@ function OwnerGated({ children }: { children: ReactNode }) {
   // The same store MainApp's useTheme() reads, not a second copy of the
   // preference, so the two can't disagree (#282).
   const { resolvedTheme } = useTheme()
+  useLegatoRenewal(state.kind === 'signed-in')
 
   switch (state.kind) {
     case 'checking':
@@ -570,9 +616,21 @@ function OwnerGated({ children }: { children: ReactNode }) {
         </Centered>
       )
     case 'needs-owner':
-      return <OwnerGate mode="create-owner" status={state.status} theme={resolvedTheme} onSession={acceptSession} />
     case 'needs-sign-in':
-      return <OwnerGate mode="sign-in" status={state.status} theme={resolvedTheme} onSession={acceptSession} />
+      return (
+        <>
+          <OwnerGate
+            mode={state.kind === 'needs-owner' ? 'create-owner' : 'sign-in'}
+            status={state.status}
+            theme={resolvedTheme}
+            onSession={acceptSession}
+          />
+          {/* #117: this may not be the server someone meant to open. */}
+          <div className="fixed inset-x-0 bottom-[24px] flex justify-center">
+            <Button onClick={() => openConnectScreen('signed-out')}>connect to a different server</Button>
+          </div>
+        </>
+      )
     case 'signed-in':
       return <AccountContext.Provider value={state.status.user}>{children}</AccountContext.Provider>
   }

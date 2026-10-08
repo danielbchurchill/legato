@@ -27,6 +27,19 @@ describe('resolveServerOrigin', () => {
     )
   })
 
+  // Issue #117: a server picked on the connect screen.
+  it('takes a chosen server ahead of the default and the env overrides', () => {
+    const page = { servedByServer: false, origin: 'tauri://localhost' }
+    expect(resolveServerOrigin(page, { VITE_SERVER_HOST: '100.100.40.50' }, 'http://192.168.1.20:8899')).toBe(
+      'http://192.168.1.20:8899',
+    )
+  })
+
+  it('never lets a chosen server override the server that served the page', () => {
+    const page = { servedByServer: true, origin: 'http://musicbox:8899' }
+    expect(resolveServerOrigin(page, {}, 'http://192.168.1.20:8899')).toBe('http://musicbox:8899')
+  })
+
   it('treats empty overrides as unset', () => {
     expect(resolveServerOrigin(null, { VITE_SERVER_HOST: '', VITE_SERVER_PORT: '' })).toBe('http://127.0.0.1:8899')
   })

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { API_BASE } from '../config/serverHost'
+import { API_BASE, SERVER_ORIGIN } from '../config/serverHost'
+import { rememberServer } from '../connect/knownServers'
+import { renewLegatoSession } from '../connect/legatoSignIn'
 import { AUTH_REQUIRED_EVENT, clearSession, readSession, storeSession } from './session'
 
 export type AuthStatus = {
@@ -7,6 +9,7 @@ export type AuthStatus = {
   setupCodeRequired: boolean
   user: { role: 'owner' | 'legacy'; provider: string; displayName: string | null; email: string | null } | null
   oauth: { google: boolean; github: boolean }
+  legato?: { serverId: string } | null
 }
 
 export type AuthState =
@@ -23,6 +26,37 @@ function toState(status: AuthStatus): AuthState {
   return status.ownerExists ? { kind: 'needs-sign-in', status } : { kind: 'needs-owner', status }
 }
 
+// What /auth/status says, as the screen to show.
+async function loadAuthState(mayRenew: boolean): Promise<AuthState> {
+  try {
+    const res = await fetch(`${API_BASE}/auth/status`)
+    if (!res.ok) throw new Error(`auth status returned ${res.status}`)
+    const status = (await res.json()) as AuthStatus
+    // A legato.fm session that ran out (the device slept through its
+    // renewal, #117) gets one more try through legato.fm before the
+    // sign-in screen.
+    if (!status.user && mayRenew && readSession()?.legato && (await renewLegatoSession(SERVER_ORIGIN))) {
+      return loadAuthState(false)
+    }
+    // A token the server no longer recognizes (expired, signed out on
+    // another device, a database restored from backup) is dropped here,
+    // so the next request doesn't keep sending it.
+    if (!status.user && readSession()) clearSession()
+    // #117: when and where this device last reached this server, for the
+    // connect screen's "your servers".
+    if (status.legato?.serverId) {
+      const serverId = status.legato.serverId
+      void fetch(`${API_BASE}/health`)
+        .then((r) => r.json() as Promise<{ name?: string }>)
+        .then((health) => rememberServer(serverId, { origin: SERVER_ORIGIN, name: health.name ?? null }))
+        .catch(() => rememberServer(serverId, { origin: SERVER_ORIGIN }))
+    }
+    return toState(status)
+  } catch (err) {
+    return { kind: 'unreachable', message: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 /* Which of the three screens App.tsx shows once the server answers: create
  * the owner, sign in, or the app itself. Re-checks whenever a request
  * anywhere comes back 401 (session.ts fires AUTH_REQUIRED_EVENT), and on
@@ -32,18 +66,7 @@ export function useAuth() {
   const [state, setState] = useState<AuthState>({ kind: 'checking' })
 
   const refresh = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/auth/status`)
-      if (!res.ok) throw new Error(`auth status returned ${res.status}`)
-      const status = (await res.json()) as AuthStatus
-      // A token the server no longer recognizes (expired, signed out on
-      // another device, a database restored from backup) is dropped here,
-      // so the next request doesn't keep sending it.
-      if (!status.user && readSession()) clearSession()
-      setState(toState(status))
-    } catch (err) {
-      setState({ kind: 'unreachable', message: err instanceof Error ? err.message : String(err) })
-    }
+    setState(await loadAuthState(true))
   }, [])
 
   useEffect(() => {
