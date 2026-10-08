@@ -18,6 +18,7 @@ import play from '../assets/icons/play.svg?raw'
 import repeat from '../assets/icons/repeat.svg?raw'
 import reverse from '../assets/icons/reverse.svg?raw'
 import search from '../assets/icons/search.svg?raw'
+import settings from '../assets/icons/settings.svg?raw'
 import sliders from '../assets/icons/sliders.svg?raw'
 import spinner from '../assets/icons/spinner.svg?raw'
 import subtract from '../assets/icons/subtract.svg?raw'
@@ -29,11 +30,11 @@ import volumeMute from '../assets/icons/volume-mute.svg?raw'
  * SVG rather than redrawn. Every glyph is a 24x24 currentColor stroke at 1.5
  * with round caps, so they inherit text color and size from their box.
  *
- * `sliders` is v2's left icon rail glyph for its "Legato Settings"
- * destination. A separate `settings` gear glyph briefly existed alongside it
- * for CollectionPanel's own settings-gear button (opening the old
- * SettingsView modal) — removed once that modal's content moved behind the
- * rail destination instead, its one call site going with it.
+ * `settings` is proicons' gear, the rail's Settings. `sliders` is the map
+ * toolbar's map options. Both used `sliders` until #285, so two different
+ * destinations looked like one. The gear was vendored once before, for
+ * CollectionPanel's old settings button (the SettingsView modal), and went
+ * with that button.
  *
  * `arrow-minimize` and `spacebar` (the minimize/maximize glyphs) went the
  * same way once the window went back to native OS decorations
@@ -94,6 +95,7 @@ const GLYPHS = {
   repeat,
   reverse,
   search,
+  settings,
   sliders,
   spinner,
   subtract,

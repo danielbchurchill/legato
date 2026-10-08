@@ -26,7 +26,7 @@ export const RAIL_ITEMS: { id: RailItem; icon: IconName; label: string }[] = [
   { id: 'health', icon: 'database', label: 'Library health' },
 ]
 
-export const SETTINGS_ITEM = { id: 'settings', icon: 'sliders', label: 'Settings' } as const satisfies {
+export const SETTINGS_ITEM = { id: 'settings', icon: 'settings', label: 'Settings' } as const satisfies {
   id: RailItem
   icon: IconName
   label: string
