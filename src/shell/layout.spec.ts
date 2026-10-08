@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { INSET, RIGHT_PANEL_WIDTH, computeShellLayout, playerContentWidth, playerParts } from './layout'
+import { INSET, PLAYER_MIN_WIDTH, RIGHT_PANEL_WIDTH, computeShellLayout, playerContentWidth, playerParts } from './layout'
 
 describe('computeShellLayout', () => {
   it('centres on the window when only the rail is showing', () => {
@@ -10,6 +10,7 @@ describe('computeShellLayout', () => {
     expect(layout.cx).toBe(754)
     expect(layout.capsuleWidth).toBe(520)
     expect(layout.playerWidth).toBe(720)
+    expect(layout.playerCx).toBe(754)
   })
 
   it('takes both panels out of the free space and centres between them', () => {
@@ -26,8 +27,9 @@ describe('computeShellLayout', () => {
   it('never reports a negative width for a window narrower than its panels', () => {
     const layout = computeShellLayout(600, 600, { leftOpen: true, rightOpen: true })
     expect(layout.free).toBe(0)
-    expect(layout.playerWidth).toBe(0)
     expect(layout.capsuleWidth).toBe(0)
+    // The player holds at the transport's width instead (#293).
+    expect(layout.playerWidth).toBe(PLAYER_MIN_WIDTH)
   })
 
   // #288: the right panel runs to the bottom inset like the left one, so
@@ -46,20 +48,19 @@ describe('computeShellLayout', () => {
     const layout = computeShellLayout(1100, 700, { leftOpen: true, rightOpen: true })
     const panelLeft = 1100 - INSET - RIGHT_PANEL_WIDTH
     expect(layout.playerWidth).toBe(276)
-    expect(panelLeft - (layout.cx + layout.playerWidth / 2)).toBe(32)
+    expect(panelLeft - (layout.playerCx + layout.playerWidth / 2)).toBe(32)
   })
 
-  it('never puts the player under the right panel, in a narrow window or a wide one', () => {
+  it('never puts the player under the right panel while the transport fits beside it', () => {
     for (const leftOpen of [false, true]) {
       const narrowest = computeShellLayout(0, 0, { leftOpen, rightOpen: true })
-      // From the narrowest window that fits both panels side by side up to a wide monitor.
-      for (let width = narrowest.leftOccupancy + narrowest.rightOccupancy; width <= 3840; width += 2) {
+      // From the narrowest window whose free space holds the transport and its margins, up to a wide monitor.
+      const first = narrowest.leftOccupancy + narrowest.rightOccupancy + 48 + PLAYER_MIN_WIDTH
+      for (let width = first; width <= 3840; width += 2) {
         const layout = computeShellLayout(width, 900, { leftOpen, rightOpen: true })
-        const playerRight = layout.cx + layout.playerWidth / 2
+        const playerRight = layout.playerCx + layout.playerWidth / 2
         const panelLeft = width - INSET - RIGHT_PANEL_WIDTH
-        expect(playerRight, `width ${width}, left ${leftOpen ? 'open' : 'closed'}`).toBeLessThanOrEqual(
-          panelLeft - (layout.playerWidth > 0 ? 32 : 8),
-        )
+        expect(playerRight, `width ${width}, left ${leftOpen ? 'open' : 'closed'}`).toBeLessThanOrEqual(panelLeft - 32)
       }
     }
   })
@@ -98,8 +99,32 @@ describe('the player as its bar narrows', () => {
   })
 
   it('fits everything it shows at every bar width', () => {
-    for (let width = playerContentWidth(transportOnly); width <= 720; width++) {
+    for (let width = PLAYER_MIN_WIDTH; width <= 720; width++) {
       expect(playerContentWidth(playerParts(width)), `bar ${width}`).toBeLessThanOrEqual(width)
     }
+  })
+
+  it('stops narrowing at the transport, in the window, however narrow the window', () => {
+    // Previous 30, play 34 and next 30, 6px apart, inside the bar's padding and border.
+    expect(PLAYER_MIN_WIDTH).toBe(1 + 12 + 30 + 6 + 34 + 6 + 30 + 14 + 1)
+    for (const leftOpen of [false, true]) {
+      for (const rightOpen of [false, true]) {
+        // From a small phone up to a wide monitor.
+        for (let width = 320; width <= 3840; width += 2) {
+          const layout = computeShellLayout(width, 900, { leftOpen, rightOpen })
+          const label = `width ${width}, left ${leftOpen}, right ${rightOpen}`
+          expect(layout.playerWidth, label).toBeGreaterThanOrEqual(PLAYER_MIN_WIDTH)
+          expect(layout.playerCx - layout.playerWidth / 2, label).toBeGreaterThanOrEqual(INSET)
+          expect(layout.playerCx + layout.playerWidth / 2, label).toBeLessThanOrEqual(width - INSET)
+        }
+      }
+    }
+  })
+
+  it("holds at the transport's width in the issue's 900px browser window", () => {
+    // Both panels open left 76px of bar before #293, and the transport was cut off.
+    const layout = computeShellLayout(900, 700, { leftOpen: true, rightOpen: true })
+    expect(layout.playerWidth).toBe(PLAYER_MIN_WIDTH)
+    expect(layout.playerParts).toEqual(transportOnly)
   })
 })

@@ -15,7 +15,11 @@ import { createContext, useContext, useEffect, useState } from 'react'
  * space less 48px, so it can't reach under the right panel, and whether one
  * is showing changes no geometry here: the right panel used to stop above
  * the player, which bought no room and made it jump 84px whenever playback
- * started or stopped (#288). */
+ * started or stopped (#288). The one exception is a window too narrow for
+ * the transport between the panels, which only a browser reaches: there the
+ * player holds at the transport's width and floats over the panels' inner
+ * edges, still inside the window, because play/pause can't be the thing
+ * that goes (#293). */
 
 export const INSET = 12
 export const RAIL_WIDTH = 56
@@ -55,9 +59,10 @@ export type PlayerParts = {
  *   202  no cover
  *   134  previous, play/pause and next alone: no shuffle, repeat or scrubber
  *
- * Those three never go. The handoff puts the compact switch at 600, but 56
- * bars at their 1px minimum with 2px gaps only fit from 614; between the
- * two, the waveform ran 6px into the duration. */
+ * Those three never go, and the bar doesn't get narrower than they are. The
+ * handoff puts the compact switch at 600, but 56 bars at their 1px minimum
+ * with 2px gaps only fit from 614; between the two, the waveform ran 6px
+ * into the duration. */
 const PLAYER_STAGES: PlayerParts[] = [
   { cover: true, titleWidth: 180, shuffleAndRepeat: true, waveformBars: 56, queueAndVolume: true },
   { cover: true, titleWidth: 112, shuffleAndRepeat: true, waveformBars: 24, queueAndVolume: true },
@@ -86,6 +91,9 @@ export function playerParts(playerWidth: number): PlayerParts {
   return PLAYER_STAGES.find((parts) => playerContentWidth(parts) <= playerWidth) ?? PLAYER_STAGES[PLAYER_STAGES.length - 1]
 }
 
+/* The transport alone: the narrowest the player gets. */
+export const PLAYER_MIN_WIDTH = playerContentWidth(PLAYER_STAGES[PLAYER_STAGES.length - 1])
+
 export type ShellLayout = {
   width: number
   height: number
@@ -97,6 +105,8 @@ export type ShellLayout = {
   cx: number
   capsuleWidth: number
   playerWidth: number
+  /** The player's centre: cx, unless that would push the bar off the window. */
+  playerCx: number
   playerParts: PlayerParts
   /** Where the map's toolbar and legend sit: above the player's row. */
   floatingBottom: number
@@ -110,16 +120,18 @@ export function computeShellLayout(
   const leftOccupancy = leftOpen ? LEFT_OCCUPANCY_OPEN : LEFT_OCCUPANCY_CLOSED
   const rightOccupancy = rightOpen ? RIGHT_OCCUPANCY_OPEN : 0
   const free = Math.max(0, width - leftOccupancy - rightOccupancy)
-  const playerWidth = Math.max(0, Math.min(720, free - 48))
+  const cx = (leftOccupancy + (width - rightOccupancy)) / 2
+  const playerWidth = Math.max(PLAYER_MIN_WIDTH, Math.min(720, free - 48))
   return {
     width,
     height,
     leftOccupancy,
     rightOccupancy,
     free,
-    cx: (leftOccupancy + (width - rightOccupancy)) / 2,
+    cx,
     capsuleWidth: Math.max(0, Math.min(520, free - 48)),
     playerWidth,
+    playerCx: Math.min(Math.max(cx, INSET + playerWidth / 2), width - INSET - playerWidth / 2),
     playerParts: playerParts(playerWidth),
     floatingBottom: INSET + PLAYER_HEIGHT + INSET,
   }

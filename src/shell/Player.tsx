@@ -221,7 +221,7 @@ export function Player({
       // Clipped to its own bar. Nothing should need it: every set of parts
       // fits the width layout.ts picks it for.
       className="absolute bottom-[var(--inset)] z-20 flex h-[var(--player-height)] -translate-x-1/2 items-center gap-[14px] overflow-hidden rounded-[var(--radius-panel)] pr-[14px] pl-[12px]"
-      style={{ left: layout.cx, width: layout.playerWidth, background }}
+      style={{ left: layout.playerCx, width: layout.playerWidth, background }}
     >
       {parts.cover && <CoverArt nodeId={status.currentRecordingNodeId} size="thumb" className="size-[48px]" alt="" />}
 

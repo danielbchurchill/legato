@@ -58,9 +58,11 @@ The player is as wide as the free space less 48px, up to 720. As that shrinks, i
 | 264px | The cover | 1088px |
 | 202px | Shuffle, repeat and the scrubber | 1026px |
 
-Previous, play/pause and next never go. With the bar's border and padding they need 134px. The desktop app's narrowest window (1100) with both panels open gives a 276px bar: the cover, the whole transport and the waveform, with nothing clipped.
+Previous, play/pause and next never go. With the bar's border and padding they need 134px, and the bar stops narrowing there. The desktop app's narrowest window (1100) with both panels open gives a 276px bar: the cover, the whole transport and the waveform, with nothing clipped.
 
 The order keeps what controls playback longest and drops what's said or reachable elsewhere first. The title is in the now-playing panel, which is usually what's open beside a narrow bar. Closing a panel brings everything back. The waveform is the first thing to narrow, from 56 bars to 24, but after that it costs no width of its own, because it sits under the transport. So it goes last, with shuffle and repeat. A playback problem's message and its one action replace the scrubber at every width, and still fit under previous, play and next.
+
+Only a browser goes narrower than 958px with both panels open. There, the bar holds at 134px and its margins close up. Under 910px it floats over the panels' inner edges, staying inside the window, rather than letting play/pause shrink away. The alternatives were closing a panel for the user, or stopping the right panel above the player again, which #288 removed.
 
 The handoff puts the compact switch at 600px. Its 56 bars at their 1px minimum with 2px gaps only fit from 614, and between the two the waveform ran 6px into the duration, so compact starts at 614. `src/shell/layout.ts` works every threshold out from the parts' sizes (`playerContentWidth`).
 

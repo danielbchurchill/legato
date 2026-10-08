@@ -112,4 +112,13 @@ describe('Player in a narrow bar', () => {
     // The title column has given way on screen, but still names the track.
     expect(container.querySelector('.sr-only')?.textContent).toBe('SongSomeone')
   })
+
+  it('comes down to previous, play/pause and next, and still says why a track failed', () => {
+    const layout = computeShellLayout(900, 700, { leftOpen: true, rightOpen: true })
+    expect(buttons(renderPlayer(null, undefined, layout))).toEqual(['Previous track', 'Play', 'Next track'])
+    document.body.innerHTML = ''
+
+    const container = renderPlayer({ headline: "Can't open “Song”", detail: 'missing', action: 'skip' }, undefined, layout)
+    expect(container.querySelector('[role="alert"] button')?.textContent).toBe('Skip track')
+  })
 })
