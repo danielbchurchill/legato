@@ -9,7 +9,9 @@ import { Surface } from './Surface'
  * Left: 320px, beside the rail, full height. Right: 360px against the right
  * edge, full height too: the player centres on the free space between them
  * and is never wider than it, so it never reaches under the right panel, and
- * the panel doesn't jump when playback starts or stops (#288). Both are glass at
+ * the panel doesn't jump when playback starts or stops (#288). The exception
+ * is a browser window with no room for the transport between them, where the
+ * player floats over both panels' inner edges (#293). Both are glass at
  * --radius-panel with their content in an overlay-scrollbar ScrollArea, x
  * pinned closed (#86). */
 

@@ -46,6 +46,26 @@ The shell floats 12px in from every edge: a 56px rail, a 320px left panel beside
 - **Right panel:** now playing (up next, lyrics, details) or node details. It replaces the full-screen inspector modal, so the map stays visible. One right panel at a time; Escape closes it, then clears the selection, then closes the left panel.
 - **Player:** replaces the 514×121 dock. It takes a wash of the playing cover's colour from its left edge. The waveform is the server's existing loudness envelope (`/files/:id/peaks`), and a seeded shape stands in until it arrives. With nothing loaded, it's an idle pill with "Shuffle library", which queues up to 500 random tracks from the library.
 
+#### The player as it narrows
+
+The player is as wide as the free space less 48px, up to 720. As that shrinks, its parts give way in a fixed order, each at the bar width where it stops fitting (#293):
+
+| Bar under | What goes | Window under, both panels open |
+|---|---|---|
+| 614px | The title column drops to 112px and the waveform to 24 bars (compact) | 1438px |
+| 470px | The title column. The cover still says what's playing, and the title stays for screen readers | 1294px |
+| 344px | Queue and volume | 1168px |
+| 264px | The cover | 1088px |
+| 202px | Shuffle, repeat and the scrubber | 1026px |
+
+Previous, play/pause and next never go. With the bar's border and padding they need 134px, and the bar stops narrowing there. The desktop app's narrowest window (1100) with both panels open gives a 276px bar: the cover, the whole transport and the waveform, with nothing clipped.
+
+The order keeps what controls playback longest and drops what's said or reachable elsewhere first. The title is in the now-playing panel, which is usually what's open beside a narrow bar. Closing a panel brings everything back. The waveform is the first thing to narrow, from 56 bars to 24, but after that it costs no width of its own, because it sits under the transport. So it goes last, with shuffle and repeat. A playback problem's message and its one action replace the scrubber at every width, and still fit under previous, play and next.
+
+Only a browser goes narrower than 958px with both panels open. There, the bar holds at 134px and its margins close up. Under 910px it floats over the panels' inner edges, staying inside the window, rather than letting play/pause shrink away. The alternatives were closing a panel for the user, or stopping the right panel above the player again, which #288 removed.
+
+The handoff puts the compact switch at 600px. Its 56 bars at their 1px minimum with 2px gaps only fit from 614, and between the two the waveform ran 6px into the duration, so compact starts at 614. `src/shell/layout.ts` works every threshold out from the parts' sizes (`playerContentWidth`).
+
 ### The map
 
 Nodes are dots, sized and toned by type. Covers at node size made the map a mosaic rather than a graph; cover colour comes back as each artist cluster's glow, the average of its records' thumbnails, computed client-side (`src/ui/coverColor.ts`). A cluster is an artist, its tracks (by first credit) and its records (by a majority of their tracks) — `src/canvas/clusters.ts`.
@@ -318,6 +338,8 @@ So there's nothing to check these three panels' layouts against pixel-for-pixel 
 "Panel collapsed (v2)" above says the toggle pill and transport dock are unaffected by either side's collapse state — true, and still true after this pass, but incomplete standing on its own: it reads as "the dock is the v1 dock," and that's no longer a safe assumption to leave in place. All three v2 frames (Search `37:653`, Music Map `58:8`, Panel Collapse `55:154`) draw the same replacement for the bottom control, consistently, not as a one-off sketch: 355 × 50, `--radius-control` (15px) rather than `--radius-surface`, holding a waveform, a divider, then plain pause/heart/volume glyphs — no numeric elapsed/duration readout, no volume slider. `TransportDock.tsx` still ships the v1 shape (514 × 121, full glass, both of those) and hasn't been touched by this pass.
 
 The dock's shape is still not implemented. **Its volume mechanic was decided on 2026-09-29, with the gpui-kit port:** the volume glyph opens a Popover holding a vertical Slider, with the value as a percentage in the thumb's tooltip. The glyph swaps to `volume-mute` at zero, so the state reads without opening anything. That answers the question that was blocking the bare-glyph design, with no loss of a specific volume setting, and it's already in the v1 dock (`TransportDock.tsx`) in place of the 64px native range input. The rest of the redesign (355 × 50, no elapsed/duration readout) is still open.
+
+The v2 player that replaced the dock narrows with the free space between the panels, and gives way part by part in a fixed order, down to previous, play/pause and next. "The player as it narrows", under Shell in Legato v2, records the order and the widths (#293).
 
 The Search frame's Inspector Panel has one more unreconciled piece, smaller: its populated-query state draws a `top hits` header (node `58:295`) and a `suggested tracks` header (`58:344`) under the search field, in place of today's single inline results list (`CollectionPanel.tsx`'s `SearchField` — issue #83 moved this back from a floating popover it briefly was, since the popover read as its own mini modal over the Inspector Panel rather than content living in it). Neither header has any rows drawn under it in the mockup — label only, nothing to build against — so this is left as-is rather than guessing at a two-section split Figma hasn't actually specified content for.
 
