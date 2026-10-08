@@ -92,9 +92,13 @@ function b64(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
 
+// tunnel marks a `link` token handed to a server that redeemed a claimed
+// code (issue #237, routes/pair.ts). Reporting that link also mints the
+// server's tunnel credential (linked-servers.ts). Only this service reads
+// it; home servers ignore claims they don't know.
 export function signServerToken(
   keys: SigningKeys,
-  input: { issuer: string; user: RelayUserRow; serverId: string; scope: ServerTokenScope; nowSeconds?: number },
+  input: { issuer: string; user: RelayUserRow; serverId: string; scope: ServerTokenScope; tunnel?: boolean; nowSeconds?: number },
 ): IssuedServerToken {
   const iat = input.nowSeconds ?? Math.floor(Date.now() / 1000);
   const exp = iat + SERVER_TOKEN_TTL_SECONDS;
@@ -111,13 +115,14 @@ export function signServerToken(
     email: input.user.email,
     email_verified: input.user.email !== null && input.user.email_verified === 1,
     name: input.user.display_name,
+    ...(input.tunnel ? { tunnel: true } : {}),
   };
   const signingInput = `${b64(header)}.${b64(claims)}`;
   const signature = sign(null, Buffer.from(signingInput), keys.signing.privateKey).toString("base64url");
   return { token: `${signingInput}.${signature}`, expiresAt: new Date(exp * 1000), scope: input.scope };
 }
 
-export type IssuedClaims = { sub: string; aud: string; scope: ServerTokenScope; jti: string; exp: number };
+export type IssuedClaims = { sub: string; aud: string; scope: ServerTokenScope; jti: string; exp: number; tunnel: boolean };
 
 function decodeSegment(segment: string): Record<string, unknown> | null {
   try {
@@ -151,10 +156,10 @@ export function verifyIssuedToken(
 
   const claims = decodeSegment(payloadPart);
   if (!claims) return null;
-  const { iss, sub, aud, scope, jti, exp } = claims;
+  const { iss, sub, aud, scope, jti, exp, tunnel } = claims;
   const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
   if (iss !== input.issuer || typeof exp !== "number" || exp <= now) return null;
   if (typeof sub !== "string" || typeof aud !== "string" || !SERVER_ID_PATTERN.test(aud)) return null;
   if ((scope !== "access" && scope !== "link") || typeof jti !== "string" || !jti) return null;
-  return { sub, aud, scope, jti, exp };
+  return { sub, aud, scope, jti, exp, tunnel: tunnel === true };
 }

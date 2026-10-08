@@ -33,7 +33,9 @@ import {
 import { isLinkedServer } from "../linked-servers.js";
 import { clientAddress, TokenLimiter } from "../rate-limit.js";
 import { parseSigningKeys, SERVER_ID_PATTERN, signServerToken, type SigningKeys } from "../signing-keys.js";
+import { claimPageRoutes, claimReturnPath } from "./claim-page.js";
 import { linkedServerRoutes } from "./linked-servers.js";
+import { pairRoutes } from "./pair.js";
 
 // Relay-side OAuth account provisioning. This mirrors server/'s pattern
 // (server/src/routes/auth.ts) deliberately: hand-rolled Authorization
@@ -228,6 +230,9 @@ const PROVIDERS: Record<Provider, ProviderFlow> = {
 // --- routes ---
 
 const STATE_COOKIE = "relay_oauth_state";
+// A browser sign-in started from the claim page (issue #237) ends back on
+// it rather than on "you can close this window".
+const RETURN_COOKIE = "relay_return_to";
 
 // Every cookie this relay sets or clears shares these attributes. Secure
 // is on whenever the relay is served over https, as it is in production
@@ -349,8 +354,16 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
       if (CORS_ROUTES.has(request.routeOptions.url ?? "")) applyCors(request, reply);
     });
     // Here rather than in app.ts because recording a link means checking a
-    // token this service signed, with the keys resolved just above.
+    // token this service signed, with the keys resolved just above, and
+    // redeeming a pairing code means signing one (issue #237).
     app.register(linkedServerRoutes(db, { signingKeys, issuer: config.callbackBaseUrl }));
+    app.register(pairRoutes(db, { signingKeys, issuer: config.callbackBaseUrl }));
+    app.register(
+      claimPageRoutes(db, {
+        providers: { google: isGoogleConfigured(config), github: isGithubConfigured(config) },
+        signingAvailable: Boolean(signingKeys && config.callbackBaseUrl),
+      }),
+    );
     for (const url of CORS_ROUTES) {
       app.options(url, async (_request, reply) => reply.code(204).send());
     }
@@ -359,7 +372,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
       const flow = PROVIDERS[provider];
       const exchange = options.exchange?.[provider] ?? ((code: string) => flow.exchange(config, code));
 
-      app.get<{ Querystring: NativeQuery }>(`/auth/${provider}`, async (request, reply) => {
+      app.get<{ Querystring: NativeQuery & { return_to?: string } }>(`/auth/${provider}`, async (request, reply) => {
         if (!flow.isConfigured(config)) {
           reply.code(503);
           return { error: notConfiguredMessage(provider) };
@@ -372,6 +385,8 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
         const state = generateState();
         reply.setCookie(STATE_COOKIE, state, { ...cookie, maxAge: 600 });
         if (start.kind === "native") createNativeRequest(db, state, provider, start.params);
+        const returnTo = start.kind === "browser" ? claimReturnPath(request.query.return_to) : null;
+        if (returnTo) reply.setCookie(RETURN_COOKIE, returnTo, { ...cookie, maxAge: 600 });
         return reply.redirect(flow.authorizeUrl(config, state));
       });
 
@@ -417,6 +432,11 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
           const user = upsertUser(db, provider, profile);
           const { token, expiresAt } = createSession(db, user.id);
           reply.setCookie(SESSION_COOKIE, token, { ...cookie, expires: expiresAt });
+          const returnTo = claimReturnPath(request.cookies[RETURN_COOKIE]);
+          if (returnTo) {
+            reply.clearCookie(RETURN_COOKIE, cookie);
+            return reply.redirect(returnTo);
+          }
           reply.type("text/html");
           return successPage(user.display_name);
         },
