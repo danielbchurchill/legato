@@ -1,43 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { IconButton } from '../ui/IconButton'
-import { formatCount } from '../ui/format'
 import { useShellLayout } from '../shell/layout'
 
-/* The map's own floating chrome, sitting on the player's row: the legend
- * pill on the left, the toolbar on the right, and the map options popover
- * the toolbar opens. All three follow the side panels' occupancy so they
- * stay in the free space. */
-
-const LEGEND = [
-  { type: 'artist', label: 'artists', dot: 9, color: 'var(--color-node-artist)' },
-  { type: 'release', label: 'albums', dot: 7, color: 'var(--color-node-release)' },
-  { type: 'recording', label: 'tracks', dot: 5, color: 'var(--color-node-recording)' },
-  { type: 'credit', label: 'producers', dot: 6, color: 'var(--color-node-credit)' },
-] as const
-
-/* What the dots mean, with how many of each the library holds. The dot sizes
- * echo the map's own (an artist is the biggest), so the key reads as a
- * scale as well as a palette. Producers only appear while they're shown. */
-export function MapLegend({ counts, showProducers }: { counts: Record<(typeof LEGEND)[number]['type'], number>; showProducers: boolean }) {
-  const layout = useShellLayout()
-  return (
-    <div
-      className="glass absolute z-10 flex h-[34px] items-center gap-[14px] rounded-full px-[14px] text-small text-[var(--color-ink-2)]"
-      style={{ left: layout.leftOccupancy + 16, bottom: layout.floatingBottom }}
-    >
-      {LEGEND.filter((item) => item.type !== 'credit' || showProducers).map((item) => (
-        <span key={item.type} className="flex items-center gap-[6px] whitespace-nowrap">
-          <span
-            aria-hidden="true"
-            className="shrink-0 rounded-full"
-            style={{ width: item.dot, height: item.dot, background: item.color }}
-          />
-          <span className="mono">{formatCount(counts[item.type])}</span> {item.label}
-        </span>
-      ))}
-    </div>
-  )
-}
+/* The map's own floating chrome, sitting on the player's row at the right:
+ * the toolbar, and the map options popover it opens. Both follow the right
+ * panel's occupancy so they stay in the free space. The map had a legend
+ * pill at the left, counting each node type; the library view's header
+ * carries those counts, and the map has the room back. */
 
 type MapToolbarProps = {
   onZoomIn: () => void

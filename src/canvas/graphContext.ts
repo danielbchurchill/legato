@@ -2,9 +2,9 @@ import { createContext, useContext } from 'react'
 import type { GraphEdge, GraphNode } from './useGraphData'
 
 /* One fetch of the library's graph, shared. The map draws it, but the
- * legend counts it, the search palette fills in subtitles and covers from
- * it, the player names the artist from it and "Shuffle library" picks from
- * it. They must agree, and none of them should pay for a second /nodes.
+ * search palette fills in subtitles and covers from it, the player names
+ * the artist from it and "Shuffle library" picks from it. They must agree,
+ * and none of them should pay for a second /nodes.
  * GraphDataProvider (graphData.tsx) fills this in. */
 
 export type GraphData = {

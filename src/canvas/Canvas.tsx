@@ -16,7 +16,7 @@ import { NODE_CARD_OFFSET, NODE_CARD_WIDTH_PX } from './nodeCardGeometry'
 import { NodeHoverPlate } from './NodeHoverPlate'
 import { NodePlayingHalo } from './NodePlayingHalo'
 import { SelectionRing } from './SelectionRing'
-import { MapLegend, MapToolbar } from './MapChrome'
+import { MapToolbar } from './MapChrome'
 import { FirstScanCard, MapNotice } from './MapStates'
 import { averageColors, hashCoverUrl, sampleCoverColor } from '../ui/coverColor'
 import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
@@ -1817,12 +1817,6 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const playingNodeId = playback.status.currentRecordingNodeId
   const playingNode = playingNodeId != null ? byId.get(playingNodeId) : undefined
 
-  const counts = useMemo(() => {
-    const byType = { artist: 0, release: 0, recording: 0, credit: 0 }
-    for (const node of nodes) if (node.type in byType) byType[node.type as keyof typeof byType]++
-    return byType
-  }, [nodes])
-
   const reduced = () => osPrefersReducedMotion() || reducedMotionForcedRef.current
   const zoomBy = (direction: 'in' | 'out') => {
     const camera = rendererRef.current?.getCamera()
@@ -1902,7 +1896,6 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         )}
       </div>
 
-      {!showEmptyState && <MapLegend counts={counts} showProducers={showCreditNodes} />}
       {!showEmptyState && <MapToolbar onZoomIn={() => zoomBy('in')} onZoomOut={() => zoomBy('out')} onFit={fitMap} options={mapOptions} />}
 
       {building ? (
