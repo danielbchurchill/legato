@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API_BASE as API } from '../config/serverHost'
+import { useLoadingWait } from './useLoadingWait'
 import type { SortDir } from './types'
 
 // One fetch covers this many rows. DOM virtualization (AlbumsGrid,
@@ -134,27 +135,7 @@ export function useLibraryPage<Row>(
     [loadPage],
   )
 
-  // Same MO-11 wait timing as useLyrics.ts/LibrarySetup.tsx: nothing for the
-  // first ~400ms (most local fetches never reach it), one non-looping change
-  // past ~800ms.
-  const [waitedShort, setWaitedShort] = useState(false)
-  const [waitedLong, setWaitedLong] = useState(false)
-  // Cleared during render, so each load starts both timers from scratch.
-  if (!loading && (waitedShort || waitedLong)) {
-    setWaitedShort(false)
-    setWaitedLong(false)
-  }
-  useEffect(() => {
-    if (!loading) return
-    const shortTimer = setTimeout(() => setWaitedShort(true), 400)
-    const longTimer = setTimeout(() => setWaitedLong(true), 800)
-    return () => {
-      clearTimeout(shortTimer)
-      clearTimeout(longTimer)
-    }
-  }, [loading])
-  const waitVisible = loading && waitedShort
-  const waitLong = loading && waitedLong
+  const wait = useLoadingWait(loading)
 
-  return { rows, total, loading, waitVisible, waitLong, ensureRange }
+  return { rows, total, loading, waitVisible: wait.visible, waitLong: wait.long, ensureRange }
 }

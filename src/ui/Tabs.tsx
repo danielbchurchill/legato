@@ -37,7 +37,10 @@ export type TabsSize = 'xs' | 'sm' | 'md' | 'lg'
 const SEGMENT_HEIGHT: Record<TabsSize, string> = {
   xs: 'h-[20px] px-[8px]',
   sm: 'h-[24px] px-[10px]',
-  md: 'h-[26px] px-[12px]',
+  // The library header's albums/artists/tracks, measured from
+  // LibraryStageV2: 30px segments in the 2px well, 34px overall, level with
+  // the sort pill beside it.
+  md: 'h-[30px] px-[12px]',
   lg: 'h-[32px] px-[14px]',
 }
 
@@ -50,8 +53,9 @@ type TabsProps<T extends string> = {
   variant?: 'segmented' | 'underline'
   /** `segmented` only: skip the inset well, for a caller drawing its own. */
   bare?: boolean
-  /** Segmented heights, v2: 24 (xs), 28 (sm, default), 30 (md), 36 (lg —
-   * the capsule's map/library switch). Underline tabs ignore it. */
+  /** Segmented heights, overall: 24 (xs), 28 (sm, default), 34 (md — the
+   * library header), 36 (lg — the capsule's map/library switch). Underline
+   * tabs ignore it. */
   size?: TabsSize
   className?: string
 }

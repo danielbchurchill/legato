@@ -3,9 +3,14 @@ import { CoverArt } from '../ui/CoverArt'
 import { formatCount, plural } from '../ui/format'
 import { useGraph } from '../canvas/graphContext'
 import { libraryArtists } from './libraryArtists'
+import { GridSkeleton } from './LibrarySkeleton'
+import { LibraryEmpty } from './LibraryEmpty'
+import { useLoadingWait } from './useLoadingWait'
 
-/* Artists: the same cover grid as albums, with round photos — on the map a
- * circle is an artist and a square a record, and the library keeps that.
+/* Artists: the albums grid's tokens and rhythm, with round photos — on the
+ * map a circle is an artist and a square a record, and the library keeps
+ * that. LibraryStageV2 draws only albums and tracks, so this follows the
+ * albums grid rather than a frame of its own.
  *
  * There is no artists endpoint; every artist is already in the graph the
  * map draws, so this reads from that, through libraryArtists (which also
@@ -18,19 +23,23 @@ type ArtistsGridProps = {
 }
 
 export function ArtistsGrid({ sortDir, onOpen }: ArtistsGridProps) {
-  const { nodes, edges } = useGraph()
+  const { nodes, edges, loading } = useGraph()
+  const wait = useLoadingWait(loading)
   const artists = useMemo(() => {
     const list = libraryArtists(nodes, edges)
     return sortDir === 'asc' ? list : list.reverse()
   }, [nodes, edges, sortDir])
 
+  if (loading) return wait.visible ? <GridSkeleton round label="Loading artists" /> : null
+  if (artists.length === 0) return <LibraryEmpty title="No artists yet" body="Tracks without an artist tag are listed under tracks." />
+
   return (
     <>
       <div className="mt-[28px] flex items-center justify-between">
         <h2 className="text-heading text-[var(--color-ink)]">All artists</h2>
-        <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-2)]">{formatCount(artists.length)}</span>
+        <span className="mono text-mono text-[var(--color-ink-2)]">{formatCount(artists.length)}</span>
       </div>
-      <ul className="mt-[14px] grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-x-[24px] gap-y-[28px]">
+      <ul className="mt-[14px] grid grid-cols-[repeat(auto-fill,minmax(var(--library-cell-min),1fr))] gap-x-[var(--library-column-gap)] gap-y-[var(--library-row-gap)]">
         {artists.map((artist) => (
           <li key={artist.id}>
             <button
