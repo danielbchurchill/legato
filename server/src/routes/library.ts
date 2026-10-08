@@ -149,6 +149,34 @@ function listAlbums(
   return { items: rows.map((row) => ({ ...row, coverHash: resolveCoverForNode(db, row.id)?.hash ?? null })), total };
 }
 
+// The joins a track row reads. The artist and album joins resolve "the first
+// edge of this type", same lowest-id-wins convention GET /nodes already uses
+// for its hover-plate subtitle — a recording can carry more than one
+// performed_by edge (featured artists), but the table shows one artist
+// column, same as the canvas shows one subtitle line.
+const TRACK_JOINS = {
+  file: "LEFT JOIN files f ON f.id = (SELECT MIN(id) FROM files WHERE recording_node_id = n.id)",
+  artist: `LEFT JOIN edges pe ON pe.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'performed_by')
+       LEFT JOIN nodes artist ON artist.id = pe.to_node`,
+  album: `LEFT JOIN edges ae ON ae.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'appears_on')
+       LEFT JOIN nodes album ON album.id = ae.to_node`,
+} as const;
+type TrackJoin = keyof typeof TRACK_JOINS;
+
+// What each sort has to join to order the whole table by.
+const TRACK_SORT_JOINS: Record<TrackSort, TrackJoin[]> = {
+  title: [],
+  artist: ["artist"],
+  album: ["album"],
+  duration: [],
+  format: ["file"],
+  dateAdded: [],
+};
+
+function trackJoins(names: TrackJoin[]): string {
+  return [...new Set(names)].map((name) => TRACK_JOINS[name]).join("\n       ");
+}
+
 function listTracks(
   db: Database,
   { q, sort, dir, limit, offset }: { q: string | null; sort: TrackSort; dir: "asc" | "desc"; limit: number; offset: number },
@@ -157,29 +185,42 @@ function listTracks(
     ? "AND (n.title LIKE ? ESCAPE '\\' OR artist.title LIKE ? ESCAPE '\\' OR album.title LIKE ? ESCAPE '\\')"
     : "";
   const whereParams = q ? [likePattern(q), likePattern(q), likePattern(q)] : [];
+  // A search matches artist and album titles, so it needs both on every row.
+  const filterJoins: TrackJoin[] = q ? ["artist", "album"] : [];
 
-  // Both joins below resolve "the first edge of this type", same
-  // lowest-id-wins convention GET /nodes already uses for its hover-plate
-  // subtitle — a recording can carry more than one performed_by edge
-  // (featured artists), but the table shows one artist column, same as the
-  // canvas shows one subtitle line.
-  const fromAndWhere = `
-       FROM nodes n
-       JOIN recordings r ON r.node_id = n.id
-       LEFT JOIN files f ON f.id = (SELECT MIN(id) FROM files WHERE recording_node_id = n.id)
-       LEFT JOIN edges pe ON pe.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'performed_by')
-       LEFT JOIN nodes artist ON artist.id = pe.to_node
-       LEFT JOIN edges ae ON ae.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'appears_on')
-       LEFT JOIN nodes album ON album.id = ae.to_node
-       WHERE n.type = 'recording'
-       ${where}`;
+  // At 30k albums this table is ~300k tracks, and every join is a few index
+  // lookups per row. Joining all three for the count and for the sort took
+  // ~5.5 s a page on that size (#263), so the count and the ordering join
+  // only what they read, and the full row is joined for the page's ids
+  // alone. Each join matches at most one row (an id equality), so leaving
+  // one out changes neither the count nor the order.
+  const total = (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM nodes n
+         JOIN recordings r ON r.node_id = n.id
+         ${trackJoins(filterJoins)}
+         WHERE n.type = 'recording'
+         ${where}`,
+      )
+      .get(...whereParams) as { count: number }
+  ).count;
 
-  const total = (db.prepare(`SELECT COUNT(*) AS count ${fromAndWhere}`).get(...whereParams) as { count: number })
-    .count;
-
+  const order = orderClause(TRACK_SORTS[sort], dir, "n.id");
   const rows = db
     .prepare(
-      `SELECT
+      `WITH page AS (
+         SELECT n.id
+         FROM nodes n
+         JOIN recordings r ON r.node_id = n.id
+         ${trackJoins([...filterJoins, ...TRACK_SORT_JOINS[sort]])}
+         WHERE n.type = 'recording'
+         ${where}
+         ORDER BY ${order}
+         LIMIT ? OFFSET ?
+       )
+       SELECT
          n.id AS id,
          n.title AS title,
          pe.to_node AS artistId,
@@ -189,9 +230,11 @@ function listTracks(
          r.canonical_duration_ms AS durationMs,
          f.format AS format,
          n.created_at AS dateAdded
-       ${fromAndWhere}
-       ORDER BY ${orderClause(TRACK_SORTS[sort], dir, "n.id")}
-       LIMIT ? OFFSET ?`,
+       FROM page
+       JOIN nodes n ON n.id = page.id
+       JOIN recordings r ON r.node_id = n.id
+       ${trackJoins(["file", "artist", "album"])}
+       ORDER BY ${order}`,
     )
     .all(...whereParams, limit, offset) as TrackRow[];
 

@@ -235,3 +235,110 @@ describe("GET /library/tracks", () => {
     expect(items[0].artistName).toBe("First Credit");
   });
 });
+
+// #263 split the tracks query so the count and the ordering join only what
+// they read. This is the query as it was before, every join on every row,
+// kept as the reference the new one has to agree with exactly.
+function referenceTrackIds(sortColumn: string, dir: "asc" | "desc", q: string | null, limit: number, offset: number) {
+  const like = (s: string) => `%${s.replace(/[\\%_]/g, "\\$&")}%`;
+  const where = q
+    ? "AND (n.title LIKE ? ESCAPE '\\' OR artist.title LIKE ? ESCAPE '\\' OR album.title LIKE ? ESCAPE '\\')"
+    : "";
+  const params = q ? [like(q), like(q), like(q)] : [];
+  const fromAndWhere = `
+       FROM nodes n
+       JOIN recordings r ON r.node_id = n.id
+       LEFT JOIN files f ON f.id = (SELECT MIN(id) FROM files WHERE recording_node_id = n.id)
+       LEFT JOIN edges pe ON pe.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'performed_by')
+       LEFT JOIN nodes artist ON artist.id = pe.to_node
+       LEFT JOIN edges ae ON ae.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'appears_on')
+       LEFT JOIN nodes album ON album.id = ae.to_node
+       WHERE n.type = 'recording'
+       ${where}`;
+  const direction = dir === "desc" ? "DESC" : "ASC";
+  const total = (db.prepare(`SELECT COUNT(*) AS count ${fromAndWhere}`).get(...params) as { count: number }).count;
+  const ids = (
+    db
+      .prepare(
+        `SELECT n.id AS id ${fromAndWhere}
+         ORDER BY (${sortColumn} IS NULL) ASC, ${sortColumn} ${direction}, n.id ASC
+         LIMIT ? OFFSET ?`,
+      )
+      .all(...params, limit, offset) as { id: number }[]
+  ).map((row) => row.id);
+  return { ids, total };
+}
+
+describe("GET /library/tracks orders exactly as the single-query version did (#263)", () => {
+  const SORT_COLUMNS = {
+    title: "n.title",
+    artist: "artist.title",
+    album: "album.title",
+    duration: "r.canonical_duration_ms",
+    format: "f.format",
+    dateAdded: "n.created_at",
+  } as const;
+
+  beforeEach(() => {
+    // Ties on every key, a null for every nullable key, and the two cases
+    // where "first" matters: a second performer, and a second file.
+    const a = makeNode("artist", "Alpha");
+    const b = makeNode("artist", "Beta");
+    const twin = makeNode("artist", "Alpha"); // same name, different node
+    const one = makeAlbum("One", { artistId: a });
+    const two = makeAlbum("Two", { artistId: b });
+    const alsoOne = makeAlbum("One"); // same title, different node
+    const spec: [string, number | null, string | null, number | null, number | null, string][] = [
+      ["Song", 200_000, "FLAC", a, one, "2020-01-01 00:00:00"],
+      ["Song", 200_000, "FLAC", b, two, "2020-01-01 00:00:00"],
+      ["Song", null, null, null, null, "2021-06-01 00:00:00"],
+      ["Another", 100_000, "MPEG", twin, alsoOne, "2019-03-03 00:00:00"],
+      ["another", 300_000, "flac", a, null, "2022-02-02 00:00:00"],
+      ["Zed", null, "MPEG", null, two, "2020-01-01 00:00:00"],
+      ["Ålborg", 200_000, null, b, one, "2018-08-08 00:00:00"],
+      ["Mid", 250_000, "FLAC", twin, alsoOne, "2021-06-01 00:00:00"],
+    ];
+    for (const [title, durationMs, format, artist, album, createdAt] of spec) {
+      const track = makeRecording(title, { durationMs, format, createdAt });
+      if (artist != null) edge(track, artist, "performed_by");
+      if (album != null) edge(track, album, "appears_on");
+    }
+    // A featured second performer, and a second file in another format:
+    // only the lowest-id edge and file count.
+    const featured = makeRecording("Featured", { durationMs: 150_000, format: "FLAC" });
+    edge(featured, b, "performed_by");
+    edge(featured, a, "performed_by");
+    edge(featured, one, "appears_on");
+    const root = db.prepare("INSERT INTO library_roots (path) VALUES ('/fake/second') RETURNING id").get() as { id: number };
+    db.prepare(
+      `INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size, format)
+       VALUES (?, ?, '/fake/second.mp3', datetime('now'), 0, 'MPEG')`,
+    ).run(featured, root.id);
+    // A recording with no file at all.
+    const loose = makeNode("recording", "Loose", "2023-01-01 00:00:00");
+    db.prepare("INSERT INTO recordings (node_id, canonical_duration_ms) VALUES (?, NULL)").run(loose);
+    edge(loose, a, "performed_by");
+  });
+
+  for (const sort of Object.keys(SORT_COLUMNS) as (keyof typeof SORT_COLUMNS)[]) {
+    for (const dir of ["asc", "desc"] as const) {
+      for (const q of [null, "o"]) {
+        it(`${sort} ${dir}${q ? ` matching "${q}"` : ""}`, async () => {
+          for (const [limit, offset] of [
+            [500, 0],
+            [3, 0],
+            [3, 3],
+            [3, 7],
+            [4, 9],
+          ]) {
+            const expected = referenceTrackIds(SORT_COLUMNS[sort], dir, q, limit, offset);
+            const query = new URLSearchParams({ sort, dir, limit: String(limit), offset: String(offset), ...(q ? { q } : {}) });
+            const { items, total } = await getTracks(`?${query}`);
+            expect(total).toBe(expected.total);
+            expect(items.map((t: { id: number }) => t.id)).toEqual(expected.ids);
+          }
+        });
+      }
+    }
+  }
+});
