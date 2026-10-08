@@ -3,7 +3,8 @@ import { Popover } from '../ui/Popover'
 import type { SortDir } from './types'
 
 /* The library's sort control: a 34px outlined pill naming the current order
- * ("artist A–Z"), opening a short list of the others. Choosing the active
+ * ("artist A–Z") beside a 16px chevron, as LibraryStageV2 draws it, opening
+ * a short list of the others. Choosing the active
  * one again flips its direction, the same gesture as clicking a sorted
  * column header in the tracks table. */
 
@@ -44,7 +45,7 @@ export function SortPill<T extends string>({ options, value, dir, kindOf, onChan
           }`}
         >
           {current?.label} {directionLabel(kindOf(value), dir)}
-          <Icon name="chevron-down" size={14} />
+          <Icon name="chevron-down" size={16} />
         </button>
       )}
     >

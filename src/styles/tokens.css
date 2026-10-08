@@ -191,6 +191,22 @@
   --player-height: 72px;
   --capsule-height: 48px;
 
+  /* The library, measured from LibraryStageV2 (the v2 handoff's library
+   * frame). Covers fill repeat(auto-fill, minmax(--library-cell-min, 1fr)):
+   * as many columns of 168px or wider as the stage holds, sharing its
+   * width, so a panel opening reflows the grid rather than covering it. The
+   * "Recently added" shelf is one clipped row of fixed-size covers. A track
+   * row is one fixed height, because both layouts are virtualised; the
+   * virtualisers read these back as numbers (src/library/tokens.ts). The
+   * table's columns, and the order they give way in, are layout arithmetic
+   * in src/library/trackColumns.ts. */
+  --library-cell-min: 168px;
+  --library-column-gap: 24px;
+  --library-row-gap: 28px;
+  --library-shelf-cover: 148px;
+  --library-shelf-gap: 20px;
+  --library-track-row: 48px;
+
   /* The control-density scale (DESIGN.md "Control density"), still used by
    * settings rows. */
   --spacing-xs: 5px;

@@ -351,23 +351,41 @@ function Workspace({
 
   const mapOptions = <MapOptions settings={settings} updateSettings={updateSettings} mapPresets={mapPresets} />
 
+  const addMusic = (
+    <AddMusic
+      onAdded={() => {
+        onLibraryAdded()
+        // The first scan is drawn on the map as it runs.
+        void updateSettings({ viewMode: 'map' })
+      }}
+    />
+  )
+
   return (
     <ShellLayoutContext.Provider value={layout}>
       <AppShell>
-        {!hasLibrary ? (
-          <div className="absolute inset-y-0" style={{ left: layout.leftOccupancy, right: layout.rightOccupancy }}>
-            <AddMusic
-              onAdded={() => {
-                onLibraryAdded()
-                // The first scan is drawn on the map as it runs.
-                void updateSettings({ viewMode: 'map' })
-              }}
+        {/* The stage waits for settings: they say which view it is, and the
+         * map (#274) opens on its saved layout without settling, so force
+         * settings or "show producers" arriving a moment later would set
+         * it moving again. */}
+        {!settingsLoaded ? null : !hasLibrary ? (
+          // The library keeps its header over first run, as its frame
+          // draws it; the map has no header to keep.
+          viewMode === 'library' ? (
+            <LibraryView
+              selectedNodeId={selectedNodeId}
+              onOpenNode={openDetails}
+              playback={playback}
+              settings={settings}
+              updateSettings={updateSettings}
+              firstRun={addMusic}
             />
-          </div>
-        ) : !settingsLoaded ? null : viewMode === 'map' ? (
-          // The map waits for settings (#274): it opens on its saved layout
-          // without settling, and force settings or "show producers"
-          // arriving a moment later would set it moving again.
+          ) : (
+            <div className="absolute inset-y-0" style={{ left: layout.leftOccupancy, right: layout.rightOccupancy }}>
+              {addMusic}
+            </div>
+          )
+        ) : viewMode === 'map' ? (
           <Canvas
             key={rebuildEpoch}
             ref={canvasRef}
