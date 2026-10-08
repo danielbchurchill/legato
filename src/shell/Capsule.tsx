@@ -11,7 +11,14 @@ import { MOD_KEY_LABEL } from './keys'
  * lives here, one click or ⌘K from anywhere.
  *
  * The search half is a button, not a field: typing happens in the palette,
- * which opens over the same spot. */
+ * which opens over the same spot.
+ *
+ * The keycap sits 14px inside the pill's top and bottom (48 tall, 20 tall).
+ * The button's 10px right padding, on top of the pill's 8px and its border,
+ * keeps it 14px from the rounded end too: its 5px corner lands on the end's
+ * own centre, 24px in, so it clears the curve evenly instead of tucking into
+ * it (#286). Padding on the button rather than the pill keeps the click
+ * target running to the end. */
 
 export type ViewMode = 'map' | 'library'
 
@@ -43,7 +50,7 @@ export function Capsule({ view, onViewChange, onOpenSearch, hidden }: CapsulePro
         onClick={onOpenSearch}
         aria-label="Search artists, albums, tracks"
         aria-keyshortcuts="Meta+K Control+K"
-        className="flex h-full min-w-0 flex-1 items-center gap-[10px] text-left"
+        className="flex h-full min-w-0 flex-1 items-center gap-[10px] pr-[10px] text-left"
       >
         <Icon name="search" size={18} className="text-[var(--color-ink-2)]" />
         <span className="min-w-0 flex-1 truncate text-[length:var(--text-body)] text-[var(--color-ink-3)]">
