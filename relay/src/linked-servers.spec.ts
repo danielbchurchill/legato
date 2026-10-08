@@ -302,12 +302,23 @@ describe("unlinking and revoking remove the pair", () => {
 });
 
 describe("spent proofs", () => {
+  const count = (db: Database) => (db.prepare("SELECT COUNT(*) AS n FROM spent_server_proofs").get() as { n: number }).n;
+
+  it("an unlink with no pair to remove writes nothing", async () => {
+    const h = setup();
+    const { user } = h.signIn();
+    for (let i = 0; i < 3; i++) {
+      const res = await h.postUnlink(unlinkProof(homeServer(), { issuer: ISSUER, accountId: String(user.id), nowSeconds: now() }));
+      expect(res.json()).toEqual({ unlinked: false });
+    }
+    expect(count(h.db)).toBe(0);
+  });
+
   it("are kept only until the proof would have expired anyway", async () => {
     const h = setup();
     const { user, headers } = h.signIn();
     const server = homeServer();
     await h.link(headers, server);
-    const count = (db: Database) => (db.prepare("SELECT COUNT(*) AS n FROM spent_server_proofs").get() as { n: number }).n;
     expect(count(h.db)).toBe(1);
 
     const later = now() + 11 * 60;

@@ -23,7 +23,7 @@ import { verifyIssuedToken, type SigningKeys } from "./signing-keys.js";
 //     the account (sub), the server (aud), this service (iss) and its own
 //     expiry, and carries a random jti that's spent here.
 //   - Unlink: the server signs the account, its id, this service, the time
-//     and a random nonce that's spent here.
+//     and a random nonce, which is spent here once it removes a pair.
 // #237's claim flow can reuse the same signature check for its pairing code.
 
 // Each proof starts with its own prefix, so a link proof can never be read
@@ -158,7 +158,10 @@ export function acceptLinkProof(
 
 // A server reports that its owner unlinked this account. The pair may
 // already be gone (the account revoked it here first); that's still a
-// success, with changed: false.
+// success, with changed: false, and writes nothing. Only a proof that
+// removes a pair spends its nonce: anyone can make a key and sign a valid
+// unlink proof for it, and with no session to limit, spending every one
+// would let them fill spent_server_proofs for free.
 export function acceptUnlinkProof(
   db: Database,
   issuer: string,
@@ -178,10 +181,11 @@ export function acceptUnlinkProof(
 
   const relayUserId = Number(proof.accountId);
   return db.transaction((): ProofResult => {
+    if (!isLinkedServer(db, relayUserId, serverId)) return { ok: true, relayUserId, serverId, changed: false };
     if (!spendProof(db, `unlink:${proof.nonce}`, issuedAt + UNLINK_PROOF_WINDOW_SECONDS, nowSeconds)) {
       return { ok: false, reason: "used" };
     }
-    const changed = removeLinkedServer(db, relayUserId, serverId);
-    return { ok: true, relayUserId, serverId, changed };
+    removeLinkedServer(db, relayUserId, serverId);
+    return { ok: true, relayUserId, serverId, changed: true };
   })();
 }
