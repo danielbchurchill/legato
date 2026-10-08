@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Database } from "../sqlite.js";
 import { legatoIdentity } from "./legatoIdentity.js";
-import { looksLikeJws, VERIFY_FAILURE_MESSAGES } from "./legatoToken.js";
+import { looksLikeJws, VERIFY_FAILURE_MESSAGES, type LegatoClaims } from "./legatoToken.js";
 import { anyLinkedAccount, userForLegatoClaims } from "./legatoUsers.js";
 import { ownerExists } from "./owner.js";
 import { userForMediaTicket, userForSessionToken, type SessionUser } from "./sessions.js";
@@ -44,6 +44,7 @@ const API_PREFIXES = ["/api/", "/covers/"];
 const PUBLIC_ROUTES = new Set([
   "GET /api/v1/health",
   "GET /api/v1/auth/status",
+  "POST /api/v1/auth/identity",
   "POST /api/v1/auth/owner",
   "GET /api/v1/auth/setup",
   "POST /api/v1/auth/sign-in",
@@ -72,6 +73,9 @@ function isSafeMethod(method: string): boolean {
 declare module "fastify" {
   interface FastifyRequest {
     authUser: SessionUser | null;
+    // Set only when authUser came from a legato.fm access token, for the one
+    // route that exchanges that token for a session (issue #117).
+    legatoClaims: LegatoClaims | null;
   }
 }
 
@@ -96,7 +100,7 @@ function originMatchesHost(request: FastifyRequest): boolean {
   }
 }
 
-type Resolved = { user: SessionUser } | { rejected: string; status?: 403; reason?: string };
+type Resolved = { user: SessionUser; claims?: LegatoClaims } | { rejected: string; status?: 403; reason?: string };
 
 // A legato.fm token that verifies but whose account this server doesn't
 // know is 403, not 401: signing in again wouldn't help, and the client
@@ -135,7 +139,7 @@ function resolveLegatoToken(db: Database, token: string): Resolved {
       reason: "not_a_member",
     };
   }
-  return { user };
+  return { user, claims: result.claims };
 }
 
 function resolveCredential(db: Database, request: FastifyRequest): Resolved | null {
@@ -169,6 +173,7 @@ function resolveCredential(db: Database, request: FastifyRequest): Resolved | nu
 
 export function installAuthGate(app: FastifyInstance, db: Database): void {
   app.decorateRequest("authUser", null);
+  app.decorateRequest("legatoClaims", null);
 
   app.addHook("onRequest", async (request, reply) => {
     // CORS preflight carries no credentials by design, and @fastify/cors
@@ -179,7 +184,10 @@ export function installAuthGate(app: FastifyInstance, db: Database): void {
     // Resolved before the public check, so the public routes that care who
     // is asking (GET /auth/status) can read authUser too.
     const resolved = resolveCredential(db, request);
-    if (resolved && "user" in resolved) request.authUser = resolved.user;
+    if (resolved && "user" in resolved) {
+      request.authUser = resolved.user;
+      request.legatoClaims = resolved.claims ?? null;
+    }
 
     if (isPublicRoute(request.method, request.routeOptions.url)) return;
     if (request.authUser) return;

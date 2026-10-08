@@ -16,7 +16,8 @@ import { accountLinkedToOtherUser, linkAccount, linkedAccountId, unlinkAccount }
 import { createOwner, ownerExists, passwordProblem, verifyOwnerPassword } from "../auth/owner.js";
 import { SignInLimiter } from "../auth/rateLimit.js";
 import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type SetupCodes } from "../auth/setupCode.js";
-import { createSession, deleteSession, type SessionUser } from "../auth/sessions.js";
+import { createSession, deleteSession, spendAccessToken, type SessionUser } from "../auth/sessions.js";
+import { IDENTITY_NONCE_PATTERN, identityProof, loadServerKey } from "../auth/serverKey.js";
 
 // Sign-in for this server (issue #112): the local owner's password, plus
 // the Google/GitHub accounts provisioned before the owner existed. The
@@ -313,12 +314,28 @@ export function authRoutes(
         // issuer says which legato.fm to ask. issuer is null when
         // LEGATO_ID_ORIGIN=off. linked only tells the signed-in caller
         // about their own row.
+        // publicKey (issue #117) is what the id is a hash of, for a client
+        // checking POST /auth/identity's signature.
         legato: {
           serverId: legatoIdentity(db).serverId(),
+          publicKey: loadServerKey(db).publicKey,
           issuer: legatoIdentity(db).origin,
           linked: request.authUser ? linkedAccountId(db, request.authUser.id) !== null : null,
         },
       };
+    });
+
+    // Public, like /auth/status (issue #117): this server signs a nonce the
+    // client just made, with the key its id is derived from, so a client can
+    // tell it apart from anything else on the LAN claiming the same id before
+    // it sends a legato.fm access token (auth/serverKey.ts).
+    app.post<{ Body: { nonce?: unknown } | null }>("/auth/identity", async (request, reply) => {
+      const nonce = request.body?.nonce;
+      if (typeof nonce !== "string" || !IDENTITY_NONCE_PATTERN.test(nonce)) {
+        reply.code(400);
+        return { error: "Send a fresh nonce of 16 to 128 base64url characters as `nonce`.", reason: "bad_nonce" };
+      }
+      return identityProof(loadServerKey(db), nonce);
     });
 
     // Public, and only while there's no owner: what the /setup page shows
@@ -540,6 +557,27 @@ export function authRoutes(
       identity.syncSchedule();
       const legatoNotified = accountId && identity.enabled ? (await identity.recordUnlink(accountId)).ok : null;
       return { ok: true, legatoNotified };
+    });
+
+    // Issue #117: a client signed in to legato.fm swaps an `access` token for
+    // a session, so covers and audio get a media ticket. Only the token can
+    // call this, never a session (the gate sets legatoClaims for a verified
+    // token alone), so a session can't mint sessions. Each token works once,
+    // and the session lasts a fixed twelve hours without sliding
+    // (auth/sessions.ts). The client checks this server's identity before
+    // the token leaves it (src/connect/identity.ts).
+    app.post("/auth/legato/session", async (request, reply) => {
+      const claims = request.legatoClaims;
+      if (!request.authUser || !claims) {
+        reply.code(403);
+        return { error: "Only a legato.fm access token can open a legato.fm session here.", reason: "legato_token_required" };
+      }
+      if (!claims.jti || !spendAccessToken(db, claims.jti, claims.exp)) {
+        reply.code(409);
+        return { error: "That legato.fm token was already used. Ask legato.fm for a fresh one.", reason: "token_used" };
+      }
+      const { token, mediaTicket, expiresAt } = createSession(db, request.authUser.id, claims.sub);
+      return { token, mediaTicket, expiresAt: expiresAt.toISOString(), user: publicUser(request.authUser) };
     });
 
     app.get("/auth/me", async (request) => ({

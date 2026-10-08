@@ -43,13 +43,23 @@ function newToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
-export function createSession(db: Database, userId: number): IssuedSession {
+// A session made from a legato.fm access token (issue #117, migration 0040)
+// lasts this long and never slides. legato.fm stops signing access tokens
+// as soon as an account revokes or unlinks, and a session must not outlive
+// that by much: twelve hours bounds it to half a day. The client renews well
+// before the end, through legato.fm, so a day of listening never sees a
+// sign-in screen, and keeps working through hours of the internet being
+// down at home (src/connect/legatoSignIn.ts).
+export const LEGATO_SESSION_TTL_HOURS = 12;
+
+export function createSession(db: Database, userId: number, legatoAccountId: string | null = null): IssuedSession {
   const token = newToken();
   const mediaTicket = newToken();
+  const lifetime = legatoAccountId === null ? `+${SESSION_TTL_DAYS} days` : `+${LEGATO_SESSION_TTL_HOURS} hours`;
   db.prepare(
-    `INSERT INTO sessions (token_hash, media_ticket_hash, user_id, expires_at)
-     VALUES (?, ?, ?, datetime('now', ?))`,
-  ).run(hashToken(token), hashToken(mediaTicket), userId, `+${SESSION_TTL_DAYS} days`);
+    `INSERT INTO sessions (token_hash, media_ticket_hash, user_id, expires_at, legato_account_id)
+     VALUES (?, ?, ?, datetime('now', ?), ?)`,
+  ).run(hashToken(token), hashToken(mediaTicket), userId, lifetime, legatoAccountId);
   const { expires_at } = db
     .prepare("SELECT expires_at FROM sessions WHERE token_hash = ?")
     .get(hashToken(token)) as { expires_at: string };
@@ -77,9 +87,10 @@ function lookup(db: Database, column: Column, credential: string): { user: Sessi
     .get(hashToken(credential)) as (SessionUser & { token_hash: string }) | undefined;
   if (!row) return null;
 
+  // A legato.fm session keeps the expiry it was issued with (below).
   db.prepare(
     `UPDATE sessions SET expires_at = datetime('now', ?), refreshed_at = datetime('now')
-     WHERE token_hash = ? AND refreshed_at < datetime('now', ?)`,
+     WHERE token_hash = ? AND refreshed_at < datetime('now', ?) AND legato_account_id IS NULL`,
   ).run(`+${SESSION_TTL_DAYS} days`, row.token_hash, REFRESH_EVERY);
 
   const { token_hash, ...user } = row;
@@ -96,4 +107,22 @@ export function userForMediaTicket(db: Database, ticket: string): SessionUser | 
 
 export function deleteSession(db: Database, token: string): void {
   db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
+}
+
+// Unlinking a legato.fm account here, or linking another in its place, ends
+// every session that account's tokens opened (auth/legatoUsers.ts).
+export function deleteLegatoSessions(db: Database, legatoAccountId: string): void {
+  db.prepare("DELETE FROM sessions WHERE legato_account_id = ?").run(legatoAccountId);
+}
+
+// False when this access token was already exchanged for a session. Rows
+// whose token has expired go first: the gate refuses that token by now, so
+// the row has nothing left to guard.
+export function spendAccessToken(db: Database, jti: string, expiresAtSeconds: number): boolean {
+  db.prepare("DELETE FROM spent_access_tokens WHERE expires_at < datetime('now')").run();
+  return (
+    db
+      .prepare("INSERT OR IGNORE INTO spent_access_tokens (jti, expires_at) VALUES (?, datetime(?, 'unixepoch'))")
+      .run(jti, expiresAtSeconds).changes > 0
+  );
 }
