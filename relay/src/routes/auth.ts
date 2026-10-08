@@ -15,6 +15,7 @@ import {
   getUserBySessionToken,
   isValidState,
   SESSION_COOKIE,
+  sessionToken,
   upsertUser,
   type OAuthProfile,
   type Provider,
@@ -29,8 +30,10 @@ import {
   takeNativeRequest,
   type NativeQuery,
 } from "../native-sign-in.js";
+import { isLinkedServer } from "../linked-servers.js";
 import { clientAddress, TokenLimiter } from "../rate-limit.js";
 import { parseSigningKeys, SERVER_ID_PATTERN, signServerToken, type SigningKeys } from "../signing-keys.js";
+import { linkedServerRoutes } from "./linked-servers.js";
 
 // Relay-side OAuth account provisioning. This mirrors server/'s pattern
 // (server/src/routes/auth.ts) deliberately: hand-rolled Authorization
@@ -283,15 +286,6 @@ function publicUser(user: RelayUserRow) {
   };
 }
 
-// A bearer token wins over the cookie: the desktop app only ever sends
-// the header, and a browser only ever has the cookie, so in practice a
-// request carries one or the other.
-export function sessionToken(request: FastifyRequest): string | undefined {
-  const header = request.headers.authorization;
-  if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim() || undefined;
-  return request.cookies[SESSION_COOKIE];
-}
-
 // The endpoints a desktop webview calls directly. Its origin is
 // tauri://localhost (Linux, macOS), http(s)://tauri.localhost (Windows),
 // or a loopback Vite in development, all cross-origin to auth.legato.fm.
@@ -354,6 +348,9 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     app.addHook("onRequest", async (request, reply) => {
       if (CORS_ROUTES.has(request.routeOptions.url ?? "")) applyCors(request, reply);
     });
+    // Here rather than in app.ts because recording a link means checking a
+    // token this service signed, with the keys resolved just above.
+    app.register(linkedServerRoutes(db, { signingKeys, issuer: config.callbackBaseUrl }));
     for (const url of CORS_ROUTES) {
       app.options(url, async (_request, reply) => reply.code(204).send());
     }
@@ -470,15 +467,21 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     // The token says who the account is; the server decides what that
     // account may do there (server/src/auth/gate.ts).
     //
-    // Always scope "link" for now. An "access" token for a server the
-    // account hasn't linked would let a hostile server that claims a real
-    // server's (public) id replay a visitor's token against the real one.
-    // So "access" is only for (account, server) pairs legato.fm has on
-    // record, and nothing records them yet: a server can't prove it owns
-    // an id to the relay until it has a tunnel credential. Until that
-    // follow-up lands (#231, which blocks #117), the only thing a token can do on a
-    // server is link the owner's account.
-    app.post<{ Body: { serverId?: unknown } | null }>("/auth/server-token", async (request, reply) => {
+    // Scope "access" only for a server this account has linked (issue
+    // #231), and "link" for every other id. A server's id is public, so an
+    // "access" token for any id would let a hostile server that claims a
+    // real server's id replay a visitor's token against the real one. A
+    // pair is only recorded once the server proves the id is its own
+    // (linked-servers.ts), so claiming an id can't get a hostile server a
+    // pair. A client still has to check that whatever answers as a linked
+    // server holds that server's key before handing it an access token;
+    // that's the connect screen's job (#117).
+    //
+    // A client can ask for "link" outright, to link a server again while
+    // legato.fm still has the pair (the owner unlinked on the server while
+    // it couldn't reach legato.fm, say). Asking for "access" for a server
+    // that isn't linked still gets "link"; the response's scope says which.
+    app.post<{ Body: { serverId?: unknown; scope?: unknown } | null }>("/auth/server-token", async (request, reply) => {
       const token = sessionToken(request);
       const user = token ? getUserBySessionToken(db, token) : null;
       if (!user) {
@@ -497,7 +500,13 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
           reason: "bad_server_id",
         };
       }
-      const issued = signServerToken(signingKeys, { issuer: config.callbackBaseUrl, user, serverId, scope: "link" });
+      const requested = request.body?.scope;
+      if (requested !== undefined && requested !== "access" && requested !== "link") {
+        reply.code(400);
+        return { error: 'scope must be "access" or "link", or left out.', reason: "bad_scope" };
+      }
+      const scope = requested !== "link" && isLinkedServer(db, user.id, serverId) ? "access" : "link";
+      const issued = signServerToken(signingKeys, { issuer: config.callbackBaseUrl, user, serverId, scope });
       return { token: issued.token, expiresAt: issued.expiresAt.toISOString(), scope: issued.scope };
     });
 

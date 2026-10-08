@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { FastifyRequest } from "fastify";
 import type { Database } from "./sqlite.js";
 import { parseSqliteDatetime } from "./sqlite-datetime.js";
 
@@ -90,6 +91,15 @@ export function getUserBySessionToken(db: Database, token: string): RelayUserRow
 
 export function deleteSession(db: Database, token: string): void {
   db.prepare("DELETE FROM relay_sessions WHERE id = ?").run(token);
+}
+
+// A bearer token wins over the cookie: the desktop app only ever sends
+// the header, and a browser only ever has the cookie, so in practice a
+// request carries one or the other.
+export function sessionToken(request: FastifyRequest): string | undefined {
+  const header = request.headers.authorization;
+  if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim() || undefined;
+  return request.cookies[SESSION_COOKIE];
 }
 
 // --- CSRF state ---

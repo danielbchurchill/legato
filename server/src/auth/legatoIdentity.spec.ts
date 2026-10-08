@@ -1,3 +1,4 @@
+import { createPublicKey, verify } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -5,7 +6,16 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { openDb } from "../db.js";
 import type { Database } from "../sqlite.js";
 import { installLegatoIdentity, LegatoIdentity } from "./legatoIdentity.js";
-import { jwksFetch, makeTestKey, signTestToken, testClaims, TEST_ISSUER, type TestKey } from "./legato-test-keys.js";
+import {
+  fakeLegatoFetch,
+  makeTestKey,
+  signTestToken,
+  testClaims,
+  TEST_ISSUER,
+  type LegatoReport,
+  type TestKey,
+} from "./legato-test-keys.js";
+import { serverIdForPublicKey } from "./serverKey.js";
 import { createSession } from "./sessions.js";
 import { buildTestApp, createOwnerForTest } from "./test-app.js";
 
@@ -22,11 +32,19 @@ afterEach(() => {
   while (cleanups.length) cleanups.pop()!();
 });
 
-async function setup(options: { db?: Database; origin?: string | null; fetchFails?: boolean } = {}) {
+type SetupOptions = {
+  db?: Database;
+  origin?: string | null;
+  fetchFails?: boolean;
+  answer?: (report: LegatoReport) => Response | Error;
+  log?: (level: "info" | "warn", message: string) => void;
+};
+
+async function setup(options: SetupOptions = {}) {
   const db = options.db ?? openDb(":memory:");
   let nowMs = START_MS;
   let published: TestKey[] = [makeTestKey()];
-  const served = jwksFetch(() => published);
+  const served = fakeLegatoFetch(() => published, options.answer);
   const failing = { calls: [] as string[] };
   const fetchImpl = options.fetchFails
     ? ((async (input: string | URL | Request) => {
@@ -38,6 +56,7 @@ async function setup(options: { db?: Database; origin?: string | null; fetchFail
     origin: options.origin === undefined ? TEST_ISSUER : options.origin,
     fetch: fetchImpl,
     now: () => nowMs,
+    log: options.log,
   });
   installLegatoIdentity(db, identity);
   cleanups.push(() => identity.stop());
@@ -54,6 +73,7 @@ async function setup(options: { db?: Database; origin?: string | null; fetchFail
     identity,
     token,
     fetchCalls: () => (options.fetchFails ? failing.calls : served.calls),
+    reports: () => served.reports,
     advance: (ms: number) => {
       nowMs += ms;
     },
@@ -141,7 +161,7 @@ describe("linking the owner", () => {
     const res = await linkOwner(h, owner);
     expect(res.statusCode).toBe(200);
     expect(res.json().linked).toEqual({ accountId: "42", email: "owner@example.com", name: "Test Owner" });
-    expect(h.fetchCalls()).toEqual([`${TEST_ISSUER}/.well-known/jwks.json`]);
+    expect(h.fetchCalls()).toEqual([`${TEST_ISSUER}/.well-known/jwks.json`, `${TEST_ISSUER}/linked-servers`]);
     expect(h.identity.scheduled).toBe(true);
 
     const access = await me(h, h.token());
@@ -313,5 +333,131 @@ describe("matching Google/GitHub users by verified email", () => {
   it("on a server with no Google/GitHub users, matches nothing", async () => {
     const h = await withLegacy([]);
     expect((await me(h, h.token({ sub: "7", email: "anyone@example.com" }))).json().reason).toBe("not_a_member");
+  });
+});
+
+describe("telling legato.fm about links (issue #231)", () => {
+  function signedBy(publicKey: string, message: string, signature: string): boolean {
+    const key = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x: publicKey }, format: "jwk" });
+    return verify(null, Buffer.from(message), key, Buffer.from(signature, "base64url"));
+  }
+
+  async function linkedStatus(h: Harness, owner: string) {
+    return (await h.app.inject({ method: "GET", url: "/api/v1/auth/status", headers: bearer(owner) })).json().legato.linked;
+  }
+
+  it("reports a link with the link token, signed by the key this server's id comes from", async () => {
+    const h = await setup();
+    const { token: owner } = await createOwnerForTest(h.app);
+    const linkToken = h.token({ scope: "link" });
+    expect((await linkOwner(h, owner, linkToken)).statusCode).toBe(200);
+
+    const [report] = h.reports();
+    expect(report!.url).toBe(`${TEST_ISSUER}/linked-servers`);
+    const body = report!.body as { publicKey: string; linkToken: string; signature: string };
+    expect(Object.keys(body).sort()).toEqual(["linkToken", "publicKey", "signature"]);
+    expect(body.linkToken).toBe(linkToken);
+    expect(serverIdForPublicKey(body.publicKey)).toBe(h.identity.serverId());
+    expect(signedBy(body.publicKey, `legato.fm link proof\n${linkToken}`, body.signature)).toBe(true);
+  });
+
+  it("changes nothing here when legato.fm can't be reached", async () => {
+    const h = await setup({ answer: () => new Error("offline") });
+    const { token: owner } = await createOwnerForTest(h.app);
+    const res = await linkOwner(h, owner);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ reason: "legato_unreachable" });
+    expect(res.json().error).toContain(TEST_ISSUER);
+    expect(await linkedStatus(h, owner)).toBe(false);
+    expect(h.identity.scheduled).toBe(false);
+  });
+
+  it("changes nothing here when legato.fm refuses, and passes its reason on", async () => {
+    const h = await setup({
+      answer: () => Response.json({ error: "That proof has already been used.", reason: "used" }, { status: 409 }),
+    });
+    const { token: owner } = await createOwnerForTest(h.app);
+    const res = await linkOwner(h, owner);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ reason: "legato_refused", legatoReason: "used" });
+    expect(res.json().error).toContain("That proof has already been used.");
+    expect(await linkedStatus(h, owner)).toBe(false);
+  });
+
+  it("refuses an access token or an account taken here without telling legato.fm anything", async () => {
+    const h = await setup();
+    const { token: owner } = await createOwnerForTest(h.app);
+    const access = await linkOwner(h, owner, h.token());
+    expect(access.statusCode).toBe(403);
+    expect(access.json().reason).toBe("wrong_scope");
+
+    h.db.prepare("INSERT INTO users (provider, provider_user_id, role, legato_account_id) VALUES ('google', 'g', 'legacy', '99')").run();
+    expect((await linkOwner(h, owner, h.token({ sub: "99", scope: "link" }))).json().reason).toBe("account_taken");
+    expect(h.reports()).toEqual([]);
+  });
+
+  it("reports an unlink, signed for this service, account and time", async () => {
+    const h = await setup();
+    const { token: owner } = await createOwnerForTest(h.app);
+    await linkOwner(h, owner);
+    const res = await h.app.inject({ method: "DELETE", url: "/api/v1/auth/legato/link", headers: bearer(owner) });
+    expect(res.json()).toEqual({ ok: true, legatoNotified: true });
+
+    const report = h.reports()[1]!;
+    expect(report.url).toBe(`${TEST_ISSUER}/linked-servers/unlink`);
+    const body = report.body as { publicKey: string; accountId: string; issuedAt: number; nonce: string; signature: string };
+    expect(body).toMatchObject({ accountId: "42", issuedAt: Math.floor(START_MS / 1000) });
+    const message = `legato.fm unlink proof\n${TEST_ISSUER}\n${h.identity.serverId()}\n42\n${body.issuedAt}\n${body.nonce}`;
+    expect(signedBy(body.publicKey, message, body.signature)).toBe(true);
+
+    // Nothing linked, nothing to report.
+    const again = await h.app.inject({ method: "DELETE", url: "/api/v1/auth/legato/link", headers: bearer(owner) });
+    expect(again.json()).toEqual({ ok: true, legatoNotified: null });
+    expect(h.reports()).toHaveLength(2);
+  });
+
+  it("unlinks here even when legato.fm can't be told", async () => {
+    let online = true;
+    const h = await setup({ answer: () => (online ? Response.json({ ok: true }) : new Error("offline")) });
+    const { token: owner } = await createOwnerForTest(h.app);
+    await linkOwner(h, owner);
+    online = false;
+    const res = await h.app.inject({ method: "DELETE", url: "/api/v1/auth/legato/link", headers: bearer(owner) });
+    expect(res.json()).toEqual({ ok: true, legatoNotified: false });
+    expect(await linkedStatus(h, owner)).toBe(false);
+    expect(h.identity.scheduled).toBe(false);
+  });
+
+  it("linking a different account reports the old one unlinked", async () => {
+    const h = await setup();
+    const { token: owner } = await createOwnerForTest(h.app);
+    await linkOwner(h, owner);
+    expect((await linkOwner(h, owner, h.token({ sub: "43", scope: "link" }))).statusCode).toBe(200);
+    expect(h.reports().map((r) => [r.url.replace(TEST_ISSUER, ""), r.body.accountId ?? null])).toEqual([
+      ["/linked-servers", null],
+      ["/linked-servers", null],
+      ["/linked-servers/unlink", "42"],
+    ]);
+  });
+
+  it("never puts the private key in a response or a log line", async () => {
+    const lines: string[] = [];
+    const h = await setup({ log: (_level, message) => void lines.push(message) });
+    const { token: owner } = await createOwnerForTest(h.app);
+    const bodies = [
+      (await linkOwner(h, owner)).body,
+      (await h.app.inject({ method: "GET", url: "/api/v1/auth/status", headers: bearer(owner) })).body,
+      (await h.app.inject({ method: "GET", url: "/api/v1/health" })).body,
+      (await me(h, h.token())).body,
+      (await linkOwner(h, owner, h.token())).body,
+      (await h.app.inject({ method: "DELETE", url: "/api/v1/auth/legato/link", headers: bearer(owner) })).body,
+      ...h.reports().map((r) => JSON.stringify(r.body)),
+      ...lines,
+    ].join("\n");
+    const pem = (h.db.prepare("SELECT private_key FROM server_identity").get() as { private_key: string }).private_key;
+    const secret = pem.split("\n").filter((line) => line && !line.startsWith("-----")).join("");
+    expect(secret.length).toBeGreaterThan(40);
+    expect(bodies).not.toContain(secret);
+    expect(bodies).not.toContain("PRIVATE KEY");
   });
 });

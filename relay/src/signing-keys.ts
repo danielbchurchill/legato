@@ -1,4 +1,4 @@
-import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, type KeyObject } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from "node:crypto";
 import type { RelayUserRow } from "./accounts.js";
 
 // legato.fm as the identity provider (issue #114): the keys this service
@@ -24,8 +24,9 @@ import type { RelayUserRow } from "./accounts.js";
 // clock a few minutes off doesn't turn a fresh token into a refused one.
 export const SERVER_TOKEN_TTL_SECONDS = 10 * 60;
 
-// Matches server_identity.server_id (server migration 0032): 128 random
-// bits as 32 lowercase hex characters.
+// Matches server_identity.server_id (server migrations 0032 and 0037): 128
+// bits as 32 lowercase hex characters, the start of the SHA-256 of the
+// server's public key (linked-servers.ts).
 export const SERVER_ID_PATTERN = /^[0-9a-f]{32}$/;
 
 export type PublicJwk = { kty: "OKP"; crv: "Ed25519"; x: string; kid: string; alg: "EdDSA"; use: "sig" };
@@ -33,6 +34,9 @@ export type PublicJwk = { kty: "OKP"; crv: "Ed25519"; x: string; kid: string; al
 export type SigningKeys = {
   signing: { kid: string; privateKey: KeyObject };
   published: PublicJwk[];
+  // Every published key by kid, for checking a token this service signed
+  // when a home server hands one back (linked-servers.ts).
+  verifying: ReadonlyMap<string, KeyObject>;
 };
 
 // RFC 7638 thumbprint: SHA-256 over the required members in lexical
@@ -76,7 +80,8 @@ export function parseSigningKeys(raw: string | undefined): SigningKeys | null {
     return privateKey;
   });
   const published = keys.map(publicJwk);
-  return { signing: { kid: published[0]!.kid, privateKey: keys[0]! }, published };
+  const verifying = new Map(keys.map((key, index) => [published[index]!.kid, createPublicKey(key)]));
+  return { signing: { kid: published[0]!.kid, privateKey: keys[0]! }, published, verifying };
 }
 
 export type ServerTokenScope = "access" | "link";
@@ -110,4 +115,46 @@ export function signServerToken(
   const signingInput = `${b64(header)}.${b64(claims)}`;
   const signature = sign(null, Buffer.from(signingInput), keys.signing.privateKey).toString("base64url");
   return { token: `${signingInput}.${signature}`, expiresAt: new Date(exp * 1000), scope: input.scope };
+}
+
+export type IssuedClaims = { sub: string; aud: string; scope: ServerTokenScope; jti: string; exp: number };
+
+function decodeSegment(segment: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(Buffer.from(segment, "base64url").toString("utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Reads back a token this service signed, when a home server returns one as
+// part of a proof (issue #231). The checks a home server makes on the way in
+// (server/src/auth/legatoToken.ts) are mostly beside the point here: this is
+// the issuer, so a token is good if one of its own published keys signed it,
+// for this issuer, and it hasn't expired. Null for anything else; the caller
+// only needs to know it can't be used.
+export function verifyIssuedToken(
+  keys: SigningKeys,
+  token: string,
+  input: { issuer: string; nowSeconds?: number },
+): IssuedClaims | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [headerPart, payloadPart, signaturePart] = parts as [string, string, string];
+  const header = decodeSegment(headerPart);
+  if (header?.alg !== "EdDSA" || typeof header.kid !== "string") return null;
+  const key = keys.verifying.get(header.kid);
+  if (!key) return null;
+  const signature = Buffer.from(signaturePart, "base64url");
+  if (signature.length !== 64 || !verify(null, Buffer.from(`${headerPart}.${payloadPart}`), key, signature)) return null;
+
+  const claims = decodeSegment(payloadPart);
+  if (!claims) return null;
+  const { iss, sub, aud, scope, jti, exp } = claims;
+  const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
+  if (iss !== input.issuer || typeof exp !== "number" || exp <= now) return null;
+  if (typeof sub !== "string" || typeof aud !== "string" || !SERVER_ID_PATTERN.test(aud)) return null;
+  if ((scope !== "access" && scope !== "link") || typeof jti !== "string" || !jti) return null;
+  return { sub, aud, scope, jti, exp };
 }

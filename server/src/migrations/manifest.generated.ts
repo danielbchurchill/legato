@@ -37,6 +37,7 @@ import m0032_legato_identity from "./0032_legato_identity.sql" with { type: "tex
 import m0034_drop_artist_photo_mbid_flags from "./0034_drop_artist_photo_mbid_flags.sql" with { type: "text" };
 import m0035_artist_credit_jobs from "./0035_artist_credit_jobs.sql" with { type: "text" };
 import m0036_settled_positions from "./0036_settled_positions.sql" with { type: "text" };
+import m0037_server_identity_key from "./0037_server_identity_key.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -79,4 +80,5 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 34, file: "0034_drop_artist_photo_mbid_flags.sql", sql: m0034_drop_artist_photo_mbid_flags },
   { version: 35, file: "0035_artist_credit_jobs.sql", sql: m0035_artist_credit_jobs },
   { version: 36, file: "0036_settled_positions.sql", sql: m0036_settled_positions },
+  { version: 37, file: "0037_server_identity_key.sql", sql: m0037_server_identity_key },
 ];

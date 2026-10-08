@@ -12,7 +12,7 @@ import { USER_AGENT } from "../enrich/mbClient.js";
 import { SESSION_COOKIE, bearerToken } from "../auth/gate.js";
 import { legatoIdentity } from "../auth/legatoIdentity.js";
 import { VERIFY_FAILURE_MESSAGES } from "../auth/legatoToken.js";
-import { linkAccount, linkedAccountId, unlinkAccount } from "../auth/legatoUsers.js";
+import { accountLinkedToOtherUser, linkAccount, linkedAccountId, unlinkAccount } from "../auth/legatoUsers.js";
 import { createOwner, ownerExists, passwordProblem, verifyOwnerPassword } from "../auth/owner.js";
 import { SignInLimiter } from "../auth/rateLimit.js";
 import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type SetupCodes } from "../auth/setupCode.js";
@@ -423,6 +423,12 @@ export function authRoutes(
     // contacts legato.fm at all (auth/legatoIdentity.ts's privacy note):
     // the keys it needs to verify the token are fetched here, and the
     // daily refresh starts once the link is stored.
+    //
+    // Issue #231: legato.fm only signs `access` tokens for servers an
+    // account has linked, so the link is reported to legato.fm too, signed
+    // with this server's identity key (auth/serverKey.ts). Nothing changes
+    // here unless legato.fm recorded it, so the two can't disagree about a
+    // link that just failed.
     app.post<{ Body: { token?: unknown } | null }>("/auth/legato/link", async (request, reply) => {
       if (request.authUser?.role !== "owner") {
         reply.code(403);
@@ -459,8 +465,44 @@ export function authRoutes(
         reply.code(401);
         return { error: VERIFY_FAILURE_MESSAGES[result.reason], reason: result.reason };
       }
+      // An access token is legato.fm saying the link already exists. It
+      // can't record one: legato.fm takes only link tokens as proof.
+      if (result.claims.scope !== "link") {
+        reply.code(403);
+        return {
+          error: 'That legato.fm token opens this server but can\'t link it. Ask legato.fm for one with scope "link".',
+          reason: "wrong_scope",
+        };
+      }
+      const userId = request.authUser.id;
+      const accountId = result.claims.sub;
+      if (accountLinkedToOtherUser(db, accountId, userId)) {
+        reply.code(409);
+        return {
+          error: "That legato.fm account is already linked to another user on this server.",
+          reason: "account_taken",
+        };
+      }
 
-      const linked = linkAccount(db, request.authUser.id, result.claims.sub);
+      const reported = await identity.recordLink(token);
+      if (!reported.ok) {
+        if (reported.reason === "unreachable") {
+          reply.code(502);
+          return {
+            error: `Couldn't reach ${identity.origin} to record the link, so nothing changed. Check this server's internet connection and try again.`,
+            reason: "legato_unreachable",
+          };
+        }
+        reply.code(409);
+        return {
+          error: `legato.fm didn't record the link, so nothing changed: ${reported.message}`,
+          reason: "legato_refused",
+          legatoReason: reported.legatoReason,
+        };
+      }
+
+      const previous = linkedAccountId(db, userId);
+      const linked = linkAccount(db, userId, accountId);
       if (!linked.ok) {
         reply.code(409);
         return {
@@ -468,22 +510,36 @@ export function authRoutes(
           reason: "account_taken",
         };
       }
+      // Linking a different account replaces the old one here, so legato.fm
+      // stops vouching for the old one too. Best effort, like an unlink.
+      if (previous && previous !== accountId) await identity.recordUnlink(previous);
       identity.syncSchedule();
       request.log.info("auth: owner linked a legato.fm account");
-      return { linked: { accountId: result.claims.sub, email: result.claims.email, name: result.claims.name } };
+      return { linked: { accountId, email: result.claims.email, name: result.claims.name } };
     });
 
     // Unlinking the last account also stops the daily key refresh, so the
     // server goes back to never contacting legato.fm. The cached keys stay;
     // they're public and harmless, and a relink can use them.
+    //
+    // legato.fm is told (issue #231), but the unlink here happens first and
+    // doesn't depend on it: the owner wants out, and may be offline. If
+    // legato.fm can't be reached, it keeps the pair and goes on signing
+    // `access` tokens for the account, which this server refuses because
+    // the account isn't linked here any more. legatoNotified says which
+    // happened, for a client to suggest removing the server on legato.fm as
+    // well, and is null when there was no link to report.
     app.delete("/auth/legato/link", async (request, reply) => {
       if (request.authUser?.role !== "owner") {
         reply.code(403);
         return { error: "Only this server's owner can unlink its legato.fm account.", reason: "owner_only" };
       }
+      const identity = legatoIdentity(db);
+      const accountId = linkedAccountId(db, request.authUser.id);
       unlinkAccount(db, request.authUser.id);
-      legatoIdentity(db).syncSchedule();
-      return { ok: true };
+      identity.syncSchedule();
+      const legatoNotified = accountId && identity.enabled ? (await identity.recordUnlink(accountId)).ok : null;
+      return { ok: true, legatoNotified };
     });
 
     app.get("/auth/me", async (request) => ({

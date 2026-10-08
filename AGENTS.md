@@ -48,7 +48,7 @@ How to work on Legato: the layout, the conventions, and the non-obvious things t
 - **Enrichment sources are keyless:** MusicBrainz, Cover Art Archive, LRCLIB, Deezer (artist photos) and Wikipedia/Wikidata need only a real User-Agent. `ACOUSTID_API_KEY` is the one optional key; without it, the fingerprint tier is off. Local secrets go in `server/.env.local` or `relay/.env.local`, which are gitignored.
 - **Tag write-back is FLAC-only for now** (`server/src/tagwrite/`, via `node-taglib-sharp`).
 - **Cover art** is cached under `<data dir>/covers/<pixel bound>/<hash prefix>/<sha1>.jpg` at two sizes, 256 and 512. A size that's missing is re-derived from the largest copy that survives. Art reaches the canvas through `GET /covers/:hash`, which is content-addressed, and panels through `GET /nodes/:id/cover`.
-- **Network contact** is deliberate and listed on legato.fm/privacy. A new outbound request needs a matching line there: the enrichment sources above, the daily update check (`LEGATO_UPDATE_CHECK=off` disables it), and the legato.fm signing-key fetch, which only happens once the server is linked to an account.
+- **Network contact** is deliberate and listed on legato.fm/privacy. A new outbound request needs a matching line there: the enrichment sources above, the daily update check (`LEGATO_UPDATE_CHECK=off` disables it), and two kinds of legato.fm contact: the signing-key fetch, which only happens once the server is linked to an account, and the signed report the server sends legato.fm when its owner links or unlinks an account.
 
 ## Desktop shell
 
