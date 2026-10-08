@@ -52,9 +52,9 @@ export function recompute(db: Database): void {
          AND NOT EXISTS (SELECT 1 FROM enrich_jobs ej WHERE ej.node_id = f.recording_node_id)`,
     )
     .all() as { id: number }[];
-  for (const { id } of neverAttempted) {
-    enqueueEnrichmentIfNeeded(db, id);
-  }
+  // In pieces, like everything recompute writes: a first scan of a large
+  // library queues a lookup for every recording (writeInChunks.ts).
+  writeInChunks(db, neverAttempted, ({ id }) => enqueueEnrichmentIfNeeded(db, id));
 
   // Same order scanner.ts's executeScan already established: entities before
   // collaboration edges (collaboration reads albums.primary_artist_node_id),

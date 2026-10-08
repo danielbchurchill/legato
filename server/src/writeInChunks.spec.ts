@@ -75,4 +75,59 @@ describe("writeInChunks", () => {
     holder.terminate();
     expect(count()).toBe(2);
   });
+
+  // Issue #281: the case that failed on a 30,000-album library. A worker
+  // writing pieces back to back starved a write on this thread until its
+  // busy timeout ran out.
+  it("lets a write from another connection in while recompute's worker writes piece after piece", async () => {
+    const writer = new Worker(
+      URL.createObjectURL(
+        new Blob([
+          `import { openConnection } from ${JSON.stringify(path.join(import.meta.dir, "db.ts"))};
+           import { pauseBetweenChunks, writeInChunks } from ${JSON.stringify(path.join(import.meta.dir, "writeInChunks.ts"))};
+           self.onmessage = (event) => {
+             const db = openConnection(event.data, 60000);
+             pauseBetweenChunks();
+             const insert = db.prepare("INSERT INTO t (x) VALUES (?)");
+             const rows = Array.from({ length: 40 }, (_, i) => i);
+             let first = true;
+             writeInChunks(db, rows, (x) => {
+               if (first) { postMessage("writing"); first = false; }
+               insert.run(x);
+               Bun.sleepSync(10);
+             });
+             db.close();
+             postMessage("done");
+           };`,
+        ]),
+      ),
+    );
+    const messages: string[] = [];
+    let resolveWriting!: () => void;
+    let resolveDone!: () => void;
+    const writing = new Promise<void>((resolve) => (resolveWriting = resolve));
+    const done = new Promise<void>((resolve) => (resolveDone = resolve));
+    writer.onmessage = (event: MessageEvent<string>) => {
+      messages.push(event.data);
+      if (event.data === "writing") resolveWriting();
+      if (event.data === "done") resolveDone();
+    };
+    writer.postMessage(path.join(dir, "test.db"));
+    await writing;
+
+    // Five writes while the worker spends 400 ms writing 50 ms pieces.
+    const waits: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const started = performance.now();
+      insert(-1);
+      waits.push(performance.now() - started);
+      await Bun.sleep(20);
+    }
+    await done;
+    writer.terminate();
+
+    expect(count()).toBe(45);
+    expect(Math.max(...waits)).toBeLessThan(250);
+  });
 });
+

@@ -4,6 +4,7 @@
 // recompute() and reports back.
 import { openConnection } from "./db.js";
 import { recompute, type RecomputeRequest, type RecomputeResult } from "./recompute.js";
+import { pauseBetweenChunks } from "./writeInChunks.js";
 
 declare const self: Worker;
 
@@ -11,6 +12,9 @@ declare const self: Worker;
 // waits out anything the request loop's connection might be writing: a
 // scan's batch, a tag write, a playlist import.
 const BUSY_TIMEOUT_MS = 60_000;
+
+// Leaves the request loop's writes a way in between pieces.
+pauseBetweenChunks();
 
 function isForeignKeyFailure(err: unknown): boolean {
   return (err as { code?: string }).code === "SQLITE_CONSTRAINT_FOREIGNKEY";
