@@ -1,4 +1,4 @@
-import { Icon } from '../ui/Icon'
+import { Icon, type IconName } from '../ui/Icon'
 import { Kbd } from '../ui/Kbd'
 import { Tabs } from '../ui/Tabs'
 import { Surface } from './Surface'
@@ -17,8 +17,8 @@ export type ViewMode = 'map' | 'library'
 
 const VIEWS = [
   { value: 'map', label: 'map', icon: 'map' },
-  { value: 'library', label: 'library', icon: 'list' },
-] as const satisfies readonly { value: ViewMode; label: string; icon: 'map' | 'list' }[]
+  { value: 'library', label: 'library', icon: 'library' },
+] as const satisfies readonly { value: ViewMode; label: string; icon: IconName }[]
 
 type CapsuleProps = {
   view: ViewMode

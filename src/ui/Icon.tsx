@@ -9,6 +9,7 @@ import eye from '../assets/icons/eye.svg?raw'
 import fastForward from '../assets/icons/fast-forward.svg?raw'
 import heart from '../assets/icons/heart.svg?raw'
 import info from '../assets/icons/info.svg?raw'
+import library from '../assets/icons/library.svg?raw'
 import list from '../assets/icons/list.svg?raw'
 import map from '../assets/icons/map.svg?raw'
 import panelLeftCollapse from '../assets/icons/panel-left-collapse.svg?raw'
@@ -41,7 +42,12 @@ import volumeMute from '../assets/icons/volume-mute.svg?raw'
  * (tauri.conf.json's `decorations: true`) and WindowControls.tsx, their one
  * caller, was removed.
  *
- * `list` is the playlists rail destination's glyph (proicons "Bullet List").
+ * `list` (proicons "Bullet List") is Collections: its rail item and the
+ * places a playlist shows up. `library` (proicons "Library", books on a
+ * shelf) is the map/library switch's library tab, and `info` is the
+ * player's queue toggle, which opens Now Playing on the track's details and
+ * up next. All three used `list` until #289.
+ *
  * `chevron-up` pairs with the existing `chevron-down` for the up-next/
  * playlist-track reorder buttons — real vendored SVGs rather than one glyph
  * CSS-rotated, matching how every other pair here (play/pause) gets its own
@@ -86,6 +92,7 @@ const GLYPHS = {
   'fast-forward': fastForward,
   heart,
   info,
+  library,
   list,
   map,
   'panel-left-collapse': panelLeftCollapse,

@@ -300,7 +300,7 @@ export function Player({
 
       <div className="flex shrink-0 items-center gap-[2px]">
         <IconButton
-          icon="list"
+          icon="info"
           label={queueOpen ? 'Hide queue' : 'Show queue'}
           active={queueOpen}
           aria-pressed={queueOpen}
