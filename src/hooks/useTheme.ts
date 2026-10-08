@@ -2,10 +2,11 @@ import { useSyncExternalStore } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { IS_TAURI } from '../config/runtime'
 
-/* Per-device dark / light / follow-system (#136) — deliberately NOT
+/* Per-device ink / paper / follow-system (#136) — deliberately NOT
  * routed through useSettings.ts's server-backed store. It's stored per
  * device, not per account, since a work laptop and a phone can differ.
- * localStorage, not the settings API. */
+ * localStorage, not the settings API. The stored values are still 'dark'
+ * and 'light': ink and paper are only what Settings calls them (#282). */
 
 export type ThemePreference = 'dark' | 'light' | 'system'
 export type ResolvedTheme = 'dark' | 'light'
