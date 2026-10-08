@@ -7,12 +7,27 @@
   <meta name="description" content="The terms for using legato.fm, legato.fm accounts, and the Legato remote-access service." />
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="128x128" href="/favicon-128.png" />
+  <script>
+    // Same theme bootstrap as index.html: a saved choice wins, otherwise the
+    // system setting. Set before first paint so paper readers see no flash.
+    (function () {
+      var theme = null;
+      try {
+        theme = localStorage.getItem('legato-site-theme');
+      } catch (e) {}
+      if (theme !== 'dark' && theme !== 'light') {
+        theme = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      }
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
+
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
   <header class="site-header">
     <div class="row">
-      <a href="/" aria-label="legato home"><img src="/wordmark.svg" alt="" class="wordmark" /></a>
+      <a class="logo" href="/" aria-label="legato home"></a>
       <nav class="nav-links">
         <a href="/">legato.fm</a>
         <a href="/privacy">Privacy</a>
@@ -24,7 +39,7 @@
     <article class="legal-body">
       <p class="eyebrow">legal</p>
       <h1>Terms of service</h1>
-      <p class="legal-updated mono">Last updated October 1, 2026</p>
+      <p class="legal-updated">Last updated October 1, 2026</p>
 
       <p>
         These terms cover legato.fm, the optional legato.fm account, and the Legato remote-access
@@ -134,10 +149,10 @@
   </main>
 
   <footer class="site-footer">
-    <img src="/wordmark.svg" alt="legato" class="wordmark small" />
+    <span class="logo logo-small" role="img" aria-label="legato"></span>
     <div class="footer-meta">
-      <span class="mono muted footer-legal"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span>
-      <span class="mono muted">legato.fm</span>
+      <span class="footer-legal"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span>
+      <span>legato.fm</span>
     </div>
   </footer>
 </body>

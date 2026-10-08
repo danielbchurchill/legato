@@ -10,33 +10,68 @@
   <meta property="og:description" content="Each recording, artist, and album gets its own wiki-style article, linked to the rest of what you own. Browse your library by association." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://legato.fm" />
-  <meta property="og:image" content="/images/article-view.webp" />
+  <meta property="og:image" content="https://legato.fm/images/hero-dark-1440.webp" />
+  <meta property="og:image:width" content="1440" />
+  <meta property="og:image:height" content="1024" />
   <meta name="twitter:card" content="summary_large_image" />
 
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
   <link rel="icon" type="image/png" sizes="128x128" href="/favicon-128.png" />
+
+  <script>
+    // Runs before first paint so the page never flashes the wrong theme. A
+    // saved choice wins; a first visit follows the system setting. main.ts
+    // owns the toggle after this.
+    (function () {
+      var theme = null;
+      try {
+        theme = localStorage.getItem('legato-site-theme');
+      } catch (e) {}
+      if (theme !== 'dark' && theme !== 'light') {
+        theme = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      }
+      document.documentElement.dataset.theme = theme;
+
+      // Every screenshot ships in both themes and the hidden copy stays
+      // unloaded only because it's lazy, so the hero is lazy too. That hides it
+      // from the preload scanner, so ask for the visible one here, with the
+      // same srcset and sizes as its <img>.
+      var hero = document.createElement('link');
+      hero.rel = 'preload';
+      hero.as = 'image';
+      hero.setAttribute('imagesrcset', '/images/hero-' + theme + '-1440.webp 1440w, /images/hero-' + theme + '-2880.webp 2880w');
+      hero.setAttribute('imagesizes', '(min-width: 1248px) 1200px, calc(100vw - 48px)');
+      hero.setAttribute('fetchpriority', 'high');
+      document.head.appendChild(hero);
+    })();
+  </script>
 
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
   <header class="site-header">
     <div class="row">
-      <a href="#top" aria-label="legato"><img src="/wordmark.svg" alt="" class="wordmark" /></a>
+      <a class="logo" href="#top" aria-label="legato"></a>
       <nav class="nav-links">
-        <a href="#graph">Map</a>
+        <a href="#map">Map</a>
         <a href="#articles">Articles</a>
+        <a href="#library">Library</a>
+        <a href="#health">Health</a>
         <a href="#ways-in">Ways in</a>
         <a href="#pricing">Pricing</a>
         <a href="#status">Status</a>
       </nav>
-      <a class="btn btn-pill" href="#waitlist">Join the waitlist</a>
+      <div class="segmented segmented-compact theme-toggle" role="group" aria-label="Theme">
+        <button type="button" data-set-theme="dark" aria-pressed="false">ink</button>
+        <button type="button" data-set-theme="light" aria-pressed="false">paper</button>
+      </div>
+      <a class="btn btn-primary btn-small" href="#waitlist">Join the waitlist</a>
     </div>
   </header>
 
   <main id="top">
-    <section class="hero" id="hero">
-      <div class="hero-bg" aria-hidden="true"></div>
-      <div class="hero-content glass">
+    <section class="hero">
+      <div class="hero-text">
         <p class="eyebrow">pre-release</p>
         <h1>
           Most music apps treat your library as a list.
@@ -49,84 +84,275 @@
           artists you never connected share a producer.
         </p>
         <div class="hero-actions">
-          <a class="btn btn-pill" href="#waitlist">Join the waitlist</a>
-          <a class="btn btn-link" href="#graph">See the map ↓</a>
+          <a class="btn btn-primary" href="#waitlist">Join the waitlist</a>
+          <a class="btn btn-ghost" href="#map">See the map ↓</a>
+        </div>
+      </div>
+      <div class="hero-media">
+        <div class="hero-glow" aria-hidden="true"></div>
+        <div class="shot shot-hero">
+          <img data-for-theme="dark" src="/images/hero-dark-1440.webp" srcset="/images/hero-dark-1440.webp 1440w, /images/hero-dark-2880.webp 2880w" sizes="(min-width: 1248px) 1200px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" fetchpriority="high" alt="Legato's map with Highway 61 Revisited selected. Its connections stay lit on the graph, a preview card sits beside it, and its article is open on the right with the track list and its links to two producers and a performer." />
+          <img data-for-theme="light" src="/images/hero-light-1440.webp" srcset="/images/hero-light-1440.webp 1440w, /images/hero-light-2880.webp 2880w" sizes="(min-width: 1248px) 1200px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" fetchpriority="high" alt="Legato's map with Highway 61 Revisited selected. Its connections stay lit on the graph, a preview card sits beside it, and its article is open on the right with the track list and its links to two producers and a performer." />
         </div>
       </div>
     </section>
 
-    <section class="feature-block" id="graph">
-      <div class="feature-text">
-        <p class="eyebrow">the map</p>
-        <h2>Browse by association</h2>
-        <p>
-          The map is a live, force-directed graph of your library. Recordings, artists,
-          releases, labels, and producers sit where their connections pull them.
-        </p>
+    <section class="section" id="map">
+      <div class="section-intro">
+        <div class="section-title">
+          <p class="eyebrow">the map</p>
+          <h2>Browse by association</h2>
+        </div>
+        <div class="section-body">
+          <p>
+            The map is a live, force-directed graph of your library. Recordings, artists,
+            releases, labels, and producers sit where their connections pull them.
+          </p>
+          <p>
+            The map shows the clusters and gaps in your library, and the corners that take up
+            more of it than you realised.
+          </p>
+        </div>
       </div>
-      <figure class="feature-figure">
-        <img src="/images/graph-overview.webp" alt="Legato's map view showing a real scanned library rendered as a node graph, with the collection panel open on the left." loading="lazy" width="1200" height="683" />
-        <figcaption>A real scan, live in the app: 26 artists, 52 albums, 715 tracks.</figcaption>
+      <figure class="figure">
+        <div class="shot">
+          <img data-for-theme="dark" src="/images/map-dark-1440.webp" srcset="/images/map-dark-1440.webp 1440w, /images/map-dark-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The whole map at rest. The Beatles, Bob Dylan, The Mountain Goats, Tom Petty and other artists each sit at the centre of a cluster of their releases and recordings, with producers and players such as Tom Wilson and Jon Brion between them." />
+          <img data-for-theme="light" src="/images/map-light-1440.webp" srcset="/images/map-light-1440.webp 1440w, /images/map-light-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The whole map at rest. The Beatles, Bob Dylan, The Mountain Goats, Tom Petty and other artists each sit at the centre of a cluster of their releases and recordings, with producers and players such as Tom Wilson and Jon Brion between them." />
+        </div>
+        <figcaption class="caption">The map at rest, with artist labels.</figcaption>
+      </figure>
+      <div class="shot-grid-2">
+        <figure class="figure">
+          <div class="shot shot-tile">
+            <img data-for-theme="dark" src="/images/map-select-dark-1440.webp" srcset="/images/map-select-dark-1440.webp 1440w, /images/map-select-dark-2880.webp 2880w" sizes="(min-width: 1200px) 560px, (min-width: 920px) calc(50vw - 40px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The map with Highway 61 Revisited selected. Its card opens over the album, its links to Bob Dylan's other records stay lit, and every other cluster fades." />
+            <img data-for-theme="light" src="/images/map-select-light-1440.webp" srcset="/images/map-select-light-1440.webp 1440w, /images/map-select-light-2880.webp 2880w" sizes="(min-width: 1200px) 560px, (min-width: 920px) calc(50vw - 40px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The map with Highway 61 Revisited selected. Its card opens over the album, its links to Bob Dylan's other records stay lit, and every other cluster fades." />
+          </div>
+          <figcaption class="caption-pair">
+            <span class="caption-title">Select a record</span>
+            <span class="caption-line">Its neighbourhood comes forward and the rest of the map steps back.</span>
+          </figcaption>
+        </figure>
+        <figure class="figure">
+          <div class="shot shot-tile">
+            <img data-for-theme="dark" src="/images/map-options-dark-1440.webp" srcset="/images/map-options-dark-1440.webp 1440w, /images/map-options-dark-2880.webp 2880w" sizes="(min-width: 1200px) 560px, (min-width: 920px) calc(50vw - 40px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The map options panel open beside the map's zoom controls, with a layout preset, which node types to show, artist labels, edge colours by type, layout lock, spacing, and the pull of related music." />
+            <img data-for-theme="light" src="/images/map-options-light-1440.webp" srcset="/images/map-options-light-1440.webp 1440w, /images/map-options-light-2880.webp 2880w" sizes="(min-width: 1200px) 560px, (min-width: 920px) calc(50vw - 40px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The map options panel open beside the map's zoom controls, with a layout preset, which node types to show, artist labels, edge colours by type, layout lock, spacing, and the pull of related music." />
+          </div>
+          <figcaption class="caption-pair">
+            <span class="caption-title">Map options</span>
+            <span class="caption-line">Map settings live on the map, next to what they change.</span>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section section-tight" id="articles">
+      <div class="section-intro">
+        <div class="section-title">
+          <p class="eyebrow">the article</p>
+          <h2>Read your records like an encyclopedia</h2>
+        </div>
+        <div class="section-body">
+          <p>
+            Click a node and Legato opens its article. Releases, recordings, and credits each
+            link to their own articles, so you find connections by reading.
+          </p>
+        </div>
+      </div>
+      <div class="tabs" data-preload-tabs>
+        <div class="segmented" role="tablist" aria-label="Article tabs">
+          <button type="button" role="tab" id="articles-tab-overview" aria-controls="articles-panel-overview" aria-selected="true">Overview</button>
+          <button type="button" role="tab" id="articles-tab-tracks" aria-controls="articles-panel-tracks" aria-selected="false" tabindex="-1">Tracks</button>
+          <button type="button" role="tab" id="articles-tab-credits" aria-controls="articles-panel-credits" aria-selected="false" tabindex="-1">Credits</button>
+          <button type="button" role="tab" id="articles-tab-metadata" aria-controls="articles-panel-metadata" aria-selected="false" tabindex="-1">Metadata</button>
+        </div>
+        <div class="shot">
+          <div role="tabpanel" id="articles-panel-overview" aria-labelledby="articles-tab-overview" tabindex="0">
+            <img data-for-theme="dark" src="/images/hero-dark-1440.webp" srcset="/images/hero-dark-1440.webp 1440w, /images/hero-dark-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The overview of Highway 61 Revisited's article: track count, length and date added, the first five tracks, and its connections to Bob Johnston and Tom Wilson as producers and Mike Bloomfield as performer." />
+            <img data-for-theme="light" src="/images/hero-light-1440.webp" srcset="/images/hero-light-1440.webp 1440w, /images/hero-light-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The overview of Highway 61 Revisited's article: track count, length and date added, the first five tracks, and its connections to Bob Johnston and Tom Wilson as producers and Mike Bloomfield as performer." />
+          </div>
+          <div role="tabpanel" id="articles-panel-tracks" aria-labelledby="articles-tab-tracks" tabindex="0" hidden>
+            <img data-for-theme="dark" src="/images/article-tracks-dark-1440.webp" srcset="/images/article-tracks-dark-1440.webp 1440w, /images/article-tracks-dark-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The Tracks tab of the album's article, listing all nine recordings with their lengths, from Like a Rolling Stone to Desolation Row." />
+            <img data-for-theme="light" src="/images/article-tracks-light-1440.webp" srcset="/images/article-tracks-light-1440.webp 1440w, /images/article-tracks-light-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The Tracks tab of the album's article, listing all nine recordings with their lengths, from Like a Rolling Stone to Desolation Row." />
+          </div>
+          <div role="tabpanel" id="articles-panel-credits" aria-labelledby="articles-tab-credits" tabindex="0" hidden>
+            <img data-for-theme="dark" src="/images/article-credits-dark-1440.webp" srcset="/images/article-credits-dark-1440.webp 1440w, /images/article-credits-dark-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The Credits tab: Bob Dylan and Mike Bloomfield as performers and Bob Johnston and Tom Wilson as producers, each with how many tracks they're on, and a place to add your own connections." />
+            <img data-for-theme="light" src="/images/article-credits-light-1440.webp" srcset="/images/article-credits-light-1440.webp 1440w, /images/article-credits-light-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The Credits tab: Bob Dylan and Mike Bloomfield as performers and Bob Johnston and Tom Wilson as producers, each with how many tracks they're on, and a place to add your own connections." />
+          </div>
+          <div role="tabpanel" id="articles-panel-metadata" aria-labelledby="articles-tab-metadata" tabindex="0" hidden>
+            <img data-for-theme="dark" src="/images/article-metadata-dark-1440.webp" srcset="/images/article-metadata-dark-1440.webp 1440w, /images/article-metadata-dark-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The Metadata tab: release date, release type, label, track count and MusicBrainz ID, with where each value came from and a button to edit them." />
+            <img data-for-theme="light" src="/images/article-metadata-light-1440.webp" srcset="/images/article-metadata-light-1440.webp 1440w, /images/article-metadata-light-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The Metadata tab: release date, release type, label, track count and MusicBrainz ID, with where each value came from and a button to edit them." />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="library">
+      <div class="section-intro">
+        <div class="section-title">
+          <p class="eyebrow">the library</p>
+          <h2>A plain library when you want one</h2>
+        </div>
+        <div class="section-body">
+          <p>
+            Some nights you want to pick an album and press play. Next to the map sits an
+            ordinary album grid and track table that stays fast at thirty thousand albums. Both
+            share one search and selection, so switching views keeps your place.
+          </p>
+        </div>
+      </div>
+      <div class="shot-grid-2">
+        <figure class="figure">
+          <div class="shot shot-tile">
+            <img data-for-theme="dark" src="/images/library-albums-dark-1440.webp" srcset="/images/library-albums-dark-1440.webp 1440w, /images/library-albums-dark-2880.webp 2880w" sizes="(min-width: 1200px) 560px, (min-width: 920px) calc(50vw - 40px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The library view as an album grid, with a recently added shelf above all albums." />
+            <img data-for-theme="light" src="/images/library-albums-light-1440.webp" srcset="/images/library-albums-light-1440.webp 1440w, /images/library-albums-light-2880.webp 2880w" sizes="(min-width: 1200px) 560px, (min-width: 920px) calc(50vw - 40px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The library view as an album grid, with a recently added shelf above all albums." />
+          </div>
+          <figcaption class="caption-pair">
+            <span class="caption-title">Albums</span>
+            <span class="caption-line">A cover grid with a recently added shelf.</span>
+          </figcaption>
+        </figure>
+        <figure class="figure">
+          <div class="shot shot-tile">
+            <img data-for-theme="dark" src="/images/library-tracks-dark-1440.webp" srcset="/images/library-tracks-dark-1440.webp 1440w, /images/library-tracks-dark-2880.webp 2880w" sizes="(min-width: 1200px) 560px, (min-width: 920px) calc(50vw - 40px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The library view as a track table with title, artist, album, length, format and date added, and the play queue open on the right." />
+            <img data-for-theme="light" src="/images/library-tracks-light-1440.webp" srcset="/images/library-tracks-light-1440.webp 1440w, /images/library-tracks-light-2880.webp 2880w" sizes="(min-width: 1200px) 560px, (min-width: 920px) calc(50vw - 40px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The library view as a track table with title, artist, album, length, format and date added, and the play queue open on the right." />
+          </div>
+          <figcaption class="caption-pair">
+            <span class="caption-title">Tracks</span>
+            <span class="caption-line">A sortable track table, with the queue open beside it.</span>
+          </figcaption>
+        </figure>
+      </div>
+      <div class="search-row">
+        <div class="search-text">
+          <h3>Search from anywhere</h3>
+          <p>
+            Search sits next to the map/library switch at the top of every screen, and
+            <kbd class="keycap">⌘K</kbd> opens it from anywhere.
+          </p>
+        </div>
+        <div class="shot shot-tile search-shot">
+          <img data-for-theme="dark" src="/images/search-dark-1440.webp" srcset="/images/search-dark-1440.webp 1440w, /images/search-dark-2880.webp 2880w" sizes="(min-width: 1200px) 732px, (min-width: 884px) 61vw, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="Search open over the library with a partial query. Bob Dylan is the top result, followed by a matching album and tracks." />
+          <img data-for-theme="light" src="/images/search-light-1440.webp" srcset="/images/search-light-1440.webp 1440w, /images/search-light-2880.webp 2880w" sizes="(min-width: 1200px) 732px, (min-width: 884px) 61vw, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="Search open over the library with a partial query. Bob Dylan is the top result, followed by a matching album and tracks." />
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="collections">
+      <div class="section-intro">
+        <div class="section-title">
+          <p class="eyebrow">collections</p>
+          <h2>Favourites, playlists, and what's playing</h2>
+        </div>
+        <div class="section-body">
+          <p>
+            Favourites and playlists share one list, and existing playlists import into it. The
+            player stays docked on every screen; open it for the queue and lyrics.
+          </p>
+        </div>
+      </div>
+      <div class="shot-grid-3">
+        <figure class="figure">
+          <div class="shot shot-tile">
+            <img data-for-theme="dark" src="/images/collections-dark-1440.webp" srcset="/images/collections-dark-1440.webp 1440w, /images/collections-dark-2880.webp 2880w" sizes="(min-width: 1200px) 368px, (min-width: 1116px) calc((100vw - 96px) / 3), (min-width: 752px) calc(50vw - 36px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The Collections panel beside the map, listing five playlists above a grid of favourite albums." />
+            <img data-for-theme="light" src="/images/collections-light-1440.webp" srcset="/images/collections-light-1440.webp 1440w, /images/collections-light-2880.webp 2880w" sizes="(min-width: 1200px) 368px, (min-width: 1116px) calc((100vw - 96px) / 3), (min-width: 752px) calc(50vw - 36px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The Collections panel beside the map, listing five playlists above a grid of favourite albums." />
+          </div>
+          <figcaption class="caption">Collections</figcaption>
+        </figure>
+        <figure class="figure">
+          <div class="shot shot-tile">
+            <img data-for-theme="dark" src="/images/playlist-dark-1440.webp" srcset="/images/playlist-dark-1440.webp 1440w, /images/playlist-dark-2880.webp 2880w" sizes="(min-width: 1200px) 368px, (min-width: 1116px) calc((100vw - 96px) / 3), (min-width: 752px) calc(50vw - 36px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="A playlist called road trip, imported from an m3u8 file, open beside the library with its tracks in order." />
+            <img data-for-theme="light" src="/images/playlist-light-1440.webp" srcset="/images/playlist-light-1440.webp 1440w, /images/playlist-light-2880.webp 2880w" sizes="(min-width: 1200px) 368px, (min-width: 1116px) calc((100vw - 96px) / 3), (min-width: 752px) calc(50vw - 36px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="A playlist called road trip, imported from an m3u8 file, open beside the library with its tracks in order." />
+          </div>
+          <figcaption class="caption">A playlist</figcaption>
+        </figure>
+        <figure class="figure">
+          <div class="shot shot-tile">
+            <img data-for-theme="dark" src="/images/now-playing-dark-1440.webp" srcset="/images/now-playing-dark-1440.webp 1440w, /images/now-playing-dark-2880.webp 2880w" sizes="(min-width: 1200px) 368px, (min-width: 1116px) calc((100vw - 96px) / 3), (min-width: 752px) calc(50vw - 36px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The now playing panel open beside the map, showing the current track with its lyrics, the current line highlighted." />
+            <img data-for-theme="light" src="/images/now-playing-light-1440.webp" srcset="/images/now-playing-light-1440.webp 1440w, /images/now-playing-light-2880.webp 2880w" sizes="(min-width: 1200px) 368px, (min-width: 1116px) calc((100vw - 96px) / 3), (min-width: 752px) calc(50vw - 36px), calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The now playing panel open beside the map, showing the current track with its lyrics, the current line highlighted." />
+          </div>
+          <figcaption class="caption">Now playing, with lyrics</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section section-tight" id="health">
+      <div class="section-intro">
+        <div class="section-title">
+          <p class="eyebrow">library health</p>
+          <h2>Fix your metadata in place</h2>
+        </div>
+        <div class="section-body">
+          <p>
+            Legato flags missing and conflicting tags, and you fix them on the map itself,
+            without a separate tagging app.
+          </p>
+        </div>
+      </div>
+      <div class="tabs" data-preload-tabs>
+        <div class="segmented" role="tablist" aria-label="Library health tabs">
+          <button type="button" role="tab" id="health-tab-checklist" aria-controls="health-panel-checklist" aria-selected="true">Checklist</button>
+          <button type="button" role="tab" id="health-tab-matches" aria-controls="health-panel-matches" aria-selected="false" tabindex="-1">Matches</button>
+          <button type="button" role="tab" id="health-tab-edit" aria-controls="health-panel-edit" aria-selected="false" tabindex="-1">Edit tags</button>
+          <button type="button" role="tab" id="health-tab-review" aria-controls="health-panel-review" aria-selected="false" tabindex="-1">Review</button>
+        </div>
+        <div class="shot">
+          <div role="tabpanel" id="health-panel-checklist" aria-labelledby="health-tab-checklist" tabindex="0">
+            <img data-for-theme="dark" src="/images/health-checklist-dark-1440.webp" srcset="/images/health-checklist-dark-1440.webp 1440w, /images/health-checklist-dark-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The Library health panel: the last scan, library totals, what needs attention, counts of metadata gaps, and how many tracks matched MusicBrainz." />
+            <img data-for-theme="light" src="/images/health-checklist-light-1440.webp" srcset="/images/health-checklist-light-1440.webp 1440w, /images/health-checklist-light-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="The Library health panel: the last scan, library totals, what needs attention, counts of metadata gaps, and how many tracks matched MusicBrainz." />
+          </div>
+          <div role="tabpanel" id="health-panel-matches" aria-labelledby="health-tab-matches" tabindex="0" hidden>
+            <img data-for-theme="dark" src="/images/health-matches-dark-1440.webp" srcset="/images/health-matches-dark-1440.webp 1440w, /images/health-matches-dark-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="Enrichment to confirm: tracks MusicBrainz couldn't match on its own, each with a field for the recording's MusicBrainz link and a choice to match it or skip." />
+            <img data-for-theme="light" src="/images/health-matches-light-1440.webp" srcset="/images/health-matches-light-1440.webp 1440w, /images/health-matches-light-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="Enrichment to confirm: tracks MusicBrainz couldn't match on its own, each with a field for the recording's MusicBrainz link and a choice to match it or skip." />
+          </div>
+          <div role="tabpanel" id="health-panel-edit" aria-labelledby="health-tab-edit" tabindex="0" hidden>
+            <img data-for-theme="dark" src="/images/health-edit-dark-1440.webp" srcset="/images/health-edit-dark-1440.webp 1440w, /images/health-edit-dark-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="Editing an album's tags in its article. A label, Columbia, is being added, with a note that nothing is written until the change is reviewed." />
+            <img data-for-theme="light" src="/images/health-edit-light-1440.webp" srcset="/images/health-edit-light-1440.webp 1440w, /images/health-edit-light-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="Editing an album's tags in its article. A label, Columbia, is being added, with a note that nothing is written until the change is reviewed." />
+          </div>
+          <div role="tabpanel" id="health-panel-review" aria-labelledby="health-tab-review" tabindex="0" hidden>
+            <img data-for-theme="dark" src="/images/health-review-dark-1440.webp" srcset="/images/health-review-dark-1440.webp 1440w, /images/health-review-dark-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="Reviewing the tag change before it is written: the old and new label side by side, a note that it writes to nine FLAC files and can be reverted from Library health, and buttons to write or discard." />
+            <img data-for-theme="light" src="/images/health-review-light-1440.webp" srcset="/images/health-review-light-1440.webp 1440w, /images/health-review-light-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" alt="Reviewing the tag change before it is written: the old and new label side by side, a note that it writes to nine FLAC files and can be reverted from Library health, and buttons to write or discard." />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-tight" id="themes">
+      <div class="section-intro">
+        <div class="section-title">
+          <p class="eyebrow">themes</p>
+          <h2>Ink or paper</h2>
+        </div>
+        <div class="section-body">
+          <p>
+            The dark theme you see here, plus a light one modelled on sheet music: warm off-white
+            paper and pen-ink black. Every text and edge colour passes WCAG AA contrast. Pick one
+            or follow your system setting.
+          </p>
+        </div>
+      </div>
+      <figure class="figure">
+        <div class="shot compare" data-compare>
+          <img class="compare-ink" src="/images/hero-dark-1440.webp" srcset="/images/hero-dark-1440.webp 1440w, /images/hero-dark-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" draggable="false" alt="The same map and article in the ink theme, on the left of the divider." />
+          <img class="compare-paper" src="/images/hero-light-1440.webp" srcset="/images/hero-light-1440.webp 1440w, /images/hero-light-2880.webp 2880w" sizes="(min-width: 1200px) 1152px, calc(100vw - 48px)" width="1440" height="1024" loading="lazy" draggable="false" alt="The same map and article in the paper theme, on the right of the divider." />
+          <div class="compare-divider">
+            <div class="compare-handle" role="slider" tabindex="0" aria-label="Divider between ink and paper" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-valuetext="ink 50%, paper 50%">
+              <span aria-hidden="true">‹</span><span aria-hidden="true">›</span>
+            </div>
+          </div>
+          <span class="compare-label compare-label-ink" aria-hidden="true">ink</span>
+          <span class="compare-label compare-label-paper" aria-hidden="true">paper</span>
+        </div>
+        <figcaption class="caption">Drag to compare.</figcaption>
       </figure>
     </section>
 
-    <section class="feature-block reverse" id="articles">
-      <div class="feature-text">
-        <p class="eyebrow">the article</p>
-        <h2>Read your records like an encyclopedia</h2>
-        <p>
-          Click a node and Legato opens its article. Releases, recordings, and credits each
-          link to their own articles, so you find connections by reading.
-        </p>
+    <section class="section" id="ways-in">
+      <div class="section-head">
+        <p class="eyebrow">ways in</p>
+        <h2>Start wherever your music already lives</h2>
       </div>
-      <figure class="feature-figure">
-        <img src="/images/article-view.webp" alt="An artist's full article view in Legato, listing real releases and recordings pulled from a scanned library, each one a link." loading="lazy" width="1600" height="913" />
-        <figcaption>Releases and recordings from a scanned library, each one a link.</figcaption>
-      </figure>
-    </section>
-
-    <section class="two-col" id="understanding">
-      <article class="glass card">
-        <span class="card-icon" data-icon="map" aria-hidden="true"></span>
-        <h3>See the shape of your taste</h3>
-        <p>
-          The map shows the clusters and gaps in your library, and the corners that take up
-          more of it than you realised.
-        </p>
-      </article>
-      <article class="glass card">
-        <span class="card-icon" data-icon="tag" aria-hidden="true"></span>
-        <h3>Fix your metadata in place</h3>
-        <p>
-          Legato flags missing and conflicting tags, and you fix them on the map itself,
-          without a separate tagging app.
-        </p>
-      </article>
-      <article class="glass card">
-        <span class="card-icon" data-icon="list" aria-hidden="true"></span>
-        <h3>A plain library when you want one</h3>
-        <p>
-          Some nights you want to pick an album and press play. Next to the map sits an
-          ordinary album grid and track table that stays fast at thirty thousand albums. Both
-          share one search and selection, so switching views keeps your place.
-        </p>
-      </article>
-      <article class="glass card">
-        <span class="card-icon" data-icon="brightness" aria-hidden="true"></span>
-        <h3>Ink or paper</h3>
-        <p>
-          The dark theme you see here, plus a light one modelled on sheet music: warm off-white
-          paper and pen-ink black. Every text and edge colour passes WCAG AA contrast. Pick one
-          or follow your system setting.
-        </p>
-      </article>
-    </section>
-
-    <section class="ways-in" id="ways-in">
-      <p class="eyebrow center">ways in</p>
-      <h2 class="center">Start wherever your music already lives</h2>
-      <div class="three-col">
-        <article class="glass card">
+      <div class="card-grid">
+        <article class="card">
           <span class="card-icon" data-icon="database" aria-hidden="true"></span>
           <p class="eyebrow">on a home server</p>
           <h3>For the NAS in the closet</h3>
@@ -137,7 +363,7 @@
             libraries, with a scan you can pause and resume.
           </p>
         </article>
-        <article class="glass card">
+        <article class="card">
           <span class="card-icon" data-icon="laptop" aria-hidden="true"></span>
           <p class="eyebrow">on your computer</p>
           <h3>For the library on your laptop</h3>
@@ -147,7 +373,7 @@
             library from the menu bar after you close the window, so your phone still reaches it.
           </p>
         </article>
-        <article class="glass card">
+        <article class="card">
           <span class="card-icon" data-icon="globe" aria-hidden="true"></span>
           <p class="eyebrow">in a browser</p>
           <h3>For people who own no files at all</h3>
@@ -164,13 +390,15 @@
       </p>
     </section>
 
-    <section class="pricing" id="pricing">
-      <p class="eyebrow center">how it works</p>
-      <h2 class="center">Free and local, forever.<br />Pay only to leave your LAN.</h2>
-      <div class="pricing-grid">
-        <article class="glass card pricing-card">
+    <section class="section" id="pricing">
+      <div class="section-head">
+        <p class="eyebrow">how it works</p>
+        <h2>Free and local, forever.<br />Pay only to leave your LAN.</h2>
+      </div>
+      <div class="card-grid">
+        <article class="card pricing-card">
           <h3>Legato</h3>
-          <p class="price"><span class="mono">$0</span></p>
+          <p class="price">$0</p>
           <ul>
             <li>Runs entirely on your own machine</li>
             <li>Your library never leaves your disk</li>
@@ -178,9 +406,9 @@
             <li>No account, no subscription</li>
           </ul>
         </article>
-        <article class="glass card pricing-card">
+        <article class="card pricing-card">
           <h3>legato.fm account</h3>
-          <p class="price"><span class="mono">$0</span></p>
+          <p class="price">$0</p>
           <ul>
             <li>Legato in any browser, nothing to install</li>
             <li>Import your Spotify playlists as a map</li>
@@ -188,9 +416,9 @@
             <li>Optional. A home install doesn't need one.</li>
           </ul>
         </article>
-        <article class="glass card pricing-card">
+        <article class="card pricing-card pricing-card-relay">
           <h3>Legato Relay</h3>
-          <p class="price"><span class="mono">paid</span> · coming later</p>
+          <p class="price price-later"><span>paid</span>· coming later</p>
           <ul>
             <li>An always-on bridge from your phone to your own home library</li>
             <li>Off-LAN access, Plex/Jellyfin-style</li>
@@ -203,20 +431,20 @@
     </section>
 
     <section class="status" id="status">
-      <div class="glass status-panel">
+      <div class="status-body">
         <p class="eyebrow">status</p>
         <h2>Legato isn't out yet.</h2>
         <p>
-          The app runs today against real libraries, and each screenshot on this page comes
-          from a live scan. It isn't packaged for public download yet. The beta opens in
-          three waves: home servers first, then the Mac and Windows desktop app, then the
-          browser and Spotify path. Join the waitlist below to hear when your wave opens.
+          The app runs today against real libraries, and every screenshot on this page is the v2
+          app running against one. It isn't packaged for public download yet. The beta
+          opens in three waves: home servers first, then the Mac and Windows desktop app, then
+          the browser and Spotify path. Join the waitlist below to hear when your wave opens.
         </p>
       </div>
     </section>
 
     <section class="waitlist" id="waitlist">
-      <div class="glass waitlist-panel">
+      <div class="waitlist-panel">
         <p class="eyebrow">get notified</p>
         <h2>Join the waitlist</h2>
         <p>One email when Legato is ready to install. No newsletter.</p>
@@ -232,7 +460,7 @@
             autocomplete="off"
             aria-hidden="true"
           />
-          <button type="submit" class="btn btn-pill">Notify me</button>
+          <button type="submit" class="btn btn-primary">Notify me</button>
         </form>
         <p class="form-message" id="waitlist-message" role="status" aria-live="polite" hidden></p>
         <p class="fine-print">
@@ -243,11 +471,11 @@
   </main>
 
   <footer class="site-footer">
-    <img src="/wordmark.svg" alt="legato" class="wordmark small" />
+    <span class="logo logo-small" role="img" aria-label="legato"></span>
     <div class="footer-meta">
-      <span class="mono muted footer-legal"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span>
-      <span class="mono muted">legato.fm</span>
-      <span class="mono muted footer-credit">
+      <span class="footer-legal"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span>
+      <span>legato.fm</span>
+      <span class="footer-credit">
         conceptualized, designed, and built by
         <a href="https://danielchurchill.dev" target="_blank" rel="noopener noreferrer">danielchurchill.dev</a>
       </span>
