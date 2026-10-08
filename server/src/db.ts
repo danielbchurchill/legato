@@ -120,11 +120,14 @@ function backupBeforeMigrating(
 // for the write lock before failing with "database is locked". recompute()
 // runs on a Worker with a connection of its own, and while it holds a write
 // transaction any write here has to wait for it. bun:sqlite waits by
-// blocking the thread, so this is a backstop, not the design: every write
-// transaction the worker holds is cut to a few tens of milliseconds
-// (writeInChunks.ts), and the auth gate no longer writes on every request
-// (auth/sessions.ts). The longest measured, on a 30,000-album library, was
-// well under this; a second covers a machine many times slower than that.
+// blocking the thread, so this is a backstop, not the design: the worker
+// writes in pieces of about 50 ms with a pause after each (writeInChunks.ts),
+// and the auth gate no longer writes on every request (auth/sessions.ts).
+// On a 30,000-album library the longest worker transaction measured was
+// 0.12 s, and no write on the request loop waited more than 84 ms. A piece
+// is bounded by time, so it's no longer on a slower machine; what isn't a
+// piece (a single INSERT … SELECT, the entity prune) is tens of ms there,
+// several hundred on a Raspberry Pi. A second covers that with room left.
 export const BUSY_TIMEOUT_MS = 1000;
 
 /** One connection with the settings every connection to legato.db needs:
