@@ -106,3 +106,58 @@ describe("recompute — B-1", () => {
     expect(jobCount.n).toBe(1);
   });
 });
+
+// Issue #269.
+describe("recompute — the membership bound", () => {
+  function artist(title: string): number {
+    return (
+      db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get(title) as { id: number }
+    ).id;
+  }
+
+  function memberOf(member: number, group: number): void {
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'member_of', 'musicbrainz')").run(
+      member,
+      group,
+    );
+  }
+
+  function jobsFor(nodeId: number): string[] {
+    return (
+      db.prepare("SELECT job_type FROM enrich_jobs WHERE node_id = ? ORDER BY job_type").all(nodeId) as {
+        job_type: string;
+      }[]
+    ).map((r) => r.job_type);
+  }
+
+  it("queues member lookups for performers and their members and groups, and photos and descriptions one hop further", () => {
+    // A producer with an artist node takes the credit (match/edges.ts's
+    // findOrCreatePerson), the way #280 merged them.
+    const producer = artist("George Martin");
+    insertFile({ artist: "The Beatles", producer: ["George Martin"] });
+    recompute(db);
+    const beatles = (
+      db.prepare("SELECT id FROM nodes WHERE type = 'artist' AND title = 'The Beatles'").get() as {
+        id: number;
+      }
+    ).id;
+    // What an older, unbounded crawl left: Bob Dylan is a third level.
+    const george = artist("George Harrison");
+    const wilburys = artist("Traveling Wilburys");
+    const dylan = artist("Bob Dylan");
+    memberOf(george, beatles);
+    memberOf(george, wilburys);
+    memberOf(dylan, wilburys);
+    db.prepare("DELETE FROM enrich_jobs").run();
+
+    recompute(db);
+
+    const everyLookup = ["artist_image_lookup", "artist_member_lookup", "description_lookup"];
+    expect(jobsFor(beatles)).toEqual(everyLookup);
+    expect(jobsFor(george)).toEqual(everyLookup);
+    // In the library, but a producer doesn't start a crawl.
+    expect(jobsFor(producer)).toEqual(["artist_image_lookup", "description_lookup"]);
+    expect(jobsFor(wilburys)).toEqual(["artist_image_lookup", "description_lookup"]);
+    expect(jobsFor(dylan)).toEqual([]);
+  });
+});

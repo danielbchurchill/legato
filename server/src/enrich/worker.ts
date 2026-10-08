@@ -29,6 +29,7 @@ import {
   enqueueArtistMemberLookupIfNeeded,
   enqueueCoverArtLookupIfNeeded,
   enqueueDescriptionLookupIfNeeded,
+  isMemberLookupArtist,
 } from "./queue.js";
 import { assignTracks, pickBestRelease, scoreReleaseCandidate, type LocalAlbumInput, type LocalTrack } from "./releaseMatch.js";
 import { looksSuspicious } from "./sanityCheck.js";
@@ -636,6 +637,15 @@ async function processArtistMemberLookup(db: Database, job: EnrichJob): Promise<
     return;
   }
 
+  // Issue #269: the bound is checked again here because the library can
+  // change between queueing and running. An artist outside it now loses
+  // the job rather than having it marked done, so the lookup is queued
+  // again if a rescan brings the artist back inside.
+  if (!isMemberLookupArtist(db, job.node_id)) {
+    db.prepare("DELETE FROM enrich_jobs WHERE id = ?").run(job.id);
+    return;
+  }
+
   if (looksLikeMultipleArtists(node.title)) {
     // Same reasoning as the artist image job: a credit-line title like
     // "Pussy Riot; Slayyyter" isn't one artist MusicBrainz can resolve
@@ -655,12 +665,28 @@ async function processArtistMemberLookup(db: Database, job: EnrichJob): Promise<
   // A member or group discovered just now (findOrCreateNode's node.title
   // collapse means this could also resolve to an *existing* node — one
   // this artist's own recordings already created — in which case nothing
-  // new needs enqueueing) gets its own enrichment queued immediately,
-  // rather than waiting for the next scan's recompute() to notice it.
+  // new needs enqueueing) gets its photo and description queued
+  // immediately, rather than waiting for the next scan's recompute() to
+  // notice it. It's inside the bound: this artist passed the check above,
+  // and the bound reaches one member_of edge past it.
   for (const newNodeId of newArtistNodeIds) {
     enqueueArtistImageLookupIfNeeded(db, newNodeId);
     enqueueDescriptionLookupIfNeeded(db, newNodeId);
-    enqueueArtistMemberLookupIfNeeded(db, newNodeId);
+  }
+  // Issue #269: of the artists this one is now linked to, only those with a
+  // member lookup of their own get one: a performer's members and groups,
+  // whose lookups find the second hop (George Harrison's Traveling
+  // Wilburys). The second hop's lookups would find a third, so they don't
+  // run. Existing nodes count too: a producer already in the library who
+  // turns out to be a performer's bandmate is looked up now.
+  const linkedArtists = db
+    .prepare(
+      `SELECT to_node AS id FROM edges WHERE from_node = ? AND type = 'member_of'
+       UNION SELECT from_node FROM edges WHERE to_node = ? AND type = 'member_of'`,
+    )
+    .all(job.node_id, job.node_id) as { id: number }[];
+  for (const { id } of linkedArtists) {
+    if (isMemberLookupArtist(db, id)) enqueueArtistMemberLookupIfNeeded(db, id);
   }
 
   // The graph gained nodes/edges outside of a scan — the canvas and any

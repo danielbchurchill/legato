@@ -37,9 +37,10 @@ function findOrCreateArtistNode(db: Database, title: string): { id: number; crea
 // it's on.
 //
 // Returns the ids of artist nodes newly created while applying these
-// relations, so the caller can enqueue their own enrichment (photo,
-// description, and their own member-relation lookup) rather than waiting
-// for the next full recompute to notice them.
+// relations, so the caller can enqueue their photo and description lookups
+// rather than waiting for the next full recompute to notice them. Whether
+// they get a member lookup of their own is the bound's call (#269,
+// enrich/queue.ts), not this function's.
 export function applyMemberRelations(
   db: Database,
   artistNodeId: number,

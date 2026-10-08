@@ -2,6 +2,8 @@ import type { Database } from "./sqlite.js";
 import { deriveLocalEdges } from "./match/edges.js";
 import { mergeDuplicatePeople } from "./match/people.js";
 import {
+  ARTISTS_IN_BOUND_SQL,
+  MEMBER_LOOKUP_ARTISTS_SQL,
   enqueueArtistImageLookupIfNeeded,
   enqueueArtistMemberLookupIfNeeded,
   enqueueDescriptionLookupIfNeeded,
@@ -72,20 +74,23 @@ export function recompute(db: Database): void {
   // recomputeEntities, because artist and release nodes are what it creates.
   // Both helpers are one-shot per node (see enrich/queue.ts), so running this
   // on every recompute costs a pair of indexed lookups per node rather than a
-  // network request.
+  // network request. Issue #269: only for artists inside the membership
+  // crawl's bound (enrich/queue.ts), the same as the member lookup below.
   const enrichable = db
-    .prepare("SELECT id, type FROM nodes WHERE type IN ('artist','release')")
+    .prepare(`SELECT id, type FROM nodes WHERE type = 'release' OR id IN (${ARTISTS_IN_BOUND_SQL})`)
     .all() as { id: number; type: string }[];
+  const memberLookupArtists = new Set(
+    (db.prepare(MEMBER_LOOKUP_ARTISTS_SQL).all() as { id: number }[]).map((row) => row.id),
+  );
   for (const node of enrichable) {
     if (node.type === "artist") {
       enqueueArtistImageLookupIfNeeded(db, node.id);
-      // Issue #61: an artist's "member of band" relations — every artist
-      // node gets this queued the same one-shot way as the photo lookup
-      // above, so a member/group node created mid-enrichment (see
-      // worker.ts's processArtistMemberLookup) still gets its own lookup
-      // the next time this runs, even on a machine where the cascade
-      // inside that job never got to it directly.
-      enqueueArtistMemberLookupIfNeeded(db, node.id);
+      // Issue #61: an artist's "member of band" relations, queued the same
+      // one-shot way as the photo lookup above, so a member or group the
+      // cascade in worker.ts's processArtistMemberLookup never got to still
+      // gets its lookup the next time this runs. Issue #269: only the
+      // performers and their direct members and groups.
+      if (memberLookupArtists.has(node.id)) enqueueArtistMemberLookupIfNeeded(db, node.id);
     }
     enqueueDescriptionLookupIfNeeded(db, node.id);
   }
