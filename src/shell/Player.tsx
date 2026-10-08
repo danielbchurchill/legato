@@ -22,7 +22,8 @@ import { useShellLayout } from './layout'
  * Left to right: the cover, title over artist, the transport over its
  * scrubber, then the queue and volume buttons. The bar picks up the cover's
  * colour as a wash from its left edge, so what's playing tints the chrome
- * that controls it.
+ * that controls it. As the bar narrows, the parts give way in the order
+ * layout.ts sets out, down to previous, play/pause and next (#293).
  *
  * With nothing loaded, the bar gives way to a small idle pill with one way
  * back in (Shuffle library). It never shows every control disabled — that
@@ -37,7 +38,7 @@ const REPEAT_LABEL: Record<RepeatMode, string> = {
 /* ---- Waveform ------------------------------------------------------------ */
 
 // The server's loudness envelope is 2000 buckets; the player shows 56 bars,
-// 24 when compact. Each bar takes the loudest bucket it covers, so a
+// or 24 in a narrower bar. Each bar takes the loudest bucket it covers, so a
 // transient isn't averaged away.
 function downsample(peaks: number[], barCount: number): number[] {
   const bars = new Array<number>(barCount).fill(0)
@@ -207,6 +208,7 @@ export function Player({
   onCycleRepeat,
 }: PlayerProps) {
   const layout = useShellLayout()
+  const parts = layout.playerParts
   const color = useCoverColor(status.currentRecordingNodeId)
   const background = color
     ? `linear-gradient(90deg, ${withAlpha(color, 0.38)}, ${withAlpha(color, 0)} 42%), var(--color-surface)`
@@ -216,14 +218,17 @@ export function Player({
     <Surface
       role="region"
       aria-label="Player"
-      // Clipped to its own bar, which never reaches the right panel. Below
-      // about 470px of bar the controls don't fit and get cut off (#293).
+      // Clipped to its own bar. Nothing should need it: every set of parts
+      // fits the width layout.ts picks it for.
       className="absolute bottom-[var(--inset)] z-20 flex h-[var(--player-height)] -translate-x-1/2 items-center gap-[14px] overflow-hidden rounded-[var(--radius-panel)] pr-[14px] pl-[12px]"
       style={{ left: layout.cx, width: layout.playerWidth, background }}
     >
-      <CoverArt nodeId={status.currentRecordingNodeId} size="thumb" className="size-[48px]" alt="" />
+      {parts.cover && <CoverArt nodeId={status.currentRecordingNodeId} size="thumb" className="size-[48px]" alt="" />}
 
-      <div className="flex min-w-0 shrink-0 flex-col" style={{ width: layout.compactPlayer ? 112 : 180 }}>
+      <div
+        className={parts.titleWidth > 0 ? 'flex min-w-0 shrink-0 flex-col' : 'sr-only'}
+        style={parts.titleWidth > 0 ? { width: parts.titleWidth } : undefined}
+      >
         <span title={title} className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
           {title}
         </span>
@@ -234,16 +239,18 @@ export function Player({
 
       <div className="flex min-w-0 flex-1 flex-col items-center gap-[4px]">
         <div className="flex items-center gap-[6px]">
-          <IconButton
-            icon="arrow-swap"
-            label={shuffled ? 'Shuffle on' : 'Shuffle off'}
-            size={28}
-            active={shuffled}
-            aria-pressed={shuffled}
-            disabled={queueBusy}
-            onClick={onToggleShuffle}
-            tooltipPlacement="top"
-          />
+          {parts.shuffleAndRepeat && (
+            <IconButton
+              icon="arrow-swap"
+              label={shuffled ? 'Shuffle on' : 'Shuffle off'}
+              size={28}
+              active={shuffled}
+              aria-pressed={shuffled}
+              disabled={queueBusy}
+              onClick={onToggleShuffle}
+              tooltipPlacement="top"
+            />
+          )}
           <IconButton icon="reverse" label="Previous track" size={30} disabled={queueBusy} onClick={onPrevious} tooltipPlacement="top" />
           <PlayCircle
             variant="ink"
@@ -256,31 +263,34 @@ export function Player({
           <IconButton icon="fast-forward" label="Next track" size={30} disabled={queueBusy} onClick={onNext} tooltipPlacement="top" />
           {/* Repeat-one gets a "1" badge: on/off is the wash, but all vs one
            * needs a mark of its own. */}
-          <span className="relative">
-            <IconButton
-              icon="repeat"
-              label={REPEAT_LABEL[repeatMode]}
-              size={28}
-              active={repeatMode !== 'off'}
-              disabled={queueBusy}
-              onClick={onCycleRepeat}
-              tooltipPlacement="top"
-            />
-            {repeatMode === 'one' && (
-              <span
-                aria-hidden="true"
-                className="mono pointer-events-none absolute right-[3px] bottom-[2px] text-[9px] leading-none text-[var(--color-ink)]"
-              >
-                1
-              </span>
-            )}
-          </span>
+          {parts.shuffleAndRepeat && (
+            <span className="relative">
+              <IconButton
+                icon="repeat"
+                label={REPEAT_LABEL[repeatMode]}
+                size={28}
+                active={repeatMode !== 'off'}
+                disabled={queueBusy}
+                onClick={onCycleRepeat}
+                tooltipPlacement="top"
+              />
+              {repeatMode === 'one' && (
+                <span
+                  aria-hidden="true"
+                  className="mono pointer-events-none absolute right-[3px] bottom-[2px] text-[9px] leading-none text-[var(--color-ink)]"
+                >
+                  1
+                </span>
+              )}
+            </span>
+          )}
         </div>
 
         {problem ? (
           // What happened, why, and the one action that fixes it. role=alert
           // because the play button that was just pressed gives no other
-          // sign that nothing happened (#184).
+          // sign that nothing happened (#184). It stays when the scrubber
+          // has given way: the action fits under the transport at any width.
           <div role="alert" className="flex w-full min-w-0 items-center gap-[10px]">
             <p title={`${problem.headline}. ${problem.detail}`} className="min-w-0 flex-1 truncate text-small text-[var(--color-ink-2)]">
               <span className="text-[var(--color-ink)]">{problem.headline}</span> · {problem.detail}
@@ -290,57 +300,61 @@ export function Player({
             </Button>
           </div>
         ) : (
-          <Waveform
-            fileId={status.currentFileId}
-            positionMs={status.positionMs}
-            durationMs={status.currentDurationMs}
-            barCount={layout.compactPlayer ? 24 : 56}
-            onSeek={onSeek}
-          />
+          parts.waveformBars > 0 && (
+            <Waveform
+              fileId={status.currentFileId}
+              positionMs={status.positionMs}
+              durationMs={status.currentDurationMs}
+              barCount={parts.waveformBars}
+              onSeek={onSeek}
+            />
+          )
         )}
       </div>
 
-      <div className="flex shrink-0 items-center gap-[2px]">
-        <IconButton
-          icon="info"
-          label={queueOpen ? 'Hide queue' : 'Show queue'}
-          active={queueOpen}
-          aria-pressed={queueOpen}
-          onClick={onToggleQueue}
-          tooltipPlacement="top"
-        />
-        {/* Volume opens a vertical slider; the glyph swaps to muted at zero
-         * so the state reads without opening anything. */}
-        <Popover
-          label="Volume"
-          placement="top"
-          align="center"
-          className="px-[10px] py-[14px]"
-          trigger={({ open: _open, ...props }) => (
-            <Tooltip label={`Volume ${Math.round(status.volume * 100)}%`} placement="top">
-              <button
-                type="button"
-                aria-label={`Volume, ${Math.round(status.volume * 100)}%`}
-                {...props}
-                className="grid size-[32px] place-items-center rounded-[10px] text-[var(--color-ink-2)] transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] hover:text-[var(--color-ink)]"
-              >
-                <Icon name={status.volume === 0 ? 'volume-mute' : 'volume'} size={19} />
-              </button>
-            </Tooltip>
-          )}
-        >
-          <Slider
-            orientation="vertical"
-            label="Volume"
-            min={0}
-            max={1}
-            step={0.01}
-            value={status.volume}
-            onChange={onSetVolume}
-            format={(v) => `${Math.round(v * 100)}%`}
+      {parts.queueAndVolume && (
+        <div className="flex shrink-0 items-center gap-[2px]">
+          <IconButton
+            icon="info"
+            label={queueOpen ? 'Hide queue' : 'Show queue'}
+            active={queueOpen}
+            aria-pressed={queueOpen}
+            onClick={onToggleQueue}
+            tooltipPlacement="top"
           />
-        </Popover>
-      </div>
+          {/* Volume opens a vertical slider; the glyph swaps to muted at zero
+           * so the state reads without opening anything. */}
+          <Popover
+            label="Volume"
+            placement="top"
+            align="center"
+            className="px-[10px] py-[14px]"
+            trigger={({ open: _open, ...props }) => (
+              <Tooltip label={`Volume ${Math.round(status.volume * 100)}%`} placement="top">
+                <button
+                  type="button"
+                  aria-label={`Volume, ${Math.round(status.volume * 100)}%`}
+                  {...props}
+                  className="grid size-[32px] place-items-center rounded-[10px] text-[var(--color-ink-2)] transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] hover:text-[var(--color-ink)]"
+                >
+                  <Icon name={status.volume === 0 ? 'volume-mute' : 'volume'} size={19} />
+                </button>
+              </Tooltip>
+            )}
+          >
+            <Slider
+              orientation="vertical"
+              label="Volume"
+              min={0}
+              max={1}
+              step={0.01}
+              value={status.volume}
+              onChange={onSetVolume}
+              format={(v) => `${Math.round(v * 100)}%`}
+            />
+          </Popover>
+        </div>
+      )}
     </Surface>
   )
 }

@@ -3,6 +3,7 @@ import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Player } from './Player'
+import { ShellLayoutContext, computeShellLayout, type ShellLayout } from './layout'
 import type { PlaybackProblem } from '../playback/playbackError'
 
 beforeEach(() => {
@@ -22,39 +23,43 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-function renderPlayer(problem: PlaybackProblem | null, onResolveProblem = () => undefined) {
+function renderPlayer(problem: PlaybackProblem | null, onResolveProblem = () => undefined, layout?: ShellLayout) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const noop = () => undefined
   act(() => {
     createRoot(container).render(
-      createElement(Player, {
-        title: 'Song',
-        artist: 'Someone',
-        queueOpen: false,
-        onToggleQueue: noop,
-        status: {
-          playing: false,
-          positionMs: 0,
-          currentRecordingNodeId: null,
-          currentFileId: null,
-          currentDurationMs: null,
-          volume: 1,
-        },
-        shuffled: false,
-        queueBusy: false,
-        repeatMode: 'off',
-        problem,
-        onResolveProblem,
-        onPause: noop,
-        onResume: noop,
-        onSeek: noop,
-        onSetVolume: noop,
-        onNext: noop,
-        onPrevious: noop,
-        onToggleShuffle: noop,
-        onCycleRepeat: noop,
-      }),
+      createElement(
+        ShellLayoutContext.Provider,
+        { value: layout ?? computeShellLayout(1440, 1024, { leftOpen: false, rightOpen: false }) },
+        createElement(Player, {
+          title: 'Song',
+          artist: 'Someone',
+          queueOpen: false,
+          onToggleQueue: noop,
+          status: {
+            playing: false,
+            positionMs: 0,
+            currentRecordingNodeId: null,
+            currentFileId: null,
+            currentDurationMs: null,
+            volume: 1,
+          },
+          shuffled: false,
+          queueBusy: false,
+          repeatMode: 'off',
+          problem,
+          onResolveProblem,
+          onPause: noop,
+          onResume: noop,
+          onSeek: noop,
+          onSetVolume: noop,
+          onNext: noop,
+          onPrevious: noop,
+          onToggleShuffle: noop,
+          onCycleRepeat: noop,
+        }),
+      ),
     )
   })
   return container
@@ -93,5 +98,18 @@ describe('Player playback problem (#184)', () => {
     const container = renderPlayer(null)
     expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(container.querySelector('[aria-label="Seek"]')).not.toBeNull()
+  })
+})
+
+// #293: what the player draws follows the parts layout.ts picks for its width.
+describe('Player in a narrow bar', () => {
+  const buttons = (container: HTMLElement) => [...container.querySelectorAll('button')].map((b) => b.getAttribute('aria-label'))
+
+  it('keeps the cover, the whole transport and the scrubber at the narrowest desktop window', () => {
+    const container = renderPlayer(null, undefined, computeShellLayout(1100, 700, { leftOpen: true, rightOpen: true }))
+    expect(buttons(container)).toEqual(['Shuffle off', 'Previous track', 'Play', 'Next track', 'Repeat off'])
+    expect(container.querySelector('[aria-label="Seek"]')?.children).toHaveLength(24)
+    // The title column has given way on screen, but still names the track.
+    expect(container.querySelector('.sr-only')?.textContent).toBe('SongSomeone')
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { INSET, RIGHT_PANEL_WIDTH, computeShellLayout } from './layout'
+import { INSET, RIGHT_PANEL_WIDTH, computeShellLayout, playerContentWidth, playerParts } from './layout'
 
 describe('computeShellLayout', () => {
   it('centres on the window when only the rail is showing', () => {
@@ -20,13 +20,7 @@ describe('computeShellLayout', () => {
     expect(layout.cx).toBe((396 + 1060) / 2)
     // min(720, 664 - 48)
     expect(layout.playerWidth).toBe(616)
-    expect(layout.compactPlayer).toBe(false)
-  })
-
-  it('switches the player to its compact layout under 600px', () => {
-    const layout = computeShellLayout(1280, 800, { leftOpen: true, rightOpen: true })
-    expect(layout.playerWidth).toBe(1280 - 396 - 380 - 48)
-    expect(layout.compactPlayer).toBe(true)
+    expect(layout.playerParts.titleWidth).toBe(180)
   })
 
   it('never reports a negative width for a window narrower than its panels', () => {
@@ -67,6 +61,45 @@ describe('computeShellLayout', () => {
           panelLeft - (layout.playerWidth > 0 ? 32 : 8),
         )
       }
+    }
+  })
+})
+
+// #293: the bar narrows with the free space, and what it holds gives way in
+// a fixed order, down to previous, play/pause and next.
+describe('the player as its bar narrows', () => {
+  const full = { cover: true, titleWidth: 180, shuffleAndRepeat: true, waveformBars: 56, queueAndVolume: true }
+  const compact = { ...full, titleWidth: 112, waveformBars: 24 }
+  const noTitle = { ...compact, titleWidth: 0 }
+  const noQueueOrVolume = { ...noTitle, queueAndVolume: false }
+  const noCover = { ...noQueueOrVolume, cover: false }
+  const transportOnly = { ...noCover, shuffleAndRepeat: false, waveformBars: 0 }
+
+  // With both panels open, the bar is the window less 824px, so each part
+  // drops out at a window width as well as a bar width.
+  it.each([
+    [1544, 720, full],
+    [1438, 614, full],
+    [1437, 613, compact],
+    [1294, 470, compact],
+    [1293, 469, noTitle],
+    [1168, 344, noTitle],
+    [1167, 343, noQueueOrVolume],
+    [1100, 276, noQueueOrVolume],
+    [1088, 264, noQueueOrVolume],
+    [1087, 263, noCover],
+    [1026, 202, noCover],
+    [1025, 201, transportOnly],
+    [958, 134, transportOnly],
+  ])('a %ipx window with both panels open has a %ipx bar', (windowWidth, bar, parts) => {
+    const layout = computeShellLayout(windowWidth, 900, { leftOpen: true, rightOpen: true })
+    expect(layout.playerWidth).toBe(bar)
+    expect(layout.playerParts).toEqual(parts)
+  })
+
+  it('fits everything it shows at every bar width', () => {
+    for (let width = playerContentWidth(transportOnly); width <= 720; width++) {
+      expect(playerContentWidth(playerParts(width)), `bar ${width}`).toBeLessThanOrEqual(width)
     }
   })
 })
