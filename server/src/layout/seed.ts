@@ -1,4 +1,5 @@
 import type { Database } from "../sqlite.js";
+import { writeInChunks } from "../writeInChunks.js";
 import { computeClusteredSeeds, type ClusterInput, type Seed } from "./cluster.js";
 
 export type { Seed };
@@ -48,10 +49,9 @@ function upsertSeeds(db: Database, seeds: Map<number, Seed>, locked: boolean): v
            END,
            seed_x = excluded.seed_x, seed_y = excluded.seed_y`,
   );
-  const applyAll = db.transaction(() => {
-    for (const [nodeId, seed] of seeds) upsert.run(nodeId, seed.x, seed.y);
-  });
-  applyAll();
+  // Issue #281: in pieces (writeInChunks.ts), so recompute's worker never
+  // holds the write lock for long. A 30,000-album library has 300,000 rows.
+  writeInChunks(db, seeds, ([nodeId, seed]) => upsert.run(nodeId, seed.x, seed.y));
 }
 
 // Recording, release, and artist nodes together — the one combined graph
@@ -157,16 +157,31 @@ export function recomputeTracksLayout(
   // credit node's position again once its last qualifying edge is gone
   // (a corrected tag, a re-match), the same way a deleted release/artist
   // entity already falls out of the first two UNION arms.
-  db.prepare(
-    `DELETE FROM positions WHERE granularity = 'tracks'
-       AND node_id NOT IN (
-         SELECT n.id FROM nodes n
-          WHERE n.type = 'recording' AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = n.id)
-         UNION SELECT node_id FROM albums
-         UNION SELECT node_id FROM artists
-         UNION SELECT DISTINCT to_node FROM edges WHERE type IN ('produced_by', 'engineered_by')
-       )`,
-  ).run();
+  //
+  // Issue #281: found first and deleted by id, in pieces. As one DELETE it
+  // held the write lock while it built that whole set, half a second on a
+  // 30,000-album library. Each id is checked again as it's deleted, so a
+  // node that gained a file or an entity row in between keeps its position.
+  const stale = db
+    .prepare(
+      `SELECT node_id AS nodeId FROM positions WHERE granularity = 'tracks'
+         AND node_id NOT IN (
+           SELECT n.id FROM nodes n
+            WHERE n.type = 'recording' AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = n.id)
+           UNION SELECT node_id FROM albums
+           UNION SELECT node_id FROM artists
+           UNION SELECT DISTINCT to_node FROM edges WHERE type IN ('produced_by', 'engineered_by')
+         )`,
+    )
+    .all() as { nodeId: number }[];
+  const remove = db.prepare(
+    `DELETE FROM positions WHERE granularity = 'tracks' AND node_id = ?
+       AND NOT EXISTS (SELECT 1 FROM nodes n JOIN files f ON f.recording_node_id = n.id WHERE n.id = ? AND n.type = 'recording')
+       AND NOT EXISTS (SELECT 1 FROM albums WHERE node_id = ?)
+       AND NOT EXISTS (SELECT 1 FROM artists WHERE node_id = ?)
+       AND NOT EXISTS (SELECT 1 FROM edges WHERE to_node = ? AND type IN ('produced_by', 'engineered_by'))`,
+  );
+  writeInChunks(db, stale, ({ nodeId }) => remove.run(nodeId, nodeId, nodeId, nodeId, nodeId));
 }
 
 // An entity's initial seed in the combined graph: the centroid of whichever
@@ -260,11 +275,17 @@ export function recomputeAllLayouts(db: Database): void {
 // plain refetch deliberately never moves an already-tracked node's x/y
 // (Canvas.tsx's syncGraph), which is right for every other kind of data
 // refresh but wrong for this one.
+//
+// Issue #281: one transaction. It runs on the request loop, where writing
+// in pieces gains nothing, and a recompute on its worker could otherwise
+// write its own seeds between the pieces.
 export function rebuildLayout(db: Database): void {
-  db.prepare(
-    `UPDATE positions SET user_x = NULL, user_y = NULL, settled_x = NULL, settled_y = NULL
-      WHERE granularity = 'tracks'`,
-  ).run();
-  const jitterSeed = Math.floor(Math.random() * 0xffffffff);
-  recomputeTracksLayout(db, { jitterSeed, ignoreLock: true });
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE positions SET user_x = NULL, user_y = NULL, settled_x = NULL, settled_y = NULL
+        WHERE granularity = 'tracks'`,
+    ).run();
+    const jitterSeed = Math.floor(Math.random() * 0xffffffff);
+    recomputeTracksLayout(db, { jitterSeed, ignoreLock: true });
+  })();
 }

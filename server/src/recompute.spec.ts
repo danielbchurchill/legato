@@ -1,7 +1,10 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { Database } from "./sqlite.js";
 import { openDb } from "./db.js";
-import { recompute } from "./recompute.js";
+import { recompute, recomputeOffThread } from "./recompute.js";
 
 let db: Database;
 let libraryRootId: number;
@@ -159,5 +162,82 @@ describe("recompute — the membership bound", () => {
     expect(jobsFor(producer)).toEqual(["artist_image_lookup", "description_lookup"]);
     expect(jobsFor(wilburys)).toEqual(["artist_image_lookup", "description_lookup"]);
     expect(jobsFor(dylan)).toEqual([]);
+  });
+});
+
+// Issue #281: what the callers (the scanner, removing a library folder, the
+// last artist credit lookup) run. On a file it's a Worker with its own
+// connection; these use one so the Worker is what they exercise.
+describe("recomputeOffThread", () => {
+  let dir: string;
+  let fileDb: Database;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "legato-recompute-"));
+    fileDb = openDb(path.join(dir, "legato.db"));
+    const root = fileDb.prepare("INSERT INTO library_roots (path) VALUES ('/fake') RETURNING id").get() as { id: number };
+    for (let i = 0; i < 200; i++) addFile(root.id, i);
+  });
+
+  afterEach(() => {
+    fileDb.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function addFile(rootId: number, i: number): number {
+    const node = fileDb.prepare("INSERT INTO nodes (type, title) VALUES ('recording', ?) RETURNING id").get(`Track ${i}`) as {
+      id: number;
+    };
+    fileDb.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(node.id);
+    fileDb
+      .prepare(
+        `INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size, match_source, tags_raw)
+         VALUES (?, ?, ?, datetime('now'), 0, 'mbid', ?)`,
+      )
+      .run(node.id, rootId, `/fake/${i}.flac`, JSON.stringify({ artist: `Artist ${i % 20}`, album: `Album ${i % 40}` }));
+    return node.id;
+  }
+
+  const count = (sql: string) => (fileDb.prepare(sql).get() as { n: number }).n;
+  // Changes only when another connection commits.
+  const dataVersion = () => (fileDb.prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
+
+  it("works on another connection while this thread goes on, and its writes are in once it resolves", async () => {
+    const before = dataVersion();
+    let ticks = 0;
+    const timer = setInterval(() => ticks++, 1);
+    await recomputeOffThread(fileDb);
+    clearInterval(timer);
+
+    expect(dataVersion()).not.toBe(before);
+    expect(ticks).toBeGreaterThan(0);
+    expect(count("SELECT COUNT(*) AS n FROM edges WHERE type = 'performed_by'")).toBe(200);
+    expect(count("SELECT COUNT(*) AS n FROM albums")).toBe(40);
+    expect(count("SELECT COUNT(*) AS n FROM articles")).toBeGreaterThan(0);
+  });
+
+  it("runs one at a time, and a call made during a run gets the next one, shared", async () => {
+    const first = recomputeOffThread(fileDb);
+    const second = recomputeOffThread(fileDb);
+    expect(recomputeOffThread(fileDb)).toBe(second);
+    expect(second).not.toBe(first);
+
+    let secondDone = false;
+    void second.then(() => (secondDone = true));
+    const rootId = (fileDb.prepare("SELECT id FROM library_roots").get() as { id: number }).id;
+    const late = addFile(rootId, 1000);
+    await first;
+    expect(secondDone).toBe(false);
+    await second;
+
+    expect(count(`SELECT COUNT(*) AS n FROM edges WHERE from_node = ${late} AND type = 'performed_by'`)).toBe(1);
+  });
+
+  it("rejects with what went wrong, and the next call starts a new run", async () => {
+    fileDb.exec("ALTER TABLE articles RENAME TO articles_away");
+    await expect(recomputeOffThread(fileDb)).rejects.toThrow("no such table");
+    fileDb.exec("ALTER TABLE articles_away RENAME TO articles");
+    await recomputeOffThread(fileDb);
+    expect(count("SELECT COUNT(*) AS n FROM articles")).toBeGreaterThan(0);
   });
 });

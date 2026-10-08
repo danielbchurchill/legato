@@ -51,6 +51,13 @@ export class Database {
     this.#inner = new BunDatabase(path, { strict: true });
   }
 
+  // The path this connection opened: ":memory:" (or "") for an in-memory
+  // database, which no second connection can reach. recompute.ts reads it
+  // to open its worker's own connection to the same file (issue #281).
+  get filename(): string {
+    return this.#inner.filename;
+  }
+
   prepare<ReturnType = unknown>(sql: string): Statement<ReturnType> {
     return new Statement<ReturnType>(this.#inner.prepare(sql));
   }
@@ -62,8 +69,15 @@ export class Database {
     this.#inner.exec(sql);
   }
 
-  transaction<A extends unknown[], T>(fn: (...args: A) => T) {
-    return this.#inner.transaction(fn);
+  // Issue #281: every transaction begins IMMEDIATE, taking the write lock
+  // before its first statement. recompute() writes on a connection of its
+  // own (recompute.ts), and a deferred transaction that read before that
+  // connection committed can't write afterwards: SQLite fails it with
+  // SQLITE_BUSY_SNAPSHOT at once, without waiting. Every transaction in
+  // this codebase writes, so none gives anything up. A nested call is a
+  // savepoint, as before.
+  transaction<A extends unknown[], T>(fn: (...args: A) => T): (...args: A) => T {
+    return this.#inner.transaction(fn).immediate;
   }
 
   close(): void {

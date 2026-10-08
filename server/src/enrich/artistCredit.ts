@@ -1,7 +1,7 @@
 import type { Database } from "../sqlite.js";
 import { deriveRecordingEdges } from "../match/edges.js";
 import { hasArtistCredit, recordArtistCredit } from "../match/evidence.js";
-import { recompute } from "../recompute.js";
+import { recomputeOffThread } from "../recompute.js";
 import { parseTags } from "../scan/tags.js";
 import { broadcast } from "../ws.js";
 import { fetchRecordingArtistCredit, type MbArtistCredit } from "./mbClient.js";
@@ -154,7 +154,7 @@ export async function processArtistCreditLookup(db: Database, job: { id: number;
   const more = db.prepare("SELECT 1 FROM enrich_jobs WHERE job_type = ? AND status = 'queued'").get(JOB_TYPE);
   if (!more && changedSinceRecompute) {
     changedSinceRecompute = false;
-    recompute(db);
+    await recomputeOffThread(db);
     // What the canvas already refetches on (src/canvas/useGraphData.ts).
     broadcast("enrich:applied", { kind: "artist_credit" });
   }

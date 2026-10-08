@@ -1,4 +1,5 @@
 import type { Database } from "../sqlite.js";
+import { writeInChunks } from "../writeInChunks.js";
 import { pickMode } from "./mode.js";
 
 // affinityReason is null for a real tie (shared recording) and a specific
@@ -240,14 +241,34 @@ export function recomputeCollaborationEdges(db: Database): void {
     ...computeAlbumRelations(albums, albumLabel),
   ]);
 
-  const applyAll = db.transaction(() => {
-    db.prepare("DELETE FROM edges WHERE type IN ('collaborated_with', 'same_artist', 'same_label')").run();
-    // affinityReason rides in the edges table's existing label column —
-    // null for a real collaborated_with tie, the reason string for an
-    // affinity-only one. articles/recompute.ts and facts.ts both filter on
-    // it before claiming two artists "collaborated".
-    const insert = db.prepare("INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, ?, 'local', ?)");
-    for (const e of edges) insert.run(e.fromNode, e.toNode, e.type, e.affinityReason ?? null);
-  });
-  applyAll();
+  // affinityReason rides in the edges table's existing label column —
+  // null for a real collaborated_with tie, the reason string for an
+  // affinity-only one. articles/recompute.ts and facts.ts both filter on
+  // it before claiming two artists "collaborated".
+  const edgeKey = (fromNode: number, toNode: number, type: string, label: string | null) =>
+    `${fromNode}:${toNode}:${type}:${label ?? ""}`;
+  const missing = new Map(edges.map((e) => [edgeKey(e.fromNode, e.toNode, e.type, e.affinityReason ?? null), e]));
+
+  // Issue #281: written as a diff rather than deleted and inserted whole.
+  // The era affinity alone is about 750,000 pairs on a 3,000-artist
+  // library, and rewriting them held the write lock for seconds on every
+  // scan; a rescan that changed nothing now writes nothing. Every edge of
+  // these types that isn't wanted goes, a duplicate or one from another
+  // source included, as the wholesale delete always did.
+  const existing = db
+    .prepare(
+      `SELECT id, from_node AS fromNode, to_node AS toNode, type, source, label FROM edges
+        WHERE type IN ('collaborated_with', 'same_artist', 'same_label')`,
+    )
+    .all() as { id: number; fromNode: number; toNode: number; type: string; source: string; label: string | null }[];
+  const stale: number[] = [];
+  for (const row of existing) {
+    if (row.source === "local" && missing.delete(edgeKey(row.fromNode, row.toNode, row.type, row.label))) continue;
+    stale.push(row.id);
+  }
+
+  const remove = db.prepare("DELETE FROM edges WHERE id = ?");
+  const insert = db.prepare("INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, ?, 'local', ?)");
+  writeInChunks(db, stale, (id) => remove.run(id));
+  writeInChunks(db, [...missing.values()], (e) => insert.run(e.fromNode, e.toNode, e.type, e.affinityReason ?? null));
 }

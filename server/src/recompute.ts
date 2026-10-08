@@ -1,19 +1,13 @@
 import type { Database } from "./sqlite.js";
 import { deriveLocalEdges } from "./match/edges.js";
 import { mergeDuplicatePeople } from "./match/people.js";
-import {
-  ARTISTS_IN_BOUND_SQL,
-  MEMBER_LOOKUP_ARTISTS_SQL,
-  enqueueArtistImageLookupIfNeeded,
-  enqueueArtistMemberLookupIfNeeded,
-  enqueueDescriptionLookupIfNeeded,
-  enqueueEnrichmentIfNeeded,
-} from "./enrich/queue.js";
+import { enqueueEnrichmentIfNeeded, enqueueLookupsInBound } from "./enrich/queue.js";
 import { recomputeEntities } from "./entities/aggregate.js";
 import { recomputeCollaborationEdges } from "./entities/collaboration.js";
 import { recomputeAllLayouts } from "./layout/seed.js";
 import { recomputeSimilarityFeatures } from "./similarity/similarity.js";
 import { recomputeArticles } from "./articles/recompute.js";
+import { writeInChunks } from "./writeInChunks.js";
 
 // B-1: three sessions in a row hit the same bug shape and each got its own
 // one-off backfill script — scanFile()'s unchanged-mtime/size short-circuit
@@ -26,11 +20,14 @@ import { recomputeArticles } from "./articles/recompute.js";
 // for every file currently in the library — not just the ones that
 // changed this run. Meant to be the last one of these ever needed: the
 // next derived field lands here, not in a fifth backfill script.
+//
+// Issue #281: callers run this through recomputeOffThread() below, never
+// directly, so that the request loop keeps answering while it works.
 export function recompute(db: Database): void {
   const files = db.prepare("SELECT id FROM files WHERE missing_since IS NULL").all() as { id: number }[];
-  for (const { id } of files) {
-    deriveLocalEdges(db, id);
-  }
+  // Each file is its own transaction (match/edges.ts); a piece of them
+  // commits together, rather than every statement on its own.
+  writeInChunks(db, files, ({ id }) => deriveLocalEdges(db, id));
 
   // Issue #273: one node per person. New credits already land on the artist
   // (match/edges.ts's findOrCreatePerson); this catches an artist node the
@@ -55,9 +52,9 @@ export function recompute(db: Database): void {
          AND NOT EXISTS (SELECT 1 FROM enrich_jobs ej WHERE ej.node_id = f.recording_node_id)`,
     )
     .all() as { id: number }[];
-  for (const { id } of neverAttempted) {
-    enqueueEnrichmentIfNeeded(db, id);
-  }
+  // In pieces, like everything recompute writes: a first scan of a large
+  // library queues a lookup for every recording (writeInChunks.ts).
+  writeInChunks(db, neverAttempted, ({ id }) => enqueueEnrichmentIfNeeded(db, id));
 
   // Same order scanner.ts's executeScan already established: entities before
   // collaboration edges (collaboration reads albums.primary_artist_node_id),
@@ -70,28 +67,83 @@ export function recompute(db: Database): void {
   recomputeSimilarityFeatures(db);
   recomputeArticles(db);
 
-  // Artist photos and encyclopedia descriptions — queued after
+  // Artist photos, members and encyclopedia descriptions — queued after
   // recomputeEntities, because artist and release nodes are what it creates.
-  // Both helpers are one-shot per node (see enrich/queue.ts), so running this
-  // on every recompute costs a pair of indexed lookups per node rather than a
-  // network request. Issue #269: only for artists inside the membership
-  // crawl's bound (enrich/queue.ts), the same as the member lookup below.
-  const enrichable = db
-    .prepare(`SELECT id, type FROM nodes WHERE type = 'release' OR id IN (${ARTISTS_IN_BOUND_SQL})`)
-    .all() as { id: number; type: string }[];
-  const memberLookupArtists = new Set(
-    (db.prepare(MEMBER_LOOKUP_ARTISTS_SQL).all() as { id: number }[]).map((row) => row.id),
-  );
-  for (const node of enrichable) {
-    if (node.type === "artist") {
-      enqueueArtistImageLookupIfNeeded(db, node.id);
-      // Issue #61: an artist's "member of band" relations, queued the same
-      // one-shot way as the photo lookup above, so a member or group the
-      // cascade in worker.ts's processArtistMemberLookup never got to still
-      // gets its lookup the next time this runs. Issue #269: only the
-      // performers and their direct members and groups.
-      if (memberLookupArtists.has(node.id)) enqueueArtistMemberLookupIfNeeded(db, node.id);
-    }
-    enqueueDescriptionLookupIfNeeded(db, node.id);
+  // Each is one-shot per node (see enrich/queue.ts), so running this on
+  // every recompute costs three statements rather than a network request.
+  // Issue #269: only for artists inside the membership crawl's bound.
+  enqueueLookupsInBound(db);
+}
+
+// Issue #281: recompute() is synchronous, as bun:sqlite is, and it used to
+// run on the request loop: for four minutes on the Pi, with nothing
+// answering, not /health and not a stream. It now runs on a Worker
+// (recomputeWorker.ts) with a connection of its own. WAL lets the request
+// loop go on reading while it works, and every write transaction it holds
+// is short (writeInChunks.ts), so a write here waits a few milliseconds at
+// most for one to finish (db.ts's BUSY_TIMEOUT_MS).
+//
+// The promise resolves once every write has been committed, so what a
+// caller broadcasts after awaiting it (scan:done, enrich:applied) sends
+// clients to refetch data that's already there.
+//
+// One runs at a time. A call made while one is running gets the run after
+// it, shared with every other call made meanwhile: a recompute derives
+// from what the database holds when it starts, so the one already running
+// may have read too early for this caller, and one more run covers them all.
+export type RecomputeRequest = { dbPath: string };
+export type RecomputeResult = { ok: true } | { ok: false; message: string };
+
+let running: Promise<void> | null = null;
+let queued: Promise<void> | null = null;
+
+export function recomputeOffThread(db: Database): Promise<void> {
+  if (queued) return queued;
+  if (running) {
+    queued = running
+      .catch(() => {})
+      .then(() => {
+        queued = null;
+        return recomputeOffThread(db);
+      });
+    return queued;
   }
+  running = runRecompute(db).finally(() => {
+    running = null;
+  });
+  return running;
+}
+
+function runRecompute(db: Database): Promise<void> {
+  // An in-memory database, which is what the specs use, can't be opened a
+  // second time, so it's recomputed here.
+  if (db.filename === ":memory:" || db.filename === "") {
+    try {
+      recompute(db);
+      return Promise.resolve();
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  }
+
+  // A new Worker for each run, ended once it reports: the heap a large
+  // library's recompute builds goes with it rather than staying resident.
+  // The compiled binary finds it through scripts/compile.ts, which embeds
+  // it at the place this URL points to inside the binary.
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./recomputeWorker.ts", import.meta.url).href);
+    let settled = false;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      worker.terminate();
+      if (error) reject(error);
+      else resolve();
+    };
+    worker.onmessage = (event: MessageEvent<RecomputeResult>) =>
+      settle(event.data.ok ? undefined : new Error(event.data.message));
+    worker.onerror = (event) => settle(new Error(`recompute worker failed: ${event.message}`));
+    worker.addEventListener("close", () => settle(new Error("recompute worker exited before it finished")));
+    worker.postMessage({ dbPath: db.filename } satisfies RecomputeRequest);
+  });
 }

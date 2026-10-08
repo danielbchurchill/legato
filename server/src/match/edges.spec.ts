@@ -418,3 +418,23 @@ describe("deriveRecordingEdges — retiring a joined node", () => {
     expect(db.prepare("SELECT id FROM nodes WHERE id = ?").get(foo)).toEqual({ id: foo });
   });
 });
+
+// Issue #281: recompute derives every file on its worker's connection while
+// the request loop's can be deriving one too, so a file is derived whole or
+// not at all, never half on top of the other's half.
+describe("deriveLocalEdges — one transaction", () => {
+  it("leaves the edges as they were when it fails part-way", () => {
+    const fileId = insertFile({ artist: "The Beatles", album: "Abbey Road" });
+    deriveLocalEdges(db, fileId);
+    const recording = recordingOf(fileId);
+    const before = edgesFrom(recording);
+    expect(before.map((e) => e.type)).toEqual(["appears_on", "performed_by"]);
+
+    db.exec(
+      `CREATE TEMP TRIGGER fail_appears_on BEFORE INSERT ON edges WHEN NEW.type = 'appears_on'
+       BEGIN SELECT RAISE(ABORT, 'boom'); END`,
+    );
+    expect(() => deriveLocalEdges(db, fileId)).toThrow("boom");
+    expect(edgesFrom(recording)).toEqual(before);
+  });
+});

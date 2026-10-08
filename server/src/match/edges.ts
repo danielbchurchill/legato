@@ -145,7 +145,16 @@ function insertEdge(db: Database, fromNode: number, toNode: number, type: string
 // source='local' edges first, then reinserts. The WHERE clause is scoped to
 // source='local' specifically — never touches source='manual' rows, which
 // is the actual mechanism behind "manual edges survive re-scan" (M5).
+//
+// Issue #281: one transaction per call. recompute() derives every file on its own connection
+// (recompute.ts) while a scan, the watcher or the enrichment worker can be
+// deriving one on the request loop's, and two runs of the delete and the
+// inserts interleaving on one recording would leave its edges doubled.
 export function deriveLocalEdges(db: Database, fileId: number): void {
+  db.transaction(() => deriveFileEdges(db, fileId))();
+}
+
+function deriveFileEdges(db: Database, fileId: number): void {
   const file = db.prepare("SELECT recording_node_id, tags_raw FROM files WHERE id = ?").get(fileId) as
     | { recording_node_id: number; tags_raw: string | null }
     | undefined;

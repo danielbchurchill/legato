@@ -116,13 +116,38 @@ function backupBeforeMigrating(
   }
 }
 
+// Issue #281: how long a statement on the request loop's connection waits
+// for the write lock before failing with "database is locked". recompute()
+// runs on a Worker with a connection of its own, and while it holds a write
+// transaction any write here has to wait for it. bun:sqlite waits by
+// blocking the thread, so this is a backstop, not the design: the worker
+// writes in pieces of about 50 ms with a pause after each (writeInChunks.ts),
+// and the auth gate no longer writes on every request (auth/sessions.ts).
+// On a 30,000-album library the longest worker transaction measured was
+// 0.12 s, and no write on the request loop waited more than 84 ms. A piece
+// is bounded by time, so it's no longer on a slower machine; what isn't a
+// piece (a single INSERT … SELECT, the entity prune) is tens of ms there,
+// several hundred on a Raspberry Pi. A second covers that with room left.
+export const BUSY_TIMEOUT_MS = 1000;
+
+/** One connection with the settings every connection to legato.db needs:
+ *  WAL, so a reader never waits for a writer, and foreign keys, which
+ *  SQLite turns on per connection rather than per file. openDb() is this
+ *  plus migrations; recompute.ts's worker opens a second one with a longer
+ *  busy timeout, since waiting there blocks nothing. */
+export function openConnection(dbPath: string, busyTimeoutMs = BUSY_TIMEOUT_MS): Database {
+  const db = openSqlite(dbPath);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
+  return db;
+}
+
 // dbPath defaults to the real on-disk DB; tests pass ":memory:" (or a temp
 // file) to get the same schema/migrations against an isolated database.
 export function openDb(dbPath: string = path.join(DATA_DIR, "legato.db"), options: OpenDbOptions = {}): Database {
   if (dbPath !== ":memory:") mkdirSync(path.dirname(dbPath), { recursive: true });
-  const db = openSqlite(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
+  const db = openConnection(dbPath);
 
   const applied = readAppliedVersions(db);
 

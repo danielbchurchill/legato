@@ -1,4 +1,5 @@
 import type { Database } from "../sqlite.js";
+import { writeInChunks } from "../writeInChunks.js";
 import { buildFeatureSpace, buildFeatureVector, computeArtistClusters, type RecordingFeatureInput } from "./features.js";
 import { rankMostDissimilar, rankMostSimilar, type RankedResult } from "./rank.js";
 
@@ -75,86 +76,98 @@ export function recomputeSimilarityFeatures(db: Database): void {
 
   const space = buildFeatureSpace(inputs, artistClusters);
 
+  const inputsByRecording = new Map(inputs.map((input) => [input.nodeId, input]));
+
+  // P-2: releases had no vector of their own, so /nodes/:id/similar
+  // returned [] for every album — the default thing to select in the
+  // default (albums) view. A release's vector is the centroid of its
+  // recordings' — same dimensionality (buildFeatureVector always emits
+  // one, driven by the fixed feature space, not by which fields a given
+  // recording happens to have), so averaging is a plain per-dimension
+  // mean.
+  const recordingsByRelease = new Map<number, number[]>();
+  for (const row of db
+    .prepare("SELECT from_node AS recordingId, to_node AS releaseId FROM edges WHERE type = 'appears_on'")
+    .all() as { recordingId: number; releaseId: number }[]) {
+    if (!inputsByRecording.has(row.recordingId)) continue;
+    if (!recordingsByRelease.has(row.releaseId)) recordingsByRelease.set(row.releaseId, []);
+    recordingsByRelease.get(row.releaseId)!.push(row.recordingId);
+  }
+
+  // Issue #281: built and written a batch of releases at a time. A vector
+  // is dense, as long as the feature space, and holding every one at once
+  // took over 10 GB on a 30,000-album library. Each batch is computed
+  // before its writes start, and written in pieces (writeInChunks.ts). A
+  // vector that hasn't changed isn't written at all (the upsert's WHERE),
+  // so a rescan that changed nothing writes nothing. A recording on two
+  // releases is built twice and written once.
   const upsert = db.prepare(
     `INSERT INTO node_similarity_features (node_id, vector_json) VALUES (?, ?)
-     ON CONFLICT(node_id) DO UPDATE SET vector_json = excluded.vector_json, updated_at = datetime('now')`,
+     ON CONFLICT(node_id) DO UPDATE SET vector_json = excluded.vector_json, updated_at = datetime('now')
+      WHERE vector_json IS NOT excluded.vector_json`,
   );
-  const applyAll = db.transaction(() => {
-    const vectorsByRecording = new Map<number, number[]>();
-    for (const input of inputs) {
-      const vector = buildFeatureVector(input, space, artistClusters);
-      vectorsByRecording.set(input.nodeId, vector);
-      upsert.run(input.nodeId, JSON.stringify(vector));
-    }
-
-    // P-2: releases had no vector of their own, so /nodes/:id/similar
-    // returned [] for every album — the default thing to select in the
-    // default (albums) view. A release's vector is the centroid of its
-    // recordings' — same dimensionality (buildFeatureVector always emits
-    // one, driven by the fixed feature space, not by which fields a given
-    // recording happens to have), so averaging is a plain per-dimension
-    // mean.
-    const recordingsByRelease = new Map<number, number[]>();
-    for (const row of db
-      .prepare("SELECT from_node AS recordingId, to_node AS releaseId FROM edges WHERE type = 'appears_on'")
-      .all() as { recordingId: number; releaseId: number }[]) {
-      if (!vectorsByRecording.has(row.recordingId)) continue;
-      if (!recordingsByRelease.has(row.releaseId)) recordingsByRelease.set(row.releaseId, []);
-      recordingsByRelease.get(row.releaseId)!.push(row.recordingId);
-    }
-
-    for (const [releaseId, recordingIds] of recordingsByRelease) {
-      const vectors = recordingIds.map((id) => vectorsByRecording.get(id)!);
+  const onARelease = new Set([...recordingsByRelease.values()].flat());
+  const groups: [releaseId: number | null, recordingIds: number[]][] = [
+    ...recordingsByRelease,
+    ...inputs.filter((input) => !onARelease.has(input.nodeId)).map((input): [null, number[]] => [null, [input.nodeId]]),
+  ];
+  const BATCH = 200;
+  for (let start = 0; start < groups.length; start += BATCH) {
+    const rows: [nodeId: number, vectorJson: string][] = [];
+    for (const [releaseId, recordingIds] of groups.slice(start, start + BATCH)) {
+      const vectors = recordingIds.map((id) => buildFeatureVector(inputsByRecording.get(id)!, space, artistClusters));
+      vectors.forEach((vector, i) => rows.push([recordingIds[i]!, JSON.stringify(vector)]));
+      if (releaseId === null) continue;
       const dims = vectors[0].length;
       const centroid = new Array(dims).fill(0);
       for (const vector of vectors) for (let i = 0; i < dims; i++) centroid[i] += vector[i] / vectors.length;
-      upsert.run(releaseId, JSON.stringify(centroid));
+      rows.push([releaseId, JSON.stringify(centroid)]);
     }
+    writeInChunks(db, rows, ([nodeId, vectorJson]) => upsert.run(nodeId, vectorJson));
+  }
 
-    // "Every vector is rebuilt together from current data on every pass"
-    // (this function's own doc comment above) was only true for nodes that
-    // survived into this pass's `recordingRows` — a recording whose last
-    // file was removed (a rescan, a hygiene resolution replacing it with a
-    // new node id) drops out of that query, but its old row here was never
-    // deleted, so it kept whatever vector_json a *previous* pass gave it.
-    // Once the library's vocabulary (buildFeatureSpace's genre/artist/label
-    // sets) grows on a later pass, that orphaned vector is shorter than
-    // every current one — confirmed live: 25 file-less recordings stuck at
-    // a 26-dim vector against 31 dims for everything else, so any
-    // similarity query whose candidate pool happened to include one of them
-    // threw out of cosineSimilarity's length check, and with no error
-    // boundary anywhere in the app that took the whole page down.
-    //
-    // Re-derived in SQL rather than collected into a JS Set and passed as a
-    // NOT IN (...) list (whose parameter count would scale with library
-    // size) or stamped via updated_at (datetime('now') is only
-    // second-precision — two passes in the same second, exactly what a fast
-    // rescan or a test does, would collide and leave the orphan behind).
-    // These conditions mirror recordingRows' own JOIN and the
-    // vectorsByRecording.has() guard above exactly, so "wanted" here always
-    // means what this pass actually wrote.
-    db.prepare(
-      `DELETE FROM node_similarity_features WHERE node_id IN (
-         SELECT nsf.node_id FROM node_similarity_features nsf
-         JOIN nodes n ON n.id = nsf.node_id
-         WHERE n.type = 'recording'
-           AND NOT EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = nsf.node_id)
-       )`,
-    ).run();
-    db.prepare(
-      `DELETE FROM node_similarity_features WHERE node_id IN (
-         SELECT nsf.node_id FROM node_similarity_features nsf
-         JOIN nodes n ON n.id = nsf.node_id
-         WHERE n.type = 'release'
-           AND NOT EXISTS (
-             SELECT 1 FROM edges e
-             JOIN files f ON f.recording_node_id = e.from_node
-             WHERE e.type = 'appears_on' AND e.to_node = nsf.node_id
-           )
-       )`,
-    ).run();
-  });
-  applyAll();
+  // "Every vector is rebuilt together from current data on every pass"
+  // (this function's own doc comment above) was only true for nodes that
+  // survived into this pass's `recordingRows` — a recording whose last
+  // file was removed (a rescan, a hygiene resolution replacing it with a
+  // new node id) drops out of that query, but its old row here was never
+  // deleted, so it kept whatever vector_json a *previous* pass gave it.
+  // Once the library's vocabulary (buildFeatureSpace's genre/artist/label
+  // sets) grows on a later pass, that orphaned vector is shorter than
+  // every current one — confirmed live: 25 file-less recordings stuck at
+  // a 26-dim vector against 31 dims for everything else, so any
+  // similarity query whose candidate pool happened to include one of them
+  // threw out of cosineSimilarity's length check, and with no error
+  // boundary anywhere in the app that took the whole page down.
+  //
+  // Re-derived in SQL rather than collected into a JS Set and passed as a
+  // NOT IN (...) list (whose parameter count would scale with library
+  // size) or stamped via updated_at (datetime('now') is only
+  // second-precision — two passes in the same second, exactly what a fast
+  // rescan or a test does, would collide and leave the orphan behind).
+  // These conditions mirror recordingRows' own JOIN and the
+  // inputsByRecording.has() guard above exactly, so "wanted" here always
+  // means what this pass actually wrote. Issue #281: read first and
+  // deleted by id, so the search for them holds no lock.
+  const orphans = db
+    .prepare(
+      `SELECT nsf.node_id AS nodeId FROM node_similarity_features nsf
+       JOIN nodes n ON n.id = nsf.node_id
+       WHERE n.type = 'recording'
+         AND NOT EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = nsf.node_id)
+       UNION ALL
+       SELECT nsf.node_id FROM node_similarity_features nsf
+       JOIN nodes n ON n.id = nsf.node_id
+       WHERE n.type = 'release'
+         AND NOT EXISTS (
+           SELECT 1 FROM edges e
+           JOIN files f ON f.recording_node_id = e.from_node
+           WHERE e.type = 'appears_on' AND e.to_node = nsf.node_id
+         )`,
+    )
+    .all() as { nodeId: number }[];
+  const remove = db.prepare("DELETE FROM node_similarity_features WHERE node_id = ?");
+  writeInChunks(db, orphans, ({ nodeId }) => remove.run(nodeId));
 }
 
 function loadVectors(db: Database): Map<number, { type: string; vector: number[] }> {

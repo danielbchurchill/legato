@@ -75,6 +75,41 @@ describe("sessions", () => {
     expect(userForSessionToken(db, token)).toBeNull();
     expect(userForMediaTicket(db, mediaTicket)).toBeNull();
   });
+
+  // Issue #281: an UPDATE needs the write lock even when it matches nothing,
+  // and recompute's worker holds it on a connection of its own. A lookup
+  // inside the refresh window has to answer while another connection is
+  // writing, which it only can if it writes nothing.
+  // A legato.fm session never slides, so however old its last refresh is,
+  // its lookup writes nothing either.
+  it("writes nothing for a lookup inside the refresh window, or for a legato.fm session", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "legato-sessions-"));
+    try {
+      const file = openDb(path.join(dir, "legato.db"));
+      file.prepare(
+        "INSERT INTO users (provider, provider_user_id, password_hash, role) VALUES ('local', 'owner', 'x', 'owner')",
+      ).run();
+      const userId = (file.prepare("SELECT id FROM users").get() as { id: number }).id;
+      const { token, mediaTicket } = createSession(file, userId);
+      const legato = createSession(file, userId, "account-1");
+      file.prepare("UPDATE sessions SET refreshed_at = datetime('now', '-2 days') WHERE legato_account_id IS NOT NULL").run();
+      file.exec("PRAGMA busy_timeout = 0");
+
+      const writer = openSqlite(path.join(dir, "legato.db"));
+      writer.exec("BEGIN IMMEDIATE");
+      try {
+        expect(userForSessionToken(file, token)).not.toBeNull();
+        expect(userForMediaTicket(file, mediaTicket)).not.toBeNull();
+        expect(userForSessionToken(file, legato.token)).not.toBeNull();
+      } finally {
+        writer.exec("ROLLBACK");
+        writer.close();
+        file.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("SignInLimiter", () => {
