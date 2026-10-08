@@ -1,3 +1,149 @@
+// ---- Theme -------------------------------------------------------------
+
+// The inline script in index.html's <head> has already set data-theme before
+// first paint (saved choice, else the system setting). This only handles
+// changes after load.
+type Theme = 'dark' | 'light';
+
+const THEME_KEY = 'legato-site-theme';
+const themeButtons = document.querySelectorAll<HTMLButtonElement>('[data-set-theme]');
+
+function currentTheme(): Theme {
+  return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+}
+
+function applyTheme(theme: Theme) {
+  document.documentElement.dataset.theme = theme;
+  themeButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.setTheme === theme)));
+}
+
+function savedTheme(): string | null {
+  try {
+    return localStorage.getItem(THEME_KEY);
+  } catch {
+    return null;
+  }
+}
+
+themeButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const theme: Theme = button.dataset.setTheme === 'light' ? 'light' : 'dark';
+    applyTheme(theme);
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      // Private browsing in some browsers refuses storage; the page still switches.
+    }
+  });
+});
+
+// Until someone picks a side, keep following the system, including when it
+// flips at sunset with the page already open.
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', (event) => {
+  if (savedTheme() === null) applyTheme(event.matches ? 'light' : 'dark');
+});
+
+applyTheme(currentTheme());
+
+// ---- Tabs (Articles, Library health) ------------------------------------
+
+document.querySelectorAll<HTMLElement>('[role="tablist"]').forEach((tablist) => {
+  const tabs = Array.from(tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+
+  function select(next: HTMLButtonElement) {
+    for (const tab of tabs) {
+      const active = tab === next;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+      const panel = document.getElementById(tab.getAttribute('aria-controls') ?? '');
+      if (panel) panel.hidden = !active;
+    }
+  }
+
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => select(tab));
+    tab.addEventListener('keydown', (event) => {
+      const last = tabs.length - 1;
+      const target =
+        event.key === 'ArrowRight' ? tabs[index === last ? 0 : index + 1]
+        : event.key === 'ArrowLeft' ? tabs[index === 0 ? last : index - 1]
+        : event.key === 'Home' ? tabs[0]
+        : event.key === 'End' ? tabs[last]
+        : undefined;
+      if (!target) return;
+      event.preventDefault();
+      select(target);
+      target.focus();
+    });
+  });
+});
+
+// Hidden tab panels are lazy images inside display: none, so they wouldn't
+// load until clicked, and the first click would show an empty frame. Once a
+// tab set is a screen or so away, flip the current theme's copies to eager,
+// which starts their download.
+const tabPreloader = new IntersectionObserver(
+  (entries, observer) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      observer.unobserve(entry.target);
+      entry.target
+        .querySelectorAll<HTMLImageElement>(`[role="tabpanel"] img[data-for-theme="${currentTheme()}"]`)
+        .forEach((img) => (img.loading = 'eager'));
+    }
+  },
+  { rootMargin: '800px 0px' },
+);
+
+document.querySelectorAll('[data-preload-tabs]').forEach((tabSet) => tabPreloader.observe(tabSet));
+
+// ---- Ink/paper comparison ---------------------------------------------------
+
+const compare = document.querySelector<HTMLElement>('[data-compare]');
+const compareHandle = compare?.querySelector<HTMLElement>('[role="slider"]');
+
+if (compare && compareHandle) {
+  let position = 50;
+
+  const setPosition = (value: number) => {
+    position = Math.min(100, Math.max(0, value));
+    compare.style.setProperty('--compare-x', `${position}%`);
+    const rounded = Math.round(position);
+    compareHandle.setAttribute('aria-valuenow', String(rounded));
+    compareHandle.setAttribute('aria-valuetext', `ink ${rounded}%, paper ${100 - rounded}%`);
+  };
+
+  const setFromPointer = (event: PointerEvent) => {
+    const rect = compare.getBoundingClientRect();
+    setPosition(((event.clientX - rect.left) / rect.width) * 100);
+  };
+
+  // Pointer capture doubles as the "is dragging" flag: it's held from
+  // pointerdown until pointerup, and the browser drops it on pointercancel.
+  compare.addEventListener('pointerdown', (event) => {
+    compare.setPointerCapture(event.pointerId);
+    setFromPointer(event);
+  });
+  compare.addEventListener('pointermove', (event) => {
+    if (compare.hasPointerCapture(event.pointerId)) setFromPointer(event);
+  });
+  compare.addEventListener('pointerup', (event) => compare.releasePointerCapture(event.pointerId));
+
+  compareHandle.addEventListener('keydown', (event) => {
+    const next =
+      event.key === 'ArrowLeft' || event.key === 'ArrowDown' ? position - 5
+      : event.key === 'ArrowRight' || event.key === 'ArrowUp' ? position + 5
+      : event.key === 'Home' ? 0
+      : event.key === 'End' ? 100
+      : undefined;
+    if (next === undefined) return;
+    event.preventDefault();
+    setPosition(next);
+  });
+}
+
+// ---- Waitlist ---------------------------------------------------------------
+
 interface WaitlistResponse {
   ok: boolean;
   error?: string;
