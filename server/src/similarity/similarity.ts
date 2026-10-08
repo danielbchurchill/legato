@@ -76,8 +76,7 @@ export function recomputeSimilarityFeatures(db: Database): void {
 
   const space = buildFeatureSpace(inputs, artistClusters);
 
-  const vectorsByRecording = new Map<number, number[]>();
-  for (const input of inputs) vectorsByRecording.set(input.nodeId, buildFeatureVector(input, space, artistClusters));
+  const inputsByRecording = new Map(inputs.map((input) => [input.nodeId, input]));
 
   // P-2: releases had no vector of their own, so /nodes/:id/similar
   // returned [] for every album — the default thing to select in the
@@ -90,30 +89,42 @@ export function recomputeSimilarityFeatures(db: Database): void {
   for (const row of db
     .prepare("SELECT from_node AS recordingId, to_node AS releaseId FROM edges WHERE type = 'appears_on'")
     .all() as { recordingId: number; releaseId: number }[]) {
-    if (!vectorsByRecording.has(row.recordingId)) continue;
+    if (!inputsByRecording.has(row.recordingId)) continue;
     if (!recordingsByRelease.has(row.releaseId)) recordingsByRelease.set(row.releaseId, []);
     recordingsByRelease.get(row.releaseId)!.push(row.recordingId);
   }
 
-  // Issue #281: written in pieces (writeInChunks.ts), and a vector that
-  // hasn't changed isn't written at all (the upsert's WHERE), so a rescan
-  // that changed nothing writes nothing. Every vector is computed above,
-  // before any of it. Serialising one, and averaging a release's, happens
-  // as it's written, because holding them all serialised would take
-  // gigabytes on a 30,000-album library.
+  // Issue #281: built and written a batch of releases at a time. A vector
+  // is dense, as long as the feature space, and holding every one at once
+  // took over 10 GB on a 30,000-album library. Each batch is computed
+  // before its writes start, and written in pieces (writeInChunks.ts). A
+  // vector that hasn't changed isn't written at all (the upsert's WHERE),
+  // so a rescan that changed nothing writes nothing. A recording on two
+  // releases is built twice and written once.
   const upsert = db.prepare(
     `INSERT INTO node_similarity_features (node_id, vector_json) VALUES (?, ?)
      ON CONFLICT(node_id) DO UPDATE SET vector_json = excluded.vector_json, updated_at = datetime('now')
       WHERE vector_json IS NOT excluded.vector_json`,
   );
-  writeInChunks(db, vectorsByRecording, ([nodeId, vector]) => upsert.run(nodeId, JSON.stringify(vector)));
-  writeInChunks(db, recordingsByRelease, ([releaseId, recordingIds]) => {
-    const vectors = recordingIds.map((id) => vectorsByRecording.get(id)!);
-    const dims = vectors[0].length;
-    const centroid = new Array(dims).fill(0);
-    for (const vector of vectors) for (let i = 0; i < dims; i++) centroid[i] += vector[i] / vectors.length;
-    upsert.run(releaseId, JSON.stringify(centroid));
-  });
+  const onARelease = new Set([...recordingsByRelease.values()].flat());
+  const groups: [releaseId: number | null, recordingIds: number[]][] = [
+    ...recordingsByRelease,
+    ...inputs.filter((input) => !onARelease.has(input.nodeId)).map((input): [null, number[]] => [null, [input.nodeId]]),
+  ];
+  const BATCH = 200;
+  for (let start = 0; start < groups.length; start += BATCH) {
+    const rows: [nodeId: number, vectorJson: string][] = [];
+    for (const [releaseId, recordingIds] of groups.slice(start, start + BATCH)) {
+      const vectors = recordingIds.map((id) => buildFeatureVector(inputsByRecording.get(id)!, space, artistClusters));
+      vectors.forEach((vector, i) => rows.push([recordingIds[i]!, JSON.stringify(vector)]));
+      if (releaseId === null) continue;
+      const dims = vectors[0].length;
+      const centroid = new Array(dims).fill(0);
+      for (const vector of vectors) for (let i = 0; i < dims; i++) centroid[i] += vector[i] / vectors.length;
+      rows.push([releaseId, JSON.stringify(centroid)]);
+    }
+    writeInChunks(db, rows, ([nodeId, vectorJson]) => upsert.run(nodeId, vectorJson));
+  }
 
   // "Every vector is rebuilt together from current data on every pass"
   // (this function's own doc comment above) was only true for nodes that
@@ -135,7 +146,7 @@ export function recomputeSimilarityFeatures(db: Database): void {
   // second-precision — two passes in the same second, exactly what a fast
   // rescan or a test does, would collide and leave the orphan behind).
   // These conditions mirror recordingRows' own JOIN and the
-  // vectorsByRecording.has() guard above exactly, so "wanted" here always
+  // inputsByRecording.has() guard above exactly, so "wanted" here always
   // means what this pass actually wrote. Issue #281: read first and
   // deleted by id, so the search for them holds no lock.
   const orphans = db
