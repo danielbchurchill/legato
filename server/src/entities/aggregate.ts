@@ -239,5 +239,5 @@ export function recomputeEntities(db: Database): void {
   db.transaction(() => {
     pruneEntities(db, "albums", albums.map((a) => a.nodeId));
     pruneEntities(db, "artists", artists.map((a) => a.nodeId));
-  }).immediate();
+  })();
 }

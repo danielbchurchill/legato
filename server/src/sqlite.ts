@@ -69,8 +69,15 @@ export class Database {
     this.#inner.exec(sql);
   }
 
-  transaction<A extends unknown[], T>(fn: (...args: A) => T) {
-    return this.#inner.transaction(fn);
+  // Issue #281: every transaction begins IMMEDIATE, taking the write lock
+  // before its first statement. recompute() writes on a connection of its
+  // own (recompute.ts), and a deferred transaction that read before that
+  // connection committed can't write afterwards: SQLite fails it with
+  // SQLITE_BUSY_SNAPSHOT at once, without waiting. Every transaction in
+  // this codebase writes, so none gives anything up. A nested call is a
+  // savepoint, as before.
+  transaction<A extends unknown[], T>(fn: (...args: A) => T): (...args: A) => T {
+    return this.#inner.transaction(fn).immediate;
   }
 
   close(): void {

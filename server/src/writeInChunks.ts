@@ -13,9 +13,7 @@ import type { Database } from "./sqlite.js";
 // once the whole thing is in.
 export const CHUNK_MS = 50;
 
-/** Calls `write` for every row, committing every CHUNK_MS. Each piece
- *  starts with BEGIN IMMEDIATE: a deferred transaction that has already
- *  read can't wait for the write lock, and fails instead. */
+/** Calls `write` for every row, committing every CHUNK_MS. */
 export function writeInChunks<T>(db: Database, rows: Iterable<T>, write: (row: T) => void, budgetMs = CHUNK_MS): void {
   const iterator = rows[Symbol.iterator]();
   let next = iterator.next();
@@ -26,5 +24,5 @@ export function writeInChunks<T>(db: Database, rows: Iterable<T>, write: (row: T
       next = iterator.next();
     } while (!next.done && performance.now() - started < budgetMs);
   });
-  while (!next.done) writeChunk.immediate();
+  while (!next.done) writeChunk();
 }
