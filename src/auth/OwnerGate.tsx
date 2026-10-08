@@ -7,7 +7,7 @@ import { API_BASE } from '../config/serverHost'
 import type { ResolvedTheme } from '../hooks/useTheme'
 import type { AuthStatus, SessionResponse } from './useAuth'
 import { QrCode } from './QrCode'
-import { formatCountdown, useSetupCode } from './useSetupCode'
+import { formatCountdown, useSetupCode, type ClaimAccount, type ClaimView } from './useSetupCode'
 
 /* Issue #112: the two screens between "the server answered" and the app.
  * Both take over the whole window, like first-run library setup (DESIGN.md
@@ -24,6 +24,38 @@ const FIELD_CLASSES =
   'w-full rounded-[var(--radius-control)] border border-[var(--color-hairline)] bg-[var(--color-inset)] px-[12px] py-[8px] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]'
 
 type ErrorBody = { error?: string; reason?: string; retryAfter?: number }
+
+// What creating the owner says about a claim it was asked to link (issue
+// #237). linked is null when it couldn't, and error says why.
+type LegatoOutcome = { linked: { accountId: string; name: string | null } | null; error?: string }
+
+/** Rowan (r•••@example.com), or whichever of the two the account has. */
+function accountLabel(account: ClaimAccount): string {
+  if (account.name && account.email) return `${account.name} (${account.email})`
+  return account.name ?? account.email ?? 'a legato.fm account'
+}
+
+/* Issue #237: what the QR caption says, by where the claim stands. Claimed
+ * isn't here: that one sits by the buttons, since it's what they act on. */
+function claimCaption(claim: ClaimView | null): string | null {
+  switch (claim?.state) {
+    case undefined:
+    case 'claimed':
+      return null
+    case 'waiting':
+      return claim.unreachable
+        ? "To claim this server for a legato.fm account, scan this with your phone. This server can't reach legato.fm right now, so a claim won't show up here until it can."
+        : 'Optional: scan this with your phone to claim this server for your legato.fm account, so you can reach it from anywhere. You choose whether to link that account when you create the owner.'
+    case 'lapsed':
+      return `The claim for ${accountLabel(claim.account)} lapsed before the owner was created, so nothing was linked. To claim again, scan the new code.`
+    case 'used':
+      return 'Someone used the last code to claim a different server on legato.fm, so this server made a new one. To claim this server, scan this.'
+    case 'expired':
+      return 'A claim of this code expired on legato.fm before this page picked it up. To claim this server, scan it again.'
+    case 'refused':
+      return claim.message
+  }
+}
 
 function describeFailure(status: number, body: ErrorBody): string {
   if (status === 429 && body.retryAfter) {
@@ -58,9 +90,15 @@ export function OwnerGate({
   const needsCode = creating && status.setupCodeRequired
   const { state: setupCodeState, reload: reloadSetupCode } = useSetupCode(needsCode)
   const shownCode = setupCodeState.kind === 'shown' ? setupCodeState : null
+  const claimed = shownCode?.claim?.state === 'claimed' ? shownCode.claim.account : null
+  // The owner exists, but the account it was asked to link isn't linked:
+  // the session waits until the reason has been read.
+  const [unlinked, setUnlinked] = useState<{ session: SessionResponse; message: string } | null>(null)
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
+  // linkAccountId is the claim's account as this page showed it; the
+  // server links it only if that's still the account that claimed.
+  const submit = async (event?: FormEvent, linkAccountId?: string) => {
+    event?.preventDefault()
     setError(null)
     if (creating && password.length < MIN_PASSWORD_LENGTH) {
       setError(`The password needs at least ${MIN_PASSWORD_LENGTH} characters.`)
@@ -82,11 +120,12 @@ export function OwnerGate({
                 password,
                 displayName: displayName || undefined,
                 setupCode: (shownCode?.code ?? setupCode) || undefined,
+                linkAccountId,
               }
             : { password },
         ),
       })
-      const body = (await res.json().catch(() => ({}))) as ErrorBody & SessionResponse
+      const body = (await res.json().catch(() => ({}))) as ErrorBody & SessionResponse & { legato?: LegatoOutcome }
       if (!res.ok) {
         // Expired between reading it and pressing the button: the page
         // fetches the replacement and says so, and the password fields
@@ -96,7 +135,14 @@ export function OwnerGate({
           setError("That code expired while you were typing. Here's the new one; press create owner again.")
           return
         }
+        // The claim changed or lapsed since this page last looked. Nothing
+        // was created; the page shows where it stands now.
+        if (body.reason?.startsWith('claim_')) void reloadSetupCode()
         setError(describeFailure(res.status, body))
+        return
+      }
+      if (body.legato && !body.legato.linked) {
+        setUnlinked({ session: body, message: body.legato.error ?? "legato.fm didn't link the account." })
         return
       }
       onSession(body)
@@ -107,13 +153,33 @@ export function OwnerGate({
     }
   }
 
+  const wordmark = (
+    <img
+      src={theme === 'light' ? blackWordmarkSrc : whiteWordmarkSrc}
+      alt="legato"
+      className="h-[var(--text-wordmark)] w-auto select-none"
+    />
+  )
+
+  if (unlinked) {
+    return (
+      <Centered>
+        {wordmark}
+        <div className="flex w-full max-w-[360px] flex-col items-stretch gap-[12px]">
+          <p className="text-[length:var(--text-base)] text-[var(--color-ink)]">The owner is created, but no account was linked.</p>
+          <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{unlinked.message}</p>
+          <div className="flex justify-center">
+            <Button onClick={() => onSession(unlinked.session)}>continue</Button>
+          </div>
+        </div>
+      </Centered>
+    )
+  }
+
+  const caption = claimCaption(shownCode?.claim ?? null)
   return (
     <Centered>
-      <img
-        src={theme === 'light' ? blackWordmarkSrc : whiteWordmarkSrc}
-        alt="legato"
-        className="h-[var(--text-wordmark)] w-auto select-none"
-      />
+      {wordmark}
 
       <form onSubmit={(e) => void submit(e)} className="flex w-full max-w-[360px] flex-col items-stretch gap-[12px]">
         {creating ? (
@@ -163,7 +229,9 @@ export function OwnerGate({
         {needsCode && shownCode && (
           <div className="flex flex-col items-center gap-[12px]">
             <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
-              {shownCode.replaced ? "That code expired. Here's a new one:" : "This server's setup code:"}
+              {shownCode.replaced && shownCode.claim?.state !== 'used' && shownCode.claim?.state !== 'lapsed'
+                ? "That code expired. Here's a new one:"
+                : "This server's setup code:"}
             </p>
             <p
               aria-live="polite"
@@ -194,26 +262,43 @@ export function OwnerGate({
           </>
         )}
 
+        {/* Issue #237: someone claimed this server on legato.fm. Linking
+         * their account is its own labelled choice, never what Enter or
+         * the plain button does, and the name and masked address say whose
+         * account it is before anyone picks it. */}
+        {claimed && shownCode?.claim?.state === 'claimed' && (
+          <div className="flex flex-col gap-[4px]">
+            <p className="text-[length:var(--text-base)] text-[var(--color-ink)]">
+              Claimed on legato.fm by {accountLabel(claimed)}.
+            </p>
+            <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">
+              Linking lets that account open this server's library from anywhere, so only link an account you
+              recognise. The claim lapses in {formatCountdown(shownCode.claim.expiresInMs)}.
+            </p>
+          </div>
+        )}
+
         {error && <p className="text-[length:var(--text-base)] text-[var(--color-ink)]">{error}</p>}
 
-        <div className="flex justify-center">
+        <div className="flex flex-wrap justify-center gap-x-[24px] gap-y-[8px]">
           <Button type="submit" disabled={busy || !password || (needsCode && setupCodeState.kind === 'loading')}>
             {creating ? 'create owner' : 'sign in'}
           </Button>
+          {claimed && (
+            <Button disabled={busy || !password} onClick={() => void submit(undefined, claimed.id)}>
+              create owner and link {accountLabel(claimed)}
+            </Button>
+          )}
         </div>
       </form>
 
-      {/* The legato.fm half of plan 02's claim isn't built yet (see the
-       * seam in server/src/index.ts), so the QR sits below the real step,
-       * muted, and says plainly that it doesn't work yet. The URL is
-       * already the final one, so nothing changes here once it does. */}
-      {shownCode && (
+      {/* The legato.fm half of plan 02's claim (issue #237). The QR opens
+       * legato.fm's claim page with this code; the server notices a claim
+       * while this page is open, and the buttons above offer to link it. */}
+      {shownCode?.claimUrl && caption && (
         <div className="flex flex-col items-center gap-[8px] pt-[12px]">
           <QrCode value={shownCode.claimUrl} theme={theme} label={`QR code for ${shownCode.claimUrl}`} />
-          <p className="max-w-[360px] text-[length:var(--text-base)] text-[var(--color-muted)]">
-            Claiming this server for a legato.fm account by scanning this is coming soon. For now, creating the
-            owner above is all it needs.
-          </p>
+          <p className="max-w-[360px] text-[length:var(--text-base)] text-[var(--color-muted)]">{caption}</p>
         </div>
       )}
 

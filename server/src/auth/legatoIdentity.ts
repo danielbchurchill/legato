@@ -3,7 +3,7 @@ import { LEGATO_ID_ORIGIN } from "../config.js";
 import type { Database } from "../sqlite.js";
 import { anyLinkedAccount } from "./legatoUsers.js";
 import { importEd25519Jwk, verifyLegatoToken, type VerifyResult } from "./legatoToken.js";
-import { ensureServerKey, linkProof, loadServerKey, unlinkProof } from "./serverKey.js";
+import { claimProof, ensureServerKey, linkProof, loadServerKey, unlinkProof } from "./serverKey.js";
 
 // This server's side of trusting legato.fm (issue #114): its own id (the
 // `aud` a token must carry), and legato.fm's public signing keys, fetched
@@ -12,9 +12,12 @@ import { ensureServerKey, linkProof, loadServerKey, unlinkProof } from "./server
 //
 // Privacy, and the reason most of this file is about *not* fetching:
 // legato.fm/privacy says a home server never contacts legato.fm. That holds
-// until the owner links a legato.fm account. Until then, nothing here
-// touches the network: no fetch at startup, no daily timer, and an unknown
-// kid is just refused. Linking does the first fetch (routes/auth.ts) and
+// until the owner links a legato.fm account, with one exception: while a
+// /setup page is open on a server with no owner, it asks every few seconds
+// whether that page's code has been claimed (exchangeClaim, issue #237),
+// and fetches the keys once someone has. Otherwise nothing here touches
+// the network: no fetch at startup, no daily timer, and an unknown kid is
+// just refused. Linking does the first fetch (routes/auth.ts) and
 // tells legato.fm about the link (issue #231); from then on the keys
 // refresh once a day, and an unknown kid triggers at most one background
 // refetch every ten minutes. Unlinking tells legato.fm too, and is the last
@@ -46,9 +49,27 @@ type IdentityRow = { server_id: string; jwks: string | null; jwks_fetched_at: st
 
 // The outcome of telling legato.fm about a link or an unlink. "unreachable"
 // means no answer at all; "refused" is any answer but yes, with legato.fm's
-// own message, which says more than a status code would.
-export type ReportResult =
-  { ok: true } | { ok: false; reason: "unreachable" } | { ok: false; reason: "refused"; message: string; legatoReason: string | null };
+// own message, which says more than a status code would. A yes carries
+// legato.fm's answer, which for a claim's link holds the tunnel credential.
+export type Refusal = { ok: false; reason: "refused"; status: number; message: string; legatoReason: string | null };
+
+export type ReportResult = { ok: true; answer: Record<string, unknown> | null } | { ok: false; reason: "unreachable" } | Refusal;
+
+// What a claim's link mints (issue #237): the credential #310's tunnel
+// will connect with.
+export type TunnelCredential = { credential: string; expiresAt: string };
+
+export type LinkReportResult = { ok: true; tunnel: TunnelCredential | null } | Exclude<ReportResult, { ok: true }>;
+
+// Asking legato.fm whether anyone has claimed a setup code: a link token
+// for the claiming account if so; not_found until then.
+export type ExchangeResult = { ok: true; linkToken: string } | { ok: false; reason: "unreachable" } | Refusal;
+
+function tunnelCredential(answer: Record<string, unknown> | null): TunnelCredential | null {
+  const tunnel = answer?.tunnel as Record<string, unknown> | undefined;
+  if (typeof tunnel?.credential !== "string" || typeof tunnel.expiresAt !== "string") return null;
+  return { credential: tunnel.credential, expiresAt: tunnel.expiresAt };
+}
 
 export class LegatoIdentity {
   readonly origin: string | null;
@@ -153,8 +174,23 @@ export class LegatoIdentity {
   // (account, server) pair and signs `access` tokens for it. Signed with the
   // identity key, which is what makes the pair this server's and no one
   // else's (serverKey.ts).
-  recordLink(linkToken: string): Promise<ReportResult> {
-    return this.report("/linked-servers", linkProof(loadServerKey(this.db), linkToken));
+  async recordLink(linkToken: string): Promise<LinkReportResult> {
+    const result = await this.report("/linked-servers", linkProof(loadServerKey(this.db), linkToken));
+    return result.ok ? { ok: true, tunnel: tunnelCredential(result.answer) } : result;
+  }
+
+  // Asks whether anyone has claimed this setup code (issue #237), signed
+  // with the identity key so legato.fm answers for this server's id only.
+  // Only auth/claim.ts calls it, and only while a /setup page is open.
+  // A 404 is the usual answer and isn't logged: it comes every few seconds.
+  async exchangeClaim(code: string): Promise<ExchangeResult> {
+    if (!this.origin) return { ok: false, reason: "unreachable" };
+    const proof = claimProof(loadServerKey(this.db), { issuer: this.origin, code, nowSeconds: Math.floor(this.now() / 1000) });
+    const result = await this.report("/pair/exchange", proof, { quiet: [404], quietUnreachable: true });
+    if (!result.ok) return result;
+    const linkToken = result.answer?.linkToken;
+    if (typeof linkToken === "string" && linkToken) return { ok: true, linkToken };
+    return { ok: false, reason: "refused", status: 200, message: "legato.fm's answer had no link token.", legatoReason: null };
   }
 
   // Tells legato.fm the owner unlinked this account here, so it stops
@@ -169,7 +205,13 @@ export class LegatoIdentity {
     return this.report("/linked-servers/unlink", proof);
   }
 
-  private async report(path: string, body: Record<string, unknown>): Promise<ReportResult> {
+  // quiet and quietUnreachable keep a caller that asks every few seconds
+  // from writing the same line every few seconds; it logs for itself.
+  private async report(
+    path: string,
+    body: Record<string, unknown>,
+    options: { quiet?: number[]; quietUnreachable?: boolean } = {},
+  ): Promise<ReportResult> {
     if (!this.origin) return { ok: false, reason: "unreachable" };
     const url = `${this.origin}${path}`;
     let res: Response;
@@ -181,16 +223,19 @@ export class LegatoIdentity {
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
     } catch (err) {
-      this.log("warn", `legato.fm: couldn't reach ${url} (${err instanceof Error ? err.message : String(err)})`);
+      if (!options.quietUnreachable) {
+        this.log("warn", `legato.fm: couldn't reach ${url} (${err instanceof Error ? err.message : String(err)})`);
+      }
       return { ok: false, reason: "unreachable" };
     }
-    if (res.ok) return { ok: true };
-    const answer = (await res.json().catch(() => null)) as { error?: unknown; reason?: unknown } | null;
+    const answer = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+    if (res.ok) return { ok: true, answer };
     const message = typeof answer?.error === "string" ? answer.error : `HTTP ${res.status}`;
-    this.log("warn", `legato.fm: ${url} refused (${res.status}): ${message}`);
+    if (!options.quiet?.includes(res.status)) this.log("warn", `legato.fm: ${url} refused (${res.status}): ${message}`);
     return {
       ok: false,
       reason: "refused",
+      status: res.status,
       message,
       legatoReason: typeof answer?.reason === "string" ? answer.reason : null,
     };
@@ -262,6 +307,10 @@ export function legatoIdentity(db: Database): LegatoIdentity {
     instances.set(db, identity);
   }
   return identity;
+}
+
+export function hasLegatoIdentity(db: Database): boolean {
+  return instances.has(db);
 }
 
 export function installLegatoIdentity(db: Database, identity: LegatoIdentity): void {

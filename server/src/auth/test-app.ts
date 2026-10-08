@@ -7,10 +7,20 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { Database } from "../sqlite.js";
 import { registerRoutes } from "../routes/register.js";
 import { installAuthGate } from "./gate.js";
+import { hasLegatoIdentity, installLegatoIdentity, LegatoIdentity } from "./legatoIdentity.js";
 
 export type RegisteredRoute = { method: string; url: string };
 
+// What a spec's server gets for legato.fm when it hasn't installed its own:
+// the real origin, so URLs read as they would in production, and a fetch
+// that never leaves the machine. Since #237 an open /setup page asks
+// legato.fm whether its code was claimed, and a spec must never do that.
+const offline = (async () => {
+  throw new Error("specs never contact legato.fm");
+}) as unknown as typeof fetch;
+
 export async function buildTestApp(db: Database): Promise<{ app: FastifyInstance; routes: RegisteredRoute[] }> {
+  if (!hasLegatoIdentity(db)) installLegatoIdentity(db, new LegatoIdentity(db, { fetch: offline }));
   const app = Fastify();
   const routes: RegisteredRoute[] = [];
   app.addHook("onRoute", (route) => {

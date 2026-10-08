@@ -93,12 +93,9 @@ if (!ownerExists(db)) {
     );
   });
   setupCodes.scheduleRefresh(() => !ownerExists(db));
-  // Seam for the legato.fm half of plan 02's claim (step 4), a follow-up
-  // to #113 waiting on #215 and #114: each code issued above would also be
-  // offered to the relay's POST /pair/exchange every few seconds until it
-  // expires, so a phone that scanned the /setup QR and claimed it on
-  // legato.fm pairs this server with no typing. That needs the tunnel
-  // client and somewhere to keep its credential, which don't exist yet.
+  // The legato.fm half of plan 02's claim (issue #237) has no timer here on
+  // purpose: the server asks legato.fm about these codes only while a
+  // /setup page is open and checking in (auth/claim.ts).
 }
 
 // Issue #123: a scan_jobs row stuck at status='running' means the

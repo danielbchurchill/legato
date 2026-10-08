@@ -1,20 +1,47 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
-import { getUserBySessionToken, SESSION_COOKIE } from "../accounts.js";
-import { mintPairingCode, redeemPairingCode } from "../pairing.js";
+import { getUserBySessionToken, SESSION_COOKIE, sessionToken, type RelayUserRow } from "../accounts.js";
+import { checkClaimProof, PROOF_FAILURE_MESSAGES, type ClaimProofFailure } from "../linked-servers.js";
+import { claimServerCode, claimStatus, mintPairingCode, redeemPairingCode, type ClaimFailure } from "../pairing.js";
+import { signServerToken, type SigningKeys } from "../signing-keys.js";
 
 // Bridges an authenticated browser session to a headless home server that
 // has no session cookie of its own — see migrations/
 // 0002_tunnel_credentials.sql for the two-step design.
 //
-// /pair/start requires a real relay session because it's minting a code
-// *for* a specific signed-in account. /pair/exchange deliberately does
-// NOT check for one: the caller redeeming a code is the home server
-// itself, which is never going to have a relay session cookie to
-// present — the single-use code is what authorizes that call, the same
-// way an OAuth device-authorization-grant code does. See routes/relay.ts's
+// /pair/start and /pair/claim require a real relay session: the first
+// mints a code *for* a signed-in account, the second adopts a code a home
+// server is showing on its /setup page (issue #237). /pair/exchange
+// deliberately does NOT check for one: the caller redeeming a code is the
+// home server itself, which is never going to have a relay session cookie
+// to present. The single-use code says which account, the same way an
+// OAuth device-authorization-grant code does, and since #237 a signature
+// from the server's identity key says which server. See routes/relay.ts's
 // header comment for the matching design decision on the /relay/* side.
-export function pairRoutes(db: Database) {
+//
+// Redeeming a code gets the server a `link` token, not a credential. The
+// server links its owner with it, as any link does (routes/linked-servers.ts),
+// and that report is what mints the credential. pairing.ts has why.
+
+export const CLAIM_FAILURE_MESSAGES: Record<ClaimFailure, string> = {
+  bad_code: "That isn't a Legato setup code. Scan the QR code on your server's /setup page again.",
+  taken:
+    "Another legato.fm account has already claimed this code. If you're the one setting up this server, " +
+    "don't link that account on its /setup page.",
+  used: "This code has already been used to claim a server. Your server shows a new code on its /setup page.",
+  too_many: "This account has too many claims waiting. Wait ten minutes for them to expire, then scan the code again.",
+};
+
+const CLAIM_FAILURE_STATUS: Record<ClaimFailure, number> = { bad_code: 400, taken: 409, used: 410, too_many: 429 };
+
+const CLAIM_PROOF_STATUS: Record<ClaimProofFailure, number> = { malformed: 400, bad_signature: 403, stale: 401 };
+
+export const SIGNING_UNAVAILABLE = "legato.fm can't link servers yet: this relay doesn't sign server tokens.";
+
+export function pairRoutes(db: Database, options: { signingKeys: SigningKeys | null; issuer: string | undefined }) {
+  const { signingKeys, issuer } = options;
+  const ownOrigin = issuer ? new URL(issuer).origin : null;
+
   return async function routes(app: FastifyInstance) {
     app.post("/pair/start", async (request, reply) => {
       const token = request.cookies[SESSION_COOKIE];
@@ -28,20 +55,76 @@ export function pairRoutes(db: Database) {
       return { code, expiresAt: expiresAt.toISOString() };
     });
 
-    app.post<{ Body: { code?: string } }>("/pair/exchange", async (request, reply) => {
-      const code = request.body?.code;
-      if (!code) {
-        reply.code(400);
-        return { error: "missing code" };
+    // The claim page (routes/claim-page.ts) posts here with the session
+    // cookie. SameSite=Lax keeps other sites' pages from sending it, but
+    // legato.fm and its subdomains count as the same site, so a page that
+    // says where it's from has to be this service's own.
+    app.post<{ Body: { code?: unknown } | null }>("/pair/claim", async (request, reply) => {
+      const token = sessionToken(request);
+      const user = token ? getUserBySessionToken(db, token) : null;
+      if (!user) {
+        reply.code(401);
+        return { error: "Sign in to legato.fm first.", reason: "signed_out" };
+      }
+      const origin = request.headers.origin;
+      if (origin !== undefined && origin !== ownOrigin) {
+        reply.code(403);
+        return { error: "Claim a server from legato.fm's own claim page.", reason: "cross_origin" };
+      }
+      // A claim this service couldn't finish would spend the code for
+      // nothing, so say so before taking it.
+      if (!signingKeys || !issuer) {
+        reply.code(503);
+        return { error: SIGNING_UNAVAILABLE, reason: "signing_not_configured" };
+      }
+      const result = claimServerCode(db, user.id, request.body?.code);
+      if (!result.ok) {
+        reply.code(CLAIM_FAILURE_STATUS[result.reason]);
+        return { error: CLAIM_FAILURE_MESSAGES[result.reason], reason: result.reason };
+      }
+      if (!result.already) request.log.info(`pair: account ${user.id} claimed a server's setup code`);
+      return { claimed: { code: result.code, expiresAt: result.expiresAt.toISOString() }, already: result.already };
+    });
+
+    // What the claim page polls while it waits for the server to pick its
+    // claim up. Only ever about the signed-in account's own claim.
+    app.get<{ Querystring: { code?: string } }>("/pair/claim", async (request, reply) => {
+      const token = sessionToken(request);
+      const user = token ? getUserBySessionToken(db, token) : null;
+      if (!user) {
+        reply.code(401);
+        return { error: "Sign in to legato.fm first.", reason: "signed_out" };
+      }
+      return { status: claimStatus(db, user.id, request.query.code) };
+    });
+
+    // Polled by a home server while its /setup page is open (issue #237):
+    // 404 until someone claims the code, then a `link` token for the
+    // claiming account and this server's id, once.
+    app.post<{ Body: Record<string, unknown> | null }>("/pair/exchange", async (request, reply) => {
+      if (!signingKeys || !issuer) {
+        reply.code(503);
+        return { error: SIGNING_UNAVAILABLE, reason: "signing_not_configured" };
+      }
+      const proof = checkClaimProof(issuer, request.body);
+      if (!proof.ok) {
+        reply.code(CLAIM_PROOF_STATUS[proof.reason]);
+        return { error: PROOF_FAILURE_MESSAGES[proof.reason], reason: proof.reason };
       }
 
-      const result = redeemPairingCode(db, code);
+      const result = redeemPairingCode(db, proof.code);
       if (!result.ok) {
         reply.code(result.reason === "not_found" ? 404 : 410);
-        return { error: `pairing code ${result.reason === "not_found" ? "not found" : result.reason}` };
+        return {
+          error: `pairing code ${result.reason === "not_found" ? "not found" : result.reason}`,
+          reason: result.reason,
+        };
       }
 
-      return { credential: result.credential, expiresAt: result.expiresAt.toISOString() };
+      const user = db.prepare("SELECT * FROM relay_users WHERE id = ?").get(result.relayUserId) as RelayUserRow;
+      const issued = signServerToken(signingKeys, { issuer, user, serverId: proof.serverId, scope: "link", tunnel: true });
+      request.log.info(`pair: server ${proof.serverId} picked up account ${user.id}'s claim`);
+      return { linkToken: issued.token, expiresAt: issued.expiresAt.toISOString() };
     });
   };
 }

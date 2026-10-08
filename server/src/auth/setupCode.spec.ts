@@ -88,6 +88,24 @@ describe("SetupCodes", () => {
     expect(store.check("AAAA-AAAA")).toBe("wrong");
   });
 
+  // Issue #237: a code someone used to claim a different server.
+  it("replaces the live code on demand, as if it had expired", () => {
+    const { issued, store } = onFakeClock(["AAAA-AAAA", "BBBB-BBBB"]);
+    store.current();
+    expect(store.replace()).toEqual({ code: "BBBB-BBBB", expiresAt: 1_600_000 });
+    expect(store.check("AAAA-AAAA")).toBe("expired");
+    expect(issued.at(-1)).toEqual(["BBBB-BBBB", "AAAA-AAAA"]);
+  });
+
+  it("offers the code it just replaced for claiming, for the grace period only", () => {
+    const { clock, store } = onFakeClock(["AAAA-AAAA", "BBBB-BBBB"]);
+    expect(store.claimable(120_000)).toEqual(["AAAA-AAAA"]);
+    clock.now += 600_000;
+    expect(store.claimable(120_000)).toEqual(["BBBB-BBBB", "AAAA-AAAA"]);
+    clock.now += 120_000;
+    expect(store.claimable(120_000)).toEqual(["BBBB-BBBB"]);
+  });
+
   it("refreshes on its own timer, and stops once it's no longer needed", async () => {
     const store = new SetupCodes({ ttlMs: 20 });
     const issued: string[] = [];

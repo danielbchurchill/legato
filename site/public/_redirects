@@ -1,0 +1,7 @@
+# Issue #237: the QR code on a headless server's /setup page opens
+# legato.fm/claim?code=…, and that page lives on the legato.fm service
+# (relay/src/routes/claim-page.ts), since this site is static. Pages carries
+# the query string over to a destination that has none of its own. 302, so
+# no browser holds on to it if the page ever moves here.
+/claim https://auth.legato.fm/claim 302
+/claim/ https://auth.legato.fm/claim 302
