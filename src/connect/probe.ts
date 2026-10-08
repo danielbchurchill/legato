@@ -127,7 +127,9 @@ export function describeProbe(result: NativeProbe | WebProbe, origin: string): s
     case 'mixedContent':
       return `This page is on https, so the browser won't connect to an http:// address. Use the server's https address, or open http://${url.host} directly.`
     case 'cantConnect':
-      return `Couldn't connect to ${url.host}. A browser doesn't say why: the name may not exist, nothing may be listening, or its certificate isn't trusted. The Legato desktop app can tell which.`
+      return url.protocol === 'https:'
+        ? `Couldn't connect to ${url.host}. A browser doesn't say why: the name may not exist, nothing may be listening, or its certificate isn't trusted. The Legato desktop app can tell which.`
+        : `Couldn't connect to ${url.host}. A browser doesn't say why: the name may not exist, or nothing may be listening there. The Legato desktop app can tell which.`
   }
   return ''
 }

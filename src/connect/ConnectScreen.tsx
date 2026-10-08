@@ -502,8 +502,12 @@ export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme
       detail: (
         <>
           <span className="mono">{server.addresses[0] ? hostOf(originFor(server.addresses[0], server.port)) : server.instance}</span>
-          {server.version && <span className="mono"> · {server.version}</span>}
-          {server.id && linkedIds.has(server.id) && ' · yours'}
+          {server.version && (
+            <>
+              {' · '}
+              <span className="mono">{server.version}</span>
+            </>
+          )}
           {here && ' · in use'}
         </>
       ),
