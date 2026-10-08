@@ -1,0 +1,17 @@
+-- Issue #231: this server's identity key, an Ed25519 private key as a
+-- PKCS#8 PEM. legato.fm signs `access` tokens only for servers an account
+-- has linked, and a server proves a link is really its own by signing it
+-- with this key (auth/serverKey.ts). server_id becomes the first 128 bits of
+-- the SHA-256 of the public key, so nobody can claim this server's id
+-- without holding the key.
+--
+-- NULL here on purpose. SQLite can't make an Ed25519 key, so the server
+-- makes one at startup, the first time it finds this empty, and moves
+-- server_id onto it in the same UPDATE (ensureServerKey). After that
+-- neither changes again.
+--
+-- The private key never leaves this row: no route returns it, nothing logs
+-- it, and it isn't in `settings`, for the same reason jwks isn't (0032).
+-- The pre-migration backups in <data dir>/backups/ do hold it, as they hold
+-- the session hashes.
+ALTER TABLE server_identity ADD COLUMN private_key TEXT;

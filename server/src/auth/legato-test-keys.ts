@@ -46,15 +46,30 @@ export function testClaims(serverId: string, nowSeconds: number, overrides: Reco
   };
 }
 
-// A fetch that serves a JWKS and counts every call, so a spec can prove
-// the server made no contact at all.
-export function jwksFetch(keys: () => TestKey[]) {
+// A fetch standing in for legato.fm. It serves the JWKS, takes the link and
+// unlink reports (issue #231) and keeps every call, so a spec can prove both
+// what the server sent and that it sent nothing at all. `answer` decides the
+// reply to a report: a Response, or an Error to play an unreachable service.
+export type LegatoReport = { url: string; body: Record<string, unknown> };
+
+export function fakeLegatoFetch(
+  keys: () => TestKey[],
+  answer: (report: LegatoReport) => Response | Error = () => Response.json({ ok: true }),
+) {
   const calls: string[] = [];
-  const impl = (async (input: string | URL | Request) => {
+  const reports: LegatoReport[] = [];
+  const impl = (async (input: string | URL | Request, init?: RequestInit) => {
     calls.push(String(input));
+    if (init?.method === "POST") {
+      const report = { url: String(input), body: JSON.parse(String(init.body)) as Record<string, unknown> };
+      reports.push(report);
+      const reply = answer(report);
+      if (reply instanceof Error) throw reply;
+      return reply;
+    }
     return new Response(JSON.stringify({ keys: keys().map((k) => k.jwk) }), {
       headers: { "Content-Type": "application/json" },
     });
   }) as typeof fetch;
-  return { impl, calls };
+  return { impl, calls, reports };
 }

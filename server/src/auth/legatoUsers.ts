@@ -55,6 +55,13 @@ export function userForLegatoClaims(db: Database, claims: LegatoClaims): Session
   return db.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`).get(matched) as SessionUser;
 }
 
+// Whether linking would clash with another row, asked before the link
+// route tells legato.fm, so a link that can't happen here never gets
+// recorded there. linkAccount still has the final say, through the index.
+export function accountLinkedToOtherUser(db: Database, accountId: string, userId: number): boolean {
+  return db.prepare("SELECT 1 FROM users WHERE legato_account_id = ? AND id != ?").get(accountId, userId) !== undefined;
+}
+
 export type LinkResult = { ok: true } | { ok: false; reason: "taken" };
 
 // The unique index users_legato_account_id (0032) is what actually decides
