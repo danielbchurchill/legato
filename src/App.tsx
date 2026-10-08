@@ -534,6 +534,8 @@ export default function App() {
 // owner and this client holds a session for them.
 function OwnerGated({ children }: { children: ReactNode }) {
   const { state, refresh, acceptSession } = useAuth()
+  // The same store MainApp's useTheme() reads, not a second copy of the
+  // preference, so the two can't disagree (#282).
   const { resolvedTheme } = useTheme()
 
   switch (state.kind) {

@@ -98,9 +98,10 @@ const REPLAYGAIN_OPTIONS = [
 // #136: per-device, not per-account — see useTheme.ts. 'system' rather
 // than the resolved theme itself is the value this control edits, so
 // picking it doesn't need to know or care which way prefers-color-scheme
-// currently leans.
+// currently leans. #282: the themes are ink and paper; the stored values
+// stay 'dark' and 'light', so a choice made before the rename still holds.
 const THEME_OPTIONS = [
-  { value: 'dark', label: 'dark' },
+  { value: 'dark', label: 'ink' },
   { value: 'light', label: 'paper' },
   { value: 'system', label: 'system' },
 ] as const satisfies readonly { value: ThemePreference; label: string }[]
@@ -108,7 +109,7 @@ const THEME_OPTIONS = [
 /* A theme is easier to pick by sight than by name: each tile is a tiny
  * window in that theme — its canvas, a panel, a line of ink — and system
  * is split down the middle. The colours are the tiles' own, not tokens: a
- * preview of paper has to stay paper while the app is dark. */
+ * preview of paper has to stay paper while the app is in ink. */
 const TILE: Record<'dark' | 'light', { canvas: string; panel: string; ink: string }> = {
   dark: { canvas: '#0f1214', panel: '#22282c', ink: '#f2efe9' },
   light: { canvas: '#ebe6dc', panel: '#fbf9f5', ink: '#1c1915' },

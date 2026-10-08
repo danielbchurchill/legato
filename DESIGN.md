@@ -91,9 +91,9 @@ Two consequences worth stating outright:
 
 ## Color
 
-Legato is a two-theme app now (issue #136): dark, and a paper light mode. Dark is the original, unchanged intent — a canvas of album art needs a dark, neutral, non-competing ground — and stays the default in every context that has no stored preference. Light is not a dimmed or inverted copy of it; it has its own rationale (below) and its own signed-off palette (issue #104's approval comment), not a formula derived from the dark values. A component never branches on which is active — both live as the same `--color-*` custom property names, dark in `tokens.css`'s `@theme` block, light overriding them under `:root[data-theme="light"]`, and every component just reads `var(--color-*)` either way. The one structural exception is the sigma canvas, which renders to WebGL and never sees CSS at all — see "The graph" below for how it stays in sync instead.
+Legato is a two-theme app now (issue #136): ink, the dark theme, and paper, the light one. Ink is the original, unchanged intent — a canvas of album art needs a dark, neutral, non-competing ground — and is the default in every context that has no stored preference (issue #282). Paper is not a dimmed or inverted copy of it; it has its own rationale (below) and its own signed-off palette (issue #104's approval comment), not a formula derived from ink's values. A component never branches on which is active — both live as the same `--color-*` custom property names, ink in `tokens.css`'s `@theme` block, paper overriding them under `:root[data-theme="light"]`, and every component just reads `var(--color-*)` either way. The one structural exception is the sigma canvas, which renders to WebGL and never sees CSS at all — see "The graph" below for how it stays in sync instead.
 
-| Token | Dark value | Role |
+| Token | Ink value | Role |
 |---|---|---|
 | `--color-canvas` | `#14181A` | The backdrop everything sits on |
 | `--color-inset` | `#14181A` | Fill of inset controls — *identical to canvas, by design* |
@@ -108,11 +108,11 @@ Legato is a two-theme app now (issue #136): dark, and a paper light mode. Dark i
 
 ### Paper (light mode, issue #136)
 
-**Sheet music in colour and contrast.** Warm paper that is not yellow — a subtly tinted off-white, the colour of good engraving paper under daylight, not parchment. Ink is pen-ink black, a little softer than pure `#000`. Staff-line grays for dividers, edge colours darkened to clear WCAG 3:1 against the paper canvas (4.5:1 anywhere an edge colour also carries text), each hue kept recognizable next to its dark-mode counterpart. Glass becomes frosted paper — surface at high opacity, with a softer, shorter, lower-alpha shadow than dark mode's punchier one; a paper shadow that read as heavy would fight the "resting on a lit desk" feeling the theme is going for.
+**Sheet music in colour and contrast.** Warm paper that is not yellow — a subtly tinted off-white, the colour of good engraving paper under daylight, not parchment. Ink is pen-ink black, a little softer than pure `#000`. Staff-line grays for dividers, edge colours darkened to clear WCAG 3:1 against the paper canvas (4.5:1 anywhere an edge colour also carries text), each hue kept recognizable next to its ink counterpart. Glass becomes frosted paper — surface at high opacity, with a softer, shorter, lower-alpha shadow than ink's punchier one; a paper shadow that read as heavy would fight the "resting on a lit desk" feeling the theme is going for.
 
 Exact values live only in `tokens.css`'s `:root[data-theme="light"]` block, copied verbatim from issue #104's sign-off comment — this file doesn't duplicate a second token table that would just drift out of sync with it. A handful of values in that block are *not* from the approved table (the node-dot fallback colors, the edge/placeholder washes, the light-mode shadow) — each is called out inline there as a derived extension pending design review, not an approved value.
 
-Preference is dark / light / follow-system, stored per device (`localStorage`, not the server-backed settings store — a work laptop and a phone can genuinely differ) — see `src/hooks/useTheme.ts`. Follow-system tracks `prefers-color-scheme` live on the web and the Tauri window theme API's `onThemeChanged` event in the desktop shell. `index.html` carries a synchronous inline script that sets `data-theme` before the stylesheet or React ever run, so a light-mode user never sees a dark first paint.
+Preference is ink / paper / system, stored per device as `dark` / `light` / `system` (`localStorage`, not the server-backed settings store — a work laptop and a phone can genuinely differ) — see `src/hooks/useTheme.ts`. A first launch with nothing stored starts in ink; following the system is a choice, not the default. Follow-system tracks `prefers-color-scheme` live on the web and the Tauri window theme API's `onThemeChanged` event in the desktop shell. `index.html` carries a synchronous inline script that sets `data-theme` before the stylesheet or React ever run, so the first paint is already the right theme.
 
 ### v2: one muted tone, not two
 
@@ -179,8 +179,8 @@ Luxurious Script rendering was), not a font-rendered string. This is the one
 place a component genuinely has to know which theme is active rather than
 just reading a token — an SVG source path isn't something a CSS custom
 property can reach — so `LibrarySetup.tsx` and `LeftPanelHeader.tsx` each take
-a `theme` prop and pick `white-wordmark.svg`/`white-logo.png` for dark,
-`black-wordmark.svg`/`black-logo.png` for light. Every other component still
+a `theme` prop and pick `white-wordmark.svg`/`white-logo.png` for ink,
+`black-wordmark.svg`/`black-logo.png` for paper. Every other component still
 must not branch on theme; this is a structural exception for swapping a whole
 asset, not a precedent for styling logic.
 
