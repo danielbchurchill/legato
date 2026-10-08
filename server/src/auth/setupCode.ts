@@ -65,8 +65,10 @@ type IssueListener = (issued: IssuedCode, replaced: string | null) => void;
 export class SetupCodes {
   #issued: IssuedCode | null = null;
   // The code just replaced, kept only to tell "that code expired" apart
-  // from "that code is wrong" when someone submits it a moment too late.
+  // from "that code is wrong" when someone submits it a moment too late,
+  // and to keep asking legato.fm about it for a little while (claimable).
   #previous: string | null = null;
+  #replacedAt = Number.NEGATIVE_INFINITY;
   #listeners: IssueListener[] = [];
   readonly #ttlMs: number;
   readonly #now: () => number;
@@ -91,6 +93,7 @@ export class SetupCodes {
       // screen would be a baffling thing to debug.
       while (code === replaced) code = this.#generate();
       this.#previous = replaced;
+      this.#replacedAt = now;
       this.#issued = { code, expiresAt: now + this.#ttlMs };
       for (const listener of this.#listeners) listener(this.#issued, replaced);
     }
@@ -100,6 +103,28 @@ export class SetupCodes {
   /** How long the live code has left, on this object's own clock. */
   remainingMs(): number {
     return Math.max(this.current().expiresAt - this.#now(), 0);
+  }
+
+  /**
+   * Retires the live code now and issues the next one, as if it had
+   * expired: someone used it to claim a different server on legato.fm
+   * (issue #237), so it shouldn't stay on screen.
+   */
+  replace(): IssuedCode {
+    if (this.#issued) this.#issued = { ...this.#issued, expiresAt: this.#now() };
+    return this.current();
+  }
+
+  /**
+   * The codes a claim on legato.fm could be waiting under (issue #237): the
+   * live one, and the one it replaced if that was under graceMs ago. A
+   * phone that scanned a code a minute before it changed is still signing
+   * in when it claims it.
+   */
+  claimable(graceMs: number): string[] {
+    const { code } = this.current();
+    const recent = this.#previous !== null && this.#now() - this.#replacedAt < graceMs;
+    return recent ? [code, this.#previous!] : [code];
   }
 
   check(candidate: unknown): CodeCheck {
