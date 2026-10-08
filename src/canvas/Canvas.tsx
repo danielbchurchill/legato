@@ -807,7 +807,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   }, [showArtists, showReleases, showTracks, showArtistLabels, colourEdgesByType, nodeSizeMultipliers, edgeColorOverrides])
 
   // #136: theme changes are rare, so the palette is resolved once per change
-  // rather than read from the DOM per node per frame.
+  // rather than read from the DOM per node per frame. useTheme has already
+  // moved data-theme by the time this runs, so the tokens are the new
+  // theme's (#282).
   const themeColorsRef = useRef(resolveThemeColors())
   useEffect(() => {
     themeColorsRef.current = resolveThemeColors()
