@@ -1,5 +1,6 @@
 import type { Database } from "../sqlite.js";
 import type { MbArtistRelation } from "./mbClient.js";
+import { ARTISTS_IN_BOUND_SQL, MEMBER_LOOKUP_ARTISTS_SQL } from "./queue.js";
 
 // Mirrors match/edges.ts's findOrCreateNode and credits.ts's
 // findOrCreateCreditNode, scoped to 'artist' nodes — same case/whitespace-
@@ -75,4 +76,157 @@ export function applyMemberRelations(
   }
 
   return newNodeIds;
+}
+
+// Issue #269: until the bound in enrich/queue.ts, the member lookup crawled
+// without limit. The Pi held 180,395 artist nodes, 239,539 member_of edges
+// and about 541,000 done lookups for a library with 98 artists. This brings
+// a database back inside the bound. index.ts runs it on every start, after
+// the #273 merge, so the bound it reads already counts merged producers as
+// library artists. On a database that's inside the bound it deletes nothing.
+
+type NodeReference = { table: string; column: string };
+
+function quote(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+// Every column that holds a node id, read from the schema's own foreign
+// keys the way match/people.ts reads them, so a table a later migration adds
+// is covered without anyone remembering to list it here.
+function nodeReferences(db: Database): NodeReference[] {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    .all() as { name: string }[];
+  const references: NodeReference[] = [];
+  for (const { name } of tables) {
+    const keys = db
+      .prepare(`SELECT "table" AS target, "from" AS fromColumn, "to" AS toColumn FROM pragma_foreign_key_list(?)`)
+      .all(name) as { target: string; fromColumn: string; toColumn: string | null }[];
+    for (const key of keys) {
+      if (key.target === "nodes" && (key.toColumn === null || key.toColumn === "id")) {
+        references.push({ table: name, column: key.fromColumn });
+      }
+    }
+  }
+  return references;
+}
+
+// The rows enrichment and recompute derive for an artist, which go with it.
+// The condition picks the derived rows out of a table that also holds
+// things a person did. A reference from anywhere else (a favourite, a
+// manual connection, a position the user dragged, a cover they chose, a
+// playlist entry, or a table added after this was written) is user data,
+// and keeps the artist wherever it sits.
+const DERIVED_ROWS: Record<string, string> = {
+  edges: "source != 'manual'",
+  positions: "user_x IS NULL AND user_y IS NULL",
+  cover_art: "source != 'manual'",
+  field_provenance: "source != 'manual'",
+  enrich_jobs: "1",
+  descriptions: "1",
+  artists: "1",
+  node_similarity_features: "1",
+  articles: "1",
+};
+
+// VACUUM rewrites the whole file, so it waits until at least this share of
+// it is free pages: the Pi's first start after this frees nearly all of it,
+// and a start that prunes a handful of artists isn't worth the rewrite.
+const VACUUM_FREE_SHARE = 0.25;
+
+export type MemberBoundPrune = { artists: number; memberEdges: number; jobs: number; reclaimedBytes: number };
+
+function count(db: Database, sql: string): number {
+  return (db.prepare(sql).get() as { n: number }).n;
+}
+
+function pragma(db: Database, name: string): number {
+  return (db.prepare(`PRAGMA ${name}`).get() as Record<string, number>)[name]!;
+}
+
+/** Deletes what the unbounded crawl left past the bound: member_of edges
+ *  that no member-lookup artist is on, the member lookups of artists that
+ *  no longer get one, and artist nodes outside the bound that carry no user
+ *  data, with every row that references them. Then reclaims the space. */
+export function pruneBeyondMemberBound(db: Database): MemberBoundPrune {
+  const references = nodeReferences(db);
+  const totals = () => ({
+    artists: count(db, "SELECT COUNT(*) AS n FROM nodes WHERE type = 'artist'"),
+    memberEdges: count(db, "SELECT COUNT(*) AS n FROM edges WHERE type = 'member_of'"),
+    jobs: count(db, "SELECT COUNT(*) AS n FROM enrich_jobs"),
+  });
+  const before = totals();
+
+  // Foreign keys are off for the transaction (the pragma can't change
+  // inside one). Every column that references a node is cleared of the
+  // pruned ids before they're deleted, so the check would find nothing, but
+  // finding nothing means scanning each unindexed referencing column once
+  // per deleted node: 11.7 s instead of 0.4 s for 180,000 nodes on a
+  // synthetic copy of the Pi's database.
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(`CREATE TEMP TABLE member_lookup_artists (id INTEGER PRIMARY KEY);
+               CREATE TEMP TABLE artists_in_bound (id INTEGER PRIMARY KEY);
+               CREATE TEMP TABLE artists_past_bound (id INTEGER PRIMARY KEY);`);
+      db.exec(`INSERT INTO member_lookup_artists SELECT id FROM (${MEMBER_LOOKUP_ARTISTS_SQL})`);
+      db.exec(`INSERT INTO artists_in_bound SELECT id FROM (${ARTISTS_IN_BOUND_SQL})`);
+
+      // The bounded crawl only writes member_of edges from the lookups of
+      // member-lookup artists, so an edge with neither end among them was
+      // found by a lookup that shouldn't have run. Removing these leaves the
+      // bound itself unchanged: every edge it was read through touches one.
+      db.exec(
+        `DELETE FROM edges WHERE type = 'member_of' AND source = 'musicbrainz'
+           AND from_node NOT IN (SELECT id FROM member_lookup_artists)
+           AND to_node NOT IN (SELECT id FROM member_lookup_artists)`,
+      );
+      // Those lookups' edges are gone, so a done job would wrongly stop the
+      // lookup being queued if the artist comes inside the bound later.
+      db.exec(
+        `DELETE FROM enrich_jobs WHERE job_type = 'artist_member_lookup'
+           AND node_id NOT IN (SELECT id FROM member_lookup_artists)`,
+      );
+
+      db.exec(
+        `INSERT INTO artists_past_bound
+         SELECT id FROM nodes WHERE type = 'artist' AND id NOT IN (SELECT id FROM artists_in_bound)`,
+      );
+      for (const { table, column } of references) {
+        db.exec(
+          `DELETE FROM artists_past_bound WHERE id IN
+             (SELECT ${quote(column)} FROM ${quote(table)} WHERE NOT (${DERIVED_ROWS[table] ?? "0"}))`,
+        );
+      }
+      for (const { table, column } of references) {
+        db.exec(`DELETE FROM ${quote(table)} WHERE ${quote(column)} IN (SELECT id FROM artists_past_bound)`);
+      }
+      db.exec("DELETE FROM nodes WHERE id IN (SELECT id FROM artists_past_bound)");
+
+      db.exec("DROP TABLE member_lookup_artists; DROP TABLE artists_in_bound; DROP TABLE artists_past_bound;");
+    })();
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+
+  const after = totals();
+  const pruned = {
+    artists: before.artists - after.artists,
+    memberEdges: before.memberEdges - after.memberEdges,
+    jobs: before.jobs - after.jobs,
+    reclaimedBytes: 0,
+  };
+  if (pruned.artists + pruned.memberEdges + pruned.jobs === 0) return pruned;
+
+  // Outside the transaction: VACUUM can't run inside one. The copy from
+  // before the prune is the backup openDb took to apply migration 0033.
+  const pagesBefore = pragma(db, "page_count");
+  if (pragma(db, "freelist_count") >= pagesBefore * VACUUM_FREE_SHARE) {
+    db.exec("VACUUM");
+    // In WAL mode the file only shrinks once the rewrite is checkpointed.
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    pruned.reclaimedBytes = (pagesBefore - pragma(db, "page_count")) * pragma(db, "page_size");
+  }
+  return pruned;
 }

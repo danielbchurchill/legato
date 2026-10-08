@@ -34,6 +34,7 @@ import m0028_fuzzy_match_index from "./0028_fuzzy_match_index.sql" with { type: 
 import m0029_local_owner from "./0029_local_owner.sql" with { type: "text" };
 import m0030_nodes_title_lookup_index from "./0030_nodes_title_lookup_index.sql" with { type: "text" };
 import m0032_legato_identity from "./0032_legato_identity.sql" with { type: "text" };
+import m0033_membership_bound from "./0033_membership_bound.sql" with { type: "text" };
 import m0034_drop_artist_photo_mbid_flags from "./0034_drop_artist_photo_mbid_flags.sql" with { type: "text" };
 import m0035_artist_credit_jobs from "./0035_artist_credit_jobs.sql" with { type: "text" };
 import m0036_settled_positions from "./0036_settled_positions.sql" with { type: "text" };
@@ -76,6 +77,7 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 29, file: "0029_local_owner.sql", sql: m0029_local_owner },
   { version: 30, file: "0030_nodes_title_lookup_index.sql", sql: m0030_nodes_title_lookup_index },
   { version: 32, file: "0032_legato_identity.sql", sql: m0032_legato_identity },
+  { version: 33, file: "0033_membership_bound.sql", sql: m0033_membership_bound },
   { version: 34, file: "0034_drop_artist_photo_mbid_flags.sql", sql: m0034_drop_artist_photo_mbid_flags },
   { version: 35, file: "0035_artist_credit_jobs.sql", sql: m0035_artist_credit_jobs },
   { version: 36, file: "0036_settled_positions.sql", sql: m0036_settled_positions },
