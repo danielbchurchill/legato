@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { CoverArt } from '../ui/CoverArt'
 import { PlayCircle } from '../ui/PlayCircle'
@@ -42,15 +42,29 @@ type AlbumsGridProps = {
  * into --shadow-panel and the 40px play button shows 10px in from its
  * corner. The shelf's cells are a fixed --library-shelf-cover wide with 8px
  * under the cover and the artist alone; the grid's fill their column with
- * 10px and "Artist · Year", as the frame captions each. */
-function AlbumCell({ album, shelf = false, onOpen, onPlay }: { album: AlbumRow; shelf?: boolean; onOpen: () => void; onPlay: () => void }) {
+ * 10px and "Artist · Year", as the frame captions each.
+ *
+ * Memoised, and handed the grid's own callbacks rather than a closure per
+ * cell: the virtualiser re-renders the grid on every scroll event, and at
+ * 30k albums re-rendering every visible cell each time cost frames (#263). */
+const AlbumCell = memo(function AlbumCell({
+  album,
+  shelf = false,
+  onOpen,
+  onPlay,
+}: {
+  album: AlbumRow
+  shelf?: boolean
+  onOpen: (id: number) => void
+  onPlay: (id: number) => void
+}) {
   const sub = shelf ? (album.artistName ?? '') : [album.artistName, album.year].filter(Boolean).join(' · ')
   return (
     <div className={`group flex min-w-0 flex-col ${shelf ? 'w-[var(--library-shelf-cover)] gap-[8px]' : 'gap-[10px]'}`}>
       <div className="relative transition-transform duration-[var(--motion-base)] ease-[var(--ease-out)] group-hover:-translate-y-[3px]">
         <button
           type="button"
-          onClick={onOpen}
+          onClick={() => onOpen(album.id)}
           aria-label={`${album.title}${album.artistName ? `, ${album.artistName}` : ''}`}
           className="block w-full"
         >
@@ -62,10 +76,10 @@ function AlbumCell({ album, shelf = false, onOpen, onPlay }: { album: AlbumRow; 
           />
         </button>
         <span className="absolute right-[10px] bottom-[10px] opacity-0 transition-opacity duration-[var(--motion-fast)] group-focus-within:opacity-100 group-hover:opacity-100">
-          <PlayCircle size={40} label={`Play ${album.title}`} onClick={onPlay} />
+          <PlayCircle size={40} label={`Play ${album.title}`} onClick={() => onPlay(album.id)} />
         </span>
       </div>
-      <button type="button" onClick={onOpen} tabIndex={-1} className="flex min-w-0 flex-col text-left">
+      <button type="button" onClick={() => onOpen(album.id)} tabIndex={-1} className="flex min-w-0 flex-col text-left">
         <span title={album.title} className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
           {album.title}
         </span>
@@ -75,7 +89,7 @@ function AlbumCell({ album, shelf = false, onOpen, onPlay }: { album: AlbumRow; 
       </button>
     </div>
   )
-}
+})
 
 /* The newest albums, one row of covers. "see all" switches the grid below to
  * newest-first rather than opening a second view. The row is clipped, not
@@ -137,7 +151,7 @@ function RecentlyAdded({
           <div className="-mt-[3px] flex gap-[var(--library-shelf-gap)] overflow-hidden pt-[3px]">
             {albums.map((album) => (
               <div key={album.id} className="shrink-0">
-                <AlbumCell album={album} shelf onOpen={() => onOpen(album.id)} onPlay={() => onPlay(album.id)} />
+                <AlbumCell album={album} shelf onOpen={onOpen} onPlay={onPlay} />
               </div>
             ))}
           </div>
@@ -230,7 +244,7 @@ export function AlbumsGrid({ scrollRef, sort, dir, onOpen, onPlay, onShowRecent 
                 if (index >= total) return null
                 const album = rows[index]
                 return album ? (
-                  <AlbumCell key={album.id} album={album} onOpen={() => onOpen(album.id)} onPlay={() => onPlay(album.id)} />
+                  <AlbumCell key={album.id} album={album} onOpen={onOpen} onPlay={onPlay} />
                 ) : (
                   <CellSkeleton key={`pending-${index}`} />
                 )

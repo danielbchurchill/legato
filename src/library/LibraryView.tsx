@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Tabs } from '../ui/Tabs'
 import { Button } from '../ui/Button'
 import { ScrollArea } from '../ui/ScrollArea'
@@ -14,7 +14,7 @@ import { libraryArtists } from './libraryArtists'
 import { TracksTable } from './TracksTable'
 import { LibraryEmpty } from './LibraryEmpty'
 import { SortPill, type SortKind } from './SortPill'
-import { ALBUM_SORT_OPTIONS, TRACK_SORT_OPTIONS, type AlbumSort, type SortDir, type TrackSort } from './types'
+import { ALBUM_SORT_OPTIONS, TRACK_SORT_OPTIONS, type AlbumSort, type SortDir, type TrackRow, type TrackSort } from './types'
 
 /* The library: the map's other view of the same music, as covers and rows.
  * Issue #126's map/library switch, now in the capsule; laid out from
@@ -90,6 +90,11 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
   const empty = firstRun == null && !loading && nodes.length === 0
 
   const scrollToTop = () => scrollRef.current?.scrollTo({ top: 0 })
+  // Stable, so the grid's memoised cells don't re-render when playback
+  // ticks this view over.
+  const { playAlbum, playNode } = playback
+  const onPlayAlbum = useCallback((id: number) => void playAlbum(id), [playAlbum])
+  const onPlayTrack = useCallback((track: TrackRow) => void playNode(track.id, track.title), [playNode])
 
   return (
     <div
@@ -165,7 +170,7 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
                   sort={albumSort.sort}
                   dir={albumSort.dir}
                   onOpen={onOpenNode}
-                  onPlay={(id) => void playback.playAlbum(id)}
+                  onPlay={onPlayAlbum}
                   onShowRecent={() => {
                     scrollToTop()
                     setAlbumSort({ sort: 'dateAdded', dir: 'desc' })
@@ -182,7 +187,7 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
                   playingId={playback.status.currentRecordingNodeId}
                   playing={playback.status.playing}
                   onOpen={onOpenNode}
-                  onPlay={(track) => void playback.playNode(track.id, track.title)}
+                  onPlay={onPlayTrack}
                 />
               )}
             </>

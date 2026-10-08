@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { CoverArt } from '../ui/CoverArt'
 import { Equaliser } from '../ui/Equaliser'
@@ -8,7 +8,7 @@ import { useLibraryPage } from './useLibraryPage'
 import { RowSkeleton, RowsSkeleton } from './LibrarySkeleton'
 import { LibraryEmpty } from './LibraryEmpty'
 import { readPx } from './tokens'
-import { trackColumns, type TrackColumnId } from './trackColumns'
+import { trackColumns, type TrackColumnId, type TrackColumns } from './trackColumns'
 import type { SortDir, TrackRow, TrackSort } from './types'
 
 /* Every track, as a virtualised table in the library's one scroll area,
@@ -45,72 +45,31 @@ function formatAdded(value: string): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) })
 }
 
-type TracksTableProps = {
-  scrollRef: RefObject<HTMLDivElement | null>
-  sort: TrackSort
-  dir: SortDir
-  onSort: (sort: TrackSort, dir: SortDir) => void
-  playingId: number | null
+/* One track row. Memoised: the virtualiser re-renders the table on every
+ * scroll event, and at 30k albums re-rendering every visible row each time
+ * cost frames (#263). Its props only change when the row itself does. */
+const TrackRowView = memo(function TrackRowView({
+  track,
+  index,
+  isPlaying,
+  playing,
+  columns,
+  y,
+  onOpen,
+  onPlay,
+}: {
+  track: TrackRow
+  index: number
+  isPlaying: boolean
+  /** Whether playback is running, for the playing row's equaliser. */
   playing: boolean
+  columns: TrackColumns
+  /** The row's offset in the table body, a number so the memo holds. */
+  y: number
   onOpen: (id: number) => void
   onPlay: (track: TrackRow) => void
-}
-
-export function TracksTable({ scrollRef, sort, dir, onSort, playingId, playing, onOpen, onPlay }: TracksTableProps) {
-  const tableRef = useRef<HTMLDivElement>(null)
-  const bodyRef = useRef<HTMLDivElement>(null)
-  const [width, setWidth] = useState<number | null>(null)
-  const [offset, setOffset] = useState(0)
-  const [rowHeight, setRowHeight] = useState<number | null>(null)
-  const { rows, total, loading, waitVisible, ensureRange } = useLibraryPage<TrackRow>('library/tracks', '', sort, dir)
-
-  // The table's width picks its columns; a panel opening or closing
-  // narrows or widens it.
-  useLayoutEffect(() => {
-    const table = tableRef.current
-    if (!table) return
-    const measure = () => setWidth(table.clientWidth)
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(table)
-    return () => observer.disconnect()
-  }, [])
-
-  useLayoutEffect(() => {
-    const body = bodyRef.current
-    if (!body) return
-    const measure = () => {
-      setOffset(body.offsetTop)
-      setRowHeight(readPx(body, '--library-track-row'))
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    if (body.parentElement) observer.observe(body.parentElement)
-    return () => observer.disconnect()
-  }, [loading, total])
-
-  const virtualizer = useVirtualizer({
-    // Nothing until the row height is known: zero would put every row on
-    // screen at once.
-    count: rowHeight ? total : 0,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => rowHeight ?? 0,
-    overscan: 8,
-    scrollMargin: offset,
-  })
-  const items = virtualizer.getVirtualItems()
-  const firstIndex = items[0]?.index
-  const lastIndex = items[items.length - 1]?.index
-  useEffect(() => {
-    if (firstIndex == null || lastIndex == null) return
-    ensureRange(firstIndex, lastIndex)
-  }, [firstIndex, lastIndex, ensureRange])
-
-  // Until the table has a width, every column; the measurement lands before
-  // the first paint.
-  const columns = trackColumns(width ?? Number.POSITIVE_INFINITY, sort)
-
-  const cell = (track: TrackRow, index: number, isPlaying: boolean, id: TrackColumnId): ReactNode => {
+}) {
+  const cell = (id: TrackColumnId) => {
     switch (id) {
       case 'number':
         return (
@@ -194,6 +153,87 @@ export function TracksTable({ scrollRef, sort, dir, onSort, playingId, playing, 
   }
 
   return (
+    <div
+      role="row"
+      aria-rowindex={index + 1}
+      aria-current={isPlaying ? 'true' : undefined}
+      onClick={() => onOpen(track.id)}
+      className={`group absolute top-0 left-0 grid h-[var(--library-track-row)] w-full cursor-default items-center rounded-[var(--radius-control)] transition-colors duration-[var(--motion-fast)] ${
+        isPlaying ? 'bg-[var(--color-wash-2)]' : 'hover:bg-[var(--color-wash)]'
+      }`}
+      style={{ ...columns.style, transform: `translateY(${y}px)` }}
+    >
+      {columns.ids.map(cell)}
+    </div>
+  )
+})
+
+type TracksTableProps = {
+  scrollRef: RefObject<HTMLDivElement | null>
+  sort: TrackSort
+  dir: SortDir
+  onSort: (sort: TrackSort, dir: SortDir) => void
+  playingId: number | null
+  playing: boolean
+  onOpen: (id: number) => void
+  onPlay: (track: TrackRow) => void
+}
+
+export function TracksTable({ scrollRef, sort, dir, onSort, playingId, playing, onOpen, onPlay }: TracksTableProps) {
+  const tableRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState<number | null>(null)
+  const [offset, setOffset] = useState(0)
+  const [rowHeight, setRowHeight] = useState<number | null>(null)
+  const { rows, total, loading, waitVisible, ensureRange } = useLibraryPage<TrackRow>('library/tracks', '', sort, dir)
+
+  // The table's width picks its columns; a panel opening or closing
+  // narrows or widens it.
+  useLayoutEffect(() => {
+    const table = tableRef.current
+    if (!table) return
+    const measure = () => setWidth(table.clientWidth)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(table)
+    return () => observer.disconnect()
+  }, [])
+
+  useLayoutEffect(() => {
+    const body = bodyRef.current
+    if (!body) return
+    const measure = () => {
+      setOffset(body.offsetTop)
+      setRowHeight(readPx(body, '--library-track-row'))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    if (body.parentElement) observer.observe(body.parentElement)
+    return () => observer.disconnect()
+  }, [loading, total])
+
+  const virtualizer = useVirtualizer({
+    // Nothing until the row height is known: zero would put every row on
+    // screen at once.
+    count: rowHeight ? total : 0,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => rowHeight ?? 0,
+    overscan: 8,
+    scrollMargin: offset,
+  })
+  const items = virtualizer.getVirtualItems()
+  const firstIndex = items[0]?.index
+  const lastIndex = items[items.length - 1]?.index
+  useEffect(() => {
+    if (firstIndex == null || lastIndex == null) return
+    ensureRange(firstIndex, lastIndex)
+  }, [firstIndex, lastIndex, ensureRange])
+
+  // Until the table has a width, every column; the measurement lands before
+  // the first paint. Memoised so the rows' memo holds while scrolling.
+  const columns = useMemo(() => trackColumns(width ?? Number.POSITIVE_INFINITY, sort), [width, sort])
+
+  return (
     <div ref={tableRef} role="table" aria-label="Tracks" aria-rowcount={total} className="mt-[24px]">
       <div
         role="row"
@@ -237,25 +277,30 @@ export function TracksTable({ scrollRef, sort, dir, onSort, playingId, playing, 
         <div ref={bodyRef} className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
           {items.map((item) => {
             const track = rows[item.index]
-            const transform = `translateY(${item.start - virtualizer.options.scrollMargin}px)`
+            const y = item.start - virtualizer.options.scrollMargin
             if (!track) {
-              return <RowSkeleton key={item.key} columns={columns} className="absolute top-0 left-0 w-full" style={{ transform }} />
+              return (
+                <RowSkeleton
+                  key={item.key}
+                  columns={columns}
+                  className="absolute top-0 left-0 w-full"
+                  style={{ transform: `translateY(${y}px)` }}
+                />
+              )
             }
             const isPlaying = track.id === playingId
             return (
-              <div
+              <TrackRowView
                 key={item.key}
-                role="row"
-                aria-rowindex={item.index + 1}
-                aria-current={isPlaying ? 'true' : undefined}
-                onClick={() => onOpen(track.id)}
-                className={`group absolute top-0 left-0 grid h-[var(--library-track-row)] w-full cursor-default items-center rounded-[var(--radius-control)] transition-colors duration-[var(--motion-fast)] ${
-                  isPlaying ? 'bg-[var(--color-wash-2)]' : 'hover:bg-[var(--color-wash)]'
-                }`}
-                style={{ ...columns.style, transform }}
-              >
-                {columns.ids.map((id) => cell(track, item.index, isPlaying, id))}
-              </div>
+                track={track}
+                index={item.index}
+                isPlaying={isPlaying}
+                playing={isPlaying && playing}
+                columns={columns}
+                y={y}
+                onOpen={onOpen}
+                onPlay={onPlay}
+              />
             )
           })}
         </div>
