@@ -9,9 +9,14 @@ import { Icon } from './Icon'
  *    the player's own play/pause, where the control is about what's already
  *    playing rather than an invitation. 34.
  *
- * The play glyph sits 2px right of centre (scaled with the circle): a
- * triangle's visual mass is left of its bounding box's middle, and a
- * centred one reads as drifting left. */
+ * The glyph box is centred and the play glyph gets no nudge of its own (#283).
+ * A triangle's visual mass is left of its bounding box's middle, so a
+ * box-centred one reads as drifting left, but proicons' `play.svg` already
+ * makes up for it: its path's box spans x 5.5 to 20.5 of 24, a unit right of
+ * centre. In the circle that lands the triangle's box 0.6–0.75px right of
+ * centre and its centroid about 0.5px left, between the two, which reads as
+ * centred at 30, 34 and 40. A 2px shift on top of that pushed it visibly
+ * right. */
 
 type PlayCircleProps = {
   size?: number
@@ -25,7 +30,6 @@ type PlayCircleProps = {
 
 export function PlayCircle({ size = 40, variant = 'accent', playing = false, label, onClick, disabled, className = '' }: PlayCircleProps) {
   const accent = variant === 'accent'
-  const nudge = playing ? 0 : Math.round((size / 40) * 2)
   return (
     <button
       type="button"
@@ -39,9 +43,7 @@ export function PlayCircle({ size = 40, variant = 'accent', playing = false, lab
       } ${className}`}
       style={{ width: size, height: size }}
     >
-      <span className="inline-flex" style={{ transform: `translateX(${nudge}px)` }}>
-        <Icon name={playing ? 'pause' : 'play'} size={Math.round(size * 0.45)} filled />
-      </span>
+      <Icon name={playing ? 'pause' : 'play'} size={Math.round(size * 0.45)} filled />
     </button>
   )
 }
