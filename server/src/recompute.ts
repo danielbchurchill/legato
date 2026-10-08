@@ -20,6 +20,9 @@ import { writeInChunks } from "./writeInChunks.js";
 // for every file currently in the library — not just the ones that
 // changed this run. Meant to be the last one of these ever needed: the
 // next derived field lands here, not in a fifth backfill script.
+//
+// Issue #281: callers run this through recomputeOffThread() below, never
+// directly, so that the request loop keeps answering while it works.
 export function recompute(db: Database): void {
   const files = db.prepare("SELECT id FROM files WHERE missing_since IS NULL").all() as { id: number }[];
   // Each file is its own transaction (match/edges.ts); a piece of them
@@ -70,4 +73,77 @@ export function recompute(db: Database): void {
   // every recompute costs three statements rather than a network request.
   // Issue #269: only for artists inside the membership crawl's bound.
   enqueueLookupsInBound(db);
+}
+
+// Issue #281: recompute() is synchronous, as bun:sqlite is, and it used to
+// run on the request loop: for four minutes on the Pi, with nothing
+// answering, not /health and not a stream. It now runs on a Worker
+// (recomputeWorker.ts) with a connection of its own. WAL lets the request
+// loop go on reading while it works, and every write transaction it holds
+// is short (writeInChunks.ts), so a write here waits a few milliseconds at
+// most for one to finish (db.ts's BUSY_TIMEOUT_MS).
+//
+// The promise resolves once every write has been committed, so what a
+// caller broadcasts after awaiting it (scan:done, enrich:applied) sends
+// clients to refetch data that's already there.
+//
+// One runs at a time. A call made while one is running gets the run after
+// it, shared with every other call made meanwhile: a recompute derives
+// from what the database holds when it starts, so the one already running
+// may have read too early for this caller, and one more run covers them all.
+export type RecomputeRequest = { dbPath: string };
+export type RecomputeResult = { ok: true } | { ok: false; message: string };
+
+let running: Promise<void> | null = null;
+let queued: Promise<void> | null = null;
+
+export function recomputeOffThread(db: Database): Promise<void> {
+  if (queued) return queued;
+  if (running) {
+    queued = running
+      .catch(() => {})
+      .then(() => {
+        queued = null;
+        return recomputeOffThread(db);
+      });
+    return queued;
+  }
+  running = runRecompute(db).finally(() => {
+    running = null;
+  });
+  return running;
+}
+
+function runRecompute(db: Database): Promise<void> {
+  // An in-memory database, which is what the specs use, can't be opened a
+  // second time, so it's recomputed here.
+  if (db.filename === ":memory:" || db.filename === "") {
+    try {
+      recompute(db);
+      return Promise.resolve();
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  }
+
+  // A new Worker for each run, ended once it reports: the heap a large
+  // library's recompute builds goes with it rather than staying resident.
+  // The compiled binary finds it through scripts/compile.ts, which embeds
+  // it at the place this URL points to inside the binary.
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./recomputeWorker.ts", import.meta.url).href);
+    let settled = false;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      worker.terminate();
+      if (error) reject(error);
+      else resolve();
+    };
+    worker.onmessage = (event: MessageEvent<RecomputeResult>) =>
+      settle(event.data.ok ? undefined : new Error(event.data.message));
+    worker.onerror = (event) => settle(new Error(`recompute worker failed: ${event.message}`));
+    worker.addEventListener("close", () => settle(new Error("recompute worker exited before it finished")));
+    worker.postMessage({ dbPath: db.filename } satisfies RecomputeRequest);
+  });
 }

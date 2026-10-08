@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { Database } from "../sqlite.js";
-import { recompute } from "../recompute.js";
+import { recomputeOffThread } from "../recompute.js";
 import { enqueueEnrichmentIfNeeded } from "../enrich/queue.js";
 import { attachCoverForFile, type EmbeddedPicture } from "../cover/extract.js";
 import { ensurePeaksForFile } from "../waveform/peaks.js";
@@ -609,8 +609,9 @@ async function runLayoutStage(
   // guard, deriveLocalEdges' delete-then-reinsert) on a no-op re-scan, and
   // still needed after an incremental scan: newly-added files still have
   // to get positions, entity aggregation, and similarity edges to show up
-  // in the graph at all.
-  recompute(db);
+  // in the graph at all. Issue #281: off the request loop, so the server
+  // keeps answering while it runs.
+  await recomputeOffThread(db);
 
   persistCursor(db, job.id, "layout", 1);
   emit(1, true);

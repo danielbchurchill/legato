@@ -51,6 +51,13 @@ export class Database {
     this.#inner = new BunDatabase(path, { strict: true });
   }
 
+  // The path this connection opened: ":memory:" (or "") for an in-memory
+  // database, which no second connection can reach. recompute.ts reads it
+  // to open its worker's own connection to the same file (issue #281).
+  get filename(): string {
+    return this.#inner.filename;
+  }
+
   prepare<ReturnType = unknown>(sql: string): Statement<ReturnType> {
     return new Statement<ReturnType>(this.#inner.prepare(sql));
   }

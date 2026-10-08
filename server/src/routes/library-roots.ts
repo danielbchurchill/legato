@@ -2,7 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { countLibraryRootContents, removeLibraryRootCascade } from "../library-roots.js";
-import { recompute } from "../recompute.js";
+import { recomputeOffThread } from "../recompute.js";
 import { createScanJob } from "../scan/scanner.js";
 import { unwatchLibraryRoot } from "../scan/watcher.js";
 import { triggerBackgroundScan } from "./scan.js";
@@ -92,8 +92,9 @@ export function libraryRootsRoutes(db: Database) {
         unwatchLibraryRoot(id);
         // Entity rows, positions and collaboration edges all outlive the
         // files they were derived from unless something recomputes — which
-        // is exactly what leaves removed music sitting on the canvas.
-        recompute(db);
+        // is exactly what leaves removed music sitting on the canvas. Awaited,
+        // so the broadcast and the 204 come once its writes are in (#281).
+        await recomputeOffThread(db);
         broadcast("scan:done", { jobId: null, libraryRootId: id });
         reply.code(204);
       },
