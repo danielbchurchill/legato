@@ -11,11 +11,35 @@
 
 ## What it does
 
-- **The map.** A live, force-directed graph of your library. Recordings, artists, releases, labels and producers sit where their connections pull them.
-- **Articles.** Each node opens a page built from your tags and open sources such as MusicBrainz, Cover Art Archive and Wikipedia, with every release, recording and credit a link.
-- **A plain library when you want one.** An album grid and a track table that stay fast at tens of thousands of albums, sharing one search and selection with the map.
-- **Library health.** It flags missing and conflicting tags, and fixes them in place. Tag write-back is FLAC only for now.
-- **Gapless native playback** on the desktop. Browsers and phones stream from your server, at a quality picked for the connection.
+**The map.** A live, force-directed graph of your library. Recordings, artists, releases, labels and producers sit where their connections pull them.
+
+**Articles.** Each node opens a page built from your tags and open sources such as MusicBrainz, Cover Art Archive and Wikipedia, with every release, recording and credit a link.
+
+<p>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="site/public/images/map-dark-1440.webp" /><img src="site/public/images/map-light-1440.webp" alt="The whole map at rest: each artist at the centre of a cluster of their releases and recordings, with producers and players between them." width="49%" /></picture>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="site/public/images/article-credits-dark-1440.webp" /><img src="site/public/images/article-credits-light-1440.webp" alt="The Credits tab of Highway 61 Revisited's article: its performers and producers, each with how many tracks they're on." width="49%" /></picture>
+</p>
+
+**A plain library when you want one.** An album grid and a track table that stay fast at tens of thousands of albums, sharing one search and selection with the map.
+
+<p>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="site/public/images/library-albums-dark-1440.webp" /><img src="site/public/images/library-albums-light-1440.webp" alt="The library as an album grid, with a recently added shelf above all albums." width="49%" /></picture>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="site/public/images/search-dark-1440.webp" /><img src="site/public/images/search-light-1440.webp" alt="Search open over the library with a partial query: Bob Dylan as the top result, then a matching album and tracks." width="49%" /></picture>
+</p>
+
+**Library health.** It flags missing and conflicting tags, and fixes them in place. Tag write-back is FLAC only for now.
+
+<p>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="site/public/images/health-checklist-dark-1440.webp" /><img src="site/public/images/health-checklist-light-1440.webp" alt="The Library health panel: the last scan, library totals, what needs attention, metadata gaps and match quality." width="49%" /></picture>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="site/public/images/health-review-dark-1440.webp" /><img src="site/public/images/health-review-light-1440.webp" alt="Reviewing a tag change before it's written: the old and new label side by side, and a note that it writes to nine FLAC files and can be reverted." width="49%" /></picture>
+</p>
+
+**Gapless native playback** on the desktop. Browsers and phones stream from your server, at a quality picked for the connection. Favourites and playlists share one list, and existing playlists import into it.
+
+<p>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="site/public/images/now-playing-dark-1440.webp" /><img src="site/public/images/now-playing-light-1440.webp" alt="The now playing panel beside the map, showing the current track's lyrics with the current line highlighted." width="49%" /></picture>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="site/public/images/collections-dark-1440.webp" /><img src="site/public/images/collections-light-1440.webp" alt="The Collections panel beside the map: five playlists above a grid of favourite albums." width="49%" /></picture>
+</p>
 
 ## Free, and what's paid
 
