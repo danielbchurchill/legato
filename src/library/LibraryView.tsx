@@ -1,26 +1,36 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { Tabs } from '../ui/Tabs'
+import { Button } from '../ui/Button'
 import { ScrollArea } from '../ui/ScrollArea'
 import { plural } from '../ui/format'
 import { useGraph } from '../canvas/graphContext'
 import { useShellLayout } from '../shell/layout'
+import { useScanStatus } from '../hooks/useScanStatus'
 import type { usePlayback } from '../playback/usePlayback'
 import type { Settings } from '../hooks/useSettings'
 import { AlbumsGrid } from './AlbumsGrid'
 import { ArtistsGrid } from './ArtistsGrid'
 import { libraryArtists } from './libraryArtists'
 import { TracksTable } from './TracksTable'
+import { LibraryEmpty } from './LibraryEmpty'
 import { SortPill, type SortKind } from './SortPill'
 import { ALBUM_SORT_OPTIONS, TRACK_SORT_OPTIONS, type AlbumSort, type SortDir, type TrackSort } from './types'
 
 /* The library: the map's other view of the same music, as covers and rows.
- * Issue #126's map/library switch, now in the capsule.
+ * Issue #126's map/library switch, now in the capsule; laid out from
+ * LibraryStageV2, the v2 handoff's library frame (#263).
  *
- * It takes over the stage between the side panels, so a panel opening
- * narrows it rather than covering it, and starts below the capsule. One
- * scroll area holds the header and whichever layout is showing; its last
+ * It takes over the stage between the side panels (the shell's left and
+ * right occupancy), so a panel opening narrows it and the grid reflows,
+ * rather than the panel covering it. One scroll area holds the header and
+ * whichever layout is showing, inset 88px from the top (the capsule's 60px
+ * and 28px under it) and 32px each side, as the frame insets it. Its last
  * 120px fade out under the player, so rows slide away beneath the glass
- * instead of being cut off by it.
+ * instead of being cut off by it, and 160px of padding below the last row
+ * lets it come to rest above that fade.
+ *
+ * The header stays in every state, as the frame keeps it: the counts line
+ * reads "Loading…" or "Nothing here yet" while there's nothing to count.
  *
  * Opening anything here — a cover, a row, an artist — opens its details in
  * the right panel: there's no node card to show off the map. */
@@ -51,11 +61,15 @@ type LibraryViewProps = {
   playback: ReturnType<typeof usePlayback>
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>
+  /** No music folder yet: the frame's first-run state, this in place of a
+   * layout under the header. */
+  firstRun?: ReactNode
 }
 
-export function LibraryView({ onOpenNode, playback, settings, updateSettings }: LibraryViewProps) {
+export function LibraryView({ onOpenNode, playback, settings, updateSettings, firstRun }: LibraryViewProps) {
   const layout = useShellLayout()
   const { nodes, edges, loading } = useGraph()
+  const scan = useScanStatus()
   const scrollRef = useRef<HTMLDivElement>(null)
   // The layout persists like the map/library switch itself; the sort is a
   // passing choice and resets with the view.
@@ -71,7 +85,9 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings }: 
     // credits aren't in the tab, so they aren't in the count either.
     return { ...byType, artist: libraryArtists(nodes, edges).length }
   }, [nodes, edges])
-  const empty = !loading && nodes.length === 0
+  // A folder is set but nothing has been matched yet: the first scan is
+  // still running, or the folder holds nothing Legato reads.
+  const empty = firstRun == null && !loading && nodes.length === 0
 
   const scrollToTop = () => scrollRef.current?.scrollTo({ top: 0 })
 
@@ -81,95 +97,96 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings }: 
       style={{ left: layout.leftOccupancy, right: layout.rightOccupancy }}
     >
       <ScrollArea viewportRef={scrollRef} className="h-full" contentClassName="px-[32px] pt-[88px] pb-[160px]">
-        {empty ? (
-          // A folder is set but nothing has been matched yet: the first
-          // scan is still running, or the folder holds nothing Legato reads.
-          <div className="mx-auto mt-[120px] flex max-w-[440px] flex-col items-center gap-[10px] text-center">
-            <h1 className="text-title text-[var(--color-ink)]">Nothing here yet</h1>
-            <p className="text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]">
-              Albums appear as your folders are read. If a scan has finished and this is still empty, check the folder in Settings.
-            </p>
+        <header className="flex flex-wrap items-end justify-between gap-[24px]">
+          <div className="flex flex-col gap-[4px]">
+            <h1 className="text-display text-[var(--color-ink)]">Library</h1>
+            <span className="text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]">
+              {firstRun != null || empty
+                ? 'Nothing here yet'
+                : loading
+                  ? 'Loading…'
+                  : `${plural(counts.release, 'album')} · ${plural(counts.artist, 'artist')} · ${plural(counts.recording, 'track')}`}
+            </span>
           </div>
-        ) : (
-          <>
-            <header className="flex flex-wrap items-end justify-between gap-[24px]">
-              <div className="flex flex-col gap-[4px]">
-                <h1 className="text-display text-[var(--color-ink)]">Library</h1>
-                <span className="text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]">
-                  {loading
-                    ? 'Loading…'
-                    : `${plural(counts.release, 'album')} · ${plural(counts.artist, 'artist')} · ${plural(counts.recording, 'track')}`}
-                </span>
-              </div>
-              <div className="flex items-center gap-[10px]">
-                <Tabs
-                  label="library layout"
-                  size="md"
-                  options={ENTITIES}
-                  value={entity}
-                  onChange={(value) => {
+          <div className="flex items-center gap-[10px]">
+            <Tabs
+              label="library layout"
+              size="md"
+              options={ENTITIES}
+              value={entity}
+              onChange={(value) => {
+                scrollToTop()
+                void updateSettings({ libraryEntity: value })
+              }}
+            />
+            {entity === 'albums' && (
+              <SortPill
+                options={ALBUM_SORT_OPTIONS}
+                value={albumSort.sort}
+                dir={albumSort.dir}
+                kindOf={(id) => ALBUM_KIND[id]}
+                onChange={(sort, dir) => setAlbumSort({ sort, dir })}
+              />
+            )}
+            {entity === 'tracks' && (
+              <SortPill
+                options={TRACK_SORT_OPTIONS}
+                value={trackSort.sort}
+                dir={trackSort.dir}
+                kindOf={(id) => TRACK_KIND[id]}
+                onChange={(sort, dir) => setTrackSort({ sort, dir })}
+              />
+            )}
+            {entity === 'artists' && (
+              <SortPill options={ARTIST_SORT} value="name" dir={artistDir} kindOf={() => 'text'} onChange={(_, dir) => setArtistDir(dir)} />
+            )}
+          </div>
+        </header>
+
+        {firstRun ??
+          (empty ? (
+            scan.scanning ? (
+              <LibraryEmpty title="Reading your library" body="Albums appear here as tracks are matched." />
+            ) : scan.error ? (
+              // The map's own words for a failed scan (MapNotice in Canvas).
+              <LibraryEmpty title="The scan stopped" body={scan.error}>
+                <Button variant="primary" onClick={scan.retry}>
+                  Try again
+                </Button>
+              </LibraryEmpty>
+            ) : (
+              <LibraryEmpty title="No music found" body="Legato couldn't read anything in your folders. Check them in Settings." />
+            )
+          ) : (
+            <>
+              {entity === 'albums' && (
+                <AlbumsGrid
+                  scrollRef={scrollRef}
+                  sort={albumSort.sort}
+                  dir={albumSort.dir}
+                  onOpen={onOpenNode}
+                  onPlay={(id) => void playback.playAlbum(id)}
+                  onShowRecent={() => {
                     scrollToTop()
-                    void updateSettings({ libraryEntity: value })
+                    setAlbumSort({ sort: 'dateAdded', dir: 'desc' })
                   }}
                 />
-                {entity === 'albums' && (
-                  <SortPill
-                    options={ALBUM_SORT_OPTIONS}
-                    value={albumSort.sort}
-                    dir={albumSort.dir}
-                    kindOf={(id) => ALBUM_KIND[id]}
-                    onChange={(sort, dir) => setAlbumSort({ sort, dir })}
-                  />
-                )}
-                {entity === 'tracks' && (
-                  <SortPill
-                    options={TRACK_SORT_OPTIONS}
-                    value={trackSort.sort}
-                    dir={trackSort.dir}
-                    kindOf={(id) => TRACK_KIND[id]}
-                    onChange={(sort, dir) => setTrackSort({ sort, dir })}
-                  />
-                )}
-                {entity === 'artists' && (
-                  <SortPill
-                    options={ARTIST_SORT}
-                    value="name"
-                    dir={artistDir}
-                    kindOf={() => 'text'}
-                    onChange={(_, dir) => setArtistDir(dir)}
-                  />
-                )}
-              </div>
-            </header>
-
-            {entity === 'albums' && (
-              <AlbumsGrid
-                scrollRef={scrollRef}
-                sort={albumSort.sort}
-                dir={albumSort.dir}
-                onOpen={onOpenNode}
-                onPlay={(id) => void playback.playAlbum(id)}
-                onShowRecent={() => {
-                  scrollToTop()
-                  setAlbumSort({ sort: 'dateAdded', dir: 'desc' })
-                }}
-              />
-            )}
-            {entity === 'artists' && <ArtistsGrid sortDir={artistDir} onOpen={onOpenNode} />}
-            {entity === 'tracks' && (
-              <TracksTable
-                scrollRef={scrollRef}
-                sort={trackSort.sort}
-                dir={trackSort.dir}
-                onSort={(sort, dir) => setTrackSort({ sort, dir })}
-                playingId={playback.status.currentRecordingNodeId}
-                playing={playback.status.playing}
-                onOpen={onOpenNode}
-                onPlay={(track) => void playback.playNode(track.id, track.title)}
-              />
-            )}
-          </>
-        )}
+              )}
+              {entity === 'artists' && <ArtistsGrid sortDir={artistDir} onOpen={onOpenNode} />}
+              {entity === 'tracks' && (
+                <TracksTable
+                  scrollRef={scrollRef}
+                  sort={trackSort.sort}
+                  dir={trackSort.dir}
+                  onSort={(sort, dir) => setTrackSort({ sort, dir })}
+                  playingId={playback.status.currentRecordingNodeId}
+                  playing={playback.status.playing}
+                  onOpen={onOpenNode}
+                  onPlay={(track) => void playback.playNode(track.id, track.title)}
+                />
+              )}
+            </>
+          ))}
       </ScrollArea>
     </div>
   )
