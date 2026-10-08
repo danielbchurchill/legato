@@ -1,14 +1,7 @@
 import type { Database } from "./sqlite.js";
 import { deriveLocalEdges } from "./match/edges.js";
 import { mergeDuplicatePeople } from "./match/people.js";
-import {
-  ARTISTS_IN_BOUND_SQL,
-  MEMBER_LOOKUP_ARTISTS_SQL,
-  enqueueArtistImageLookupIfNeeded,
-  enqueueArtistMemberLookupIfNeeded,
-  enqueueDescriptionLookupIfNeeded,
-  enqueueEnrichmentIfNeeded,
-} from "./enrich/queue.js";
+import { enqueueEnrichmentIfNeeded, enqueueLookupsInBound } from "./enrich/queue.js";
 import { recomputeEntities } from "./entities/aggregate.js";
 import { recomputeCollaborationEdges } from "./entities/collaboration.js";
 import { recomputeAllLayouts } from "./layout/seed.js";
@@ -70,28 +63,10 @@ export function recompute(db: Database): void {
   recomputeSimilarityFeatures(db);
   recomputeArticles(db);
 
-  // Artist photos and encyclopedia descriptions — queued after
+  // Artist photos, members and encyclopedia descriptions — queued after
   // recomputeEntities, because artist and release nodes are what it creates.
-  // Both helpers are one-shot per node (see enrich/queue.ts), so running this
-  // on every recompute costs a pair of indexed lookups per node rather than a
-  // network request. Issue #269: only for artists inside the membership
-  // crawl's bound (enrich/queue.ts), the same as the member lookup below.
-  const enrichable = db
-    .prepare(`SELECT id, type FROM nodes WHERE type = 'release' OR id IN (${ARTISTS_IN_BOUND_SQL})`)
-    .all() as { id: number; type: string }[];
-  const memberLookupArtists = new Set(
-    (db.prepare(MEMBER_LOOKUP_ARTISTS_SQL).all() as { id: number }[]).map((row) => row.id),
-  );
-  for (const node of enrichable) {
-    if (node.type === "artist") {
-      enqueueArtistImageLookupIfNeeded(db, node.id);
-      // Issue #61: an artist's "member of band" relations, queued the same
-      // one-shot way as the photo lookup above, so a member or group the
-      // cascade in worker.ts's processArtistMemberLookup never got to still
-      // gets its lookup the next time this runs. Issue #269: only the
-      // performers and their direct members and groups.
-      if (memberLookupArtists.has(node.id)) enqueueArtistMemberLookupIfNeeded(db, node.id);
-    }
-    enqueueDescriptionLookupIfNeeded(db, node.id);
-  }
+  // Each is one-shot per node (see enrich/queue.ts), so running this on
+  // every recompute costs three statements rather than a network request.
+  // Issue #269: only for artists inside the membership crawl's bound.
+  enqueueLookupsInBound(db);
 }

@@ -121,6 +121,64 @@ export function isMemberLookupArtist(db: Database, artistNodeId: number): boolea
   return db.prepare(`SELECT 1 FROM (${MEMBER_LOOKUP_ARTISTS_SQL}) WHERE id = ?`).get(artistNodeId) !== undefined;
 }
 
+// One INSERT … SELECT per job type, with enqueueOnce's rule as its NOT
+// EXISTS: a node that has ever had a job of that type, in any status, gets
+// no new one.
+function insertOnce(db: Database, jobType: string, candidates: string): void {
+  db.prepare(
+    `INSERT INTO enrich_jobs (node_id, job_type, status)
+     SELECT c.id, ?, 'queued' FROM (${candidates}) c
+      WHERE NOT EXISTS (SELECT 1 FROM enrich_jobs ej WHERE ej.node_id = c.id AND ej.job_type = ?)
+      ORDER BY c.id`,
+  ).run(jobType, jobType);
+}
+
+/** Issue #281: every artist inside the bound gets a photo and a
+ *  description lookup, every release a description lookup, and every
+ *  member-lookup artist a member lookup, each queued once (enqueueOnce).
+ *  recompute.ts calls this after every scan. It used to call the helpers
+ *  above three times per node, 540,000 lookups on the Pi.
+ *
+ *  An INSERT … SELECT holds the write lock while its SELECT runs, and on a
+ *  30,000-album library reading the bound takes seconds. So each set is read
+ *  once into a temp table first, which writes only to this connection's
+ *  temp database, and the three inserts read from those. CROSS JOIN keeps
+ *  the temp table as the outer loop: it has no statistics, and SQLite
+ *  otherwise checked every artist node in the database against it. */
+export function enqueueLookupsInBound(db: Database): void {
+  if (!isEnrichmentEnabled(db)) return;
+
+  db.exec("CREATE TEMP TABLE IF NOT EXISTS artists_in_bound (id INTEGER PRIMARY KEY)");
+  db.exec("CREATE TEMP TABLE IF NOT EXISTS member_lookup_artists (id INTEGER PRIMARY KEY)");
+  try {
+    db.exec(`INSERT OR IGNORE INTO temp.artists_in_bound SELECT id FROM (${ARTISTS_IN_BOUND_SQL})`);
+    db.exec(`INSERT OR IGNORE INTO temp.member_lookup_artists SELECT id FROM (${MEMBER_LOOKUP_ARTISTS_SQL})`);
+
+    insertOnce(
+      db,
+      "artist_image_lookup",
+      "SELECT n.id FROM temp.artists_in_bound b CROSS JOIN nodes n ON n.id = b.id WHERE n.type = 'artist'",
+    );
+    // Issue #61: an artist's "member of band" relations, so a member or
+    // group the cascade in worker.ts's processArtistMemberLookup never got
+    // to still gets its lookup at the next scan. Issue #269: only the
+    // performers and their direct members and groups, a subset of the bound.
+    insertOnce(
+      db,
+      "artist_member_lookup",
+      "SELECT n.id FROM temp.member_lookup_artists m CROSS JOIN nodes n ON n.id = m.id WHERE n.type = 'artist'",
+    );
+    insertOnce(
+      db,
+      "description_lookup",
+      "SELECT id FROM nodes WHERE type = 'release' OR id IN (SELECT id FROM temp.artists_in_bound)",
+    );
+  } finally {
+    db.exec("DROP TABLE temp.artists_in_bound");
+    db.exec("DROP TABLE temp.member_lookup_artists");
+  }
+}
+
 // Queued once a 'recording_lookup' job resolves a real MusicBrainz mbid —
 // only then does the release its recording belongs to have any MBID this
 // server can hand to Cover Art Archive (enrich/coverArchive.ts). node_id

@@ -6,6 +6,7 @@ import {
   enqueueCoverArtLookupIfNeeded,
   enqueueDescriptionLookupIfNeeded,
   enqueueEnrichmentIfNeeded,
+  enqueueLookupsInBound,
   isEnrichmentEnabled,
 } from "./queue.js";
 
@@ -142,5 +143,67 @@ describe("artist image and description lookups", () => {
     enqueueArtistImageLookupIfNeeded(db, nodeId);
     enqueueDescriptionLookupIfNeeded(db, nodeId);
     expect(jobTypes(nodeId)).toEqual([]);
+  });
+});
+
+// Issue #281: recompute's three statements, one per job type, in place of
+// three enqueueOnce calls per node.
+describe("enqueueLookupsInBound", () => {
+  let performer: number;
+  let release: number;
+
+  beforeEach(() => {
+    const node = (type: string, title: string) =>
+      (db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as { id: number }).id;
+    const recording = node("recording", "Something");
+    performer = node("artist", "The Beatles");
+    release = node("release", "Abbey Road");
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+      recording,
+      performer,
+    );
+  });
+
+  const jobs = () =>
+    db.prepare("SELECT node_id AS nodeId, job_type AS jobType, status FROM enrich_jobs ORDER BY id").all() as {
+      nodeId: number;
+      jobType: string;
+      status: string;
+    }[];
+
+  it("queues each lookup once for each node it's for", () => {
+    enqueueLookupsInBound(db);
+    expect(jobs()).toEqual([
+      { nodeId: performer, jobType: "artist_image_lookup", status: "queued" },
+      { nodeId: performer, jobType: "artist_member_lookup", status: "queued" },
+      { nodeId: performer, jobType: "description_lookup", status: "queued" },
+      { nodeId: release, jobType: "description_lookup", status: "queued" },
+    ]);
+
+    enqueueLookupsInBound(db);
+    expect(jobs()).toHaveLength(4);
+  });
+
+  it("queues nothing more for a node that has a job of that type in any status", () => {
+    const statuses = ["queued", "running", "done", "error", "deferred"];
+    for (const status of statuses) {
+      db.prepare("DELETE FROM enrich_jobs").run();
+      for (const [nodeId, jobType] of [
+        [performer, "artist_image_lookup"],
+        [performer, "artist_member_lookup"],
+        [performer, "description_lookup"],
+        [release, "description_lookup"],
+      ] as const) {
+        db.prepare("INSERT INTO enrich_jobs (node_id, job_type, status) VALUES (?, ?, ?)").run(nodeId, jobType, status);
+      }
+      enqueueLookupsInBound(db);
+      expect(jobs().map((job) => job.status)).toEqual([status, status, status, status]);
+    }
+  });
+
+  it("respects the global enrichment switch", () => {
+    db.prepare("INSERT INTO settings (key, value) VALUES ('enrichmentEnabled', 'false')").run();
+    enqueueLookupsInBound(db);
+    expect(jobs()).toEqual([]);
   });
 });
