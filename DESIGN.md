@@ -93,10 +93,12 @@ Two consequences worth stating outright:
 
 Legato is a two-theme app now (issue #136): ink, the dark theme, and paper, the light one. Ink is the original, unchanged intent — a canvas of album art needs a dark, neutral, non-competing ground — and is the default in every context that has no stored preference (issue #282). Paper is not a dimmed or inverted copy of it; it has its own rationale (below) and its own signed-off palette (issue #104's approval comment), not a formula derived from ink's values. A component never branches on which is active — both live as the same `--color-*` custom property names, ink in `tokens.css`'s `@theme` block, paper overriding them under `:root[data-theme="light"]`, and every component just reads `var(--color-*)` either way. The one structural exception is the sigma canvas, which renders to WebGL and never sees CSS at all — see "The graph" below for how it stays in sync instead.
 
+Only the canvas and inset rows are current. The rest are v1's values, from before the v2 roles above; tokens.css has today's.
+
 | Token | Ink value | Role |
 |---|---|---|
-| `--color-canvas` | `#14181A` | The backdrop everything sits on |
-| `--color-inset` | `#14181A` | Fill of inset controls — *identical to canvas, by design* |
+| `--color-canvas` | `#0f1214` | The backdrop everything sits on |
+| `--color-inset` | `rgb(0 0 0 / 0.28)` | Fill of inset controls. Since v2 it's an alias of `--color-sunken`, a dark wash over the surface, so it no longer equals the canvas as "Raised and inset" below asks |
 | `--color-surface` | `rgb(30 36 38 / 0.8)` | Floating glass panels |
 | `--color-surface-flat` | `#1C2124` | Opaque equivalent, for no-blur fallback |
 | `--color-hairline` | `rgb(255 255 255 / 0.3)` | Panel and control edges |
@@ -128,7 +130,18 @@ The two are also distinguished by shadow, not just fill: raised surfaces carry `
 
 ### Verification
 
-`rgb(30 36 38 / 0.8)` over `#14181A` composites to `rgb(28, 33.6, 35.6)`. The render measures `#1C2124` = `rgb(28, 33, 36)`. The glass value is correct and `--color-surface-flat` is its honest opaque twin.
+*A v1 measurement, against v1's canvas:* `rgb(30 36 38 / 0.8)` over `#14181A` composites to `rgb(28, 33.6, 35.6)`. The render measures `#1C2124` = `rgb(28, 33, 36)`. The glass value is correct and `--color-surface-flat` is its honest opaque twin.
+
+Against today's tokens, glass over bare canvas composites like this:
+
+| Theme | `--color-surface` | over `--color-canvas` | composites to | `--color-solid` |
+|---|---|---|---|---|
+| ink | `rgb(22 26 29 / 0.74)` | `#0f1214` | `rgb(20.2, 23.9, 26.7)` | `#171b1e` |
+| paper | `rgb(251 249 245 / 0.82)` | `#ebe6dc` | `rgb(248.1, 245.6, 240.5)` | `#fbf9f5` |
+
+The render agrees. In headless Chrome on 2026-10-08, the rail over an empty map measured `rgb(20, 24, 26)` on ink and `rgb(249, 245, 240)` on paper, within a level per channel of the table; glass's `saturate(140%)` shifts the canvas under it slightly.
+
+v2's opaque twin, `--color-solid` (which `--color-surface-flat` now aliases), isn't that composite. It's the glass colour at full opacity: exactly so on paper, one level lighter per channel on ink. So the no-blur fallback sits 3 to 4.5 levels per channel lighter than glass over bare canvas. `src/styles/canvasCopies.spec.ts` redoes this arithmetic from tokens.css, so the table can't drift from it.
 
 ---
 

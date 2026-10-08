@@ -204,10 +204,13 @@ fn classify(head: &str) -> Request {
   Request::Other
 }
 
+// The page's background is tokens.css's ink canvas, like the app window the
+// sign-in started from. src/styles/canvasCopies.spec.ts checks it against
+// the token.
 fn respond(stream: &mut TcpStream, status: &str, body: &str) {
   let page = format!(
     "<!doctype html><html><head><meta charset=\"utf-8\"><title>Legato</title></head>\
-<body style=\"margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#14181A;color:#c9c9c9;font-family:system-ui,sans-serif;font-size:14px;\">\
+<body style=\"margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f1214;color:#c9c9c9;font-family:system-ui,sans-serif;font-size:14px;\">\
 <p>{body}</p></body></html>"
   );
   let response = format!(
