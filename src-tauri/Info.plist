@@ -11,6 +11,16 @@
 	     `tauri dev` never showed it: that page comes from Vite on 127.0.0.1.
 	     Scoped to web content because the webview is the only thing that talks
 	     to a server; the Rust side's networking doesn't go through ATS. -->
+	<!-- Issue #117: the connect screen browses _legato._tcp (src/discovery.rs)
+	     and checks addresses on the LAN (src/probe.rs). Since macOS 15 both need
+	     the user's Local Network permission, and this is the sentence the
+	     prompt shows. NSBonjourServices names the one service type browsed. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Legato looks for Legato servers on your network, so you can connect to one without typing its address.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_legato._tcp</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoadsInWebContent</key>

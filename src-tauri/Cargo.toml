@@ -28,3 +28,14 @@ tauri-plugin-opener = "2"
 rodio = "0.22"
 ctrlc = { version = "3", features = ["termination"] }
 tauri-plugin-autostart = "2"
+# Issue #117's connect screen: browsing _legato._tcp (discovery.rs), and the
+# custom-address probe's TLS step (probe.rs). Pure Rust on every target; ring
+# rather than rustls's default aws-lc-rs, which needs cmake and NASM to build.
+mdns-sd = { version = "0.21", default-features = false, features = ["logging"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-platform-verifier = "0.6"
+
+[dev-dependencies]
+# probe.rs's test serves a self-signed certificate to check it's reported
+# as untrusted.
+rcgen = "0.14"

@@ -3,12 +3,15 @@ use std::sync::Mutex;
 
 use tauri::Manager;
 
+mod discovery;
 mod keep_awake;
 mod playback;
+mod probe;
 mod relay_sign_in;
 mod server_process;
 mod serving;
 mod tray;
+use discovery::Discovery;
 use keep_awake::KeepAwake;
 use playback::PlaybackState;
 use relay_sign_in::SignInState;
@@ -38,6 +41,7 @@ pub fn run() {
     .manage(ServerProcess(Mutex::new(None)))
     .manage(PlaybackState::new())
     .manage(SignInState::default())
+    .manage(Discovery::default())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -105,6 +109,8 @@ pub fn run() {
       playback::queue_set_device,
       relay_sign_in::relay_sign_in,
       relay_sign_in::relay_sign_in_cancel,
+      discovery::discovered_servers,
+      probe::probe_server,
       serving::serving_settings,
       serving::set_launch_at_login,
       serving::set_keep_awake,
