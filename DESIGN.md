@@ -91,12 +91,14 @@ Two consequences worth stating outright:
 
 ## Color
 
-Legato is a two-theme app now (issue #136): ink, the dark theme, and paper, the light one. Ink is the original, unchanged intent — a canvas of album art needs a dark, neutral, non-competing ground — and is the default in every context that has no stored preference (issue #282). Paper is not a dimmed or inverted copy of it; it has its own rationale (below) and its own signed-off palette (issue #104's approval comment), not a formula derived from ink's values. A component never branches on which is active — both live as the same `--color-*` custom property names, ink in `tokens.css`'s `@theme` block, paper overriding them under `:root[data-theme="light"]`, and every component just reads `var(--color-*)` either way. The one structural exception is the sigma canvas, which renders to WebGL and never sees CSS at all — see "The graph" below for how it stays in sync instead.
+Legato is a two-theme app now (issue #136): ink, the dark theme, and paper, the light one. Ink is the original, unchanged intent — a canvas of album art needs a dark, neutral, non-competing ground — and is the default in every context that has no stored preference (issue #282). Paper is not a dimmed or inverted copy of it; it has its own rationale (below) and its own signed-off palette (issue #104's approval comment), not a formula derived from ink's values. A component never branches on which is active — both live as the same `--color-*` custom property names, ink in `tokens.css`'s `@theme` block, paper overriding them under `:root[data-theme="light"]`, and every component just reads `var(--color-*)` either way. The one structural exception is the sigma canvas, which renders to WebGL and never sees CSS at all — see "Following the theme" under "The graph" below for how it stays in sync instead.
+
+Only the canvas and inset rows are current. The rest are v1's values, from before the v2 roles above; tokens.css has today's.
 
 | Token | Ink value | Role |
 |---|---|---|
-| `--color-canvas` | `#14181A` | The backdrop everything sits on |
-| `--color-inset` | `#14181A` | Fill of inset controls — *identical to canvas, by design* |
+| `--color-canvas` | `#0f1214` | The backdrop everything sits on |
+| `--color-inset` | `rgb(0 0 0 / 0.28)` | Fill of inset controls. Since v2 it's an alias of `--color-sunken`, a dark wash over the surface, so it no longer equals the canvas as "Raised and inset" below asks |
 | `--color-surface` | `rgb(30 36 38 / 0.8)` | Floating glass panels |
 | `--color-surface-flat` | `#1C2124` | Opaque equivalent, for no-blur fallback |
 | `--color-hairline` | `rgb(255 255 255 / 0.3)` | Panel and control edges |
@@ -128,7 +130,18 @@ The two are also distinguished by shadow, not just fill: raised surfaces carry `
 
 ### Verification
 
-`rgb(30 36 38 / 0.8)` over `#14181A` composites to `rgb(28, 33.6, 35.6)`. The render measures `#1C2124` = `rgb(28, 33, 36)`. The glass value is correct and `--color-surface-flat` is its honest opaque twin.
+*A v1 measurement, against v1's canvas:* `rgb(30 36 38 / 0.8)` over `#14181A` composites to `rgb(28, 33.6, 35.6)`. The render measures `#1C2124` = `rgb(28, 33, 36)`. The glass value is correct and `--color-surface-flat` is its honest opaque twin.
+
+Against today's tokens, glass over bare canvas composites like this:
+
+| Theme | `--color-surface` | over `--color-canvas` | composites to | `--color-solid` |
+|---|---|---|---|---|
+| ink | `rgb(22 26 29 / 0.74)` | `#0f1214` | `rgb(20.2, 23.9, 26.7)` | `#171b1e` |
+| paper | `rgb(251 249 245 / 0.82)` | `#ebe6dc` | `rgb(248.1, 245.6, 240.5)` | `#fbf9f5` |
+
+The render agrees. In headless Chrome on 2026-10-08, the rail over an empty map measured `rgb(20, 24, 26)` on ink and `rgb(249, 245, 240)` on paper, within a level per channel of the table; glass's `saturate(140%)` shifts the canvas under it slightly.
+
+v2's opaque twin, `--color-solid` (which `--color-surface-flat` now aliases), isn't that composite. It's the glass colour at full opacity: exactly so on paper, one level lighter per channel on ink. So the no-blur fallback sits 3 to 4.5 levels per channel lighter than glass over bare canvas. `src/styles/canvasCopies.spec.ts` redoes this arithmetic from tokens.css, so the table can't drift from it.
 
 ---
 
@@ -403,6 +416,16 @@ The v2 mockup's "links > colours" legend shows 4 swatches (collab/year/style/not
 
 Storage: a type → hex override map, most naturally in the existing `settings` key-value store (`server/src/routes/settings.ts` — already a generic string store, no new migration needed for this). Unset types fall back to the curated defaults above.
 
+### Following the theme
+
+The map can't take its colours from CSS. Sigma draws nodes and edges in WebGL, and labels and cluster glows go on 2D canvases, so none of them can use `var(--color-*)`. Only the ground is CSS: sigma's canvases are transparent, over the shell's `--color-canvas`. Everything drawn on top comes from the same tokens, copied into a palette in `src/canvas/Canvas.tsx`:
+
+- **Read from the tokens.** `resolveThemeColors` reads the node fills (`--color-node-*`), the edge colours (`--color-edge`, `--color-edge-fallback` and one `--color-edge-*` per type), the canvas, the three inks, the halo and `--map-glow` through `getComputedStyle` on `<html>`. Each colour goes through `toSigmaColor`, because the translucent tokens come back in CSS4's space-separated `rgb(r g b / a)`, and sigma's colour parser only reads hex and comma `rgb()`/`rgba()`. A token that reads empty or won't parse falls back to `DEFAULT_THEME_COLORS`, which are ink's values.
+- **Once per theme change, not per frame.** The palette is held in a ref. An effect keyed on Canvas's `theme` prop (App's `resolvedTheme`) resolves it again, repaints every node's base fill and refreshes sigma. The repaint is needed because a node's fill is baked into the graph when it syncs, so a new palette alone wouldn't reach it. Everything else reads the ref as it draws: the node reducer mixes unfocused nodes toward `canvas`, the edge reducer picks `edge` or a type colour (a user's override first), labels stroke `halo` and fill with `ink`, `ink-2` or `ink-3`, and glows take each artist's cover colour at `--map-glow`'s alpha. Nothing on the map reads the DOM per frame.
+- **`data-theme` moves first.** The re-read is only right if `<html data-theme>` already names the new theme when the effect runs. React runs a child's effects before its parent's. While `useTheme` moved `data-theme` in an effect of its own, up in `MainApp`, Canvas read the old theme's tokens and the map stayed one theme behind (#282). `useTheme` now keeps the theme in one module-level store (`src/hooks/useTheme.ts`). Its `update()` moves `data-theme` and the theme-color meta first and only then notifies React, so any render, layout effect or effect that runs for the new theme already sees the new tokens. The test "moves data-theme before any effect below it re-reads the tokens" in `useTheme.spec.tsx` fails if that order is undone.
+
+Two rules keep this working. A new colour on the map is a token, read in `resolveThemeColors`; it's never a hex in `Canvas.tsx`, and never a `getComputedStyle` call per frame. And only `useTheme.ts` moves `data-theme` once React is running (`index.html`'s boot script sets it before that); a component's own effect never does.
+
 ---
 
 ## Library view
@@ -458,7 +481,7 @@ Underline used to be the only button affordance in the app (C-3) — "retry", "r
 
 `destructive` is distinguished by shape, not color. The palette has no danger token, deliberately (`--color-*` in tokens.css is glass/ink/muted/edge-hue, full stop — inventing a red for one rare state would be the first exception), so weight carries what color can't: a bordered pill reads as a control to commit to, plain text reads as a link to follow.
 
-**`link`'s underline was removed app-wide 2026-09-02 (issue #30)** — it read badly wherever it appeared, and it was never load-bearing: the hover color-shift to `--color-muted-hi` was already the affordance doing the real work, the underline just rode along. Every "click a title to fly to this node" spot outside the shared component (Favourites' row, the collection panel's maintenance preview and similarity thumbnails, search results) had already converged on plain-text-plus-color-shift with no underline — TagManager's row title was brought in line with that convention first (see "v2: panels without a frame" below); `Button.tsx`'s `link` variant, `ArticleBody.tsx`'s inline article links, and `ConnectionsContent.tsx`'s recordings/personal-edges rows were the three remaining holdouts, fixed in the same pass. `destructive` is untouched — it was never underlined, and its bordered-pill shape is the whole point of that variant.
+**`link`'s underline was removed app-wide 2026-09-02 (issue #30)** — it read badly wherever it appeared, and it was never load-bearing: the hover color-shift to `--color-muted-hi` was already the affordance doing the real work, the underline just rode along. Every "click a title to fly to this node" spot outside the shared component (Favourites' row, the collection panel's maintenance preview and similarity thumbnails, search results) had already converged on plain-text-plus-color-shift with no underline — TagManager's row title was brought in line with that convention first (see "v2: panels without a frame" above); `Button.tsx`'s `link` variant, `ArticleBody.tsx`'s inline article links, and `ConnectionsContent.tsx`'s recordings/personal-edges rows were the three remaining holdouts, fixed in the same pass. `destructive` is untouched — it was never underlined, and its bordered-pill shape is the whole point of that variant.
 
 Both variants share the toggle pill's rounding language (`rounded-full`, no new radius token) and MO-1's motion tokens (`--motion-fast`, `--ease-out`) rather than a literal duration.
 

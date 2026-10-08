@@ -267,7 +267,7 @@ function successPage(displayName: string | null): string {
   const name = displayName ? escapeHtml(displayName) : "your account";
   return `<!doctype html>
 <html>
-  <body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#14181A;color:#c9c9c9;font-family:system-ui,sans-serif;font-size:14px;">
+  <body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f1214;color:#c9c9c9;font-family:system-ui,sans-serif;font-size:14px;">
     <p>Signed in as ${name}. You can close this window.</p>
   </body>
 </html>`;

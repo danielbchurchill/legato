@@ -15,8 +15,10 @@
       the theme-color meta below. The two hexes are tokens.css's
       --color-canvas for each theme, repeated here because tokens.css hasn't
       loaded yet; useTheme.ts reads the token itself from then on.
+      src/styles/canvasCopies.spec.ts runs this script and fails if either
+      hex stops matching its token (#291).
     -->
-    <meta name="theme-color" content="#14181a" />
+    <meta name="theme-color" content="#0f1214" />
     <script>
       (function () {
         var theme;
@@ -28,7 +30,7 @@
           theme = 'dark';
         }
         document.documentElement.dataset.theme = theme;
-        document.querySelector('meta[name="theme-color"]').content = theme === 'light' ? '#f6f4ef' : '#14181a';
+        document.querySelector('meta[name="theme-color"]').content = theme === 'light' ? '#ebe6dc' : '#0f1214';
       })();
     </script>
     <link rel="icon" type="image/png" href="/favicon.png" />

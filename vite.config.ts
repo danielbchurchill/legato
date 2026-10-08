@@ -20,5 +20,9 @@ export default defineConfig({
     // fails to resolve their dependencies from here. An allowlist keeps the
     // next top-level package from breaking this the same way relay/ did.
     include: ['src/**/*.spec.{ts,tsx}'],
+    // Vitest blanks every .css import, ?raw included. canvasCopies.spec.ts
+    // reads tokens.css as text to check the hand copies of its canvas
+    // colour (#291); a plain import of a stylesheet stays blank.
+    css: { include: [/\/src\/styles\/tokens\.css\?raw$/] },
   },
 })

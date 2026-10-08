@@ -210,12 +210,13 @@ function escapeHtml(s: string): string {
 // origin this server can assume (Vite dev port, a Tauri bundle, a future
 // remote client), so the sign-in button opens this flow in a new window
 // and the Account section itself re-checks GET /auth/me on window focus.
-// #14181A matches the Tauri window's own background (tauri.conf.json) so
-// the flash between pages doesn't look like a crash.
+// The background is tokens.css's ink canvas, the same as the Tauri window's
+// own (tauri.conf.json), so the flash between pages doesn't look like a
+// crash. src/styles/canvasCopies.spec.ts checks every copy against the token.
 function messagePage(message: string): string {
   return `<!doctype html>
 <html>
-  <body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#14181A;color:#c9c9c9;font-family:system-ui,sans-serif;font-size:14px;">
+  <body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f1214;color:#c9c9c9;font-family:system-ui,sans-serif;font-size:14px;">
     <p style="max-width:420px;text-align:center;">${message}</p>
   </body>
 </html>`;
