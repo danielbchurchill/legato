@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../sqlite.js";
 import { listRootReachability } from "../scan/reachability.js";
+import { SERVER_NAME } from "../config.js";
 import { GIT_SHA, VERSION } from "../version.js";
 import { resolveInstallChannel, type InstallChannel } from "../update/installChannel.js";
 import { readUpdateStatus, type UpdateCheckOptions, type UpdateStatus } from "../update/check.js";
@@ -10,6 +11,9 @@ import { readUpdateStatus, type UpdateCheckOptions, type UpdateStatus } from "..
 // memory. Shape, for any client or notice that reads it (#193, #110):
 //
 //   status         "ok" whenever the server answers at all
+//   name           what clients call this server (#117): the machine's name,
+//                  or LEGATO_SERVER_NAME (config.ts). The same name it
+//                  advertises over mDNS
 //   version        release version, the same string `legato-server
 //                  --version` prints ("0.0.0-dev" outside a compiled binary)
 //   gitSha         commit the binary was built from ("unknown" outside one)
@@ -37,6 +41,7 @@ import { readUpdateStatus, type UpdateCheckOptions, type UpdateStatus } from "..
 // which is exactly how clients recognise it as out of date.
 export type HealthBody = {
   status: "ok";
+  name: string;
   version: string;
   gitSha: string;
   schemaVersion: number;
@@ -57,7 +62,7 @@ export function highestAppliedMigration(db: Database): number {
 
 // `update` is injectable so health.spec.ts can pin the env and version
 // without touching process.env.
-export function healthRoutes(db: Database, update: UpdateCheckOptions = {}) {
+export function healthRoutes(db: Database, update: UpdateCheckOptions = {}, name: string = SERVER_NAME) {
   const schemaVersion = highestAppliedMigration(db);
   const installChannel = resolveInstallChannel(update.env);
 
@@ -70,6 +75,7 @@ export function healthRoutes(db: Database, update: UpdateCheckOptions = {}) {
       "/health",
       async (): Promise<HealthBody> => ({
         status: "ok",
+        name,
         version: VERSION,
         gitSha: GIT_SHA,
         schemaVersion,

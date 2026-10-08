@@ -25,7 +25,7 @@ async function getHealth(update: UpdateCheckOptions = {}) {
 }
 
 describe("GET /api/v1/health", () => {
-  it("reports status, version, gitSha, schemaVersion, libraryRoots, installChannel and update", async () => {
+  it("reports status, name, version, gitSha, schemaVersion, libraryRoots, installChannel and update", async () => {
     const res = await getHealth();
 
     expect(res.statusCode).toBe(200);
@@ -34,6 +34,7 @@ describe("GET /api/v1/health", () => {
       "gitSha",
       "installChannel",
       "libraryRoots",
+      "name",
       "schemaVersion",
       "status",
       "update",
@@ -48,6 +49,15 @@ describe("GET /api/v1/health", () => {
 
     expect(body.version).toBe(VERSION);
     expect(body.gitSha).toBe(GIT_SHA);
+  });
+
+  // Issue #117: the name the connect screen and the mDNS advertisement show.
+  it("reports the server's name", async () => {
+    const app = Fastify();
+    await app.register(healthRoutes(db, {}, "musicbox"), { prefix: "/api/v1" });
+    const body = (await app.inject({ method: "GET", url: "/api/v1/health" })).json() as HealthBody;
+
+    expect(body.name).toBe("musicbox");
   });
 
   it("reports the highest migration applied, as a number", async () => {

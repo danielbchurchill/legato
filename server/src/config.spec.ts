@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { resolveLegatoIdOrigin, resolveMediaConcurrencyLimit } from "./config.js";
+import { resolveLegatoIdOrigin, resolveMediaConcurrencyLimit, resolveServerName } from "./config.js";
 
 describe("resolveMediaConcurrencyLimit", () => {
   it("defaults to max(1, cores - 1) when LEGATO_MEDIA_CONCURRENCY is unset", () => {
@@ -53,5 +53,22 @@ describe("resolveLegatoIdOrigin", () => {
     expect(() => resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "https://auth.legato.fm/api" })).toThrow(/just an origin/);
     expect(() => resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "ftp://auth.legato.fm" })).toThrow(/just an origin/);
     expect(() => resolveLegatoIdOrigin({ LEGATO_ID_ORIGIN: "not a url" })).toThrow(/LEGATO_ID_ORIGIN/);
+  });
+});
+
+// Issue #117: the name the connect screen and the mDNS advertisement show.
+describe("resolveServerName", () => {
+  it("is the machine's name, without macOS's .local", () => {
+    expect(resolveServerName({}, "musicbox")).toBe("musicbox");
+    expect(resolveServerName({}, "Priyas-MacBook.local")).toBe("Priyas-MacBook");
+  });
+
+  it("takes LEGATO_SERVER_NAME over the hostname, which in Docker is a random id", () => {
+    expect(resolveServerName({ LEGATO_SERVER_NAME: "  Living room  " }, "3f9a1c2b7d4e")).toBe("Living room");
+  });
+
+  it("caps the name at one DNS label, and never leaves it empty", () => {
+    expect(resolveServerName({ LEGATO_SERVER_NAME: "x".repeat(80) }, "h")).toHaveLength(63);
+    expect(resolveServerName({ LEGATO_SERVER_NAME: "   " }, ".local")).toBe("Legato server");
   });
 });

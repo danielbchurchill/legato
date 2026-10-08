@@ -1,4 +1,4 @@
-import { cpus, homedir } from "node:os";
+import { cpus, homedir, hostname as osHostname } from "node:os";
 import path from "node:path";
 
 // M-9: the first real secret this project has needed. AGENTS.md's
@@ -127,3 +127,23 @@ export function resolveLegatoIdOrigin(env: NodeJS.ProcessEnv = process.env): str
 }
 
 export const LEGATO_ID_ORIGIN = resolveLegatoIdOrigin();
+
+// Issue #117: the name a client shows for this server, on the connect
+// screen and in its mDNS advertisement. The machine's own name unless
+// LEGATO_SERVER_NAME says otherwise, which a Docker install wants, since a
+// container's hostname is a random id. macOS hostnames end in ".local",
+// which is mDNS's domain rather than part of the name.
+export function resolveServerName(env: NodeJS.ProcessEnv = process.env, hostname: string = osHostname()): string {
+  const configured = env.LEGATO_SERVER_NAME?.trim();
+  if (configured) return configured.slice(0, 63);
+  const machine = hostname.replace(/\.local\.?$/i, "").trim();
+  return (machine || "Legato server").slice(0, 63);
+}
+
+export const SERVER_NAME = resolveServerName();
+
+// Issue #117: the server advertises `_legato._tcp` on the LAN so the desktop
+// app can list it under "servers on this network" (discovery/advertise.ts).
+// On by default; LEGATO_MDNS=off stops it. Nothing goes beyond the LAN, so
+// it isn't one of legato.fm/privacy's outbound requests.
+export const MDNS_ENABLED = process.env.LEGATO_MDNS?.trim().toLowerCase() !== "off";
