@@ -1,6 +1,6 @@
 import type { Database } from "../sqlite.js";
 import type { LegatoClaims } from "./legatoToken.js";
-import type { SessionUser } from "./sessions.js";
+import { deleteLegatoSessions, type SessionUser } from "./sessions.js";
 
 // Mapping a verified legato.fm token onto this server's users (issue #114,
 // migration 0032). Nothing here creates a row. A legato.fm account this
@@ -66,9 +66,14 @@ export type LinkResult = { ok: true } | { ok: false; reason: "taken" };
 
 // The unique index users_legato_account_id (0032) is what actually decides
 // a clash, so this can't race into one account owning two rows.
+//
+// Sessions the previous account's tokens opened end here (issue #117): that
+// account no longer opens this row.
 export function linkAccount(db: Database, userId: number, accountId: string): LinkResult {
+  const previous = linkedAccountId(db, userId);
   try {
     db.prepare("UPDATE users SET legato_account_id = ? WHERE id = ?").run(accountId, userId);
+    if (previous && previous !== accountId) deleteLegatoSessions(db, previous);
     return { ok: true };
   } catch (err) {
     if (err instanceof Error && /UNIQUE constraint failed/.test(err.message)) return { ok: false, reason: "taken" };
@@ -77,5 +82,7 @@ export function linkAccount(db: Database, userId: number, accountId: string): Li
 }
 
 export function unlinkAccount(db: Database, userId: number): void {
+  const accountId = linkedAccountId(db, userId);
   db.prepare("UPDATE users SET legato_account_id = NULL WHERE id = ?").run(userId);
+  if (accountId) deleteLegatoSessions(db, accountId);
 }

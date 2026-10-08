@@ -17,7 +17,12 @@ import { SERVER_ORIGIN } from '../config/serverHost'
  * startup, so the ~25 files that call fetch() stay unchanged and a new one
  * is covered without anyone remembering. */
 
-export type StoredSession = { token: string; mediaTicket: string }
+/** `legato` marks a session opened with a legato.fm access token (#117):
+ * it lasts a fixed time and is renewed through legato.fm before it ends
+ * (src/connect/legatoSignIn.ts). A password session has none. */
+export type LegatoSessionInfo = { serverId: string; expiresAt: string }
+
+export type StoredSession = { token: string; mediaTicket: string; legato?: LegatoSessionInfo }
 
 /** Fired when the server stops accepting this client's session. App.tsx
  * listens for it and falls back to the sign-in screen. */
@@ -37,9 +42,11 @@ export function readSession(storage: Storage = localStorage, origin = serverOrig
     const raw = storage.getItem(storageKey(origin))
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<StoredSession>
-    return typeof parsed.token === 'string' && typeof parsed.mediaTicket === 'string'
-      ? { token: parsed.token, mediaTicket: parsed.mediaTicket }
-      : null
+    if (typeof parsed.token !== 'string' || typeof parsed.mediaTicket !== 'string') return null
+    const legato = parsed.legato
+    return typeof legato?.serverId === 'string' && typeof legato.expiresAt === 'string'
+      ? { token: parsed.token, mediaTicket: parsed.mediaTicket, legato: { serverId: legato.serverId, expiresAt: legato.expiresAt } }
+      : { token: parsed.token, mediaTicket: parsed.mediaTicket }
   } catch {
     return null
   }
@@ -92,9 +99,10 @@ export function createAuthFetch({ baseFetch, origin, storage, onAuthRequired, pa
 
     // A 401 from /auth/* is a wrong password or setup code, which the form
     // that sent it shows itself. Anywhere else it means this session is no
-    // longer accepted.
+    // longer accepted. A legato.fm session stays put for useAuth to renew
+    // through legato.fm first (#117); it clears it if that fails.
     if (res.status === 401 && !url.pathname.includes('/auth/')) {
-      clearSession(storage, origin)
+      if (!session?.legato) clearSession(storage, origin)
       onAuthRequired()
     }
     return res

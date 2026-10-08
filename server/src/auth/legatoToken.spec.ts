@@ -30,6 +30,7 @@ describe("verifyLegatoToken", () => {
         iat: NOW,
         exp: NOW + 600,
         scope: "access",
+        jti: "test",
         email: "owner@example.com",
         emailVerified: true,
         name: "Test Owner",

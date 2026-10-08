@@ -25,11 +25,13 @@
     "chokidar": "^5.0.0",
     "fast-glob": "^3.3.3",
     "fastify": "^5.12.5",
+    "multicast-dns": "^7.2.5",
     "music-metadata": "^11.16.1",
     "node-taglib-sharp": "^6.0.3"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",
+    "@types/multicast-dns": "^7.2.4",
     "@types/node": "^26.6.4",
     "@types/ws": "^8.18.2",
     "typescript": "~7.0.2"

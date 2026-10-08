@@ -9,11 +9,14 @@
 //   deliberately beats VITE_SERVER_HOST: a .env.local baked into the build
 //   (the Mac's one pins the Pi) must not send a page the Pi served at
 //   http://musicbox:8899/ to a hardcoded IP instead.
-// - Desktop app (Tauri, dev or packaged) and plain `npm run dev`: the
-//   configured endpoint, which today is still the env-derived default below.
-// - app.legato.fm: a server picked on the connect screen (plan 03,
-//   "Connecting a client"). Not built yet; see the seam in
-//   resolveServerOrigin.
+// - Desktop app (Tauri, dev or packaged) and plain `npm run dev`: a server
+//   picked on the connect screen (#117, src/connect/serverChoice.ts), else
+//   the env-derived default below, which in the desktop app is its own
+//   embedded server.
+// - app.legato.fm: a server picked on the connect screen, the same way,
+//   once that client exists.
+
+import { readServerChoice } from '../connect/serverChoice'
 
 // Matches the server's own LEGATO_PORT default (server/src/config.ts).
 const DEFAULT_HOST = '127.0.0.1'
@@ -35,12 +38,12 @@ export interface ServerEnv {
 // second server on the same machine while the default port stays taken.
 // `||` rather than `??` so an empty `VITE_SERVER_PORT=` line in a .env file
 // falls back instead of producing `http://127.0.0.1:/api/v1`.
-export function resolveServerOrigin(page: PageContext | null, env: ServerEnv): string {
+export function resolveServerOrigin(page: PageContext | null, env: ServerEnv, chosen: string | null = null): string {
   if (page?.servedByServer) return page.origin
-  // The app.legato.fm seam: a chosen server, once the connect screen stores
-  // one, is returned here ahead of the default. Choosing a server reloads
-  // the page, so the constants below re-resolve without every importer
-  // having to become a function call.
+  // A server picked on the connect screen comes ahead of the default.
+  // Choosing one reloads the page, so the constants below re-resolve
+  // without every importer having to become a function call.
+  if (chosen) return chosen
   return `http://${env.VITE_SERVER_HOST || DEFAULT_HOST}:${env.VITE_SERVER_PORT || DEFAULT_PORT}`
 }
 
@@ -59,10 +62,14 @@ export const SERVED_BY_SERVER = currentPage()?.servedByServer ?? false
 
 // The only places a server URL is assembled. Every other file imports one
 // of these rather than building its own.
-export const SERVER_ORIGIN = resolveServerOrigin(currentPage(), {
+const SERVER_ENV: ServerEnv = {
   VITE_SERVER_HOST: import.meta.env.VITE_SERVER_HOST,
   VITE_SERVER_PORT: import.meta.env.VITE_SERVER_PORT,
-})
+}
+export const SERVER_ORIGIN = resolveServerOrigin(currentPage(), SERVER_ENV, readServerChoice())
+/** The server this client uses when nothing was picked: in the desktop app,
+ * its own embedded one. The connect screen offers to go back to it. */
+export const DEFAULT_SERVER_ORIGIN = resolveServerOrigin(currentPage(), SERVER_ENV)
 // Read back out of the resolved origin, not the env, so a message naming
 // the server ("legato-server on musicbox is out of date") names the one
 // actually being talked to. The port falls back to the scheme's default

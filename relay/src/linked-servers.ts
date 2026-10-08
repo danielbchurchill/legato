@@ -3,6 +3,7 @@ import type { Database } from "./sqlite.js";
 import { normalizeCode } from "./claimCode.js";
 import { mintTunnelCredential, type TunnelCredentialMinted } from "./pairing.js";
 import { verifyIssuedToken, type SigningKeys } from "./signing-keys.js";
+import { parseSqliteDatetime } from "./sqlite-datetime.js";
 
 // Which home servers each account has linked (issue #231, migration 0005).
 // A pair means "this account has linked this server", and it's the only
@@ -95,6 +96,16 @@ function recordLinkedServer(db: Database, relayUserId: number, serverId: string,
     `INSERT INTO linked_servers (relay_user_id, server_id, public_key) VALUES (?, ?, ?)
      ON CONFLICT (relay_user_id, server_id) DO UPDATE SET public_key = excluded.public_key, linked_at = datetime('now')`,
   ).run(relayUserId, serverId, publicKey);
+}
+
+// The account's own pairs, oldest first: the connect screen's "your servers"
+// (issue #117). Only what the account itself made, and nothing a server
+// reported beyond its id.
+export function listLinkedServers(db: Database, relayUserId: number): { serverId: string; linkedAt: Date }[] {
+  const rows = db
+    .prepare("SELECT server_id, linked_at FROM linked_servers WHERE relay_user_id = ? ORDER BY linked_at, server_id")
+    .all(relayUserId) as { server_id: string; linked_at: string }[];
+  return rows.map((row) => ({ serverId: row.server_id, linkedAt: parseSqliteDatetime(row.linked_at) }));
 }
 
 export function removeLinkedServer(db: Database, relayUserId: number, serverId: string): boolean {

@@ -66,6 +66,17 @@ describe('createAuthFetch', () => {
     expect(onAuthRequired).toHaveBeenCalledOnce()
   })
 
+  // #117: useAuth renews it through legato.fm first, and clears it only if
+  // that fails.
+  it('keeps a legato.fm session for renewal, and still reports it', async () => {
+    const { storage, onAuthRequired, authFetch } = setup(401)
+    const legato = { serverId: '0123456789abcdef0123456789abcdef', expiresAt: '2026-10-08T12:00:00.000Z' }
+    storeSession({ token: 'tok', mediaTicket: 'tkt', legato }, storage, ORIGIN)
+    await authFetch(`${ORIGIN}/api/v1/stats`)
+    expect(readSession(storage, ORIGIN)).toEqual({ token: 'tok', mediaTicket: 'tkt', legato })
+    expect(onAuthRequired).toHaveBeenCalledOnce()
+  })
+
   it("leaves a wrong password to the form that sent it", async () => {
     const { onAuthRequired, authFetch } = setup(401)
     await authFetch(`${ORIGIN}/api/v1/auth/sign-in`, { method: 'POST' })

@@ -34,6 +34,10 @@ export type LegatoClaims = {
   iat: number;
   exp: number;
   scope: TokenScope;
+  // legato.fm gives every token a random jti. Only POST /auth/legato/session
+  // reads it, to take each access token once (issue #117); everything else
+  // accepts a token without one, as before.
+  jti: string | null;
   email: string | null;
   emailVerified: boolean;
   name: string | null;
@@ -125,7 +129,7 @@ export function verifyLegatoToken(token: string, options: VerifyOptions): Verify
   // Nothing in the payload is read until the signature holds.
   const payload = decodeJson(payloadPart);
   if (!payload) return { ok: false, reason: "malformed" };
-  const { iss, sub, aud, iat, exp, scope, email, email_verified, name } = payload;
+  const { iss, sub, aud, iat, exp, scope, jti, email, email_verified, name } = payload;
 
   if (iss !== options.issuer) return { ok: false, reason: "wrong_issuer" };
   if (typeof aud !== "string" || aud !== options.audience) return { ok: false, reason: "wrong_audience" };
@@ -148,6 +152,7 @@ export function verifyLegatoToken(token: string, options: VerifyOptions): Verify
       iat,
       exp,
       scope,
+      jti: typeof jti === "string" && jti ? jti : null,
       email: typeof email === "string" && email ? email : null,
       emailVerified: email_verified === true,
       name: typeof name === "string" && name ? name : null,

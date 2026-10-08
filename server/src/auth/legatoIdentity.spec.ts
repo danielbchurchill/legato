@@ -136,7 +136,13 @@ describe("privacy: an unlinked server never contacts legato.fm", () => {
     expect(res.json().reason).toBe("not_linked");
 
     const status = await h.app.inject({ method: "GET", url: "/api/v1/auth/status" });
-    expect(status.json().legato).toEqual({ serverId: h.identity.serverId(), issuer: TEST_ISSUER, linked: null });
+    expect(status.json().legato).toEqual({
+      serverId: h.identity.serverId(),
+      publicKey: status.json().legato.publicKey,
+      issuer: TEST_ISSUER,
+      linked: null,
+    });
+    expect(serverIdForPublicKey(status.json().legato.publicKey)).toBe(h.identity.serverId());
 
     await Bun.sleep(0);
     expect(h.fetchCalls()).toEqual([]);
@@ -448,6 +454,7 @@ describe("telling legato.fm about links (issue #231)", () => {
       (await linkOwner(h, owner)).body,
       (await h.app.inject({ method: "GET", url: "/api/v1/auth/status", headers: bearer(owner) })).body,
       (await h.app.inject({ method: "GET", url: "/api/v1/health" })).body,
+      (await h.app.inject({ method: "POST", url: "/api/v1/auth/identity", payload: { nonce: "n".repeat(32) } })).body,
       (await me(h, h.token())).body,
       (await linkOwner(h, owner, h.token())).body,
       (await h.app.inject({ method: "DELETE", url: "/api/v1/auth/legato/link", headers: bearer(owner) })).body,

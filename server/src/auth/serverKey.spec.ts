@@ -3,7 +3,7 @@ import { describe, expect, it } from "bun:test";
 import { openDb } from "../db.js";
 import { LegatoIdentity } from "./legatoIdentity.js";
 import { TEST_ISSUER } from "./legato-test-keys.js";
-import { ensureServerKey, linkProof, loadServerKey, serverIdForPublicKey, unlinkProof } from "./serverKey.js";
+import { ensureServerKey, identityProof, linkProof, loadServerKey, serverIdForPublicKey, unlinkProof } from "./serverKey.js";
 
 // Issue #231, migration 0037: the identity key this server proves its id
 // with. relay/src/linked-servers.spec.ts runs these proofs through the
@@ -87,5 +87,16 @@ describe("proofs", () => {
     expect(first).toMatchObject({ publicKey: key.publicKey, accountId: "42", issuedAt: 1_800_000_000 });
     const message = `legato.fm unlink proof\n${TEST_ISSUER}\n${key.serverId}\n42\n1800000000\n${first.nonce}`;
     expect(verifies(key.publicKey, message, first.signature)).toBe(true);
+  });
+
+  // Issue #117: what a client checks before it sends this server an access
+  // token. Its own prefix, so the same key's signature over a client's
+  // nonce can never stand in for a link or unlink proof.
+  it("an identity proof signs the server id and the client's nonce under its own prefix", () => {
+    const key = loadServerKey(openDb(":memory:"));
+    const proof = identityProof(key, "client-nonce-0123456789");
+    expect(proof).toEqual({ serverId: key.serverId, publicKey: key.publicKey, signature: proof.signature });
+    expect(verifies(key.publicKey, `legato server identity proof\n${key.serverId}\nclient-nonce-0123456789`, proof.signature)).toBe(true);
+    expect(verifies(key.publicKey, "legato.fm link proof\nclient-nonce-0123456789", proof.signature)).toBe(false);
   });
 });

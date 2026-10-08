@@ -71,6 +71,23 @@ export function linkProof(key: ServerKey, linkToken: string) {
   return { publicKey: key.publicKey, linkToken, signature: signMessage(key, `legato.fm link proof\n${linkToken}`) };
 }
 
+// What POST /api/v1/auth/identity answers (issue #117). Before a client
+// sends a server a legato.fm access token, it has the server sign a nonce
+// the client just made, and checks that the public key hashes to the id it
+// expects and that the signature verifies (src/connect/identity.ts). Without
+// that, anything on the LAN that answers with a linked server's id would
+// receive the owner's token. The prefix keeps it from ever reading as a link
+// or unlink proof, and the nonce can't carry a newline into the message.
+export const IDENTITY_NONCE_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
+
+export function identityProofMessage(serverId: string, nonce: string): string {
+  return `legato server identity proof\n${serverId}\n${nonce}`;
+}
+
+export function identityProof(key: ServerKey, nonce: string) {
+  return { serverId: key.serverId, publicKey: key.publicKey, signature: signMessage(key, identityProofMessage(key.serverId, nonce)) };
+}
+
 // What POST <legato.fm>/linked-servers/unlink takes once the owner unlinks
 // an account here. Names the service it's for, so it can't be replayed at
 // another one, and carries the time and a nonce legato.fm spends.

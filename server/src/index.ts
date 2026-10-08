@@ -4,13 +4,14 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 import { openDb } from "./db.js";
-import { PORT, DATA_DIR } from "./config.js";
+import { PORT, DATA_DIR, MDNS_ENABLED, SERVER_NAME } from "./config.js";
 import { FFMPEG_PATH, FPCALC_PATH } from "./mediaBinaries.js";
 import { installAuthGate, redactCredentials } from "./auth/gate.js";
 import { registerRoutes } from "./routes/register.js";
 import { setupCodes } from "./auth/setupCode.js";
 import { ownerExists } from "./auth/owner.js";
-import { installLegatoIdentity, LegatoIdentity } from "./auth/legatoIdentity.js";
+import { installLegatoIdentity, legatoIdentity, LegatoIdentity } from "./auth/legatoIdentity.js";
+import { advertise } from "./discovery/advertise.js";
 import { webClientRoutes } from "./routes/web-client.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { reconcileInterruptedScans } from "./scan/scanner.js";
@@ -253,4 +254,21 @@ app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
     process.exit(1);
   }
   app.log.info(`legato-server listening at ${address}`);
+
+  // Issue #117: `_legato._tcp` on the LAN, for the desktop app's "servers on
+  // this network" (discovery/advertise.ts). After listen, so it never names
+  // a port that isn't open yet. Stopping cleanly sends the goodbye that
+  // takes this server off clients' lists at once, rather than when the
+  // records expire.
+  if (MDNS_ENABLED) {
+    const advertiser = advertise(
+      { name: SERVER_NAME, serverId: legatoIdentity(db).serverId(), version: VERSION, port: PORT },
+      (level, message) => (level === "warn" ? app.log.warn(message) : app.log.info(message)),
+    );
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.once(signal, () => {
+        void Promise.race([advertiser.stop(), new Promise((resolve) => setTimeout(resolve, 500))]).finally(() => process.exit(0));
+      });
+    }
+  }
 });

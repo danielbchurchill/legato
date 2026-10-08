@@ -296,7 +296,8 @@ function publicUser(user: RelayUserRow) {
 // or a loopback Vite in development, all cross-origin to auth.legato.fm.
 // No Access-Control-Allow-Credentials: these callers send a bearer token
 // and nothing else, so a cookie never rides along cross-site.
-const CORS_ROUTES = new Set(["/auth/token", "/auth/me", "/auth/logout", "/auth/server-token"]);
+// GET /linked-servers is the connect screen's "your servers" (issue #117).
+const CORS_ROUTES = new Set(["/auth/token", "/auth/me", "/auth/logout", "/auth/server-token", "/linked-servers"]);
 const LOOPBACK_DEV_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/;
 
 export function isAllowedAppOrigin(origin: string | undefined): boolean {
