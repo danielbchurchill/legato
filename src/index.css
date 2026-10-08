@@ -67,8 +67,12 @@
  * --color-solid, never to a different colour. */
 @utility glass {
   background: var(--color-surface);
-  backdrop-filter: blur(var(--blur-glass)) saturate(140%);
+  /* Prefixed first. Lightning CSS, Vite's CSS minifier, treats the pair as
+   * one property and keeps only the last declaration. With the prefix last,
+   * Chromium, which ignores it, drew every panel unblurred (#296).
+   * scripts/check-built-css.mjs fails the build if that comes back. */
   -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(140%);
+  backdrop-filter: blur(var(--blur-glass)) saturate(140%);
   border: 1px solid var(--color-line);
   box-shadow: var(--shadow-panel);
 
