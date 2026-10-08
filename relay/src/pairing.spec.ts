@@ -67,17 +67,17 @@ describe("getRelayUserIdByCredential", () => {
 });
 
 describe("redeemPairingCode", () => {
-  it("mints a credential and marks the code used on a valid redemption", () => {
+  // Issue #237: the credential comes with the link the server reports
+  // afterwards (linked-servers.ts), so redeeming mints none.
+  it("marks the code used and says whose it was, minting no credential", () => {
     const { code } = mintPairingCode(db, userId);
 
     const result = redeemPairingCode(db, code);
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("unreachable");
-    expect(getRelayUserIdByCredential(db, result.credential)).toBe(userId);
-
+    expect(result).toEqual({ ok: true, relayUserId: userId });
     const row = db.prepare("SELECT used_at FROM pairing_codes WHERE code = ?").get(code) as { used_at: string | null };
     expect(row.used_at).not.toBeNull();
+    expect(db.prepare("SELECT COUNT(*) AS n FROM tunnel_credentials").get()).toEqual({ n: 0 });
   });
 
   it("accepts the code the way a person types it", () => {

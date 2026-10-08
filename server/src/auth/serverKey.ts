@@ -102,3 +102,12 @@ export function unlinkProof(key: ServerKey, input: { issuer: string; accountId: 
     signature: signMessage(key, message),
   };
 }
+
+// What POST <legato.fm>/pair/exchange takes while the /setup page is open
+// (issue #237): the setup code someone may have claimed, signed, so what
+// legato.fm hands back is for this server's id and no other. Names the
+// service and the time, like an unlink proof, and has its own prefix.
+export function claimProof(key: ServerKey, input: { issuer: string; code: string; nowSeconds: number }) {
+  const message = ["legato.fm claim proof", input.issuer, key.serverId, input.code, String(input.nowSeconds)].join("\n");
+  return { code: input.code, publicKey: key.publicKey, issuedAt: input.nowSeconds, signature: signMessage(key, message) };
+}

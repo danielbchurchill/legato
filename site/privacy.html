@@ -92,8 +92,16 @@
         account, your server also tells legato.fm, so legato.fm knows which servers your
         account can open. That message carries the server's ID, its public key and a
         signature made with its private key, which never leaves the server, plus the
-        short-lived sign-in token you linked with, or, when you unlink, your account ID. A
-        server that isn't linked never contacts legato.fm.
+        short-lived sign-in token you linked with, or, when you unlink, your account ID.
+      </p>
+      <p>
+        Until a server has an owner, it has a setup page with a code you can scan to claim it
+        for your legato.fm account. While that page is open in a browser, and only then, the
+        server asks legato.fm every few seconds whether its code has been claimed. Each request
+        sends the code, the server's ID and public key, and a signature. It stops when the page
+        is closed, and for good once the server has an owner. If someone has claimed the code,
+        the server also fetches legato.fm's public signing keys. Apart from that, a server that
+        isn't linked never contacts legato.fm.
       </p>
 
       <h2>This website</h2>
@@ -133,7 +141,7 @@
         <li>your display name and profile picture link;</li>
         <li>when you created the account and when you last signed in;</li>
         <li>your active sign-in sessions, so you stay signed in on your devices;</li>
-        <li>for each Legato server you link to your account, its ID and public key, the credential it uses to connect, and the short-lived code you used to link it.</li>
+        <li>for each Legato server you link to your account, its ID and public key, the credential it uses to connect, and the short-lived code you used to link or claim it.</li>
       </ul>
       <p>
         From Google we request only <span class="mono">openid</span>, <span class="mono">email</span>

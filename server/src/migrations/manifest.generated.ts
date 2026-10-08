@@ -39,6 +39,7 @@ import m0034_drop_artist_photo_mbid_flags from "./0034_drop_artist_photo_mbid_fl
 import m0035_artist_credit_jobs from "./0035_artist_credit_jobs.sql" with { type: "text" };
 import m0036_settled_positions from "./0036_settled_positions.sql" with { type: "text" };
 import m0037_server_identity_key from "./0037_server_identity_key.sql" with { type: "text" };
+import m0039_tunnel_credential from "./0039_tunnel_credential.sql" with { type: "text" };
 import m0040_legato_sessions from "./0040_legato_sessions.sql" with { type: "text" };
 
 export interface MigrationFile {
@@ -84,5 +85,6 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 35, file: "0035_artist_credit_jobs.sql", sql: m0035_artist_credit_jobs },
   { version: 36, file: "0036_settled_positions.sql", sql: m0036_settled_positions },
   { version: 37, file: "0037_server_identity_key.sql", sql: m0037_server_identity_key },
+  { version: 39, file: "0039_tunnel_credential.sql", sql: m0039_tunnel_credential },
   { version: 40, file: "0040_legato_sessions.sql", sql: m0040_legato_sessions },
 ];

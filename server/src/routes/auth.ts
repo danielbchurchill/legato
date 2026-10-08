@@ -7,12 +7,14 @@ import {
   GITHUB_CLIENT_ID,
   GITHUB_CLIENT_SECRET,
   AUTH_CALLBACK_BASE_URL,
+  DEFAULT_LEGATO_ID_ORIGIN,
 } from "../config.js";
 import { USER_AGENT } from "../enrich/mbClient.js";
+import { ServerClaims, type ClaimCheck } from "../auth/claim.js";
 import { SESSION_COOKIE, bearerToken } from "../auth/gate.js";
 import { legatoIdentity } from "../auth/legatoIdentity.js";
-import { VERIFY_FAILURE_MESSAGES } from "../auth/legatoToken.js";
-import { accountLinkedToOtherUser, linkAccount, linkedAccountId, unlinkAccount } from "../auth/legatoUsers.js";
+import { linkLegatoAccount } from "../auth/legatoLink.js";
+import { linkedAccountId, unlinkAccount } from "../auth/legatoUsers.js";
 import { createOwner, ownerExists, passwordProblem, verifyOwnerPassword } from "../auth/owner.js";
 import { SignInLimiter } from "../auth/rateLimit.js";
 import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type SetupCodes } from "../auth/setupCode.js";
@@ -260,15 +262,32 @@ const SETUP_CODE_LOG_HELP = "It's in the server's log; on a Linux service, run j
 const SETUP_CODE_HELP =
   "It's on the server's /setup page, and in its log; on a Linux service, run journalctl --user-unit legato-server.";
 
-// Where the /setup page's QR code points: legato.fm's claim page, which
-// signs the phone in and pairs this server with that account. The claim
-// side isn't built yet (#237); the URL is already the final one, so a
-// printed QR keeps working once it is.
+// Where the /setup page's QR code points: the claim page (issue #237),
+// which signs the phone in to legato.fm and claims this server for that
+// account (auth/claim.ts). For legato.fm itself that's legato.fm/claim, the
+// URL #113 already printed; the static site sends it on to the page on
+// auth.legato.fm (site/public/_redirects). Any other LEGATO_ID_ORIGIN, a
+// relay on this machine say, serves the page itself. Null when legato.fm
+// is off, and then there's no QR.
 const CLAIM_URL_BASE = "https://legato.fm/claim";
+
+function claimUrl(origin: string | null, code: string): string | null {
+  if (!origin) return null;
+  const base = origin === DEFAULT_LEGATO_ID_ORIGIN ? CLAIM_URL_BASE : `${origin}/claim`;
+  return `${base}?code=${encodeURIComponent(code)}`;
+}
+
+const CLAIM_CHECK_MESSAGES: Record<Exclude<ClaimCheck, "ok">, string> = {
+  no_claim: "Nobody has claimed this server on legato.fm, so there's no account to link. Create the owner on its own.",
+  mismatch:
+    "This server's claim is for a different legato.fm account than the one this page showed, so nothing was created. Check the page again.",
+  lapsed:
+    "The claim lapsed before the owner was created, so there's nothing to link. Scan the code again to claim it, or create the owner on its own.",
+};
 
 export function authRoutes(
   db: Database,
-  options: { limiter?: SignInLimiter; setupCodes?: SetupCodes } = {},
+  options: { limiter?: SignInLimiter; setupCodes?: SetupCodes; claims?: ServerClaims } = {},
 ) {
   const limiter = options.limiter ?? new SignInLimiter();
   const setupCodes = options.setupCodes ?? serverSetupCodes;
@@ -297,6 +316,14 @@ export function authRoutes(
   }
 
   return async function routes(app: FastifyInstance) {
+    const claims =
+      options.claims ??
+      new ServerClaims({
+        setupCodes,
+        identity: () => legatoIdentity(db),
+        log: (level, message) => (level === "warn" ? app.log.warn(message) : app.log.info(message)),
+      });
+
     // Public: the client calls this before it knows whether to show "create
     // the owner", "sign in", or the app itself.
     app.get("/auth/status", async (request) => {
@@ -343,6 +370,11 @@ export function authRoutes(
     // everyone else is pointed at the log. expiresInMs rather than only a
     // timestamp, so the page's countdown is right even when the browser's
     // clock isn't.
+    //
+    // The open page asks again every few seconds, and that's what lets
+    // this server ask legato.fm whether the code has been claimed (issue
+    // #237, auth/claim.ts). claim says where that stands; null when
+    // legato.fm is off.
     app.get("/auth/setup", async (request, reply) => {
       if (ownerExists(db)) {
         reply.code(409);
@@ -355,16 +387,23 @@ export function authRoutes(
           reason: "setup_code_hidden",
         };
       }
+      const claim = claims.enabled ? claims.checkIn() : null;
       const { code, expiresAt } = setupCodes.current();
       return {
         code,
         expiresAt: new Date(expiresAt).toISOString(),
         expiresInMs: setupCodes.remainingMs(),
-        claimUrl: `${CLAIM_URL_BASE}?code=${encodeURIComponent(code)}`,
+        claimUrl: claimUrl(legatoIdentity(db).origin, code),
+        claim,
       };
     });
 
-    app.post<{ Body: { password?: unknown; displayName?: unknown; setupCode?: unknown } | null }>(
+    // linkAccountId (issue #237): the legato.fm account /setup showed as
+    // having claimed this server, sent only when the person chose to link
+    // it. It's checked against the claim before anything is created, so a
+    // claim that changed or lapsed since the page last looked links nobody
+    // and creates nobody. Without it, a pending claim is dropped.
+    app.post<{ Body: { password?: unknown; displayName?: unknown; setupCode?: unknown; linkAccountId?: unknown } | null }>(
       "/auth/owner",
       async (request, reply) => {
         if (ownerExists(db)) {
@@ -395,6 +434,14 @@ export function authRoutes(
           limiter.recordSuccess(request.ip);
         }
 
+        const linkAccountId = request.body?.linkAccountId;
+        const linking = typeof linkAccountId === "string" && linkAccountId !== "";
+        const claimCheck = linking ? claims.check(linkAccountId) : "ok";
+        if (claimCheck !== "ok") {
+          reply.code(409);
+          return { error: CLAIM_CHECK_MESSAGES[claimCheck], reason: `claim_${claimCheck}` };
+        }
+
         const rawName = request.body?.displayName;
         const displayName = typeof rawName === "string" && rawName.trim() ? rawName.trim().slice(0, 200) : null;
         const owner = await createOwner(db, password as string, displayName);
@@ -403,8 +450,21 @@ export function authRoutes(
           return { error: "This server already has an owner. Sign in instead.", reason: "owner_exists" };
         }
         request.log.info("auth: owner account created");
+
+        // The owner exists whatever happens next. A link that fails says
+        // why alongside the session, and the owner can link from the app.
+        let legato: { linked: { accountId: string; email: string | null; name: string | null } | null; error?: string; reason?: string } | undefined;
+        if (linking) {
+          const linkToken = claims.take(linkAccountId);
+          const outcome = linkToken
+            ? await linkLegatoAccount(db, owner.id, linkToken)
+            : { ok: false as const, error: CLAIM_CHECK_MESSAGES.lapsed, reason: "claim_lapsed" };
+          legato = outcome.ok ? { linked: outcome.linked } : { linked: null, error: outcome.error, reason: outcome.reason };
+          if (outcome.ok) request.log.info("auth: owner linked the legato.fm account that claimed this server");
+        }
+        claims.drop();
         reply.code(201);
-        return issueSession(db, reply, owner);
+        return { ...issueSession(db, reply, owner), ...(legato ? { legato } : {}) };
       },
     );
 
@@ -436,16 +496,15 @@ export function authRoutes(
     // Issue #114: the owner attaches their legato.fm account to this server,
     // so a token legato.fm signs for it maps to the owner's row. Takes a
     // token rather than an account id, so the server sees legato.fm's own
-    // signature on who the account is. This is the first time the server
-    // contacts legato.fm at all (auth/legatoIdentity.ts's privacy note):
-    // the keys it needs to verify the token are fetched here, and the
-    // daily refresh starts once the link is stored.
+    // signature on who the account is. Unless it was claimed from /setup,
+    // this is the first time the server contacts legato.fm at all
+    // (auth/legatoIdentity.ts's privacy note): the keys it needs to verify
+    // the token are fetched here, and the daily refresh starts once the
+    // link is stored.
     //
     // Issue #231: legato.fm only signs `access` tokens for servers an
     // account has linked, so the link is reported to legato.fm too, signed
-    // with this server's identity key (auth/serverKey.ts). Nothing changes
-    // here unless legato.fm recorded it, so the two can't disagree about a
-    // link that just failed.
+    // with this server's identity key. auth/legatoLink.ts does both halves.
     app.post<{ Body: { token?: unknown } | null }>("/auth/legato/link", async (request, reply) => {
       if (request.authUser?.role !== "owner") {
         reply.code(403);
@@ -465,74 +524,14 @@ export function authRoutes(
         return { error: "Send the legato.fm token to link as `token`.", reason: "missing_token" };
       }
 
-      let result = identity.verify(token);
-      if (!result.ok && result.reason === "unknown_key") {
-        // The one place a request waits on legato.fm: an owner is at the
-        // screen, and there are no cached keys yet on a first link.
-        if (!(await identity.refresh())) {
-          reply.code(502);
-          return {
-            error: `Couldn't reach ${identity.origin} to fetch its signing keys. Check this server's internet connection and try again.`,
-            reason: "keys_unavailable",
-          };
-        }
-        result = identity.verify(token);
+      const outcome = await linkLegatoAccount(db, request.authUser.id, token);
+      if (!outcome.ok) {
+        reply.code(outcome.status);
+        const { error, reason, legatoReason } = outcome;
+        return legatoReason === undefined ? { error, reason } : { error, reason, legatoReason };
       }
-      if (!result.ok) {
-        reply.code(401);
-        return { error: VERIFY_FAILURE_MESSAGES[result.reason], reason: result.reason };
-      }
-      // An access token is legato.fm saying the link already exists. It
-      // can't record one: legato.fm takes only link tokens as proof.
-      if (result.claims.scope !== "link") {
-        reply.code(403);
-        return {
-          error: 'That legato.fm token opens this server but can\'t link it. Ask legato.fm for one with scope "link".',
-          reason: "wrong_scope",
-        };
-      }
-      const userId = request.authUser.id;
-      const accountId = result.claims.sub;
-      if (accountLinkedToOtherUser(db, accountId, userId)) {
-        reply.code(409);
-        return {
-          error: "That legato.fm account is already linked to another user on this server.",
-          reason: "account_taken",
-        };
-      }
-
-      const reported = await identity.recordLink(token);
-      if (!reported.ok) {
-        if (reported.reason === "unreachable") {
-          reply.code(502);
-          return {
-            error: `Couldn't reach ${identity.origin} to record the link, so nothing changed. Check this server's internet connection and try again.`,
-            reason: "legato_unreachable",
-          };
-        }
-        reply.code(409);
-        return {
-          error: `legato.fm didn't record the link, so nothing changed: ${reported.message}`,
-          reason: "legato_refused",
-          legatoReason: reported.legatoReason,
-        };
-      }
-
-      const previous = linkedAccountId(db, userId);
-      const linked = linkAccount(db, userId, accountId);
-      if (!linked.ok) {
-        reply.code(409);
-        return {
-          error: "That legato.fm account is already linked to another user on this server.",
-          reason: "account_taken",
-        };
-      }
-      // Linking a different account replaces the old one here, so legato.fm
-      // stops vouching for the old one too. Best effort, like an unlink.
-      if (previous && previous !== accountId) await identity.recordUnlink(previous);
-      identity.syncSchedule();
       request.log.info("auth: owner linked a legato.fm account");
-      return { linked: { accountId, email: result.claims.email, name: result.claims.name } };
+      return { linked: outcome.linked };
     });
 
     // Unlinking the last account also stops the daily key refresh, so the

@@ -3,7 +3,6 @@ import websocketPlugin from "@fastify/websocket";
 import type { Database } from "./sqlite.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { authRoutes, type AuthRoutesOptions } from "./routes/auth.js";
-import { pairRoutes } from "./routes/pair.js";
 import { relayRoutes } from "./routes/relay.js";
 import { tunnelRoutes } from "./routes/tunnel.js";
 import { TunnelRegistry } from "./tunnel-registry.js";
@@ -29,8 +28,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   app.register(websocketPlugin);
   app.register(tunnelRoutes(registry, options.db));
   app.register(relayRoutes(registry, options.db));
+  // Also registers the pairing, claim and linked-server routes, which need
+  // the signing keys it resolves.
   app.register(authRoutes(options.db, options.auth));
-  app.register(pairRoutes(options.db));
 
   return app;
 }

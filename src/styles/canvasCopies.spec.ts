@@ -15,6 +15,7 @@ import manifest from '../../public/manifest.webmanifest?raw'
 import tauriConf from '../../src-tauri/tauri.conf.json?raw'
 import serverAuth from '../../server/src/routes/auth.ts?raw'
 import relayAuth from '../../relay/src/routes/auth.ts?raw'
+import relayClaimPage from '../../relay/src/routes/claim-page.ts?raw'
 import relaySignIn from '../../src-tauri/src/relay_sign_in.rs?raw'
 import designMd from '../../DESIGN.md?raw'
 
@@ -95,6 +96,30 @@ describe("ink's canvas, where only one colour fits", () => {
     const backgrounds = [...source.matchAll(/<body style=\\?"[^"]*?background(?:-color)?:\s*([^;"\\]+)/g)].map((m) => m[1].toLowerCase())
     expect(backgrounds.length).toBeGreaterThan(0)
     for (const background of backgrounds) expect(background).toBe(canvas.dark)
+  })
+})
+
+// #237's claim page on the relay follows the system theme, so it carries
+// both palettes as custom properties: ink in its first :root, paper in the
+// one under prefers-color-scheme: light. Each must be tokens.css's value for
+// the same role.
+describe("the relay's claim page", () => {
+  function properties(css: string): [string, string][] {
+    return [...css.matchAll(/--([\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()])
+  }
+  const ink = relayClaimPage.match(/:root \{([^}]*)\}/)?.[1] ?? ''
+  const paper = relayClaimPage.match(/prefers-color-scheme: light\) \{\s*:root \{([^}]*)\}/)?.[1] ?? ''
+
+  it.each([
+    ['dark', ink],
+    ['light', paper],
+  ] as const)('copies the %s tokens it uses', (theme, css) => {
+    const copied = properties(css)
+    expect(copied.map(([name]) => name)).toContain('canvas')
+    for (const [name, value] of copied) {
+      const tokenName = name === 'accent-fill' ? '--accent-fill' : `--color-${name}`
+      expect(value, `--${name}`).toBe(token(theme, tokenName))
+    }
   })
 })
 
