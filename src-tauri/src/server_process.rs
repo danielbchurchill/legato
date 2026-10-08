@@ -123,6 +123,15 @@ pub fn spawn(app: &AppHandle) -> Result<Child, String> {
     // so the server it spawns skips the release check and shows no notice.
     .env("LEGATO_INSTALL_CHANNEL", "desktop");
 
+  // Issue #117: a headless server advertises itself over mDNS so clients
+  // can find it, but this server goes wherever the laptop goes, and would
+  // announce the machine's name on every network it joins, café Wi-Fi
+  // included. Off unless the app's own environment sets LEGATO_MDNS, so
+  // `LEGATO_MDNS=on npx tauri dev` still advertises.
+  if std::env::var_os("LEGATO_MDNS").is_none() {
+    cmd.env("LEGATO_MDNS", "off");
+  }
+
   if let Some(ffmpeg_path) = resolve_media_binary(app, "ffmpeg") {
     log::info!("[server] using bundled ffmpeg: {ffmpeg_path:?}");
     cmd.env("LEGATO_FFMPEG_PATH", ffmpeg_path);
