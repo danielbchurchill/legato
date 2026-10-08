@@ -1,4 +1,23 @@
 import { createContext, useContext, useEffect, useState } from 'react'
+import {
+  PLAYER_BAR_GAP,
+  PLAYER_BAR_MIN_WIDTH,
+  PLAYER_BORDER,
+  PLAYER_COLUMN_GAP,
+  PLAYER_COVER_SIZE,
+  PLAYER_PADDING_LEFT,
+  PLAYER_PADDING_RIGHT,
+  PLAYER_PLAY_SIZE,
+  PLAYER_QUEUE_SIZE,
+  PLAYER_QUEUE_VOLUME_GAP,
+  PLAYER_REPEAT_SIZE,
+  PLAYER_SCRUBBER_GAP,
+  PLAYER_SHUFFLE_SIZE,
+  PLAYER_SKIP_SIZE,
+  PLAYER_TIME_WIDTH,
+  PLAYER_TRANSPORT_GAP,
+  PLAYER_VOLUME_SIZE,
+} from './playerGeometry'
 
 /* The shell's geometry, as arithmetic rather than CSS, because three things
  * outside CSS need the same answers: the map's camera (which has to keep
@@ -72,19 +91,27 @@ const PLAYER_STAGES: PlayerParts[] = [
   { cover: false, titleWidth: 0, shuffleAndRepeat: false, waveformBars: 0, queueAndVolume: false },
 ]
 
-/* The width a set of parts needs, from the sizes Player.tsx draws them at:
- * a 1px glass border and 12px/14px of padding each side, 14px between parts.
- * The transport sits over the scrubber, so the middle column is the wider
- * of the two. */
+/* The width a set of parts needs, from the sizes Player.tsx draws them at
+ * (playerGeometry.ts). The transport sits over the scrubber, so the middle
+ * column is the wider of the two. */
 export function playerContentWidth(parts: PlayerParts): number {
-  // Shuffle 28, previous 30, play 34, next 30, repeat 28, 6px apart.
-  const transport = parts.shuffleAndRepeat ? 28 + 6 + 30 + 6 + 34 + 6 + 30 + 6 + 28 : 30 + 6 + 34 + 6 + 30
-  // Elapsed and duration are 34px each, 8px from bars at least 1px wide and 2px apart.
+  const skipAndPlay = PLAYER_SKIP_SIZE + PLAYER_TRANSPORT_GAP + PLAYER_PLAY_SIZE + PLAYER_TRANSPORT_GAP + PLAYER_SKIP_SIZE
+  const transport = parts.shuffleAndRepeat
+    ? PLAYER_SHUFFLE_SIZE + PLAYER_TRANSPORT_GAP + skipAndPlay + PLAYER_TRANSPORT_GAP + PLAYER_REPEAT_SIZE
+    : skipAndPlay
   const bars = parts.waveformBars
-  const scrubber = bars > 0 ? 34 + 8 + bars + (bars - 1) * 2 + 8 + 34 : 0
-  const columns = [parts.cover ? 48 : 0, parts.titleWidth, Math.max(transport, scrubber), parts.queueAndVolume ? 32 + 2 + 32 : 0]
+  const waveform = bars * PLAYER_BAR_MIN_WIDTH + (bars - 1) * PLAYER_BAR_GAP
+  const scrubber = bars > 0 ? PLAYER_TIME_WIDTH + PLAYER_SCRUBBER_GAP + waveform + PLAYER_SCRUBBER_GAP + PLAYER_TIME_WIDTH : 0
+  const queueAndVolume = PLAYER_QUEUE_SIZE + PLAYER_QUEUE_VOLUME_GAP + PLAYER_VOLUME_SIZE
+  const columns = [
+    parts.cover ? PLAYER_COVER_SIZE : 0,
+    parts.titleWidth,
+    Math.max(transport, scrubber),
+    parts.queueAndVolume ? queueAndVolume : 0,
+  ]
   const shown = columns.filter((w) => w > 0)
-  return 1 + 12 + shown.reduce((sum, w) => sum + w, 0) + 14 * (shown.length - 1) + 14 + 1
+  const content = shown.reduce((sum, w) => sum + w, 0) + PLAYER_COLUMN_GAP * (shown.length - 1)
+  return PLAYER_BORDER + PLAYER_PADDING_LEFT + content + PLAYER_PADDING_RIGHT + PLAYER_BORDER
 }
 
 export function playerParts(playerWidth: number): PlayerParts {

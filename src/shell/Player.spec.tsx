@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Player } from './Player'
 import { ShellLayoutContext, computeShellLayout, type ShellLayout } from './layout'
+import * as geometry from './playerGeometry'
 import type { PlaybackProblem } from '../playback/playbackError'
 
 beforeEach(() => {
@@ -120,5 +121,45 @@ describe('Player in a narrow bar', () => {
 
     const container = renderPlayer({ headline: "Can't open “Song”", detail: 'missing', action: 'skip' }, undefined, layout)
     expect(container.querySelector('[role="alert"] button')?.textContent).toBe('Skip track')
+  })
+})
+
+// #293: layout.ts picks what fits by adding up playerGeometry.ts's sizes, so
+// the player has to be drawn at exactly those sizes. A size typed into
+// Player.tsx instead would move the drawing and leave every threshold behind.
+describe('Player geometry', () => {
+  const px = (n: number) => `${n}px`
+
+  it('draws every button at the size layout.ts adds up', () => {
+    const container = renderPlayer(null)
+    const width = (label: string) => container.querySelector<HTMLElement>(`[aria-label="${label}"]`)!.style.width
+    expect(width('Shuffle off')).toBe(px(geometry.PLAYER_SHUFFLE_SIZE))
+    expect(width('Previous track')).toBe(px(geometry.PLAYER_SKIP_SIZE))
+    expect(width('Play')).toBe(px(geometry.PLAYER_PLAY_SIZE))
+    expect(width('Next track')).toBe(px(geometry.PLAYER_SKIP_SIZE))
+    expect(width('Repeat off')).toBe(px(geometry.PLAYER_REPEAT_SIZE))
+    expect(width('Show queue')).toBe(px(geometry.PLAYER_QUEUE_SIZE))
+    expect(width('Volume, 100%')).toBe(px(geometry.PLAYER_VOLUME_SIZE))
+  })
+
+  it('spaces and pads the parts by the same sizes', () => {
+    const container = renderPlayer(null)
+    const bar = container.querySelector<HTMLElement>('[aria-label="Player"]')!
+    expect(bar.style.paddingLeft).toBe(px(geometry.PLAYER_PADDING_LEFT))
+    expect(bar.style.paddingRight).toBe(px(geometry.PLAYER_PADDING_RIGHT))
+    expect(bar.style.gap).toBe(px(geometry.PLAYER_COLUMN_GAP))
+    expect((bar.firstElementChild as HTMLElement).style.width).toBe(px(geometry.PLAYER_COVER_SIZE))
+
+    const transport = container.querySelector('[aria-label="Previous track"]')!.closest('div')!
+    expect(transport.style.gap).toBe(px(geometry.PLAYER_TRANSPORT_GAP))
+    const queueAndVolume = container.querySelector('[aria-label="Show queue"]')!.closest('div')!
+    expect(queueAndVolume.style.gap).toBe(px(geometry.PLAYER_QUEUE_VOLUME_GAP))
+
+    const seek = container.querySelector<HTMLElement>('[aria-label="Seek"]')!
+    expect(seek.style.gap).toBe(px(geometry.PLAYER_BAR_GAP))
+    expect((seek.firstElementChild as HTMLElement).style.minWidth).toBe(px(geometry.PLAYER_BAR_MIN_WIDTH))
+    expect(seek.parentElement!.style.gap).toBe(px(geometry.PLAYER_SCRUBBER_GAP))
+    expect((seek.previousElementSibling as HTMLElement).style.width).toBe(px(geometry.PLAYER_TIME_WIDTH))
+    expect((seek.nextElementSibling as HTMLElement).style.width).toBe(px(geometry.PLAYER_TIME_WIDTH))
   })
 })

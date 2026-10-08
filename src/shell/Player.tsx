@@ -15,6 +15,24 @@ import type { PlaybackProblem } from '../playback/playbackError'
 import { API_BASE as API } from '../config/serverHost'
 import { Surface } from './Surface'
 import { useShellLayout } from './layout'
+import {
+  PLAYER_BAR_GAP,
+  PLAYER_BAR_MIN_WIDTH,
+  PLAYER_COLUMN_GAP,
+  PLAYER_COVER_SIZE,
+  PLAYER_PADDING_LEFT,
+  PLAYER_PADDING_RIGHT,
+  PLAYER_PLAY_SIZE,
+  PLAYER_QUEUE_SIZE,
+  PLAYER_QUEUE_VOLUME_GAP,
+  PLAYER_REPEAT_SIZE,
+  PLAYER_SCRUBBER_GAP,
+  PLAYER_SHUFFLE_SIZE,
+  PLAYER_SKIP_SIZE,
+  PLAYER_TIME_WIDTH,
+  PLAYER_TRANSPORT_GAP,
+  PLAYER_VOLUME_SIZE,
+} from './playerGeometry'
 
 /* The player: a 72px glass bar floating above the bottom edge, centred on
  * the free space. It replaces the 514×121 transport dock.
@@ -129,8 +147,10 @@ function Waveform({
   }
 
   return (
-    <div className="flex w-full min-w-0 items-center gap-[8px]">
-      <span className="mono w-[34px] shrink-0 text-right text-[11px] text-[var(--color-ink-2)]">{formatDuration(shownMs)}</span>
+    <div className="flex w-full min-w-0 items-center" style={{ gap: PLAYER_SCRUBBER_GAP }}>
+      <span className="mono shrink-0 text-right text-[11px] text-[var(--color-ink-2)]" style={{ width: PLAYER_TIME_WIDTH }}>
+        {formatDuration(shownMs)}
+      </span>
       <div
         ref={ref}
         role="slider"
@@ -149,17 +169,20 @@ function Waveform({
           if (e.key === 'ArrowRight') onSeek(Math.min(durationMs, positionMs + 5000))
           if (e.key === 'ArrowLeft') onSeek(Math.max(0, positionMs - 5000))
         }}
-        className={`flex h-[14px] min-w-0 flex-1 touch-none items-center gap-[2px] ${durationMs ? 'cursor-pointer' : ''}`}
+        className={`flex h-[14px] min-w-0 flex-1 touch-none items-center ${durationMs ? 'cursor-pointer' : ''}`}
+        style={{ gap: PLAYER_BAR_GAP }}
       >
         {bars.map((peak, i) => (
           <span
             key={i}
-            className={`min-w-px flex-1 rounded-[2px] ${i < playedBars ? 'bg-[var(--color-ink)]' : 'bg-[var(--color-wash-2)]'}`}
-            style={{ height: `${Math.round(Math.max(0.14, peak) * 100)}%` }}
+            className={`flex-1 rounded-[2px] ${i < playedBars ? 'bg-[var(--color-ink)]' : 'bg-[var(--color-wash-2)]'}`}
+            style={{ minWidth: PLAYER_BAR_MIN_WIDTH, height: `${Math.round(Math.max(0.14, peak) * 100)}%` }}
           />
         ))}
       </div>
-      <span className="mono w-[34px] shrink-0 text-[11px] text-[var(--color-ink-2)]">{formatDuration(durationMs)}</span>
+      <span className="mono shrink-0 text-[11px] text-[var(--color-ink-2)]" style={{ width: PLAYER_TIME_WIDTH }}>
+        {formatDuration(durationMs)}
+      </span>
     </div>
   )
 }
@@ -220,10 +243,24 @@ export function Player({
       aria-label="Player"
       // Clipped to its own bar. Nothing should need it: every set of parts
       // fits the width layout.ts picks it for.
-      className="absolute bottom-[var(--inset)] z-20 flex h-[var(--player-height)] -translate-x-1/2 items-center gap-[14px] overflow-hidden rounded-[var(--radius-panel)] pr-[14px] pl-[12px]"
-      style={{ left: layout.playerCx, width: layout.playerWidth, background }}
+      className="absolute bottom-[var(--inset)] z-20 flex h-[var(--player-height)] -translate-x-1/2 items-center overflow-hidden rounded-[var(--radius-panel)]"
+      style={{
+        left: layout.playerCx,
+        width: layout.playerWidth,
+        gap: PLAYER_COLUMN_GAP,
+        paddingLeft: PLAYER_PADDING_LEFT,
+        paddingRight: PLAYER_PADDING_RIGHT,
+        background,
+      }}
     >
-      {parts.cover && <CoverArt nodeId={status.currentRecordingNodeId} size="thumb" className="size-[48px]" alt="" />}
+      {parts.cover && (
+        <CoverArt
+          nodeId={status.currentRecordingNodeId}
+          size="thumb"
+          style={{ width: PLAYER_COVER_SIZE, height: PLAYER_COVER_SIZE }}
+          alt=""
+        />
+      )}
 
       <div
         className={parts.titleWidth > 0 ? 'flex min-w-0 shrink-0 flex-col' : 'sr-only'}
@@ -238,12 +275,12 @@ export function Player({
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col items-center gap-[4px]">
-        <div className="flex items-center gap-[6px]">
+        <div className="flex items-center" style={{ gap: PLAYER_TRANSPORT_GAP }}>
           {parts.shuffleAndRepeat && (
             <IconButton
               icon="arrow-swap"
               label={shuffled ? 'Shuffle on' : 'Shuffle off'}
-              size={28}
+              size={PLAYER_SHUFFLE_SIZE}
               active={shuffled}
               aria-pressed={shuffled}
               disabled={queueBusy}
@@ -251,16 +288,30 @@ export function Player({
               tooltipPlacement="top"
             />
           )}
-          <IconButton icon="reverse" label="Previous track" size={30} disabled={queueBusy} onClick={onPrevious} tooltipPlacement="top" />
+          <IconButton
+            icon="reverse"
+            label="Previous track"
+            size={PLAYER_SKIP_SIZE}
+            disabled={queueBusy}
+            onClick={onPrevious}
+            tooltipPlacement="top"
+          />
           <PlayCircle
             variant="ink"
-            size={34}
+            size={PLAYER_PLAY_SIZE}
             playing={status.playing}
             label={status.playing ? 'Pause' : 'Play'}
             disabled={queueBusy}
             onClick={status.playing ? onPause : onResume}
           />
-          <IconButton icon="fast-forward" label="Next track" size={30} disabled={queueBusy} onClick={onNext} tooltipPlacement="top" />
+          <IconButton
+            icon="fast-forward"
+            label="Next track"
+            size={PLAYER_SKIP_SIZE}
+            disabled={queueBusy}
+            onClick={onNext}
+            tooltipPlacement="top"
+          />
           {/* Repeat-one gets a "1" badge: on/off is the wash, but all vs one
            * needs a mark of its own. */}
           {parts.shuffleAndRepeat && (
@@ -268,7 +319,7 @@ export function Player({
               <IconButton
                 icon="repeat"
                 label={REPEAT_LABEL[repeatMode]}
-                size={28}
+                size={PLAYER_REPEAT_SIZE}
                 active={repeatMode !== 'off'}
                 disabled={queueBusy}
                 onClick={onCycleRepeat}
@@ -313,10 +364,11 @@ export function Player({
       </div>
 
       {parts.queueAndVolume && (
-        <div className="flex shrink-0 items-center gap-[2px]">
+        <div className="flex shrink-0 items-center" style={{ gap: PLAYER_QUEUE_VOLUME_GAP }}>
           <IconButton
             icon="info"
             label={queueOpen ? 'Hide queue' : 'Show queue'}
+            size={PLAYER_QUEUE_SIZE}
             active={queueOpen}
             aria-pressed={queueOpen}
             onClick={onToggleQueue}
@@ -335,7 +387,8 @@ export function Player({
                   type="button"
                   aria-label={`Volume, ${Math.round(status.volume * 100)}%`}
                   {...props}
-                  className="grid size-[32px] place-items-center rounded-[10px] text-[var(--color-ink-2)] transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] hover:text-[var(--color-ink)]"
+                  style={{ width: PLAYER_VOLUME_SIZE, height: PLAYER_VOLUME_SIZE }}
+                  className="grid place-items-center rounded-[10px] text-[var(--color-ink-2)] transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] hover:text-[var(--color-ink)]"
                 >
                   <Icon name={status.volume === 0 ? 'volume-mute' : 'volume'} size={19} />
                 </button>
