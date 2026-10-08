@@ -260,11 +260,17 @@ export function recomputeAllLayouts(db: Database): void {
 // plain refetch deliberately never moves an already-tracked node's x/y
 // (Canvas.tsx's syncGraph), which is right for every other kind of data
 // refresh but wrong for this one.
+//
+// Issue #281: one transaction. It runs on the request loop, where writing
+// in pieces gains nothing, and a recompute on its worker could otherwise
+// write its own seeds between the pieces.
 export function rebuildLayout(db: Database): void {
-  db.prepare(
-    `UPDATE positions SET user_x = NULL, user_y = NULL, settled_x = NULL, settled_y = NULL
-      WHERE granularity = 'tracks'`,
-  ).run();
-  const jitterSeed = Math.floor(Math.random() * 0xffffffff);
-  recomputeTracksLayout(db, { jitterSeed, ignoreLock: true });
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE positions SET user_x = NULL, user_y = NULL, settled_x = NULL, settled_y = NULL
+        WHERE granularity = 'tracks'`,
+    ).run();
+    const jitterSeed = Math.floor(Math.random() * 0xffffffff);
+    recomputeTracksLayout(db, { jitterSeed, ignoreLock: true });
+  })();
 }
