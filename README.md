@@ -2,7 +2,10 @@
 
 **Your music library as a graph.** Legato is a local-first music player and library manager. Every recording, artist, album and label gets its own article, linked to the rest of what you own. You browse by association: open a track and find out its engineer worked on three other records you have.
 
-![Legato's map view: a real scanned library laid out as a graph, with the collection panel open](site/public/images/graph-overview.webp)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/images/hero-dark-1440.webp" />
+  <img src="site/public/images/hero-light-1440.webp" alt="Legato's map with Highway 61 Revisited selected: its connections lit on the graph, a preview card beside it, and its article open on the right." />
+</picture>
 
 > **Status: pre-release.** Legato runs today against real libraries, but there are no public builds yet. The install options below are ready in the repo and will be published with the first release. [legato.fm](https://legato.fm) has the waitlist.
 
@@ -11,7 +14,7 @@
 - **The map.** A live, force-directed graph of your library. Recordings, artists, releases, labels and producers sit where their connections pull them.
 - **Articles.** Each node opens a page built from your tags and open sources such as MusicBrainz, Cover Art Archive and Wikipedia, with every release, recording and credit a link.
 - **A plain library when you want one.** An album grid and a track table that stay fast at tens of thousands of albums, sharing one search and selection with the map.
-- **Hygiene.** It flags missing and conflicting tags, and fixes them in place. Tag write-back is FLAC only for now.
+- **Library health.** It flags missing and conflicting tags, and fixes them in place. Tag write-back is FLAC only for now.
 - **Gapless native playback** on the desktop. Browsers and phones stream from your server, at a quality picked for the connection.
 
 ## Free, and what's paid
