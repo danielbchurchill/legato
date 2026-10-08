@@ -12,6 +12,10 @@ export type ResolvedTheme = 'dark' | 'light'
 
 const STORAGE_KEY = 'legato:theme'
 
+// #282: a first launch starts in ink. Following the system is a choice in
+// Settings, not the default.
+const FIRST_LAUNCH: ThemePreference = 'dark'
+
 function isThemePreference(value: string | null): value is ThemePreference {
   return value === 'dark' || value === 'light' || value === 'system'
 }
@@ -19,11 +23,11 @@ function isThemePreference(value: string | null): value is ThemePreference {
 function readStoredPreference(): ThemePreference {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
-    return isThemePreference(stored) ? stored : 'system'
+    return isThemePreference(stored) ? stored : FIRST_LAUNCH
   } catch {
-    // Storage unavailable (private browsing, disabled entirely) — fall back
-    // to following the system, same as a first launch would.
-    return 'system'
+    // Storage unavailable (private browsing, disabled entirely) — start in
+    // ink, same as a first launch would.
+    return FIRST_LAUNCH
   }
 }
 

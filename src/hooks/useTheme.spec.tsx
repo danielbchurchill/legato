@@ -5,10 +5,12 @@
 // effects before its parent's, so it read them before useTheme's own effect
 // (up in MainApp) had moved data-theme. A second useTheme() in OwnerGated
 // held its own copy of the preference, which a change in Settings never
-// reached.
+// reached. And a first launch with nothing stored followed the system; it
+// starts in ink now, in index.html's boot script as well as here.
 import { act, useEffect, useLayoutEffect, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import indexHtml from '../../index.html?raw'
 
 type Theme = ReturnType<typeof import('./useTheme').useTheme>
 type Result = { current: Theme | null }
@@ -154,5 +156,83 @@ describe('switching theme', () => {
     await act(async () => setSystemLight(true))
     expect(theme().resolvedTheme).toBe('light')
     expect(document.documentElement.dataset.theme).toBe('light')
+  })
+})
+
+describe('first launch', () => {
+  it('starts in ink with nothing stored, even when the system prefers light', async () => {
+    systemLight = true
+    const theme = await mountTheme()
+    expect(theme().preference).toBe('dark')
+    expect(theme().resolvedTheme).toBe('dark')
+    expect(document.documentElement.dataset.theme).toBe('dark')
+  })
+
+  it('starts in ink when storage is unavailable', async () => {
+    systemLight = true
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError')
+    })
+    const theme = await mountTheme()
+    expect(theme().resolvedTheme).toBe('dark')
+  })
+
+  it.each([
+    ['dark', false, 'dark'],
+    ['dark', true, 'dark'],
+    ['light', false, 'light'],
+    ['system', false, 'dark'],
+    ['system', true, 'light'],
+  ] as const)('keeps a stored %s (system light: %s) as %s', async (stored, light, expected) => {
+    systemLight = light
+    localStorage.setItem('legato:theme', stored)
+    const theme = await mountTheme()
+    expect(theme().preference).toBe(stored)
+    expect(theme().resolvedTheme).toBe(expected)
+  })
+})
+
+describe("index.html's boot script", () => {
+  const bootScript = indexHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? ''
+
+  // The script runs before the stylesheet paints anything, and useTheme takes
+  // over once React mounts; if they disagree, the first paint is the other theme.
+  const cases: [stored: string | null, light: boolean][] = []
+  for (const stored of [null, 'dark', 'light', 'system', 'something else']) {
+    for (const light of [false, true]) cases.push([stored, light])
+  }
+
+  it('is the inline script that reads the stored theme', () => {
+    expect(bootScript).toContain("localStorage.getItem('legato:theme')")
+  })
+
+  it.each(cases)('agrees with useTheme when %s is stored (system light: %s)', async (stored, light) => {
+    systemLight = light
+    if (stored !== null) localStorage.setItem('legato:theme', stored)
+    new Function(bootScript)()
+    const booted = document.documentElement.dataset.theme
+    delete document.documentElement.dataset.theme
+
+    const theme = await mountTheme()
+    expect(booted).toBe(theme().resolvedTheme)
+  })
+
+  it('agrees with useTheme when storage is unavailable', async () => {
+    systemLight = true
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError')
+    })
+    new Function(bootScript)()
+    const booted = document.documentElement.dataset.theme
+    delete document.documentElement.dataset.theme
+
+    const theme = await mountTheme()
+    expect(booted).toBe(theme().resolvedTheme)
+  })
+
+  it('starts a first launch in ink', () => {
+    systemLight = true
+    new Function(bootScript)()
+    expect(document.documentElement.dataset.theme).toBe('dark')
   })
 })

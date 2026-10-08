@@ -4,11 +4,12 @@
     <meta charset="UTF-8" />
     <!--
       #136: sets data-theme on <html> before Tailwind's tokens.css rules
-      or React ever run, so a light-mode user never sees a dark first paint.
+      or React ever run, so a paper user never sees an ink first paint.
       Mirrors useTheme.ts's own resolution exactly (same storage key, same
-      'system' -> prefers-color-scheme fallback) — keep the two in sync by
-      hand if either changes; this one has to stay a plain inline script
-      since it must run synchronously, before the stylesheet paints anything.
+      'system' -> prefers-color-scheme, same ink when nothing is stored or
+      storage is unavailable, #282). useTheme.spec.tsx runs this script to
+      check the two agree; it has to stay a plain inline script since it
+      must run synchronously, before the stylesheet paints anything.
 
       #128: it also colours the browser/installed-app chrome to match, via
       the theme-color meta below. The two hexes are tokens.css's
@@ -21,7 +22,7 @@
         var theme;
         try {
           var stored = localStorage.getItem('legato:theme');
-          var pref = stored === 'dark' || stored === 'light' || stored === 'system' ? stored : 'system';
+          var pref = stored === 'dark' || stored === 'light' || stored === 'system' ? stored : 'dark';
           theme = pref === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : pref;
         } catch (e) {
           theme = 'dark';
