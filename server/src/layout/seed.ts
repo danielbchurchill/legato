@@ -1,4 +1,5 @@
 import type { Database } from "../sqlite.js";
+import { writeInChunks } from "../writeInChunks.js";
 import { computeClusteredSeeds, type ClusterInput, type Seed } from "./cluster.js";
 
 export type { Seed };
@@ -48,10 +49,9 @@ function upsertSeeds(db: Database, seeds: Map<number, Seed>, locked: boolean): v
            END,
            seed_x = excluded.seed_x, seed_y = excluded.seed_y`,
   );
-  const applyAll = db.transaction(() => {
-    for (const [nodeId, seed] of seeds) upsert.run(nodeId, seed.x, seed.y);
-  });
-  applyAll();
+  // Issue #281: in pieces (writeInChunks.ts), so recompute's worker never
+  // holds the write lock for long. A 30,000-album library has 300,000 rows.
+  writeInChunks(db, seeds, ([nodeId, seed]) => upsert.run(nodeId, seed.x, seed.y));
 }
 
 // Recording, release, and artist nodes together — the one combined graph

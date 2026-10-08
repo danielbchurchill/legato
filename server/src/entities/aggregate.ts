@@ -1,4 +1,5 @@
 import type { Database } from "../sqlite.js";
+import { writeInChunks } from "../writeInChunks.js";
 import { pickMode } from "./mode.js";
 
 export type EdgeRef = { fromNode: number; toNode: number };
@@ -229,15 +230,14 @@ export function recomputeEntities(db: Database): void {
        updated_at = datetime('now')`,
   );
 
-  const applyAll = db.transaction(() => {
-    for (const a of albums) {
-      upsertAlbum.run(a.nodeId, a.primaryArtistNodeId, a.trackCount, a.totalDurationMs, a.yearMin, a.yearMax);
-    }
-    for (const a of artists) {
-      upsertArtist.run(a.nodeId, a.trackCount, a.albumCount);
-    }
+  // Issue #281: in pieces (writeInChunks.ts), so recompute's worker never
+  // holds the write lock for long.
+  writeInChunks(db, albums, (a) =>
+    upsertAlbum.run(a.nodeId, a.primaryArtistNodeId, a.trackCount, a.totalDurationMs, a.yearMin, a.yearMax),
+  );
+  writeInChunks(db, artists, (a) => upsertArtist.run(a.nodeId, a.trackCount, a.albumCount));
+  db.transaction(() => {
     pruneEntities(db, "albums", albums.map((a) => a.nodeId));
     pruneEntities(db, "artists", artists.map((a) => a.nodeId));
-  });
-  applyAll();
+  }).immediate();
 }

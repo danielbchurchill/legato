@@ -361,3 +361,37 @@ describe("recomputeCollaborationEdges", () => {
     expect(stillThere.n).toBe(1);
   });
 });
+
+// Issue #281: written as a diff, so recompute's worker holds the write lock
+// only for what changed.
+describe("recomputeCollaborationEdges — writing only what changed", () => {
+  function makeNode(db: Database, type: string, title: string): number {
+    return (db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as { id: number }).id;
+  }
+  const collaborations = (db: Database) =>
+    db
+      .prepare("SELECT id, from_node AS fromNode, to_node AS toNode, source, label FROM edges WHERE type = 'collaborated_with' ORDER BY id")
+      .all();
+
+  it("keeps an unchanged edge's row, and removes one that's no longer true, a duplicate or another source's", () => {
+    const db = openDb(":memory:");
+    const a = makeNode(db, "artist", "A");
+    const b = makeNode(db, "artist", "B");
+    const c = makeNode(db, "artist", "C");
+    const recording = makeNode(db, "recording", "Duet");
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(recording, a);
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'featured_artist', 'local')").run(recording, b);
+
+    recomputeCollaborationEdges(db);
+    const first = collaborations(db);
+    expect(first).toHaveLength(1);
+
+    const insert = db.prepare("INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, 'collaborated_with', ?, NULL)");
+    insert.run(a, b, "local"); // a duplicate
+    insert.run(a, c, "local"); // no longer true
+    insert.run(b, c, "manual"); // what the wholesale delete always removed too
+    recomputeCollaborationEdges(db);
+
+    expect(collaborations(db)).toEqual(first);
+  });
+});

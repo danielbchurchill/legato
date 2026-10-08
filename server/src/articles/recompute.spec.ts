@@ -123,3 +123,35 @@ describe("recomputeArticles", () => {
     expect(count.n).toBe(1);
   });
 });
+
+// Issue #281: every article is generated, but only one that came out
+// different is written, outside any long transaction.
+describe("recomputeArticles — writing only what changed", () => {
+  it("leaves an unchanged article's row alone, rewrites a changed one and removes an emptied one", () => {
+    const db = openDb(":memory:");
+    const artist = makeNode(db, "artist", "The Beatles");
+    const release = makeNode(db, "release", "Abbey Road");
+    const credit = makeNode(db, "credit", "George Martin");
+    const recording = makeNode(db, "recording", "Come Together");
+    edge(db, recording, artist, "performed_by");
+    edge(db, recording, release, "appears_on");
+    edge(db, recording, credit, "produced_by");
+    recomputeArticles(db);
+    expect(articleFor(db, credit)).toBeDefined();
+    db.prepare("UPDATE articles SET updated_at = '2000-01-01 00:00:00'").run();
+    const stamp = (nodeId: number) =>
+      (db.prepare("SELECT updated_at AS updatedAt FROM articles WHERE node_id = ?").get(nodeId) as { updatedAt: string } | undefined)
+        ?.updatedAt;
+
+    recomputeArticles(db);
+    expect(stamp(recording)).toBe("2000-01-01 00:00:00");
+
+    const other = makeNode(db, "recording", "Something");
+    edge(db, other, release, "appears_on");
+    db.prepare("DELETE FROM edges WHERE type = 'produced_by'").run();
+    recomputeArticles(db);
+    expect(stamp(recording)).not.toBe("2000-01-01 00:00:00");
+    expect(articleFor(db, recording)).toContain("1 other track");
+    expect(articleFor(db, credit)).toBeUndefined();
+  });
+});

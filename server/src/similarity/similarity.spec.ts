@@ -227,3 +227,34 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
     expect(findMostSimilar(db, anchor, 5).map((r) => r.nodeId)).toContain(other);
   });
 });
+
+// Issue #281: a vector that comes out the same isn't written again, so a
+// rescan that changed nothing holds recompute's write lock for nothing.
+describe("recomputeSimilarityFeatures — writing only what changed", () => {
+  it("leaves an unchanged vector's row alone and rewrites one whose inputs moved", () => {
+    const db = openDb(":memory:");
+    const beatles = makeNode(db, "artist", "The Beatles");
+    const release = makeNode(db, "release", "Abbey Road");
+    const a = makeRecording(db, "Come Together", { artist: beatles, year: 1969, genre: ["rock"] });
+    const b = makeRecording(db, "Something", { artist: beatles, year: 1969, genre: ["rock"] });
+    appearsOn(db, a, release);
+    appearsOn(db, b, release);
+    recomputeSimilarityFeatures(db);
+    db.prepare("UPDATE node_similarity_features SET updated_at = '2000-01-01 00:00:00'").run();
+    const stamps = () =>
+      db.prepare("SELECT node_id AS nodeId, updated_at AS updatedAt FROM node_similarity_features ORDER BY node_id").all();
+
+    recomputeSimilarityFeatures(db);
+    expect(stamps()).toEqual([
+      { nodeId: release, updatedAt: "2000-01-01 00:00:00" },
+      { nodeId: a, updatedAt: "2000-01-01 00:00:00" },
+      { nodeId: b, updatedAt: "2000-01-01 00:00:00" },
+    ]);
+
+    db.prepare("UPDATE files SET genre = ? WHERE recording_node_id = ?").run(JSON.stringify(["jazz"]), b);
+    recomputeSimilarityFeatures(db);
+    const changed = (stamps() as { nodeId: number; updatedAt: string }[]).filter((row) => row.updatedAt !== "2000-01-01 00:00:00");
+    // The genre vocabulary grew, so every vector has a new dimension.
+    expect(changed.map((row) => row.nodeId).sort((x, y) => x - y)).toEqual([release, a, b].sort((x, y) => x - y));
+  });
+});

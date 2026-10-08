@@ -7,6 +7,7 @@ import { recomputeCollaborationEdges } from "./entities/collaboration.js";
 import { recomputeAllLayouts } from "./layout/seed.js";
 import { recomputeSimilarityFeatures } from "./similarity/similarity.js";
 import { recomputeArticles } from "./articles/recompute.js";
+import { writeInChunks } from "./writeInChunks.js";
 
 // B-1: three sessions in a row hit the same bug shape and each got its own
 // one-off backfill script — scanFile()'s unchanged-mtime/size short-circuit
@@ -21,9 +22,9 @@ import { recomputeArticles } from "./articles/recompute.js";
 // next derived field lands here, not in a fifth backfill script.
 export function recompute(db: Database): void {
   const files = db.prepare("SELECT id FROM files WHERE missing_since IS NULL").all() as { id: number }[];
-  for (const { id } of files) {
-    deriveLocalEdges(db, id);
-  }
+  // Each file is its own transaction (match/edges.ts); a piece of them
+  // commits together, rather than every statement on its own.
+  writeInChunks(db, files, ({ id }) => deriveLocalEdges(db, id));
 
   // Issue #273: one node per person. New credits already land on the artist
   // (match/edges.ts's findOrCreatePerson); this catches an artist node the
