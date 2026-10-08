@@ -47,8 +47,8 @@ function artistSize(releaseCount: number): number {
 }
 
 /* Edges are hairlines whose on-screen width follows the zoom (edgeWidth.ts):
- * wider at the overview, narrower up close. A focused cluster's edges draw
- * a third wider than the rest at the same zoom. */
+ * steady from the overview in, thinner zoomed out. A focused cluster's edges
+ * draw a third wider than the rest at the same zoom. */
 const FOCUSED_EDGE_WIDTH = 4 / 3
 /* While something is focused: its cluster's edges in their type colours at
  * 85%; every other edge drops to 60% of its usual (already faint) alpha.
@@ -1288,9 +1288,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     // Reducers only run on a refresh, and a camera move alone only
     // re-renders. Once the layout settles nothing else refreshes, so edges
-    // would keep the width of the last tick's zoom: sigma's own scaling
-    // would then thin them as you zoom out, the opposite of edgeWidthPx. A
-    // zoom (not a pan) asks for one, batched into the next frame.
+    // would keep the width of the last tick's zoom, and sigma's own scaling
+    // would take over: thickening without limit as you zoom in, and thinning
+    // twice as fast as edgeWidthPx as you zoom out. A zoom (not a pan) asks
+    // for one, batched into the next frame.
     let lastRatio = renderer.getCamera().ratio
     const refreshOnZoom = () => {
       const { ratio } = renderer.getCamera()
