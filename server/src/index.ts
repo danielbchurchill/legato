@@ -17,6 +17,7 @@ import { reconcileInterruptedScans } from "./scan/scanner.js";
 import { backfillFuzzyIndex } from "./match/backfill-fuzzy-index.js";
 import { mergeDuplicatePeople } from "./match/people.js";
 import { enqueueArtistCreditLookups } from "./enrich/artistCredit.js";
+import { pruneBeyondMemberBound } from "./enrich/members.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 import { startUpdateChecks } from "./update/check.js";
@@ -136,6 +137,31 @@ if (!ownerExists(db)) {
   if (merged > 0) app.log.info(`people: merged ${merged} credit node(s) into the artist of the same name`);
   const queued = enqueueArtistCreditLookups(db);
   if (queued > 0) app.log.info(`people: queued ${queued} recording(s) to split credit lines joined by "," or "&"`);
+}
+
+// Issue #269: the band-membership lookup used to crawl without limit, and a
+// database from then holds what it found, 180,000 artists on the Pi. This
+// removes everything past the bound (enrich/members.ts). After the merge
+// above, so merged producers count as the library artists they are. A
+// failure is logged, not fatal: the next start tries again, and a server
+// carrying the old crawl still works. The time is in the line because the
+// first start on a crawled database holds the server up while it runs.
+try {
+  const started = performance.now();
+  const pruned = pruneBeyondMemberBound(db);
+  if (pruned.artists + pruned.memberEdges + pruned.jobs > 0) {
+    const reclaimed =
+      pruned.reclaimedBytes > 0 ? `, reclaimed ${(pruned.reclaimedBytes / 1024 / 1024).toFixed(1)} MB` : "";
+    const seconds = ((performance.now() - started) / 1000).toFixed(1);
+    app.log.info(
+      `membership: removed ${pruned.artists} artist(s), ${pruned.memberEdges} member_of edge(s) and ` +
+        `${pruned.jobs} enrichment job(s) past the membership bound${reclaimed} in ${seconds} s`,
+    );
+  }
+} catch (err) {
+  app.log.error(
+    `membership: couldn't prune past the membership bound: ${err instanceof Error ? err.message : String(err)}`,
+  );
 }
 
 // Same one-line-diagnosis reasoning as the database log above: if a

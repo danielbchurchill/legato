@@ -1,0 +1,14 @@
+-- #269: the band-membership lookup used to crawl MusicBrainz without limit,
+-- and the Pi's database still holds the 180,395 artists, 239,539 member_of
+-- edges and ~541,000 enrichment jobs that crawl left. The prune that removes
+-- them runs at startup in TypeScript (enrich/members.ts's
+-- pruneBeyondMemberBound), not here: it finds what references a node from
+-- the schema's foreign keys, the way match/people.ts does, which plain SQL
+-- can't, and it ends in a VACUUM, which can't run inside the transaction a
+-- migration runs in.
+--
+-- So this migration changes nothing. It exists so that the upgrade bringing
+-- the prune applies a migration, and openDb takes its VACUUM INTO backup
+-- (db.ts's backupBeforeMigrating) before the prune deletes anything. The
+-- statement is there because a migration with none fails to apply.
+SELECT 1;

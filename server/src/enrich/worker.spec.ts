@@ -13,6 +13,7 @@ mock.module("./mbClient.js", () => ({
   lookupReleaseGroupForRecording: mock(),
   searchArtist: mock(),
   fetchArtistMemberRelations: mock(),
+  fetchUrlRelations: mock(),
 }));
 mock.module("./coverArchive.js", () => ({ fetchCaaFrontImage: mock() }));
 mock.module("./deezer.js", () => ({ fetchArtistImage: mock() }));
@@ -30,6 +31,7 @@ mock.module("./acoustid.js", () => ({ lookupFingerprint: mock() }));
 
 const { runDueJobs, applyMatch, tryFingerprintMatch } = await import("./worker.js");
 const { deriveLocalEdges } = await import("../match/edges.js");
+const { recompute } = await import("../recompute.js");
 
 let db: Database;
 
@@ -422,6 +424,20 @@ describe("processArtistMemberLookup — issue #61", () => {
     return node.id;
   }
 
+  // Issue #269: a member lookup only runs for an artist a recording names as
+  // its performer, or for one of their members and groups.
+  function insertLibraryArtist(title: string): number {
+    const artist = insertArtistNode(title);
+    const recording = db
+      .prepare("INSERT INTO nodes (type, title) VALUES ('recording', ?) RETURNING id")
+      .get(`${title} track`) as { id: number };
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+      recording.id,
+      artist,
+    );
+    return artist;
+  }
+
   function enqueueMemberLookup(nodeId: number): void {
     db.prepare("INSERT INTO enrich_jobs (node_id, job_type, status) VALUES (?, 'artist_member_lookup', 'queued')").run(
       nodeId,
@@ -439,7 +455,7 @@ describe("processArtistMemberLookup — issue #61", () => {
   }
 
   it("resolves the artist's mbid, fetches member relations, and writes the resulting edges", async () => {
-    const beatles = insertArtistNode("The Beatles");
+    const beatles = insertLibraryArtist("The Beatles");
     enqueueMemberLookup(beatles);
     mocked(mbClient.searchArtist).mockResolvedValue([
       { mbid: "beatles-mbid", name: "The Beatles", score: 100, disambiguation: null },
@@ -457,7 +473,7 @@ describe("processArtistMemberLookup — issue #61", () => {
   });
 
   it("cascades: a member node created by this job gets its own member-lookup enqueued", async () => {
-    const beatles = insertArtistNode("The Beatles");
+    const beatles = insertLibraryArtist("The Beatles");
     enqueueMemberLookup(beatles);
     mocked(mbClient.searchArtist).mockResolvedValue([
       { mbid: "beatles-mbid", name: "The Beatles", score: 100, disambiguation: null },
@@ -482,7 +498,7 @@ describe("processArtistMemberLookup — issue #61", () => {
   });
 
   it("marks the job done without fetching relations when the artist mbid can't be resolved", async () => {
-    const node = insertArtistNode("Totally Obscure Artist");
+    const node = insertLibraryArtist("Totally Obscure Artist");
     enqueueMemberLookup(node);
     mocked(mbClient.searchArtist).mockResolvedValue([]);
 
@@ -494,7 +510,7 @@ describe("processArtistMemberLookup — issue #61", () => {
   });
 
   it("skips a credit-line title naming more than one artist, without calling MusicBrainz at all", async () => {
-    const node = insertArtistNode("JPEGMAFIA; Danny Brown");
+    const node = insertLibraryArtist("JPEGMAFIA; Danny Brown");
     enqueueMemberLookup(node);
 
     await runDueJobs(db);
@@ -503,6 +519,151 @@ describe("processArtistMemberLookup — issue #61", () => {
     expect(mbClient.fetchArtistMemberRelations).not.toHaveBeenCalled();
     const job = db.prepare("SELECT status FROM enrich_jobs WHERE node_id = ?").get(node) as { status: string };
     expect(job.status).toBe("done");
+  });
+
+  // Issue #269.
+  it("drops the job of an artist outside the bound without asking MusicBrainz, so it can be queued again", async () => {
+    const node = insertArtistNode("Rory Storm and the Hurricanes");
+    enqueueMemberLookup(node);
+
+    await runDueJobs(db);
+
+    expect(mbClient.searchArtist).not.toHaveBeenCalled();
+    expect(mbClient.fetchArtistMemberRelations).not.toHaveBeenCalled();
+    expect(db.prepare("SELECT id FROM enrich_jobs WHERE node_id = ?").all(node)).toEqual([]);
+  });
+});
+
+// Issue #269: #61's crawl, bounded. Three library bands whose members have
+// other groups, as MusicBrainz lists them. Each group's own page lists its
+// members, and each member's page lists their groups, so a lookup run on
+// any artist here finds the next level out.
+describe("membership bound — issue #269", () => {
+  const MEMBERS: Record<string, string[]> = {
+    // Level 0: the library.
+    "The Beatles": ["John Lennon", "Paul McCartney", "George Harrison", "Ringo Starr", "Pete Best", "Stuart Sutcliffe"],
+    Radiohead: ["Thom Yorke", "Jonny Greenwood", "Colin Greenwood", "Ed O'Brien", "Philip Selway"],
+    "Talking Heads": ["David Byrne", "Tina Weymouth", "Chris Frantz", "Jerry Harrison"],
+    // Level 2: the members' other groups, and their members, the third level.
+    "The Quarrymen": ["John Lennon", "Paul McCartney", "George Harrison", "Pete Shotton"],
+    "Plastic Ono Band": ["John Lennon", "Yoko Ono", "Klaus Voormann"],
+    Wings: ["Paul McCartney", "Linda McCartney", "Denny Laine"],
+    "Traveling Wilburys": ["George Harrison", "Bob Dylan", "Tom Petty", "Roy Orbison", "Jeff Lynne"],
+    "Rory Storm and the Hurricanes": ["Ringo Starr", "Rory Storm"],
+    "The Pete Best Band": ["Pete Best"],
+    "Atoms for Peace": ["Thom Yorke", "Flea", "Nigel Godrich"],
+    "The Smile": ["Thom Yorke", "Jonny Greenwood", "Tom Skinner"],
+    "Tom Tom Club": ["Tina Weymouth", "Chris Frantz"],
+    "The Modern Lovers": ["Jerry Harrison", "Jonathan Richman"],
+    // Level 4, which only a lookup on the third level would find.
+    "Tom Petty and the Heartbreakers": ["Tom Petty", "Mike Campbell"],
+    "Electric Light Orchestra": ["Jeff Lynne", "Bev Bevan"],
+    "Red Hot Chili Peppers": ["Flea", "Anthony Kiedis"],
+  };
+  const LIBRARY = ["The Beatles", "Radiohead", "Talking Heads"];
+  const THIRD_LEVEL = [
+    "Pete Shotton",
+    "Yoko Ono",
+    "Klaus Voormann",
+    "Linda McCartney",
+    "Denny Laine",
+    "Bob Dylan",
+    "Tom Petty",
+    "Roy Orbison",
+    "Jeff Lynne",
+    "Rory Storm",
+    "Flea",
+    "Nigel Godrich",
+    "Tom Skinner",
+    "Jonathan Richman",
+  ];
+
+  function relationsFor(name: string) {
+    const members = (MEMBERS[name] ?? []).map((member) => ({ direction: "backward" as const, name: member }));
+    const groups = Object.entries(MEMBERS)
+      .filter(([, people]) => people.includes(name))
+      .map(([group]) => ({ direction: "forward" as const, name: group }));
+    return [...members, ...groups];
+  }
+
+  function artistTitles(): string[] {
+    return (
+      db.prepare("SELECT title FROM nodes WHERE type = 'artist' ORDER BY title").all() as { title: string }[]
+    ).map((r) => r.title);
+  }
+
+  function jobsFor(title: string): string[] {
+    return (
+      db
+        .prepare(
+          `SELECT ej.job_type FROM enrich_jobs ej JOIN nodes n ON n.id = ej.node_id
+            WHERE n.type = 'artist' AND n.title = ? ORDER BY ej.job_type`,
+        )
+        .all(title) as { job_type: string }[]
+    ).map((r) => r.job_type);
+  }
+
+  beforeEach(() => {
+    mocked(mbClient.searchArtist).mockImplementation(async (name: string) => [
+      { mbid: `mbid:${name}`, name, score: 100, disambiguation: null },
+    ]);
+    mocked(mbClient.fetchArtistMemberRelations).mockImplementation(async (mbid: string) =>
+      relationsFor(mbid.slice("mbid:".length)),
+    );
+    mocked(mbClient.fetchUrlRelations).mockResolvedValue([]);
+    mocked(deezer.fetchArtistImage).mockResolvedValue(null);
+
+    for (const band of LIBRARY) {
+      const recording = db
+        .prepare("INSERT INTO nodes (type, title) VALUES ('recording', ?) RETURNING id")
+        .get(`${band} track`) as { id: number };
+      const artist = db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get(band) as {
+        id: number;
+      };
+      db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+        recording.id,
+        artist.id,
+      );
+    }
+  });
+
+  it("resolves #61's two hops and creates or queues nothing on the third level, across scans", async () => {
+    // Two scans with a full drain after each: a recompute that queued a
+    // lookup for every artist would push the bound out one level per scan.
+    for (let scan = 0; scan < 2; scan++) {
+      recompute(db);
+      await runDueJobs(db);
+    }
+
+    const artists = artistTitles();
+    // #61's example: The Beatles -> George Harrison -> Traveling Wilburys.
+    expect(artists).toContain("George Harrison");
+    expect(artists).toContain("Traveling Wilburys");
+    const georgesGroups = db
+      .prepare(
+        `SELECT g.title FROM edges e JOIN nodes m ON m.id = e.from_node JOIN nodes g ON g.id = e.to_node
+          WHERE e.type = 'member_of' AND m.title = 'George Harrison' ORDER BY g.title`,
+      )
+      .all() as { title: string }[];
+    expect(georgesGroups.map((g) => g.title)).toEqual(["The Beatles", "The Quarrymen", "Traveling Wilburys"]);
+
+    // The third level is neither created nor queued, and nothing past it.
+    for (const name of THIRD_LEVEL) expect(artists).not.toContain(name);
+    expect(artists).not.toContain("Tom Petty and the Heartbreakers");
+    expect(mbClient.fetchArtistMemberRelations).not.toHaveBeenCalledWith("mbid:Traveling Wilburys");
+
+    // Members and groups of the library get every lookup. The second level
+    // gets a photo and a description, but no member lookup of its own.
+    expect(jobsFor("George Harrison")).toEqual(["artist_image_lookup", "artist_member_lookup", "description_lookup"]);
+    expect(jobsFor("Traveling Wilburys")).toEqual(["artist_image_lookup", "description_lookup"]);
+
+    // How far this reaches for a real library, three bands: the 3 bands,
+    // their 15 members, and the members' 10 other groups. Member lookups
+    // ran for the first 18.
+    expect(artists).toHaveLength(28);
+    expect(mbClient.fetchArtistMemberRelations).toHaveBeenCalledTimes(18);
+    const queued = db.prepare("SELECT COUNT(*) AS n FROM enrich_jobs WHERE status != 'done'").get() as { n: number };
+    expect(queued.n).toBe(0);
   });
 });
 

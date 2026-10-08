@@ -68,13 +68,57 @@ export function enqueueDescriptionLookupIfNeeded(db: Database, nodeId: number): 
 }
 
 // Issue #61: this artist's "member of band" relations, in both directions
-// (enrich/members.ts). Called for every artist node on recompute the same
-// way the two helpers above are, and also called directly from inside
-// processArtistMemberLookup for a node it just created — a member/group
-// discovered mid-drain gets its own lookup queued immediately rather than
-// waiting for the next scan's recompute pass to notice it exists.
+// (enrich/members.ts). Called on recompute for every artist inside
+// MEMBER_LOOKUP_ARTISTS_SQL below, and from processArtistMemberLookup for
+// the members and groups a performer's lookup just found, so they're looked
+// up in the same drain rather than at the next scan.
 export function enqueueArtistMemberLookupIfNeeded(db: Database, artistNodeId: number): void {
   enqueueOnce(db, artistNodeId, "artist_member_lookup");
+}
+
+// Issue #269: the member lookup is a crawl. Each artist it looks up can add
+// artists whose own lookups add more, and with nothing to stop it, it walked
+// 180,396 artists out from a library of 26. The two sets below are its
+// bound. They're read from the graph whenever they're checked, never stored
+// on a node when it's created, so a rescan, a merge (match/people.ts) or an
+// artist leaving the library moves the bound with it. Both are SQL selecting
+// artist node ids, so recompute.ts, the worker and the startup prune
+// (members.ts) all ask the same question.
+//
+// Joins rather than IN (…): SQLite flattens them, so a check for one artist
+// (`WHERE id = ?`) reads that artist's own edges instead of building the
+// whole set first.
+
+// The crawl's starting points: artists a recording names as its performer.
+// A producer, engineer or mixer is in the library too (#280), but doesn't
+// start a crawl.
+const PERFORMERS = `SELECT p.to_node AS id FROM edges p JOIN nodes r ON r.id = p.from_node
+  WHERE r.type = 'recording' AND p.type IN ('performed_by', 'featured_artist')`;
+
+// Artists with an edge of any type from a recording, performers included.
+const LIBRARY_ARTISTS = `SELECT l.to_node AS id FROM edges l JOIN nodes r ON r.id = l.from_node
+  JOIN nodes a ON a.id = l.to_node WHERE r.type = 'recording' AND a.type = 'artist'`;
+
+// Artists one member_of edge away from `ids`, in either direction.
+function memberHop(ids: string): string {
+  return `SELECT m.to_node AS id FROM edges m JOIN (${ids}) s ON s.id = m.from_node WHERE m.type = 'member_of'
+    UNION SELECT m.from_node FROM edges m JOIN (${ids}) s ON s.id = m.to_node WHERE m.type = 'member_of'`;
+}
+
+/** Artists a member lookup runs for: the performers, and their direct
+ *  members and groups. With The Beatles in the library, that's The Beatles
+ *  and George Harrison, whose lookup is what finds the Traveling Wilburys. */
+export const MEMBER_LOOKUP_ARTISTS_SQL = `${PERFORMERS} UNION ${memberHop(PERFORMERS)}`;
+
+/** Every artist inside the bound, which is who gets a photo and a
+ *  description: the library's artists, the member-lookup artists above, and
+ *  the artists their lookups found (the Wilburys). Nothing past that is
+ *  created, so nothing past it is queued. */
+export const ARTISTS_IN_BOUND_SQL = `${LIBRARY_ARTISTS} UNION ${MEMBER_LOOKUP_ARTISTS_SQL}
+  UNION ${memberHop(MEMBER_LOOKUP_ARTISTS_SQL)}`;
+
+export function isMemberLookupArtist(db: Database, artistNodeId: number): boolean {
+  return db.prepare(`SELECT 1 FROM (${MEMBER_LOOKUP_ARTISTS_SQL}) WHERE id = ?`).get(artistNodeId) !== undefined;
 }
 
 // Queued once a 'recording_lookup' job resolves a real MusicBrainz mbid —
