@@ -1,14 +1,15 @@
-import type { CSSProperties, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { Icon } from '../ui/Icon'
 import { ScrollArea } from '../ui/ScrollArea'
 import { Surface } from './Surface'
-import { useShellLayout } from './layout'
 
 /* The two side panels' frames. Content is the caller's; these own position,
  * material and scrolling.
  *
  * Left: 320px, beside the rail, full height. Right: 360px against the right
- * edge, stopping above the player when one is showing. Both are glass at
+ * edge, full height too: the player centres on the free space between them
+ * and is never wider than it, so it never reaches under the right panel, and
+ * the panel doesn't jump when playback starts or stops (#288). Both are glass at
  * --radius-panel with their content in an overlay-scrollbar ScrollArea, x
  * pinned closed (#86). */
 
@@ -27,17 +28,14 @@ export function LeftPanel({ children, label }: { children: ReactNode; label: str
 }
 
 export function RightPanel({ children, label, wash }: { children: ReactNode; label: string; wash?: string }) {
-  const layout = useShellLayout()
-  // The wash sits under the glass's own surface colour, so the panel keeps
-  // its material and the cover colour reads as light falling through it.
-  const style: CSSProperties = { bottom: layout.rightPanelBottom }
-  if (wash) style.background = `${wash}, var(--color-surface)`
   return (
     <Surface
       role="complementary"
       aria-label={label}
-      className="absolute top-[var(--inset)] right-[var(--inset)] z-20 flex w-[var(--right-panel-width)] flex-col overflow-hidden rounded-[var(--radius-panel)]"
-      style={style}
+      className="absolute top-[var(--inset)] right-[var(--inset)] bottom-[var(--inset)] z-20 flex w-[var(--right-panel-width)] flex-col overflow-hidden rounded-[var(--radius-panel)]"
+      // The wash sits under the glass's own surface colour, so the panel keeps
+      // its material and the cover colour reads as light falling through it.
+      style={wash ? { background: `${wash}, var(--color-surface)` } : undefined}
     >
       <ScrollArea className="flex-1" contentClassName="p-[12px]">
         {children}

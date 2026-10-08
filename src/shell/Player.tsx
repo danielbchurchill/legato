@@ -216,7 +216,9 @@ export function Player({
     <Surface
       role="region"
       aria-label="Player"
-      className="absolute bottom-[var(--inset)] z-20 flex h-[var(--player-height)] -translate-x-1/2 items-center gap-[14px] rounded-[var(--radius-panel)] pr-[14px] pl-[12px]"
+      // Clipped to its own bar, which never reaches the right panel. Below
+      // about 470px of bar the controls don't fit and get cut off (#293).
+      className="absolute bottom-[var(--inset)] z-20 flex h-[var(--player-height)] -translate-x-1/2 items-center gap-[14px] overflow-hidden rounded-[var(--radius-panel)] pr-[14px] pl-[12px]"
       style={{ left: layout.cx, width: layout.playerWidth, background }}
     >
       <CoverArt nodeId={status.currentRecordingNodeId} size="thumb" className="size-[48px]" alt="" />
