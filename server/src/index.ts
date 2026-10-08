@@ -270,5 +270,9 @@ app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
         void Promise.race([advertiser.stop(), new Promise((resolve) => setTimeout(resolve, 500))]).finally(() => process.exit(0));
       });
     }
+  } else {
+    // The desktop app's own server lands here by default, so "why isn't it
+    // on the connect screen" has a one-line answer in the log.
+    app.log.info("mDNS: not advertising (LEGATO_MDNS=off)");
   }
 });

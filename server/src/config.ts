@@ -144,6 +144,8 @@ export const SERVER_NAME = resolveServerName();
 
 // Issue #117: the server advertises `_legato._tcp` on the LAN so the desktop
 // app can list it under "servers on this network" (discovery/advertise.ts).
-// On by default; LEGATO_MDNS=off stops it. Nothing goes beyond the LAN, so
-// it isn't one of legato.fm/privacy's outbound requests.
+// On by default; LEGATO_MDNS=off stops it. The desktop app sets that for the
+// server it spawns (src-tauri/src/server_process.rs), so only headless
+// servers advertise unless asked. Nothing goes beyond the LAN, so it isn't
+// one of legato.fm/privacy's outbound requests.
 export const MDNS_ENABLED = process.env.LEGATO_MDNS?.trim().toLowerCase() !== "off";
