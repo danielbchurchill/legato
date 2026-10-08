@@ -1,6 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { getUserBySessionToken, sessionToken } from "../accounts.js";
-import { acceptLinkProof, acceptUnlinkProof, PROOF_FAILURE_MESSAGES, removeLinkedServer, type ProofFailure } from "../linked-servers.js";
+import {
+  acceptLinkProof,
+  acceptUnlinkProof,
+  listLinkedServers,
+  PROOF_FAILURE_MESSAGES,
+  removeLinkedServer,
+  type ProofFailure,
+} from "../linked-servers.js";
 import { SERVER_ID_PATTERN, type SigningKeys } from "../signing-keys.js";
 import type { Database } from "../sqlite.js";
 
@@ -9,8 +16,8 @@ import type { Database } from "../sqlite.js";
 //
 // The first two routes are called by a home server, which has no session:
 // the signature in the body is what authorizes them, the same way the
-// single-use code authorizes /pair/exchange. The third is the account's own
-// way to take a server off its list, with its session.
+// single-use code authorizes /pair/exchange. The other two are the
+// account's own, with its session: listing its servers, and taking one off.
 
 const PROOF_FAILURE_STATUS: Record<ProofFailure, number> = {
   malformed: 400,
@@ -52,6 +59,20 @@ export function linkedServerRoutes(db: Database, options: { signingKeys: Signing
       }
       if (result.changed) request.log.info(`linked-servers: server ${result.serverId} unlinked account ${result.relayUserId}`);
       return { unlinked: result.changed };
+    });
+
+    // The connect screen's "your servers" (issue #117). The desktop app's
+    // webview calls it cross-origin, so it's on routes/auth.ts's CORS list.
+    app.get("/linked-servers", async (request, reply) => {
+      const token = sessionToken(request);
+      const user = token ? getUserBySessionToken(db, token) : null;
+      if (!user) {
+        reply.code(401);
+        return { error: "Sign in to legato.fm first.", reason: "signed_out" };
+      }
+      return {
+        servers: listLinkedServers(db, user.id).map(({ serverId, linkedAt }) => ({ serverId, linkedAt: linkedAt.toISOString() })),
+      };
     });
 
     // Revoking from the account's side. The server isn't told: its owner is

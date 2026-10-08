@@ -292,6 +292,39 @@ describe("unlinking and revoking remove the pair", () => {
     expect((await h.serverToken(friend.headers, server.serverId)).scope).toBe("access");
   });
 
+  // Issue #117: the connect screen's "your servers".
+  it("lists the account's own servers, with its session only, to the desktop app's webview", async () => {
+    const h = setup();
+    const owner = h.signIn("owner");
+    const friend = h.signIn("friend");
+    const [first, second] = [homeServer(), homeServer()];
+    await h.link(owner.headers, first);
+    await h.link(owner.headers, second);
+    await h.link(friend.headers, homeServer());
+
+    expect((await h.app.inject({ method: "GET", url: "/linked-servers" })).statusCode).toBe(401);
+    const res = await h.app.inject({ method: "GET", url: "/linked-servers", headers: { ...owner.headers, origin: "tauri://localhost" } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["access-control-allow-origin"]).toBe("tauri://localhost");
+    const { servers } = res.json() as { servers: { serverId: string; linkedAt: string }[] };
+    expect(servers.map((s) => s.serverId).sort()).toEqual([first.serverId, second.serverId].sort());
+    expect(Number.isNaN(Date.parse(servers[0]!.linkedAt))).toBe(false);
+
+    const preflight = await h.app.inject({
+      method: "OPTIONS",
+      url: "/linked-servers",
+      headers: { origin: "http://127.0.0.1:5183", "access-control-request-method": "GET", "access-control-request-headers": "authorization" },
+    });
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers["access-control-allow-headers"]).toContain("Authorization");
+    const elsewhere = await h.app.inject({ method: "GET", url: "/linked-servers", headers: { ...owner.headers, origin: "https://evil.example" } });
+    expect(elsewhere.headers["access-control-allow-origin"]).toBeUndefined();
+
+    await h.app.inject({ method: "DELETE", url: `/linked-servers/${first.serverId}`, headers: owner.headers });
+    const after = (await h.app.inject({ method: "GET", url: "/linked-servers", headers: owner.headers })).json();
+    expect(after.servers.map((s: { serverId: string }) => s.serverId)).toEqual([second.serverId]);
+  });
+
   it("deleting the account takes its pairs with it", async () => {
     const h = setup();
     const { user, headers } = h.signIn();
