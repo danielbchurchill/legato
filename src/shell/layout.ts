@@ -6,10 +6,16 @@ import { createContext, useContext, useEffect, useState } from 'react'
  * space), and the search palette (centred on it).
  *
  * Everything floats 12px (INSET) in from the window. The rail is always
- * there; the left panel, right panel and player come and go, and each one
- * that's present takes its width out of the free space. The capsule, player
- * and palette centre on the middle of what's left, not the middle of the
- * window, so opening a panel slides them rather than covering them. */
+ * there; the left and right panels come and go, and each one that's open
+ * takes its width out of the free space. The capsule, player and palette
+ * centre on the middle of what's left, not the middle of the window, so
+ * opening a panel slides them rather than covering them.
+ *
+ * Both panels run the full height. The player is never wider than the free
+ * space less 48px, so it can't reach under the right panel, and whether one
+ * is showing changes no geometry here: the right panel used to stop above
+ * the player, which bought no room and made it jump 84px whenever playback
+ * started or stopped (#288). */
 
 export const INSET = 12
 export const RAIL_WIDTH = 56
@@ -42,8 +48,6 @@ export type ShellLayout = {
   capsuleWidth: number
   playerWidth: number
   compactPlayer: boolean
-  /** The right panel stops above the player when one is showing. */
-  rightPanelBottom: number
   /** Where the map's toolbar and legend sit: above the player's row. */
   floatingBottom: number
 }
@@ -51,7 +55,7 @@ export type ShellLayout = {
 export function computeShellLayout(
   width: number,
   height: number,
-  { leftOpen, rightOpen, playerVisible }: { leftOpen: boolean; rightOpen: boolean; playerVisible: boolean },
+  { leftOpen, rightOpen }: { leftOpen: boolean; rightOpen: boolean },
 ): ShellLayout {
   const leftOccupancy = leftOpen ? LEFT_OCCUPANCY_OPEN : LEFT_OCCUPANCY_CLOSED
   const rightOccupancy = rightOpen ? RIGHT_OCCUPANCY_OPEN : 0
@@ -67,12 +71,11 @@ export function computeShellLayout(
     capsuleWidth: Math.max(0, Math.min(520, free - 48)),
     playerWidth,
     compactPlayer: playerWidth < COMPACT_PLAYER_WIDTH,
-    rightPanelBottom: playerVisible ? INSET + PLAYER_HEIGHT + INSET : INSET,
     floatingBottom: INSET + PLAYER_HEIGHT + INSET,
   }
 }
 
-const FALLBACK = computeShellLayout(1440, 1024, { leftOpen: false, rightOpen: false, playerVisible: false })
+const FALLBACK = computeShellLayout(1440, 1024, { leftOpen: false, rightOpen: false })
 
 export const ShellLayoutContext = createContext<ShellLayout>(FALLBACK)
 

@@ -9,6 +9,7 @@ import eye from '../assets/icons/eye.svg?raw'
 import fastForward from '../assets/icons/fast-forward.svg?raw'
 import heart from '../assets/icons/heart.svg?raw'
 import info from '../assets/icons/info.svg?raw'
+import library from '../assets/icons/library.svg?raw'
 import list from '../assets/icons/list.svg?raw'
 import map from '../assets/icons/map.svg?raw'
 import panelLeftCollapse from '../assets/icons/panel-left-collapse.svg?raw'
@@ -18,6 +19,7 @@ import play from '../assets/icons/play.svg?raw'
 import repeat from '../assets/icons/repeat.svg?raw'
 import reverse from '../assets/icons/reverse.svg?raw'
 import search from '../assets/icons/search.svg?raw'
+import settings from '../assets/icons/settings.svg?raw'
 import sliders from '../assets/icons/sliders.svg?raw'
 import spinner from '../assets/icons/spinner.svg?raw'
 import subtract from '../assets/icons/subtract.svg?raw'
@@ -29,18 +31,23 @@ import volumeMute from '../assets/icons/volume-mute.svg?raw'
  * SVG rather than redrawn. Every glyph is a 24x24 currentColor stroke at 1.5
  * with round caps, so they inherit text color and size from their box.
  *
- * `sliders` is v2's left icon rail glyph for its "Legato Settings"
- * destination. A separate `settings` gear glyph briefly existed alongside it
- * for CollectionPanel's own settings-gear button (opening the old
- * SettingsView modal) — removed once that modal's content moved behind the
- * rail destination instead, its one call site going with it.
+ * `settings` is proicons' gear, the rail's Settings. `sliders` is the map
+ * toolbar's map options. Both used `sliders` until #285, so two different
+ * destinations looked like one. The gear was vendored once before, for
+ * CollectionPanel's old settings button (the SettingsView modal), and went
+ * with that button.
  *
  * `arrow-minimize` and `spacebar` (the minimize/maximize glyphs) went the
  * same way once the window went back to native OS decorations
  * (tauri.conf.json's `decorations: true`) and WindowControls.tsx, their one
  * caller, was removed.
  *
- * `list` is the playlists rail destination's glyph (proicons "Bullet List").
+ * `list` (proicons "Bullet List") is Collections: its rail item and the
+ * places a playlist shows up. `library` (proicons "Library", books on a
+ * shelf) is the map/library switch's library tab, and `info` is the
+ * player's queue toggle, which opens Now Playing on the track's details and
+ * up next. All three used `list` until #289.
+ *
  * `chevron-up` pairs with the existing `chevron-down` for the up-next/
  * playlist-track reorder buttons — real vendored SVGs rather than one glyph
  * CSS-rotated, matching how every other pair here (play/pause) gets its own
@@ -85,6 +92,7 @@ const GLYPHS = {
   'fast-forward': fastForward,
   heart,
   info,
+  library,
   list,
   map,
   'panel-left-collapse': panelLeftCollapse,
@@ -94,6 +102,7 @@ const GLYPHS = {
   repeat,
   reverse,
   search,
+  settings,
   sliders,
   spinner,
   subtract,

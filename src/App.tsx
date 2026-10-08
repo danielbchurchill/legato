@@ -158,9 +158,8 @@ function Workspace({
       computeShellLayout(windowSize.width, windowSize.height, {
         leftOpen: leftView != null,
         rightOpen: rightView != null,
-        playerVisible,
       }),
-    [windowSize.width, windowSize.height, leftView, rightView, playerVisible],
+    [windowSize.width, windowSize.height, leftView, rightView],
   )
 
   // #46 "rebuild map": the server reseeds every node; a full Canvas remount
