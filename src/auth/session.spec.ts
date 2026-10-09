@@ -102,6 +102,7 @@ describe('createAuthFetch', () => {
 
     await expect(authFetch(`${ORIGIN}/api/v1/playlists`)).rejects.toThrow('Failed to fetch')
     expect(onNetworkError).toHaveBeenCalledTimes(1)
+    expect(String(onNetworkError.mock.calls[0][0])).toBe(`${ORIGIN}/api/v1/playlists`)
     await expect(authFetch(`${ORIGIN}/api/v1/playlists`)).rejects.toThrow('aborted')
     expect(onNetworkError).toHaveBeenCalledTimes(1)
   })

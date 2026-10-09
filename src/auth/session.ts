@@ -80,7 +80,7 @@ type AuthFetchDeps = {
   storage: Storage
   onAuthRequired: () => void
   /** A request the network failed: not one that was aborted. */
-  onNetworkError?: () => void
+  onNetworkError?: (url: URL) => void
   pageUrl: string
 }
 
@@ -99,7 +99,7 @@ export function createAuthFetch({ baseFetch, origin, storage, onAuthRequired, on
     // different origin from the server on :8899 (same site, though, so a
     // SameSite=Lax cookie is still sent).
     const res = await baseFetch(input, { ...init, headers, credentials: init?.credentials ?? 'include' }).catch((err: unknown) => {
-      if (!(err instanceof DOMException && err.name === 'AbortError')) onNetworkError?.()
+      if (!(err instanceof DOMException && err.name === 'AbortError')) onNetworkError?.(url)
       throw err
     })
 
@@ -127,7 +127,11 @@ export function installAuthFetch(): void {
     onAuthRequired: () => window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT)),
     // #119: whatever asked may now show nothing in its place, so the next
     // outage that ends has everything read again (connect/reconnect.ts).
-    onNetworkError: noteReadFailed,
+    // Not the health check's own failures: those are what an outage is
+    // made of, and nothing shows what they would have read.
+    onNetworkError: (url) => {
+      if (!url.pathname.endsWith('/health')) noteReadFailed()
+    },
     pageUrl: window.location.href,
   })
 }
