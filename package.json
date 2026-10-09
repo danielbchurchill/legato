@@ -9,6 +9,7 @@
     "dev:server": "LEGATO_DATA_DIR=\"${LEGATO_DATA_DIR:-$HOME/.local/share/fm.legato.app}\" npm --prefix server run dev",
     "dev:full": "trap 'kill 0' EXIT INT TERM; npm run dev:server & npm run dev",
     "dev:remote": "trap 'kill 0' EXIT INT TERM; npm run dev:server & VITE_SERVER_HOST=\"$(tailscale ip -4)\" vite --host \"$(tailscale ip -4)\"",
+    "dev:instance": "node scripts/tauri-dev-instance.mjs",
     "build": "tsc -b && vite build && node scripts/check-built-css.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
