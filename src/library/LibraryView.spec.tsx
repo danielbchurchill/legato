@@ -43,8 +43,14 @@ function artistsPage(url: URL): { items: ArtistRow[]; total: number } {
 // Every socket the view opened, to send server events through.
 let sockets: { onmessage: ((msg: { data: string }) => void) | null }[]
 
-function send(event: string) {
-  for (const socket of sockets) socket.onmessage?.({ data: JSON.stringify({ event, payload: {} }) })
+function send(event: string, payload: unknown = {}) {
+  for (const socket of sockets) socket.onmessage?.({ data: JSON.stringify({ event, payload }) })
+}
+
+// What the server sends after a recompute or a merge, with its revision.
+let revision = 1_000
+function libraryChanged(at = ++revision) {
+  send('library:changed', { revision: at })
 }
 
 let root: Root | null = null
@@ -130,15 +136,6 @@ const countsLine = (container: HTMLElement) => container.querySelector('h1')?.ne
 const tabCount = (container: HTMLElement) =>
   [...container.querySelectorAll('h2')].find((h) => h.textContent === 'All artists')?.nextElementSibling?.textContent
 
-// Sends the events, then lets the view's coalescing wait run out and what it
-// fetched land.
-async function after(events: string[]) {
-  await act(async () => {
-    for (const event of events) send(event)
-    await vi.advanceTimersByTimeAsync(1_500)
-  })
-}
-
 describe('Library header past the graph cap (#302)', () => {
   it("counts the whole library from the server, not the map's capped graph", async () => {
     const container = await render(cappedGraph())
@@ -173,45 +170,70 @@ describe('Library header and Artists tab after the library changes (#302)', () =
     server.stats = { ...STATS, artists: 2_999 }
   }
 
-  for (const event of ['scan:done', 'enrich:applied', 'hygiene:changed']) {
-    it(`fetches both again after ${event}, so they agree`, async () => {
-      const container = await render(cappedGraph())
-      vi.useFakeTimers()
-
-      changeLibrary()
-      await after([event])
-
-      expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
-      expect(countsLine(container)).toBe('30,000 albums · 2,999 artists · 300,000 tracks')
-      expect(tabCount(container)).toBe('2,999')
-    })
-  }
-
-  it('fetches once for a burst of changes, not once per event', async () => {
-    await render(cappedGraph())
-    vi.useFakeTimers()
-    expect(requests).toMatchObject({ '/stats': 1, '/library/artists': 1 })
-
-    await act(async () => {
-      for (let i = 0; i < 20; i++) {
-        send('hygiene:changed')
-        await vi.advanceTimersByTimeAsync(1_000)
-      }
-    })
-    await after(['scan:done', 'enrich:applied'])
-
-    expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
-  })
-
-  it("doesn't fetch on scan:file, which a scan sends for every file it reads", async () => {
+  it('fetches both again after library:changed, so they agree', async () => {
     const container = await render(cappedGraph())
     vi.useFakeTimers()
 
     changeLibrary()
-    await after(Array.from({ length: 1_000 }, () => 'scan:file'))
+    await act(async () => {
+      libraryChanged()
+      await vi.advanceTimersByTimeAsync(1_500)
+    })
 
-    expect(requests).toMatchObject({ '/stats': 1, '/library/artists': 1 })
-    expect(countsLine(container)).toBe('30,000 albums · 3,000 artists · 300,000 tracks')
+    expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
+    expect(countsLine(container)).toBe('30,000 albums · 2,999 artists · 300,000 tracks')
+    expect(tabCount(container)).toBe('2,999')
+  })
+
+  // The watcher sends scan:file for every file it reads, and the enrichment
+  // worker sends enrich:applied and hygiene:changed for every job, every few
+  // seconds for as long as a drain lasts. None of them rewrites the albums.
+  for (const event of ['scan:file', 'enrich:applied', 'hygiene:changed', 'scan:done']) {
+    it(`doesn't fetch on ${event}`, async () => {
+      const container = await render(cappedGraph())
+      vi.useFakeTimers()
+
+      changeLibrary()
+      await act(async () => {
+        for (let i = 0; i < 300; i++) {
+          send(event)
+          await vi.advanceTimersByTimeAsync(2_500)
+        }
+      })
+
+      expect(requests).toMatchObject({ '/stats': 1, '/library/artists': 1 })
+      expect(countsLine(container)).toBe('30,000 albums · 3,000 artists · 300,000 tracks')
+    })
+  }
+
+  it('fetches once for a burst of changes that goes quiet', async () => {
+    await render(cappedGraph())
+    vi.useFakeTimers()
+
+    await act(async () => {
+      for (let i = 0; i < 5; i++) {
+        libraryChanged()
+        await vi.advanceTimersByTimeAsync(1_000)
+      }
+      await vi.advanceTimersByTimeAsync(1_500)
+    })
+
+    expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
+  })
+
+  it("doesn't fetch for a revision it has already fetched", async () => {
+    await render(cappedGraph())
+    vi.useFakeTimers()
+
+    await act(async () => {
+      libraryChanged(2_000)
+      await vi.advanceTimersByTimeAsync(1_500)
+      libraryChanged(2_000)
+      libraryChanged(1_999)
+      await vi.advanceTimersByTimeAsync(1_500)
+    })
+
+    expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
   })
 
   for (const status of [500, 401]) {
@@ -221,7 +243,10 @@ describe('Library header and Artists tab after the library changes (#302)', () =
 
       server.statsStatus = status
       server.artistsStatus = status
-      await after(['scan:done'])
+      await act(async () => {
+        libraryChanged()
+        await vi.advanceTimersByTimeAsync(1_500)
+      })
 
       expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
       expect(countsLine(container)).toBe('30,000 albums · 3,000 artists · 300,000 tracks')

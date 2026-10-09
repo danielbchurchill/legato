@@ -5,31 +5,37 @@ import { REFETCH_COALESCE_MS } from '../canvas/useGraphData'
 import type { Stats } from '../panels/healthData'
 
 /* When the Library header's counts and the Artists tab fetch again (#302).
- * Both read the albums and artists tables, which change when a recompute
- * rewrites them, so they follow the events that come after one: a scan's
- * (scan:done), an artist-credit split's (enrich:applied, the only event
- * enrich/artistCredit.ts sends), and a hygiene change, a match or a merge
- * (hygiene:changed).
+ * Both read the albums table and the track count, which change when a
+ * recompute rewrites the albums table and when a merge moves files between
+ * recordings. The server sends library:changed after each, with a revision
+ * number that only goes up (server/src/libraryRevision.ts), and nothing
+ * else here fetches again.
  *
- * Not scan:file. A scan sends one per file it reads, the tables only change
- * at its recompute, and GET /stats holds the server's loop for about 0.15 s
- * at 30,000 albums: a 1,000-file copy refetched on every one was two and a
- * half minutes of a blocked server for each Library view open.
+ * Not scan:file, enrich:applied or hygiene:changed. The watcher sends
+ * scan:file for every file it reads, and the enrichment worker sends the
+ * other two once per job, every few seconds for as long as a drain lasts,
+ * and none of those rewrite what the header or the tab reads. GET /stats
+ * holds the server's loop for about 0.13 s at 30,000 albums.
  *
- * One socket for the view, and a burst coalesced into one refetch, as the
+ * One socket for the view, and a burst coalesced into one fetch, as the
  * map's own refetch is (canvas/useGraphData.ts). */
 
-const LIBRARY_CHANGES = ['scan:done', 'enrich:applied', 'hygiene:changed']
-
-/** A count that goes up once a burst of library changes has gone quiet. */
+/** The library's revision as of its last change, once a burst of changes
+ * has gone quiet; 0 until one arrives. */
 export function useLibraryChanges(): number {
   const [revision, setRevision] = useState(0)
+  // The newest revision the server has sent, which a settled burst shows.
+  // An event that isn't newer (sent again, or out of order) is left out.
+  const latest = useRef(0)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useWsEvent(LIBRARY_CHANGES, () => {
+  useWsEvent(['library:changed'], (payload) => {
+    const next = (payload as { revision?: unknown } | undefined)?.revision
+    if (typeof next !== 'number' || next <= latest.current) return
+    latest.current = next
     if (timerRef.current != null) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
       timerRef.current = null
-      setRevision((n) => n + 1)
+      setRevision(latest.current)
     }, REFETCH_COALESCE_MS)
   })
   useEffect(
