@@ -52,12 +52,21 @@ vi.mock('./search/SearchPalette', () => ({ SearchPalette: () => createElement('d
 vi.mock('./connect/ConnectScreen', async () => {
   const { useEffect: useMountEffect } = await import('react')
   return {
-    ConnectScreen: () => {
+    ConnectScreen: ({ onClose }: { onClose: () => void }) => {
       const [typed, setTyped] = useState('')
       useMountEffect(() => {
         harness.connectMounts++
       }, [])
-      return createElement('input', { 'aria-label': 'Server address', value: typed, onChange: (e: { target: { value: string } }) => setTyped(e.target.value) })
+      return createElement(
+        'div',
+        null,
+        createElement('input', {
+          'aria-label': 'Server address',
+          value: typed,
+          onChange: (e: { target: { value: string } }) => setTyped(e.target.value),
+        }),
+        createElement('button', { 'data-testid': 'close-connect', onClick: onClose }, 'back'),
+      )
     },
   }
 })
@@ -78,6 +87,7 @@ vi.mock('./playback/usePlayback', () => {
 })
 
 import App from './App'
+import { OPEN_CONNECT_EVENT } from './connect/openConnect'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -232,5 +242,33 @@ describe('App across an outage', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // The coordinator's review of #346: the connect screen moved in the tree
+  // when the server first answered, which lost what was typed.
+  it('keeps the connect screen, and what was typed in it, when the server answers for the first time', async () => {
+    harness.status = { ...harness.status, ready: false, everConnected: false, server: null }
+    await mount()
+    expect(container.textContent).toContain('connecting…')
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(OPEN_CONNECT_EVENT, { detail: 'unreachable' }))
+    })
+    const input = container.querySelector<HTMLInputElement>('[aria-label="Server address"]')!
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setValue.call(input, '192.168.1.20')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(input.value).toBe('192.168.1.20')
+
+    await setStatus({
+      ready: true,
+      everConnected: true,
+      server: { version: '0.4.0', gitSha: 'abc1234', schemaVersion: MIN_SERVER_SCHEMA_VERSION, outOfDate: false, update: null },
+    })
+
+    expect(harness.connectMounts).toBe(1)
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Server address"]')).toBe(input)
+    expect(input.value).toBe('192.168.1.20')
   })
 })

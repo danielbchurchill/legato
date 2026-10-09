@@ -654,49 +654,16 @@ export default function App() {
   // again: React leaves an element it has already rendered alone.
   const app = useMemo(() => <MainApp />, [])
 
-  // Back goes to whatever was there before: the app, a sign-in screen, or
-  // the wait for a server that isn't answering. It's drawn over that rather
-  // than in its place (#119), so going back finds the app as it was left:
-  // the same queue, and anything still playing.
-  const connectScreen = connect.reason && (
-    <div role="dialog" aria-modal="true" aria-label="Connect to a server" className="relative z-50">
-      <ConnectScreen theme={resolvedTheme} reason={connect.reason} onClose={connect.close} />
-    </div>
-  )
-
-  if (!everConnected) {
-    // #119: a server that isn't answering gets the unreachable state, with
-    // the desktop app's own server given time to start first.
-    if (unreachable && (SERVER_PATH !== 'embedded' || embeddedHadTime)) {
-      return (
-        <>
-          <ServerUnreachableWindow view={unreachable} theme={resolvedTheme} />
-          {connectScreen}
-        </>
-      )
-    }
-    // #128: an installed web app launched with the server out of reach
-    // runs the service worker's cached shell, and "starting" would be a
-    // lie there: no browser starts a server. It still polls, so the app
-    // comes up by itself once the server answers. #117: the link is the
-    // way out when the server this client points at isn't there.
-    return (
-      <>
-        <Centered>
-          {SERVER_PATH === 'embedded' ? 'starting legato-server…' : 'connecting…'}
-          {offerAnother && <Button onClick={() => openConnectScreen('unreachable')}>connect to a different server</Button>}
-        </Centered>
-        {connectScreen}
-      </>
-    )
-  }
-
-  // Once the app has run, it stays mounted through an outage (#119): the
-  // queue and the web player live in it, and anything buffered keeps
-  // playing. The shell draws the unreachable state over itself; anything
-  // else (the sign-in check, loading the library) gets the whole window.
-  return (
-    <UnreachableContext.Provider value={surface}>
+  // Before the first connection: the wait for the server, or the
+  // unreachable state once it's clear the server isn't answering, with the
+  // desktop app's own server given time to start first (#119). After it,
+  // the app stays mounted through an outage: the queue and the web player
+  // live in it, and anything buffered keeps playing. The shell draws the
+  // unreachable state over itself; anything else (the sign-in check,
+  // loading the library) gets the whole window.
+  let main: ReactNode
+  if (everConnected) {
+    main = (
       <ToastProvider>
         {/* A server older than migration 0029 has no owner gate and no
          * /auth/status to ask, so it runs ungated exactly as before,
@@ -704,8 +671,37 @@ export default function App() {
         {server?.outOfDate ? app : <OwnerGated>{app}</OwnerGated>}
         <ServerUpdateNotice server={server} />
       </ToastProvider>
-      {unreachable && !claimed && <ServerUnreachableWindow view={unreachable} theme={resolvedTheme} />}
-      {connectScreen}
+    )
+  } else if (!unreachable || (SERVER_PATH === 'embedded' && !embeddedHadTime)) {
+    // #128: an installed web app launched with the server out of reach
+    // runs the service worker's cached shell, and "starting" would be a
+    // lie there: no browser starts a server. It still polls, so the app
+    // comes up by itself once the server answers. #117: the link is the
+    // way out when the server this client points at isn't there.
+    main = (
+      <Centered>
+        {SERVER_PATH === 'embedded' ? 'starting legato-server…' : 'connecting…'}
+        {offerAnother && <Button onClick={() => openConnectScreen('unreachable')}>connect to a different server</Button>}
+      </Centered>
+    )
+  }
+  const unreachableWindow = unreachable && !claimed && (everConnected || main == null)
+
+  // Back goes to whatever was there before: the app, a sign-in screen, or
+  // the wait for a server that isn't answering. It's drawn over that rather
+  // than in its place (#119), so going back finds the app as it was left:
+  // the same queue, and anything still playing. It keeps one place in the
+  // tree whatever is under it, so the server answering for the first time
+  // while it's open doesn't remount it and lose what was typed.
+  return (
+    <UnreachableContext.Provider value={surface}>
+      {main}
+      {unreachableWindow && <ServerUnreachableWindow view={unreachable} theme={resolvedTheme} />}
+      {connect.reason && (
+        <div role="dialog" aria-modal="true" aria-label="Connect to a server" className="relative z-50">
+          <ConnectScreen theme={resolvedTheme} reason={connect.reason} onClose={connect.close} />
+        </div>
+      )}
     </UnreachableContext.Provider>
   )
 }
