@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { INSET, PLAYER_MIN_WIDTH, RIGHT_PANEL_WIDTH, computeShellLayout, playerContentWidth, playerParts } from './layout'
+import {
+  CAPSULE_MIN_WIDTH,
+  INSET,
+  PLAYER_MIN_WIDTH,
+  RIGHT_PANEL_WIDTH,
+  capsuleContentWidth,
+  capsuleParts,
+  computeShellLayout,
+  playerContentWidth,
+  playerParts,
+  type ShellLayout,
+} from './layout'
 
 describe('computeShellLayout', () => {
   it('centres on the window when only the rail is showing', () => {
@@ -27,8 +38,9 @@ describe('computeShellLayout', () => {
   it('never reports a negative width for a window narrower than its panels', () => {
     const layout = computeShellLayout(600, 600, { leftOpen: true, rightOpen: true })
     expect(layout.free).toBe(0)
-    expect(layout.capsuleWidth).toBe(0)
-    // The player holds at the transport's width instead (#293).
+    // Both hold at their narrowest instead: the player at the transport's
+    // width (#293), the capsule at its icons (#308).
+    expect(layout.capsuleWidth).toBe(CAPSULE_MIN_WIDTH)
     expect(layout.playerWidth).toBe(PLAYER_MIN_WIDTH)
   })
 
@@ -128,3 +140,79 @@ describe('the player as its bar narrows', () => {
     expect(layout.playerParts).toEqual(transportOnly)
   })
 })
+
+const PANELS = [
+  { leftOpen: false, rightOpen: false },
+  { leftOpen: true, rightOpen: false },
+  { leftOpen: false, rightOpen: true },
+  { leftOpen: true, rightOpen: true },
+]
+
+/* The glass either side of the free space: the rail or the left panel, and
+ * the right panel or the window's inset edge. */
+function panelEdges(layout: ShellLayout, rightOpen: boolean) {
+  return { left: layout.leftOccupancy, right: layout.width - INSET - (rightOpen ? RIGHT_PANEL_WIDTH : 0) }
+}
+
+// #308: the capsule gives way the way the player does, down to the switch's
+// icons and the magnifier.
+describe('the capsule as it narrows', () => {
+  const full = { switchLabels: true, searchLabel: 'full', searchShortcut: true }
+  const short = { ...full, searchLabel: 'short' }
+  const noShortcut = { ...short, searchShortcut: false }
+  const magnifier = { ...noShortcut, searchLabel: null }
+  const icons = { ...magnifier, switchLabels: false }
+
+  // With both panels open the capsule is the window less 824px, up to 520.
+  it.each([
+    [1440, 520, full],
+    [1331, 507, full],
+    [1330, 506, short],
+    [1184, 360, short],
+    [1183, 359, noShortcut],
+    [1123, 299, noShortcut],
+    [1122, 298, magnifier],
+    [1100, 276, magnifier],
+    [1067, 243, magnifier],
+    [1066, 242, icons],
+    [959, 135, icons],
+    [900, 135, icons],
+  ])('a %ipx window with both panels open has a %ipx capsule', (windowWidth, capsule, parts) => {
+    const layout = computeShellLayout(windowWidth, 900, { leftOpen: true, rightOpen: true })
+    expect(layout.capsuleWidth).toBe(capsule)
+    expect(layout.capsuleParts).toEqual(parts)
+  })
+
+  it('fits everything it shows at every capsule width', () => {
+    for (let width = CAPSULE_MIN_WIDTH; width <= 520; width++) {
+      expect(capsuleContentWidth(capsuleParts(width)), `capsule ${width}`).toBeLessThanOrEqual(width)
+    }
+  })
+
+  it('stops narrowing at its icons, in the window, however narrow the window', () => {
+    // Two 32px segments in the switch's well, the divider, the magnifier, and the padding, gaps and border around them.
+    expect(CAPSULE_MIN_WIDTH).toBe(1 + 6 + (2 + 32 + 2 + 32 + 2) + 10 + 1 + 10 + (18 + 10) + 8 + 1)
+    for (const panels of PANELS) {
+      for (let width = 320; width <= 3840; width += 2) {
+        const layout = computeShellLayout(width, 900, panels)
+        const label = `width ${width}, ${JSON.stringify(panels)}`
+        expect(layout.capsuleWidth, label).toBeGreaterThanOrEqual(CAPSULE_MIN_WIDTH)
+        expect(layout.capsuleCx - layout.capsuleWidth / 2, label).toBeGreaterThanOrEqual(INSET)
+        expect(layout.capsuleCx + layout.capsuleWidth / 2, label).toBeLessThanOrEqual(width - INSET)
+      }
+    }
+  })
+
+  it('never covers a panel at the desktop minimum or wider', () => {
+    for (const panels of PANELS) {
+      for (let width = 1100; width <= 3840; width += 2) {
+        const layout = computeShellLayout(width, 900, panels)
+        const edges = panelEdges(layout, panels.rightOpen)
+        const label = `width ${width}, ${JSON.stringify(panels)}`
+        expect(layout.capsuleCx - layout.capsuleWidth / 2, label).toBeGreaterThanOrEqual(edges.left)
+        expect(layout.capsuleCx + layout.capsuleWidth / 2, label).toBeLessThanOrEqual(edges.right)
+      }
+    }
+  })
+})
+

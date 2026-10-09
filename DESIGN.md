@@ -66,6 +66,21 @@ Only a browser goes narrower than 958px with both panels open. There, the bar ho
 
 The handoff puts the compact switch at 600px. Its 56 bars at their 1px minimum with 2px gaps only fit from 614, and between the two the waveform ran 6px into the duration, so compact starts at 614. `src/shell/layout.ts` works every threshold out from the parts' sizes (`playerContentWidth`).
 
+#### The capsule as it narrows
+
+The capsule is as wide as the free space less 48px, up to 520. Its parts give way the same way, at the capsule width where each stops fitting (#308):
+
+| Capsule under | What goes | Window under, both panels open |
+|---|---|---|
+| 507px | The placeholder shortens to "Search" | 1331px |
+| 360px | The keycap. ⌘K/Ctrl-K and `/` still open search | 1184px |
+| 299px | "Search". The magnifier stays | 1123px |
+| 243px | The switch's "map" and "library". Their icons stay, and the labels stay for screen readers | 1067px |
+
+The switch and the search button never go. With the switch's icons and the magnifier the capsule needs 135px, and it stops narrowing there. Under 959px with both panels open its margins close up, and under 911px it floats over the panels' inner edges, inside the window, as the bar does. At 1100 with both panels open it's 276px, the labelled switch and the magnifier.
+
+The words go before the switch's labels because a magnifier needs no caption, and the map and library icons are Legato's own. The keycap is counted at its "Ctrl K" width, the wider of the two, so the thresholds are the same on every platform and a Mac's "⌘K" has some slack. Unlike the bar's, most of the capsule's widths are text, so they're measured rather than added up: in Chromium, with the self-hosted fonts, rounded up to the next pixel (`src/shell/capsuleGeometry.ts`). Changing a label or a font means measuring again.
+
 ### The map
 
 Nodes are dots, sized and toned by type. Covers at node size made the map a mosaic rather than a graph; cover colour comes back as each artist cluster's glow, the average of its records' thumbnails, computed client-side (`src/ui/coverColor.ts`). A cluster is an artist, its tracks (by first credit) and its records (by a majority of their tracks) — `src/canvas/clusters.ts`.

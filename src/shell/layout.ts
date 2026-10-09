@@ -1,5 +1,20 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import {
+  CAPSULE_BORDER,
+  CAPSULE_DIVIDER_WIDTH,
+  CAPSULE_GAP,
+  CAPSULE_PADDING_LEFT,
+  CAPSULE_PADDING_RIGHT,
+  CAPSULE_PLACEHOLDER_WIDTH,
+  CAPSULE_SEARCH_GAP,
+  CAPSULE_SEARCH_ICON_SIZE,
+  CAPSULE_SEARCH_PADDING_RIGHT,
+  CAPSULE_SEARCH_WORD_WIDTH,
+  CAPSULE_SHORTCUT_WIDTH,
+  CAPSULE_SWITCH_ICONS_WIDTH,
+  CAPSULE_SWITCH_WIDTH,
+} from './capsuleGeometry'
+import {
   PLAYER_BAR_GAP,
   PLAYER_BAR_MIN_WIDTH,
   PLAYER_BORDER,
@@ -38,7 +53,8 @@ import {
  * the transport between the panels, which only a browser reaches: there the
  * player holds at the transport's width and floats over the panels' inner
  * edges, still inside the window, because play/pause can't be the thing
- * that goes (#293). */
+ * that goes (#293). The capsule does the same at the top, holding at its two
+ * controls' icons (#308). */
 
 export const INSET = 12
 export const RAIL_WIDTH = 56
@@ -121,6 +137,55 @@ export function playerParts(playerWidth: number): PlayerParts {
 /* The transport alone: the narrowest the player gets. */
 export const PLAYER_MIN_WIDTH = playerContentWidth(PLAYER_STAGES[PLAYER_STAGES.length - 1])
 
+/* What the capsule shows. A dropped label stays for screen readers, and
+ * both controls, the map/library switch and the search field, stay. */
+export type CapsuleParts = {
+  /** "map" and "library" beside the switch's icons. */
+  switchLabels: boolean
+  /** The search field's placeholder: the sentence, "Search", or nothing
+   * beside the magnifier. */
+  searchLabel: 'full' | 'short' | null
+  /** The ⌘K / Ctrl K keycap. */
+  searchShortcut: boolean
+}
+
+/* The capsule gives way the same way (#308), at the capsule width where each
+ * set stops fitting, widest first:
+ *
+ *   507  everything
+ *   360  the placeholder shortens to "Search"
+ *   299  no keycap; ⌘K and / still open search
+ *   243  no "Search": the magnifier alone
+ *   135  the switch's icons alone, its labels kept for screen readers
+ *
+ * It doesn't get narrower than the last. The words go before the switch's
+ * labels because a magnifier needs no caption and the map and library icons
+ * are Legato's own. */
+const CAPSULE_STAGES: CapsuleParts[] = [
+  { switchLabels: true, searchLabel: 'full', searchShortcut: true },
+  { switchLabels: true, searchLabel: 'short', searchShortcut: true },
+  { switchLabels: true, searchLabel: 'short', searchShortcut: false },
+  { switchLabels: true, searchLabel: null, searchShortcut: false },
+  { switchLabels: false, searchLabel: null, searchShortcut: false },
+]
+
+/* The width a set of capsule parts needs, from capsuleGeometry.ts. */
+export function capsuleContentWidth(parts: CapsuleParts): number {
+  const label = parts.searchLabel === 'full' ? CAPSULE_PLACEHOLDER_WIDTH : parts.searchLabel === 'short' ? CAPSULE_SEARCH_WORD_WIDTH : 0
+  const searchItems = [CAPSULE_SEARCH_ICON_SIZE, label, parts.searchShortcut ? CAPSULE_SHORTCUT_WIDTH : 0].filter((w) => w > 0)
+  const search = searchItems.reduce((sum, w) => sum + w, 0) + CAPSULE_SEARCH_GAP * (searchItems.length - 1) + CAPSULE_SEARCH_PADDING_RIGHT
+  const switchWidth = parts.switchLabels ? CAPSULE_SWITCH_WIDTH : CAPSULE_SWITCH_ICONS_WIDTH
+  const content = switchWidth + CAPSULE_GAP + CAPSULE_DIVIDER_WIDTH + CAPSULE_GAP + search
+  return CAPSULE_BORDER + CAPSULE_PADDING_LEFT + content + CAPSULE_PADDING_RIGHT + CAPSULE_BORDER
+}
+
+export function capsuleParts(capsuleWidth: number): CapsuleParts {
+  return CAPSULE_STAGES.find((parts) => capsuleContentWidth(parts) <= capsuleWidth) ?? CAPSULE_STAGES[CAPSULE_STAGES.length - 1]
+}
+
+/* The switch's icons and the magnifier: the narrowest the capsule gets. */
+export const CAPSULE_MIN_WIDTH = capsuleContentWidth(CAPSULE_STAGES[CAPSULE_STAGES.length - 1])
+
 export type ShellLayout = {
   width: number
   height: number
@@ -131,6 +196,9 @@ export type ShellLayout = {
   /** Horizontal centre of the free space. */
   cx: number
   capsuleWidth: number
+  /** The capsule's centre: cx, unless that would push it off the window. */
+  capsuleCx: number
+  capsuleParts: CapsuleParts
   playerWidth: number
   /** The player's centre: cx, unless that would push the bar off the window. */
   playerCx: number
@@ -148,6 +216,7 @@ export function computeShellLayout(
   const rightOccupancy = rightOpen ? RIGHT_OCCUPANCY_OPEN : 0
   const free = Math.max(0, width - leftOccupancy - rightOccupancy)
   const cx = (leftOccupancy + (width - rightOccupancy)) / 2
+  const capsuleWidth = Math.max(CAPSULE_MIN_WIDTH, Math.min(520, free - 48))
   const playerWidth = Math.max(PLAYER_MIN_WIDTH, Math.min(720, free - 48))
   return {
     width,
@@ -156,7 +225,9 @@ export function computeShellLayout(
     rightOccupancy,
     free,
     cx,
-    capsuleWidth: Math.max(0, Math.min(520, free - 48)),
+    capsuleWidth,
+    capsuleCx: Math.min(Math.max(cx, INSET + capsuleWidth / 2), width - INSET - capsuleWidth / 2),
+    capsuleParts: capsuleParts(capsuleWidth),
     playerWidth,
     playerCx: Math.min(Math.max(cx, INSET + playerWidth / 2), width - INSET - playerWidth / 2),
     playerParts: playerParts(playerWidth),

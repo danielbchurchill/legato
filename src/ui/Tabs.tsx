@@ -44,6 +44,14 @@ const SEGMENT_HEIGHT: Record<TabsSize, string> = {
   lg: 'h-[32px] px-[14px]',
 }
 
+/* An icon alone sits in a square segment, a circle once the thumb's under it. */
+const SEGMENT_SQUARE: Record<TabsSize, string> = {
+  xs: 'size-[20px] justify-center',
+  sm: 'size-[24px] justify-center',
+  md: 'size-[30px] justify-center',
+  lg: 'size-[32px] justify-center',
+}
+
 type TabsProps<T extends string> = {
   options: readonly TabOption<T>[]
   value: T
@@ -57,6 +65,9 @@ type TabsProps<T extends string> = {
    * library header), 36 (lg — the capsule's map/library switch). Underline
    * tabs ignore it. */
   size?: TabsSize
+  /** `segmented` only: each option's icon alone, its label kept for screen
+   * readers. The capsule's switch when it's narrow (#308). */
+  iconOnly?: boolean
   className?: string
 }
 
@@ -68,6 +79,7 @@ export function Tabs<T extends string>({
   variant = 'segmented',
   bare = false,
   size = 'sm',
+  iconOnly = false,
   className = '',
 }: TabsProps<T>) {
   const listRef = useRef<HTMLDivElement>(null)
@@ -162,11 +174,11 @@ export function Tabs<T extends string>({
             onClick={() => onChange(option.value)}
             onKeyDown={handleKeyDown}
             className={`relative z-[1] flex items-center gap-[6px] text-[length:var(--text-secondary)] leading-none font-medium whitespace-nowrap transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
-              segmented ? `rounded-full ${SEGMENT_HEIGHT[size]}` : 'pb-[9px]'
+              segmented ? `rounded-full ${iconOnly ? SEGMENT_SQUARE[size] : SEGMENT_HEIGHT[size]}` : 'pb-[9px]'
             } ${active ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-ink-2)] hover:text-[var(--color-ink)]'}`}
           >
             {option.icon && <Icon name={option.icon} size={iconSize} />}
-            {option.label}
+            {iconOnly ? <span className="sr-only">{option.label}</span> : option.label}
           </button>
         )
       })}
