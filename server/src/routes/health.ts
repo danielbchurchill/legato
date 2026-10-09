@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../sqlite.js";
 import { listRootReachability } from "../scan/reachability.js";
@@ -17,6 +18,10 @@ import { readUpdateStatus, type UpdateCheckOptions, type UpdateStatus } from "..
 //   version        release version, the same string `legato-server
 //                  --version` prints ("0.0.0-dev" outside a compiled binary)
 //   gitSha         commit the binary was built from ("unknown" outside one)
+//   bootId         a random id this process picked when it started (#119).
+//                  A client that sees it change knows the server restarted,
+//                  however quickly, and reads everything again. It says
+//                  nothing but when the server last started
 //   schemaVersion  highest migration applied to this server's database; the
 //                  number a client compares against the lowest it can work
 //                  with (src/config/serverVersion.ts)
@@ -44,6 +49,7 @@ export type HealthBody = {
   name: string;
   version: string;
   gitSha: string;
+  bootId: string;
   schemaVersion: number;
   libraryRoots: ReturnType<typeof listRootReachability>;
   installChannel: InstallChannel;
@@ -60,9 +66,12 @@ export function highestAppliedMigration(db: Database): number {
   return row.version ?? 0;
 }
 
+// One per process, so it changes on every restart and on nothing else.
+export const BOOT_ID = randomUUID();
+
 // `update` is injectable so health.spec.ts can pin the env and version
 // without touching process.env.
-export function healthRoutes(db: Database, update: UpdateCheckOptions = {}, name: string = SERVER_NAME) {
+export function healthRoutes(db: Database, update: UpdateCheckOptions = {}, name: string = SERVER_NAME, bootId: string = BOOT_ID) {
   const schemaVersion = highestAppliedMigration(db);
   const installChannel = resolveInstallChannel(update.env);
 
@@ -78,6 +87,7 @@ export function healthRoutes(db: Database, update: UpdateCheckOptions = {}, name
         name,
         version: VERSION,
         gitSha: GIT_SHA,
+        bootId,
         schemaVersion,
         libraryRoots: listRootReachability(),
         installChannel,

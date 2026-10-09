@@ -5,7 +5,7 @@ import { openDb } from "../db.js";
 import { MIGRATIONS } from "../migrations/manifest.generated.js";
 import { GIT_SHA, VERSION } from "../version.js";
 import { checkForUpdates, type UpdateCheckOptions } from "../update/check.js";
-import { healthRoutes, highestAppliedMigration, type HealthBody } from "./health.js";
+import { BOOT_ID, healthRoutes, highestAppliedMigration, type HealthBody } from "./health.js";
 
 // Issue #193. Clients decide "this server is too old for me" from these
 // fields alone, so the shape is pinned here rather than left to whatever
@@ -25,12 +25,13 @@ async function getHealth(update: UpdateCheckOptions = {}) {
 }
 
 describe("GET /api/v1/health", () => {
-  it("reports status, name, version, gitSha, schemaVersion, libraryRoots, installChannel and update", async () => {
+  it("reports status, name, version, gitSha, bootId, schemaVersion, libraryRoots, installChannel and update", async () => {
     const res = await getHealth();
 
     expect(res.statusCode).toBe(200);
     const body = res.json() as HealthBody;
     expect(Object.keys(body).sort()).toEqual([
+      "bootId",
       "gitSha",
       "installChannel",
       "libraryRoots",
@@ -49,6 +50,24 @@ describe("GET /api/v1/health", () => {
 
     expect(body.version).toBe(VERSION);
     expect(body.gitSha).toBe(GIT_SHA);
+  });
+
+  // Issue #119: how a client tells a restart from a blip on its own side.
+  it("reports the same boot id on every answer from this process, and a random one", async () => {
+    const first = (await getHealth()).json() as HealthBody;
+    const second = (await getHealth()).json() as HealthBody;
+
+    expect(first.bootId).toBe(BOOT_ID);
+    expect(second.bootId).toBe(BOOT_ID);
+    expect(BOOT_ID).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("reports the boot id it was given, as a restarted process would", async () => {
+    const app = Fastify();
+    await app.register(healthRoutes(db, {}, "musicbox", "after-restart"), { prefix: "/api/v1" });
+    const body = (await app.inject({ method: "GET", url: "/api/v1/health" })).json() as HealthBody;
+
+    expect(body.bootId).toBe("after-restart");
   });
 
   // Issue #117: the name the connect screen and the mDNS advertisement show.
