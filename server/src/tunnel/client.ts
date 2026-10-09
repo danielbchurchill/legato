@@ -55,6 +55,10 @@ const HEARTBEAT_MS = 30_000;
 const AUTH_TIMEOUT_MS = 15_000;
 // How long stop() waits for answers already under way before it closes.
 const STOP_GRACE_MS = 2_000;
+// How long a closing socket has to send what's queued on it before it's
+// dropped: HIGH_WATER of audio and an answer behind it, up a slow home
+// connection (1 MB at 1 Mbit/s is 8 s).
+const CLOSE_WAIT_MS = 10_000;
 // After a refusal: about an hour, plus up to a quarter more by chance, so
 // every server refused by one incident doesn't come back in one burst.
 const REFUSED_RETRY_MS = 60 * 60_000;
@@ -88,6 +92,8 @@ export type TunnelClientOptions = {
   heartbeatMs?: number;
   /** The wait before asking again after a refusal. */
   refusedRetryMs?: number;
+  /** How long a closing socket has to send what's queued on it. */
+  closeWaitMs?: number;
   random?: () => number;
   now?: () => number;
 };
@@ -252,10 +258,15 @@ export class TunnelClient {
   }
 
   // Closes the current socket and everything riding on it, and forgets it,
-  // so its own close event, when it comes, finds nothing to do. A socket
-  // that stopped answering is dropped (`dead`): a close lets what's queued
-  // go first, and Bun keeps the socket open until it has, which on a dead
-  // connection is until the OS gives up.
+  // so its own close event, when it comes, finds nothing to do.
+  //
+  // Requests still under way are cancelled, then a close frame goes after
+  // whatever is already queued: Bun sends what's queued first. So an
+  // answer already sent still gets out, even an unlink's queued behind up
+  // to HIGH_WATER of a stream cut off at the end of stop()'s grace. A
+  // socket that hasn't finished within CLOSE_WAIT_MS is dropped. One that
+  // stopped answering is dropped at once (`dead`): nothing queued on it
+  // will go, and Bun would keep it open until the OS gave up.
   private teardown(dead = false): void {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.beatTimer) clearInterval(this.beatTimer);
@@ -265,15 +276,18 @@ export class TunnelClient {
     // through requestOver().
     const socket = this.socket;
     this.socket = null;
-    const graceful = !dead && this.requests.size === 0;
     for (const request of [...this.requests.values()]) request.cancel();
     this.requests.clear();
+    if (!socket) return;
     try {
-      // A close frame goes after whatever is still queued, so the last
-      // answers aren't cut off. A socket with requests still riding on it
-      // is just dropped.
-      if (graceful && socket?.readyState === WebSocket.OPEN) socket.close(1000, "stopped");
-      else socket?.terminate();
+      if (dead || socket.readyState !== WebSocket.OPEN) {
+        socket.terminate();
+        return;
+      }
+      socket.close(1000, "stopped");
+      const deadline = setTimeout(() => socket.terminate(), this.options.closeWaitMs ?? CLOSE_WAIT_MS);
+      deadline.unref();
+      socket.addEventListener("close", () => clearTimeout(deadline), { once: true });
     } catch {
       // Already closed.
     }

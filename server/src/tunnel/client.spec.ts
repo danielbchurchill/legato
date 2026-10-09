@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -83,6 +83,46 @@ async function silentRelay(): Promise<{ url: string; sockets: Socket[] }> {
   });
   const { port } = silent.address() as { port: number };
   return { url: `ws://127.0.0.1:${port}/tunnel`, sockets };
+}
+
+// Carries a tunnel to the relay at `target` byte for byte, and can stop
+// carrying what the server sends up it, the way a slow uplink does: the
+// tunnel's socket then holds what it sends, and its bufferedAmount climbs.
+async function stallingProxy(target: string): Promise<{ url: string; stall: () => void; flow: () => void }> {
+  const port = Number(new URL(target).port);
+  const pairs: Socket[] = [];
+  let stalled = false;
+  const fromServers: Socket[] = [];
+  const proxy: Server = createServer((fromServer) => {
+    const toRelay = connect(port, "127.0.0.1");
+    pairs.push(fromServer, toRelay);
+    fromServers.push(fromServer);
+    // By hand rather than pipe(), which resumes a paused source whenever
+    // its destination drains.
+    fromServer.on("data", (data) => toRelay.write(data));
+    toRelay.on("data", (data) => fromServer.write(data));
+    fromServer.on("end", () => toRelay.end());
+    toRelay.on("end", () => fromServer.end());
+    if (stalled) fromServer.pause();
+    for (const socket of [fromServer, toRelay]) socket.on("error", () => {});
+  });
+  await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  cleanups.push(() => {
+    for (const socket of pairs) socket.destroy();
+    return new Promise((resolve) => proxy.close(resolve));
+  });
+  const { port: proxyPort } = proxy.address() as { port: number };
+  return {
+    url: `ws://127.0.0.1:${proxyPort}/tunnel`,
+    stall: () => {
+      stalled = true;
+      for (const socket of fromServers) socket.pause();
+    },
+    flow: () => {
+      stalled = false;
+      for (const socket of fromServers) socket.resume();
+    },
+  };
 }
 
 describe("backoffDelay", () => {
@@ -496,6 +536,68 @@ describe("TunnelClient", () => {
     await expect(endless).rejects.toThrow("disconnected");
     expect(Date.now() - stoppedAt).toBeGreaterThanOrEqual(1_900);
     expect(Date.now() - stoppedAt).toBeLessThan(3_000);
+  });
+
+  it("gets an answer queued behind a stream out before it closes, once the grace is over", async () => {
+    // An unlink through legato.fm with music playing: when the grace runs
+    // out, the unlink's answer can still be queued on the socket behind up
+    // to HIGH_WATER of audio, waiting on a slow uplink.
+    const app = Fastify();
+    const audio = Buffer.alloc(64 * 1024, 7);
+    app.get("/endless", (_request, reply) => {
+      reply.raw.writeHead(200, { "content-type": "audio/flac" });
+      const pump = () => {
+        while (!reply.raw.destroyed && reply.raw.write(audio));
+      };
+      reply.raw.on("drain", pump);
+      pump();
+    });
+    app.get("/answer", async () => "answered");
+    const origin = await listen(app);
+    const fake = relay();
+    const proxy = await stallingProxy(fake.url);
+    const tunnel = client(proxy.url, origin);
+    await waitFor(tunnel, "connected");
+
+    proxy.stall();
+    const endless = fake.request({ method: "GET", path: "/endless", headers: {} });
+    endless.catch(() => {});
+    await sleep(500);
+    const answer = fake.request({ method: "GET", path: "/answer", headers: {} });
+    answer.catch(() => {});
+    await sleep(100);
+    tunnel.stop();
+    await sleep(2_500);
+    proxy.flow();
+    expect((await answer).body.toString()).toBe("answered");
+    await expect(endless).rejects.toThrow("disconnected");
+  }, 10_000);
+
+  it("drops a socket that can't finish sending what's queued on it", async () => {
+    // A stream still under way when stop()'s grace runs out, on an uplink
+    // that has stopped taking anything.
+    const terminate = spyOn(WebSocket.prototype, "terminate");
+    cleanups.push(() => terminate.mockRestore());
+    const app = Fastify();
+    app.get("/big", (_request, reply) => {
+      reply.raw.writeHead(200, { "content-type": "audio/flac" });
+      reply.raw.end(Buffer.alloc(8 * 1024 * 1024, 7));
+    });
+    const origin = await listen(app);
+    const fake = relay();
+    const proxy = await stallingProxy(fake.url);
+    const tunnel = client(proxy.url, origin, { closeWaitMs: 200 });
+    await waitFor(tunnel, "connected");
+
+    proxy.stall();
+    void fake.request({ method: "GET", path: "/big", headers: {} }).catch(() => {});
+    await sleep(500);
+    tunnel.stop();
+    // The grace, then the close's own wait.
+    await sleep(2_100);
+    expect(terminate).not.toHaveBeenCalled();
+    await sleep(400);
+    expect(terminate).toHaveBeenCalledTimes(1);
   });
 
   it("aborts its own request when legato.fm cancels it, and sends nothing more for it", async () => {
