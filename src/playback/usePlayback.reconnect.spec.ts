@@ -15,6 +15,7 @@ vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false, invoke: vi.fn() }
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(() => Promise.resolve(() => undefined)) }))
 
 import { usePlayback } from './usePlayback'
+import { storeQualityPreference } from './quality'
 
 const server = { up: true }
 
@@ -103,6 +104,8 @@ describe('usePlayback across a server outage (web player)', () => {
   beforeEach(() => {
     server.up = true
     FakeAudio.made = []
+    // Also starts the quality ladder over, which drops in earlier tests moved.
+    storeQualityPreference('auto')
     vi.stubGlobal('Audio', FakeAudio)
     vi.stubGlobal(
       'fetch',
@@ -249,6 +252,29 @@ describe('usePlayback across a server outage (web player)', () => {
     expect(playback.current.status.playing).toBe(true)
     expect(playback.current.currentTitle).toBe('One')
     expect(titles(playback.current)).toEqual(['Two', 'Three'])
+  })
+
+  // The coordinator's review of #346: a VBR MP3 with no Xing header, or a
+  // truncated file, ends before the length on record. With the server up,
+  // that's the track's end.
+  it('moves on from a file whose stored length is 14 s longer than its audio, at the same quality', async () => {
+    const playback = await mount()
+    await act(async () => playback.current.playAlbum(9))
+    const audio = player()
+    expect(new URL(audio.src).searchParams.get('quality')).toBe('original')
+
+    await act(async () => {
+      audio.currentTime = 186
+      audio.fire('timeupdate')
+      audio.paused = true
+      audio.fire('ended')
+    })
+
+    expect(playback.current.currentTitle).toBe('Two')
+    expect(titles(playback.current)).toEqual(['Three'])
+    expect(playback.current.status.playing).toBe(true)
+    expect(audio.src).toContain('/files/20/stream')
+    expect(new URL(audio.src).searchParams.get('quality')).toBe('original')
   })
 
   // The coordinator's #120 check found an element still playing after the

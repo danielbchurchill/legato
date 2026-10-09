@@ -3,7 +3,7 @@ import { API_BASE, SERVER_ORIGIN } from '../config/serverHost'
 import { MIN_SERVER_SCHEMA_VERSION } from '../config/serverVersion'
 import { updateAction, type UpdateAction } from '../config/installChannel'
 import { readLastSeen, rememberSeen } from '../connect/lastSeen'
-import { announceServerBack } from '../connect/reconnect'
+import { announceServerBack, noteOutage } from '../connect/reconnect'
 import { classifyFailure, HEALTH_TIMEOUT_MS, outageFailure, type CheckFailure } from '../connect/unreachable'
 
 const HEALTH_URL = `${API_BASE}/health`
@@ -284,6 +284,7 @@ export function useServerReady(): ServerStatus {
       if (!down && now - failingSince >= limit) {
         down = true
         downSince = now
+        noteOutage()
         setReady(false)
       }
       if (!down) return

@@ -1,6 +1,7 @@
 import { API_BASE as API } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
-import { SERVER_BACK_EVENT } from '../connect/reconnect'
+import { inOutage, SERVER_BACK_EVENT } from '../connect/reconnect'
+import { HEALTH_TIMEOUT_MS } from '../connect/unreachable'
 
 /* Issue #120: which rung of the server's quality ladder a browser
  * client asks GET /files/:id/stream for. Only the web <audio> path uses
@@ -151,7 +152,7 @@ const MEDIA_ERR_SRC_NOT_SUPPORTED = 4
 export const STALL_LIMIT_MS = 20_000
 
 // How far short of a track's known length an `ended` has to come before it
-// counts as the stream being cut (#119) rather than the track finishing. A
+// could be the stream being cut (#119) rather than the track finishing. A
 // transcode's length differs from the file's by well under a second.
 export const EARLY_END_MS = 5000
 
@@ -163,6 +164,27 @@ type MediaLike = Pick<HTMLMediaElement, 'addEventListener' | 'removeEventListene
   src: string
 }
 
+/** Whether the server answers its health check right now. */
+function serverAnswersNow(): Promise<boolean> {
+  return fetch(`${API}/health`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) }).then(
+    (res) => res.ok,
+    () => false,
+  )
+}
+
+// A stream URL without its media ticket: the same stream, whichever ticket
+// it was asked for with.
+function streamOf(src: string): string {
+  if (!src) return ''
+  try {
+    const url = new URL(src)
+    url.searchParams.delete('t')
+    return url.href
+  } catch {
+    return src
+  }
+}
+
 /** Watches the web player for a mid-track drop: a network error, or a stall
  * longer than STALL_LIMIT_MS. On one it pauses the track, steps the ladder
  * down for the next, and calls `onDrop` so the UI can show paused.
@@ -170,15 +192,20 @@ type MediaLike = Pick<HTMLMediaElement, 'addEventListener' | 'removeEventListene
  * A network error leaves the element dead, so play() on it would fail. The
  * same source is reloaded paused at the same position, so pressing play
  * picks up where it stopped. A reload that fails too (still offline) isn't
- * a second drop. It's retried when the browser reports it's back online,
- * or when the server answers again after an outage (#119's
- * SERVER_BACK_EVENT, from useServerReady). That retry also revives a track
- * that couldn't start at all while the server was gone.
+ * a second drop. It's loaded again once the server is back after an outage
+ * (#119's SERVER_BACK_EVENT, which waits for the session to be renewed), or
+ * when the browser comes back online from a drop too short to be one. That
+ * also revives a track that couldn't start at all while the server was gone.
+ * Only a failure that was the network's is loaded again, always with the
+ * current media ticket: a track that won't load while the server answers
+ * (a missing file, which looks the same to the element) is left alone.
  *
  * A server that goes away mid-track can also end the stream rather than
  * fail it: the browser plays what arrived and fires `ended`, as though the
- * file stopped there. Short of `durationMs` by more than EARLY_END_MS,
- * that's a drop too. Only a real end reaches `onEnded`.
+ * file stopped there. So can a file whose length on record is wrong. An end
+ * short of `durationMs` by more than EARLY_END_MS is a drop only with
+ * evidence the network failed: a stall on the way there, or a server that
+ * doesn't answer now. Otherwise it's the track's end, and `onEnded` gets it.
  *
  * Returns a cleanup function. */
 export function watchForDrops(
@@ -188,11 +215,19 @@ export function watchForDrops(
     online = typeof window === 'undefined' ? null : window,
     onEnded = () => {},
     durationMs = () => null,
-  }: { online?: EventTarget | null; onEnded?: () => void; durationMs?: () => number | null } = {},
+    serverAnswers = serverAnswersNow,
+  }: {
+    online?: EventTarget | null
+    onEnded?: () => void
+    durationMs?: () => number | null
+    serverAnswers?: () => Promise<boolean>
+  } = {},
 ): () => void {
   let stallTimer: ReturnType<typeof setTimeout> | null = null
-  let reloading: { src: string; at: number } | null = null
-  let earlyEnd: { src: string; at: number } | null = null
+  // A stream that failed because the network did, and where to pick it up.
+  let retry: { stream: string; at: number } | null = null
+  // The element said its data stopped coming, and nothing has come since.
+  let stalled = false
 
   const clearStall = () => {
     if (stallTimer !== null) clearTimeout(stallTimer)
@@ -206,25 +241,40 @@ export function watchForDrops(
     onDrop()
   }
 
+  const failedHere = () => retry !== null && retry.stream === streamOf(audio.src)
+
+  // Remembers where to pick the stream up. A stream already waiting keeps
+  // the spot it had: a load that failed may have taken currentTime to 0.
+  const markForRetry = (at: number) => {
+    if (!failedHere()) retry = { stream: streamOf(audio.src), at }
+  }
+
   const reload = () => {
-    // A source already reloaded once keeps the position it was reloaded
-    // at: a load that failed may have taken currentTime back to 0.
-    const at = reloading?.src === audio.src ? reloading.at : audio.currentTime
-    reloading = { src: audio.src, at }
-    audio.src = reloading.src
+    if (!retry || !failedHere()) return
+    audio.src = withMediaTicket(retry.stream)
     // Set before metadata loads, this becomes the element's default start
     // position, which is where the reloaded track begins.
-    audio.currentTime = at
+    audio.currentTime = retry.at
   }
 
   const onError = () => {
-    if (audio.error?.code !== MEDIA_ERR_NETWORK) return
-    if (reloading !== null && audio.src === reloading.src) return
-    // A track that never started didn't drop mid-track. usePlayback's own
-    // play() rejection already shows it as not playing.
-    if (audio.currentTime <= 0) return
-    drop()
-    reload()
+    const code = audio.error?.code
+    if (code !== MEDIA_ERR_NETWORK && code !== MEDIA_ERR_SRC_NOT_SUPPORTED) return
+    // A reload that failed too, the server still gone: not a second drop.
+    if (failedHere()) return
+    if (code === MEDIA_ERR_NETWORK && audio.currentTime > 0) {
+      markForRetry(audio.currentTime)
+      drop()
+      reload()
+      return
+    }
+    // A track that couldn't load at all didn't drop mid-track, and
+    // usePlayback's own play() rejection already shows it as not playing.
+    // It's worth loading again only if the server was out of reach.
+    const src = audio.src
+    void serverAnswers().then((answers) => {
+      if (!answers && audio.src === src) markForRetry(0)
+    })
   }
 
   const onWaiting = () => {
@@ -233,52 +283,69 @@ export function watchForDrops(
     stallTimer = setTimeout(drop, STALL_LIMIT_MS)
   }
 
-  const onLoaded = () => {
-    reloading = null
+  const onStalled = () => {
+    stalled = true
   }
 
-  // A second early end at the same spot is the track's real end: the
-  // database's length was wrong, and holding it there would stick.
+  const onProgress = () => {
+    stalled = false
+  }
+
+  const onLoaded = () => {
+    stalled = false
+    if (failedHere()) retry = null
+  }
+
   const onEnd = () => {
     const expected = durationMs()
     const at = audio.currentTime
-    const again = earlyEnd?.src === audio.src && Math.abs(earlyEnd.at - at) < 2
-    if (expected != null && at * 1000 < expected - EARLY_END_MS && !again) {
-      earlyEnd = { src: audio.src, at }
-      drop()
-      reload()
+    if (expected == null || at * 1000 >= expected - EARLY_END_MS) {
+      onEnded()
       return
     }
-    earlyEnd = null
-    onEnded()
+    const src = audio.src
+    const answers = stalled ? Promise.resolve(false) : serverAnswers()
+    void answers.then((up) => {
+      // Moved on meanwhile (next, or a new queue): that's its own answer.
+      if (audio.src !== src) return
+      if (up) {
+        onEnded()
+        return
+      }
+      markForRetry(at)
+      drop()
+      reload()
+    })
   }
 
-  // Whatever the outage killed loads again where it stopped, paused: a
-  // dropped track whose reload failed too, or one that failed before it
-  // could start. A decode error isn't the network's, so it stays as it is.
-  const onBack = () => {
-    const code = audio.error?.code
-    if (!audio.src || (code !== MEDIA_ERR_NETWORK && code !== MEDIA_ERR_SRC_NOT_SUPPORTED)) return
-    reload()
+  const onServerBack = () => reload()
+  // The browser back online: a drop too short to be an outage loads again
+  // now. During one, it waits for SERVER_BACK_EVENT and the session.
+  const onOnline = () => {
+    if (!inOutage()) reload()
   }
 
   const settled = ['playing', 'pause', 'seeking', 'emptied', 'ended'] as const
   audio.addEventListener('error', onError)
   audio.addEventListener('waiting', onWaiting)
+  audio.addEventListener('stalled', onStalled)
+  audio.addEventListener('progress', onProgress)
   audio.addEventListener('loadeddata', onLoaded)
   audio.addEventListener('ended', onEnd)
   for (const event of settled) audio.addEventListener(event, clearStall)
-  online?.addEventListener('online', onBack)
-  online?.addEventListener(SERVER_BACK_EVENT, onBack)
+  online?.addEventListener('online', onOnline)
+  online?.addEventListener(SERVER_BACK_EVENT, onServerBack)
 
   return () => {
     clearStall()
     audio.removeEventListener('error', onError)
     audio.removeEventListener('waiting', onWaiting)
+    audio.removeEventListener('stalled', onStalled)
+    audio.removeEventListener('progress', onProgress)
     audio.removeEventListener('loadeddata', onLoaded)
     audio.removeEventListener('ended', onEnd)
     for (const event of settled) audio.removeEventListener(event, clearStall)
-    online?.removeEventListener('online', onBack)
-    online?.removeEventListener(SERVER_BACK_EVENT, onBack)
+    online?.removeEventListener('online', onOnline)
+    online?.removeEventListener(SERVER_BACK_EVENT, onServerBack)
   }
 }

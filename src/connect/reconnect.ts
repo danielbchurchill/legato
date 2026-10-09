@@ -21,6 +21,19 @@ export type ServerBackDetail = { since: number }
 
 let epoch = 0
 let sessionCheck: (() => Promise<void>) | null = null
+let outage = false
+
+/** For useServerReady, as it declares an outage. */
+export function noteOutage(): void {
+  outage = true
+}
+
+/** True from a declared outage until the server's back and the session
+ * checked. Something that would load again on the browser's `online` waits
+ * for SERVER_BACK_EVENT instead while this holds. */
+export function inOutage(): boolean {
+  return outage
+}
 
 /** For useAuth: the check to run before anything reads from a server that's
  * back. Returns a function that withdraws it. */
@@ -35,6 +48,7 @@ export function provideSessionCheck(check: () => Promise<void>): () => void {
  * answered before it. */
 export async function announceServerBack(since: number): Promise<void> {
   await sessionCheck?.().catch(() => undefined)
+  outage = false
   epoch += 1
   window.dispatchEvent(new CustomEvent<ServerBackDetail>(SERVER_BACK_EVENT, { detail: { since } }))
 }

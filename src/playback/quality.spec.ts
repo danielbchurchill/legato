@@ -10,7 +10,8 @@ import {
   streamUrl,
   watchForDrops,
 } from './quality'
-import { SERVER_BACK_EVENT } from '../connect/reconnect'
+import { announceServerBack, noteOutage, SERVER_BACK_EVENT } from '../connect/reconnect'
+import { storeSession } from '../auth/session'
 
 function memoryStorage(): Storage {
   const data = new Map<string, string>()
@@ -134,6 +135,13 @@ describe('watchForDrops', () => {
   // streamUrl's chosen rung, read back out of the URL it builds.
   const nextQuality = () => new URL(streamUrl(7)).searchParams.get('quality')
 
+  // Lets the health check an early end or a failed load asks for answer.
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+  }
+  const serverUp = () => Promise.resolve(true)
+  const serverDown = () => Promise.resolve(false)
+
   it('on a network error mid-track: pauses, reports it, and moves the next track down a rung', () => {
     const audio = new FakeAudio()
     const onDrop = vi.fn()
@@ -224,11 +232,11 @@ describe('watchForDrops', () => {
     expect(audio.currentTime).toBe(83)
   })
 
-  it('once the server is back, loads a track that failed to start while it was gone', () => {
+  it('once the server is back, loads a track that failed to start while it was gone', async () => {
     const audio = new FakeAudio()
     const online = new EventTarget()
     const reloads: string[] = []
-    watchForDrops(audio, () => undefined, { online })
+    watchForDrops(audio, () => undefined, { online, serverAnswers: serverDown })
     Object.defineProperty(audio, 'src', {
       get: () => 'http://server/api/v1/files/2/stream?quality=original',
       set: (value: string) => reloads.push(value),
@@ -237,20 +245,90 @@ describe('watchForDrops', () => {
     // A load that fails before any of it arrives reports "not supported".
     audio.error = { code: 4 }
     audio.fire('error')
+    await settle()
     online.dispatchEvent(new Event(SERVER_BACK_EVENT))
 
     expect(reloads).toEqual(['http://server/api/v1/files/2/stream?quality=original'])
     expect(audio.currentTime).toBe(0)
   })
 
-  it('treats a track that ends well short of its length as a drop, and passes a real end on', () => {
+  // The coordinator's review of #346: a missing file looks the same to the
+  // element, and was asked for again on every reconnect.
+  it("leaves a track that won't load while the server answers alone, however often it comes back", async () => {
+    const audio = new FakeAudio()
+    const online = new EventTarget()
+    const reloads: string[] = []
+    watchForDrops(audio, () => undefined, { online, serverAnswers: serverUp })
+    Object.defineProperty(audio, 'src', {
+      get: () => 'http://server/api/v1/files/2/stream?quality=original',
+      set: (value: string) => reloads.push(value),
+    })
+
+    audio.error = { code: 4 }
+    audio.fire('error')
+    await settle()
+    online.dispatchEvent(new Event(SERVER_BACK_EVENT))
+    online.dispatchEvent(new Event('online'))
+    online.dispatchEvent(new Event(SERVER_BACK_EVENT))
+
+    expect(reloads).toEqual([])
+  })
+
+  it('loads a dropped track again with the media ticket the session has now', async () => {
+    storeSession({ token: 'session', mediaTicket: 'before' }, storage)
+    const audio = new FakeAudio()
+    audio.src = `http://server/api/v1/files/1/stream?quality=original&t=before`
+    const online = new EventTarget()
+    watchForDrops(audio, () => undefined, { online })
+
+    audio.currentTime = 42
+    audio.error = { code: 2 }
+    audio.fire('error')
+    expect(new URL(audio.src).searchParams.get('t')).toBe('before')
+
+    // Renewed while the server was gone.
+    storeSession({ token: 'session', mediaTicket: 'after' }, storage)
+    online.dispatchEvent(new Event(SERVER_BACK_EVENT))
+
+    const url = new URL(audio.src)
+    expect(url.searchParams.getAll('t')).toEqual(['after'])
+    expect(url.searchParams.get('quality')).toBe('original')
+    expect(audio.currentTime).toBe(42)
+  })
+
+  it("waits for the server and the session during an outage, rather than loading again on the browser's online", async () => {
+    const page = Object.assign(new EventTarget(), { location: { href: 'http://127.0.0.1:5184/' } })
+    vi.stubGlobal('window', page)
+    const audio = new FakeAudio()
+    const reloads: string[] = []
+    watchForDrops(audio, () => undefined, { online: page })
+    audio.currentTime = 42
+    audio.error = { code: 2 }
+    audio.fire('error')
+    Object.defineProperty(audio, 'src', {
+      get: () => 'http://server/api/v1/files/1/stream?quality=opus160',
+      set: (value: string) => reloads.push(value),
+    })
+
+    noteOutage()
+    page.dispatchEvent(new Event('online'))
+    expect(reloads).toHaveLength(0)
+
+    await announceServerBack(0)
+    expect(reloads).toHaveLength(1)
+  })
+
+  it("treats an end well short of the track's length as a drop when the server doesn't answer, and passes a real end on", async () => {
     const audio = new FakeAudio()
     const onDrop = vi.fn()
     const onEnded = vi.fn()
-    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 180_000 })
+    const serverAnswers = vi.fn(serverDown)
+    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 180_000, serverAnswers })
 
     audio.currentTime = 57.6
     audio.fire('ended')
+    await settle()
+    expect(serverAnswers).toHaveBeenCalledTimes(1)
     expect(onDrop).toHaveBeenCalledTimes(1)
     expect(onEnded).not.toHaveBeenCalled()
     expect(audio.currentTime).toBe(57.6)
@@ -258,23 +336,75 @@ describe('watchForDrops', () => {
 
     audio.currentTime = 180 - EARLY_END_MS / 1000 + 0.5
     audio.fire('ended')
+    await settle()
     expect(onEnded).toHaveBeenCalledTimes(1)
     expect(onDrop).toHaveBeenCalledTimes(1)
+    expect(serverAnswers).toHaveBeenCalledTimes(1)
   })
 
-  it('takes a second early end at the same spot as the real end, so a wrong length in the database never sticks', () => {
+  // The coordinator's review of #346: a VBR MP3 with no Xing header, or a
+  // truncated file, has a stored length longer than its audio.
+  it('lets a file whose stored length is 14 s longer than its audio end and move on, without stepping the ladder down', async () => {
     const audio = new FakeAudio()
     const onDrop = vi.fn()
     const onEnded = vi.fn()
-    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 240_000 })
+    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 194_000, serverAnswers: serverUp })
 
-    audio.currentTime = 170
+    audio.currentTime = 180
     audio.fire('ended')
-    audio.currentTime = 170.4
-    audio.fire('ended')
+    await settle()
 
-    expect(onDrop).toHaveBeenCalledTimes(1)
     expect(onEnded).toHaveBeenCalledTimes(1)
+    expect(onDrop).not.toHaveBeenCalled()
+    expect(audio.pause).not.toHaveBeenCalled()
+    expect(nextQuality()).toBe('original')
+  })
+
+  it('takes an early end after the element said its data stopped coming as a drop, without asking the server', async () => {
+    const audio = new FakeAudio()
+    const onDrop = vi.fn()
+    const serverAnswers = vi.fn(serverUp)
+    watchForDrops(audio, onDrop, { online: null, durationMs: () => 180_000, serverAnswers })
+
+    audio.currentTime = 50
+    audio.fire('stalled')
+    audio.currentTime = 58
+    audio.fire('ended')
+    await settle()
+
+    expect(serverAnswers).not.toHaveBeenCalled()
+    expect(onDrop).toHaveBeenCalledTimes(1)
+  })
+
+  it('forgets a stall the stream recovered from', async () => {
+    const audio = new FakeAudio()
+    const onDrop = vi.fn()
+    const onEnded = vi.fn()
+    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 194_000, serverAnswers: serverUp })
+
+    audio.fire('stalled')
+    audio.fire('progress')
+    audio.currentTime = 180
+    audio.fire('ended')
+    await settle()
+
+    expect(onDrop).not.toHaveBeenCalled()
+    expect(onEnded).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves an early end alone if the track moved on while the server was asked', async () => {
+    const audio = new FakeAudio()
+    const onDrop = vi.fn()
+    const onEnded = vi.fn()
+    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 180_000, serverAnswers: serverDown })
+
+    audio.currentTime = 58
+    audio.fire('ended')
+    audio.src = 'http://server/api/v1/files/2/stream?quality=original'
+    await settle()
+
+    expect(onDrop).not.toHaveBeenCalled()
+    expect(onEnded).not.toHaveBeenCalled()
   })
 
   it('passes every end on when the length is unknown', () => {
