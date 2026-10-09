@@ -455,7 +455,8 @@ export function authRoutes(
         request.log.info("auth: owner account created");
 
         // The owner exists whatever happens next. A link that fails says
-        // why alongside the session, and the owner can link from the app.
+        // why alongside the session, and the owner can link again from
+        // Settings (issue #325).
         let legato: { linked: { accountId: string; email: string | null; name: string | null } | null; error?: string; reason?: string } | undefined;
         if (linking) {
           const linkToken = claims.take(linkAccountId);
