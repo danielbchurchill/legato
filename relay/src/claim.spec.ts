@@ -596,13 +596,39 @@ describe("the claim page", () => {
       `https://evil.example/claim?code=K7QM-4XRD&server=${id}`,
       `/claimx?code=K7QM-4XRD&server=${id}`,
       `/claim?code=nope&server=${id}`,
-      "/claim?code=K7QM-4XRD",
       "/claim?code=K7QM-4XRD&server=%22%3E%3Cscript%3E",
       "/auth/me",
       undefined,
     ]) {
       expect(claimReturnPath(bad)).toBeNull();
     }
+  });
+
+  // Issue #324, review: someone mid-sign-in when the relay deploys carries
+  // the return path the relay before it wrote, with no server id.
+  it("takes a sign-in that started before server ids back to the page that asks for an update", async () => {
+    expect(claimReturnPath("/claim?code=k7qm4xrd")).toBe("/claim?code=K7QM-4XRD");
+    expect(claimReturnPath("/claim?code=k7qm4xrd&server=")).toBe("/claim?code=K7QM-4XRD");
+
+    // The state cookie from a sign-in start, and the return cookie the
+    // relay before server ids set beside it.
+    const h = setup({ github: true });
+    const start = await h.app.inject({ method: "GET", url: "/auth/github" });
+    const state = new URL(start.headers.location as string).searchParams.get("state");
+    const cookies = [
+      ...start.cookies.filter((c) => c.name !== "relay_return_to").map((c) => `${c.name}=${c.value}`),
+      `relay_return_to=${encodeURIComponent("/claim?code=K7QM-4XRD")}`,
+    ];
+    const callback = await h.app.inject({
+      method: "GET",
+      url: `/auth/github/callback?code=x&state=${state}`,
+      headers: { cookie: cookies.join("; ") },
+    });
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe("/claim?code=K7QM-4XRD");
+    const session = callback.cookies.find((c) => c.name === "relay_session")!.value;
+    const page = await h.app.inject({ method: "GET", url: "/claim?code=K7QM-4XRD", headers: { cookie: `relay_session=${session}` } });
+    expect(view(page.body)).toBe("outdated_server");
   });
 
   it("shows each state of the account's claim", async () => {

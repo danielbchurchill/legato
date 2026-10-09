@@ -298,6 +298,10 @@ export function claimPage(view: ClaimView): string {
 // Where a browser sign-in started from the claim page goes back to
 // afterwards (routes/auth.ts). Only ever this page, a code and a server id,
 // rebuilt from the parts, so the parameter can't send anyone anywhere else.
+// One with a code and no server id at all is from a sign-in that started
+// before this relay knew about server ids (#324). It goes back to the page
+// too, which asks for the server to be updated, rather than to the generic
+// "signed in" page that would leave its claim nowhere.
 export function claimReturnPath(candidate: unknown): string | null {
   if (typeof candidate !== "string") return null;
   let url: URL;
@@ -309,7 +313,9 @@ export function claimReturnPath(candidate: unknown): string | null {
   if (url.origin !== "http://relay.invalid" || url.pathname !== "/claim") return null;
   const code = normalizeCode(url.searchParams.get("code"));
   const server = url.searchParams.get("server");
-  return code && server && SERVER_ID_PATTERN.test(server) ? claimPath(code, server) : null;
+  if (!code) return null;
+  if (!server) return `/claim?code=${code}`;
+  return SERVER_ID_PATTERN.test(server) ? claimPath(code, server) : null;
 }
 
 export function claimPageRoutes(db: Database, options: { providers: Providers; signingAvailable: boolean }) {
