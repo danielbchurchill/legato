@@ -1,9 +1,8 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { access, mkdir, open, rename, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import type { Readable } from "node:stream";
 import { DATA_DIR } from "../config.js";
 import { FFMPEG_PATH } from "../mediaBinaries.js";
 import { runMediaTask } from "../media/queue.js";
@@ -212,14 +211,25 @@ export async function* readGrowing(job: TranscodeJob, chunkSize = 64 * 1024): As
   }
 }
 
+// How long ffmpeg has to exit after SIGTERM before it gets SIGKILL.
+export const FFMPEG_KILL_MS = 3_000;
+
 // Its stdout goes before the signal. ffmpeg traps SIGTERM to write out
 // what it has, and if its stdout is paused for backpressure
 // (transcodeToFile), that write blocks on the full pipe for ever: the
 // process never exits, and never gives its media-queue slot back. With
 // the pipe's read end gone, the write fails and it exits at once.
-export function stopFfmpeg(ffmpeg: ChildProcessByStdio<null, Readable, Readable>): void {
-  ffmpeg.stdout.destroy();
+//
+// One that still hasn't exited after `killAfterMs` gets SIGKILL: an ffmpeg
+// stuck reading a source on a hung network mount (a Mac whose library is
+// an NFS share) sits on SIGTERM, and with a media concurrency of 1 or 2
+// every stream after it would queue for ever.
+export function stopFfmpeg(ffmpeg: ChildProcess, killAfterMs = FFMPEG_KILL_MS): void {
+  ffmpeg.stdout?.destroy();
   ffmpeg.kill();
+  const escalate = setTimeout(() => ffmpeg.kill("SIGKILL"), killAfterMs);
+  escalate.unref();
+  ffmpeg.once("close", () => clearTimeout(escalate));
 }
 
 // Writes ffmpeg's stdout to the temp file chunk by chunk, telling the job

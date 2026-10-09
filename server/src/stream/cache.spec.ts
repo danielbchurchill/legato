@@ -186,6 +186,27 @@ describe("stopFfmpeg", () => {
     if (!stopped) ffmpeg.kill("SIGKILL");
     expect(stopped).toBe(true);
   });
+
+  it("kills a process that ignores SIGTERM once it has had a few seconds", async () => {
+    // An ffmpeg stuck reading a source on a hung network mount sits on
+    // SIGTERM, and its media-queue slot with it: with a concurrency of 1
+    // or 2, every stream after it would queue for ever.
+    const stuck = spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000); console.error("ready")'], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    try {
+      await new Promise((resolve) => stuck.stderr.once("data", resolve));
+      const closed = new Promise<NodeJS.Signals | null>((resolve) => stuck.once("close", (_code, signal) => resolve(signal)));
+      stopFfmpeg(stuck, 300);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(stuck.exitCode).toBeNull();
+      expect(stuck.signalCode).toBeNull();
+      const timedOut = new Promise<string>((resolve) => setTimeout(() => resolve("still running"), 2_000));
+      expect(await Promise.race([closed, timedOut])).toBe("SIGKILL");
+    } finally {
+      stuck.kill("SIGKILL");
+    }
+  });
 });
 
 describe("TranscodeJob listeners", () => {
