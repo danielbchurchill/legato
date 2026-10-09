@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useCoalescedWsEvent } from '../hooks/useCoalescedWsEvent'
 import { API_BASE as API } from '../config/serverHost'
 import { useReconnectEpoch } from '../connect/reconnect'
@@ -48,16 +48,27 @@ export function useGraphData() {
   const [edges, setEdges] = useState<GraphEdge[]>([])
   const [loading, setLoading] = useState(true)
 
+  // Rejects when the graph couldn't be read, keeping the one already shown.
+  // Once there is one, `loading` goes back to false whether or not a
+  // refetch worked: Canvas syncs nothing while it's true, so a failure that
+  // left it set stopped the map taking any later graph (#119). Before the
+  // first graph arrives it stays true, so a failed first load doesn't read
+  // as an empty library.
+  const loadedOnce = useRef(false)
   const refetch = useCallback(async () => {
     setLoading(true)
-    const [nodesRes, edgesRes] = await Promise.all([fetch(`${API}/nodes`), fetch(`${API}/edges`)])
-    const [nextNodes, nextEdges] = await Promise.all([nodesRes.json(), edgesRes.json()])
-    // Only lists replace the graph. An error's JSON object (a 500 from a
-    // server still starting) would leave the map nothing it can draw.
-    if (!Array.isArray(nextNodes) || !Array.isArray(nextEdges)) throw new Error(`the graph answered ${nodesRes.status}/${edgesRes.status}`)
-    setNodes(nextNodes)
-    setEdges(nextEdges)
-    setLoading(false)
+    try {
+      const [nodesRes, edgesRes] = await Promise.all([fetch(`${API}/nodes`), fetch(`${API}/edges`)])
+      const [nextNodes, nextEdges] = await Promise.all([nodesRes.json(), edgesRes.json()])
+      // Only lists replace the graph. An error's JSON object (a 500 from a
+      // server still starting) would leave the map nothing it can draw.
+      if (!Array.isArray(nextNodes) || !Array.isArray(nextEdges)) throw new Error(`the graph answered ${nodesRes.status}/${edgesRes.status}`)
+      setNodes(nextNodes)
+      setEdges(nextEdges)
+      loadedOnce.current = true
+    } finally {
+      if (loadedOnce.current) setLoading(false)
+    }
   }, [])
 
   // Fetched once, and once more after every outage (#119): a scan that
@@ -85,7 +96,10 @@ export function useGraphData() {
   // runs for every artist and record, 33,000 of them at 30,000 albums. With
   // the 10 s bound that would be a refetch every 10 s for the hours the
   // drain takes, of an /edges that's 137 MB at that size (#302).
-  useCoalescedWsEvent(['enrich:applied', 'scan:done'], () => void refetch(), {
+  //
+  // A failure keeps the graph already shown; the next event, or the next
+  // outage's resync, reads it again (#119).
+  useCoalescedWsEvent(['enrich:applied', 'scan:done'], () => refetch().catch(() => undefined), {
     accept: (payload) => (payload as { kind?: string } | undefined)?.kind !== 'description',
   })
 
