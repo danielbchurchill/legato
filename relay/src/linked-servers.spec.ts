@@ -161,6 +161,26 @@ describe("a link token from /auth/server-token mints a tunnel credential when it
     expect(isLinkedServer(h.db, user.id, server.serverId)).toBe(false);
   });
 
+  it("keeps one live credential per account and server: linking again retires the old one", async () => {
+    const h = setup();
+    const owner = h.signIn("owner");
+    const other = h.signIn("other");
+    const server = homeServer();
+    const elsewhere = homeServer();
+    const first = ((await h.link(owner.headers, server)).json() as { tunnel: { credential: string } }).tunnel.credential;
+    const otherAccount = ((await h.link(other.headers, server)).json() as { tunnel: { credential: string } }).tunnel.credential;
+    const otherServer = ((await h.link(owner.headers, elsewhere)).json() as { tunnel: { credential: string } }).tunnel.credential;
+
+    const again = ((await h.link(owner.headers, server)).json() as { tunnel: { credential: string } }).tunnel.credential;
+    expect(again).not.toBe(first);
+    expect(tunnelCredentialHolder(h.db, first)).toBeNull();
+    expect(tunnelCredentialHolder(h.db, again)?.relayUserId).toBe(owner.user.id);
+    // Another account's pair, and this account's other server, keep theirs.
+    expect(tunnelCredentialHolder(h.db, otherAccount)?.relayUserId).toBe(other.user.id);
+    expect(tunnelCredentialHolder(h.db, otherServer)?.relayUserId).toBe(owner.user.id);
+    expect(credentials(h.db)).toHaveLength(3);
+  });
+
   it("mints one per token: the same report again is spent", async () => {
     const h = setup();
     const { headers } = h.signIn();
