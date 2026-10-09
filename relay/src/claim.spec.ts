@@ -1,4 +1,4 @@
-import { createPublicKey, generateKeyPairSync, sign } from "node:crypto";
+import { createHash, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { FastifyInstance } from "fastify";
 // The home server's real signers, as in linked-servers.spec.ts: what a
@@ -452,6 +452,42 @@ describe("the claim page", () => {
     const off = await setup({ signing: false }).page("K7QM-4XRD");
     expect(off.statusCode).toBe(503);
     expect(view(off.body)).toBe("unavailable");
+  });
+
+  it("sends a policy that runs only its own script and style, and talks only to this service", async () => {
+    const h = setup();
+    const { cookie } = h.signIn();
+    const pages = [
+      await h.page("K7QM-4XRD"),
+      await h.page("K7QM-4XRD", cookie),
+      await h.page("hello"),
+      await setup({ signing: false }).page("K7QM-4XRD"),
+    ];
+    expect(pages.map((res) => res.statusCode)).toEqual([200, 200, 400, 503]);
+    for (const res of pages) {
+      const policy = res.headers["content-security-policy"] as string;
+      const directives = new Map(
+        policy
+          .split(";")
+          .map((d) => d.trim().split(/\s+/))
+          .map(([name, ...sources]) => [name, sources]),
+      );
+      const hashOf = (tag: string) => {
+        const inline = res.body.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "g")) ?? [];
+        expect(inline).toHaveLength(1);
+        const text = inline[0]!.slice(tag.length + 2, -(tag.length + 3));
+        return `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
+      };
+      expect(directives.get("default-src")).toEqual(["'none'"]);
+      expect(directives.get("script-src")).toEqual([hashOf("script")]);
+      expect(directives.get("style-src")).toEqual([hashOf("style")]);
+      expect(directives.get("connect-src")).toEqual(["'self'"]);
+      expect(policy).not.toContain("unsafe");
+      // Nothing inline the hashes don't cover.
+      expect(res.body).not.toMatch(/\s(on[a-z]+|style)=/);
+    }
+    // The script reads the code off the page rather than having it written in.
+    expect(pages[1]!.body).toContain('<body data-view="ready" data-code="K7QM-4XRD">');
   });
 
   it("escapes the account's name", async () => {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -127,17 +128,11 @@ function content(view: ClaimView): { title: string; body: string } {
   }
 }
 
-export function claimPage(view: ClaimView): string {
-  const { title, body } = content(view);
-  const code = "code" in view ? view.code : null;
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="dark light" />
-  <title>${escapeHtml(title)} · legato.fm</title>
-  <style>
+// The page's one style and one script, apart from the page so its policy
+// can name them by hash (issue #324). The script reads the code off the
+// body rather than having it written in, so both are the same on every page
+// and the policy is too.
+const STYLE = `
     :root {
       color-scheme: dark;
       --canvas: #0f1214;
@@ -206,14 +201,10 @@ export function claimPage(view: ClaimView): string {
     .link { height: auto; padding: 0; background: none; color: var(--ink-2); }
     .link:hover { color: var(--ink); }
     :focus-visible { outline: 3px solid color-mix(in srgb, var(--ink-3) 50%, transparent); outline-offset: 2px; }
-  </style>
-</head>
-<body data-view="${view.kind}">
-  ${WORDMARK}
-  <h1>${escapeHtml(title)}</h1>
-  ${body}
-  <script>
-    const code = ${JSON.stringify(code)};
+  `;
+
+const SCRIPT = `
+    const code = document.body.dataset.code ?? null;
     const view = document.body.dataset.view;
     const status = document.querySelector("[data-status]");
 
@@ -247,7 +238,41 @@ export function claimPage(view: ClaimView): string {
         if (answer && answer.status !== "pending") location.reload();
       }, 3000);
     }
-  </script>
+  `;
+
+const hashSource = (text: string) => `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
+
+// Nothing on the page runs, loads or styles but those two, and its script
+// only talks to this service. Where it can be framed, where a form could
+// submit and what its base URL is don't fall back to default-src, so they're
+// shut by name.
+export const CLAIM_PAGE_CSP = [
+  "default-src 'none'",
+  `script-src ${hashSource(SCRIPT)}`,
+  `style-src ${hashSource(STYLE)}`,
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+export function claimPage(view: ClaimView): string {
+  const { title, body } = content(view);
+  const code = "code" in view ? view.code : null;
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>${escapeHtml(title)} · legato.fm</title>
+  <style>${STYLE}</style>
+</head>
+<body data-view="${view.kind}"${code ? ` data-code="${escapeHtml(code)}"` : ""}>
+  ${WORDMARK}
+  <h1>${escapeHtml(title)}</h1>
+  ${body}
+  <script>${SCRIPT}</script>
 </body>
 </html>`;
 }
@@ -271,7 +296,7 @@ export function claimReturnPath(candidate: unknown): string | null {
 export function claimPageRoutes(db: Database, options: { providers: Providers; signingAvailable: boolean }) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Querystring: { code?: string } }>("/claim", async (request, reply) => {
-      reply.type("text/html").header("Cache-Control", "no-store");
+      reply.type("text/html").header("Cache-Control", "no-store").header("Content-Security-Policy", CLAIM_PAGE_CSP);
       const code = normalizeCode(request.query.code);
       if (!code) {
         reply.code(400);
