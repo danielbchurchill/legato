@@ -15,7 +15,8 @@ import { Icon, type IconName } from './Icon'
  *    secondary; kept so older call sites keep a meaningful name.
  *
  * Pills at 32px (28 inside a dense row, 36 for a hero action), 13/500, with an optional 16px icon —
- * filled, since an outline glyph on the gradient reads as a hole. */
+ * filled, since an outline glyph on the gradient reads as a hole. An icon
+ * with no label is a circle, named by aria-label. */
 
 type ButtonVariant = 'primary' | 'secondary' | 'link' | 'destructive'
 type ButtonSize = 'sm' | 'md' | 'lg'
@@ -42,7 +43,8 @@ type ButtonProps = {
   onClick?: () => void
   disabled?: boolean
   className?: string
-  children: ReactNode
+  /** Left out for an icon alone, which then needs an aria-label. */
+  children?: ReactNode
   'aria-label'?: string
   /** AlertDialog points its initial focus at its cancel button. */
   ref?: Ref<HTMLButtonElement>
@@ -61,7 +63,8 @@ export function Button({
   ref,
 }: ButtonProps) {
   const pill = variant !== 'link'
-  const padding = pill ? (icon ? 'pl-[10px] pr-[14px]' : 'px-[16px]') : ''
+  const iconOnly = icon != null && children == null
+  const padding = pill ? (iconOnly ? 'aspect-square' : icon ? 'pl-[10px] pr-[14px]' : 'px-[16px]') : ''
   return (
     <button
       ref={ref}

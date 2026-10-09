@@ -44,7 +44,7 @@ The shell floats 12px in from every edge: a 56px rail, a 320px left panel beside
 - **Rail:** Collections (favourites, playlists, import), Library health (database inspector, tag manager, maintenance worklists), then Settings and the avatar. Seven destinations became three; map settings moved onto the map.
 - **Capsule:** the map/library switch and the way into search (⌘K/Ctrl-K from anywhere, or `/`).
 - **Right panel:** now playing (up next, lyrics, details) or node details. It replaces the full-screen inspector modal, so the map stays visible. One right panel at a time; Escape closes it, then clears the selection, then closes the left panel.
-- **Player:** replaces the 514×121 dock. It takes a wash of the playing cover's colour from its left edge. The waveform is the server's existing loudness envelope (`/files/:id/peaks`), and a seeded shape stands in until it arrives. With nothing loaded, it's an idle pill with "Shuffle library", which queues up to 500 random tracks from the library.
+- **Player:** replaces the 514×121 dock. It takes a wash of the playing cover's colour from its left edge. The waveform is the server's existing loudness envelope (`/files/:id/peaks`), and a seeded shape stands in until it arrives. With nothing loaded, it's an idle pill with "Shuffle library", which queues up to 500 random tracks from the library. The pill sits where the bar would, inside its width.
 
 #### The player as it narrows
 
@@ -66,6 +66,18 @@ Only a browser goes narrower than 958px with both panels open. There, the bar ho
 
 The handoff puts the compact switch at 600px. Its 56 bars at their 1px minimum with 2px gaps only fit from 614, and between the two the waveform ran 6px into the duration, so compact starts at 614. `src/shell/layout.ts` works every threshold out from the parts' sizes (`playerContentWidth`).
 
+#### The idle pill as it narrows
+
+With nothing loaded, the idle pill takes the bar's place. It centres where the bar would (`playerCx`) and is never wider than the bar would be, so it follows the same free space and the same 134px floor (#308). It hugs its content, and its parts give way in this order:
+
+| Bar under | What goes | Window under, both panels open |
+|---|---|---|
+| 325px | The space keycap. It says what the button does | 1149px |
+| 269px | "Nothing playing". The button alone says it | 1093px |
+| 153px | The button's label. Its icon stays in a round pill, named in a tooltip and for screen readers | 977px |
+
+At the desktop app's narrowest window with both panels open, the bar would be 276px, and the pill shows "Nothing playing" and the button inside it, clear of both panels. Before #308 the pill was a fixed 324px on the free space's centre: at 1100 it touched the left panel, and in a narrower browser window it overlapped both.
+
 #### The capsule as it narrows
 
 The capsule is as wide as the free space less 48px, up to 520. Its parts give way the same way, at the capsule width where each stops fitting (#308):
@@ -79,7 +91,7 @@ The capsule is as wide as the free space less 48px, up to 520. Its parts give wa
 
 The switch and the search button never go. With the switch's icons and the magnifier the capsule needs 135px, and it stops narrowing there. Under 959px with both panels open its margins close up, and under 911px it floats over the panels' inner edges, inside the window, as the bar does. At 1100 with both panels open it's 276px, the labelled switch and the magnifier.
 
-The words go before the switch's labels because a magnifier needs no caption, and the map and library icons are Legato's own. The keycap is counted at its "Ctrl K" width, the wider of the two, so the thresholds are the same on every platform and a Mac's "⌘K" has some slack. Unlike the bar's, most of the capsule's widths are text, so they're measured rather than added up: in Chromium, with the self-hosted fonts, rounded up to the next pixel (`src/shell/capsuleGeometry.ts`). Changing a label or a font means measuring again.
+The words go before the switch's labels because a magnifier needs no caption, and the map and library icons are Legato's own. The keycap is counted at its "Ctrl K" width, the wider of the two, so the thresholds are the same on every platform and a Mac's "⌘K" has some slack. Unlike the bar's, most of the capsule's and the pill's widths are text, so they're measured rather than added up: in Chromium, with the self-hosted fonts, rounded up to the next pixel (`src/shell/capsuleGeometry.ts`, `src/shell/playerGeometry.ts`). Changing a label or a font means measuring again.
 
 ### The map
 

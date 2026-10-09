@@ -2,7 +2,7 @@
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Player } from './Player'
+import { IdlePlayer, Player } from './Player'
 import { ShellLayoutContext, computeShellLayout, type ShellLayout } from './layout'
 import * as geometry from './playerGeometry'
 import type { PlaybackProblem } from '../playback/playbackError'
@@ -161,5 +161,66 @@ describe('Player geometry', () => {
     expect(seek.parentElement!.style.gap).toBe(px(geometry.PLAYER_SCRUBBER_GAP))
     expect((seek.previousElementSibling as HTMLElement).style.width).toBe(px(geometry.PLAYER_TIME_WIDTH))
     expect((seek.nextElementSibling as HTMLElement).style.width).toBe(px(geometry.PLAYER_TIME_WIDTH))
+  })
+})
+
+// #308: the idle pill takes the bar's place: its centre, and its width as a
+// limit, giving way in its own order.
+describe('IdlePlayer as the bar narrows', () => {
+  const px = (n: number) => `${n}px`
+  // Words on screen, without the icon's markup.
+  const words = (el: Element) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    const out: string[] = []
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.textContent!.trim() && !node.parentElement!.closest('svg')) out.push(node.textContent!.trim())
+    }
+    return out
+  }
+
+  function renderIdle(windowWidth: number) {
+    const layout = computeShellLayout(windowWidth, 900, { leftOpen: true, rightOpen: true })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    act(() => {
+      createRoot(container).render(
+        createElement(
+          ShellLayoutContext.Provider,
+          { value: layout },
+          createElement(IdlePlayer, { onShuffleLibrary: () => undefined, busy: false }),
+        ),
+      )
+    })
+    const pill = container.querySelector<HTMLElement>('[aria-label="Player"]')!
+    return { layout, pill, text: words(pill), button: container.querySelector('button')! }
+  }
+
+  it('centres on the bar and draws at the sizes layout.ts adds up', () => {
+    const { layout, pill } = renderIdle(1440)
+    expect(pill.style.left).toBe(px(layout.playerCx))
+    expect(pill.style.height).toBe(px(geometry.IDLE_HEIGHT))
+    expect(pill.style.minWidth).toBe(px(geometry.IDLE_HEIGHT))
+    expect(pill.style.gap).toBe(px(geometry.IDLE_GAP))
+    expect(pill.style.paddingLeft).toBe(px(geometry.IDLE_PADDING_TEXT))
+    expect(pill.style.paddingRight).toBe(px(geometry.IDLE_PADDING))
+  })
+
+  it('shows everything in a wide bar', () => {
+    expect(renderIdle(1440).text).toEqual(['Nothing playing', 'Shuffle library', 'space'])
+  })
+
+  it('drops the space keycap at the narrowest desktop window', () => {
+    expect(renderIdle(1100).text).toEqual(['Nothing playing', 'Shuffle library'])
+  })
+
+  it('comes down to the button, then its icon, named for screen readers', () => {
+    const buttonAlone = renderIdle(1000)
+    expect(buttonAlone.text).toEqual(['Shuffle library'])
+    expect(buttonAlone.pill.style.paddingLeft).toBe(px(geometry.IDLE_PADDING))
+    document.body.innerHTML = ''
+
+    const iconAlone = renderIdle(900)
+    expect(iconAlone.text).toEqual([])
+    expect(iconAlone.button.getAttribute('aria-label')).toBe('Shuffle library')
   })
 })

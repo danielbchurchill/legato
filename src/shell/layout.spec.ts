@@ -7,6 +7,8 @@ import {
   capsuleContentWidth,
   capsuleParts,
   computeShellLayout,
+  idleContentWidth,
+  idleParts,
   playerContentWidth,
   playerParts,
   type ShellLayout,
@@ -216,3 +218,63 @@ describe('the capsule as it narrows', () => {
   })
 })
 
+// #308: with nothing loaded, the idle pill takes the bar's width as its
+// limit and the bar's centre as its own, so it gives way where the bar does.
+describe('the idle player as the bar narrows', () => {
+  const full = { sentence: true, buttonLabel: true, shortcut: true }
+  const noShortcut = { ...full, shortcut: false }
+  const buttonAlone = { ...noShortcut, sentence: false }
+  const iconAlone = { ...buttonAlone, buttonLabel: false }
+
+  it.each([
+    [1440, 616, full],
+    [1149, 325, full],
+    [1148, 324, noShortcut],
+    [1100, 276, noShortcut],
+    [1093, 269, noShortcut],
+    [1092, 268, buttonAlone],
+    [977, 153, buttonAlone],
+    [976, 152, iconAlone],
+    [900, 134, iconAlone],
+  ])('a %ipx window with both panels open gives it a %ipx bar', (windowWidth, bar, parts) => {
+    const layout = computeShellLayout(windowWidth, 900, { leftOpen: true, rightOpen: true })
+    expect(layout.playerWidth).toBe(bar)
+    expect(layout.idleParts).toEqual(parts)
+  })
+
+  it('fits everything it shows at every bar width', () => {
+    for (let width = PLAYER_MIN_WIDTH; width <= 720; width++) {
+      expect(idleContentWidth(idleParts(width)), `bar ${width}`).toBeLessThanOrEqual(width)
+    }
+  })
+
+  it("stays inside the bar's box, so in the window, however narrow the window", () => {
+    // The button's icon in a circle as wide as the pill is tall.
+    expect(idleContentWidth(iconAlone)).toBe(52)
+    for (const panels of PANELS) {
+      for (let width = 320; width <= 3840; width += 2) {
+        const layout = computeShellLayout(width, 900, panels)
+        const half = idleContentWidth(layout.idleParts) / 2
+        const label = `width ${width}, ${JSON.stringify(panels)}`
+        expect(layout.playerCx - half, label).toBeGreaterThanOrEqual(layout.playerCx - layout.playerWidth / 2)
+        expect(layout.playerCx + half, label).toBeLessThanOrEqual(layout.playerCx + layout.playerWidth / 2)
+        expect(layout.playerCx - half, label).toBeGreaterThanOrEqual(INSET)
+        expect(layout.playerCx + half, label).toBeLessThanOrEqual(width - INSET)
+      }
+    }
+  })
+
+  it('never overlaps a panel at the desktop minimum or wider', () => {
+    // Before #308 it was a fixed 324px on cx, and at 1100 with both panels open it touched the left panel.
+    for (const panels of PANELS) {
+      for (let width = 1100; width <= 3840; width += 2) {
+        const layout = computeShellLayout(width, 900, panels)
+        const edges = panelEdges(layout, panels.rightOpen)
+        const half = idleContentWidth(layout.idleParts) / 2
+        const label = `width ${width}, ${JSON.stringify(panels)}`
+        expect(layout.playerCx - half, label).toBeGreaterThanOrEqual(edges.left)
+        expect(layout.playerCx + half, label).toBeLessThanOrEqual(edges.right)
+      }
+    }
+  })
+})

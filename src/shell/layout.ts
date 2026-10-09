@@ -15,6 +15,14 @@ import {
   CAPSULE_SWITCH_WIDTH,
 } from './capsuleGeometry'
 import {
+  IDLE_BUTTON_ICON_SIZE,
+  IDLE_BUTTON_WIDTH,
+  IDLE_GAP,
+  IDLE_HEIGHT,
+  IDLE_PADDING,
+  IDLE_PADDING_TEXT,
+  IDLE_SENTENCE_WIDTH,
+  IDLE_SHORTCUT_WIDTH,
   PLAYER_BAR_GAP,
   PLAYER_BAR_MIN_WIDTH,
   PLAYER_BORDER,
@@ -54,7 +62,8 @@ import {
  * player holds at the transport's width and floats over the panels' inner
  * edges, still inside the window, because play/pause can't be the thing
  * that goes (#293). The capsule does the same at the top, holding at its two
- * controls' icons (#308). */
+ * controls' icons, and the idle pill fits inside the player's width at the
+ * player's centre, so neither covers a panel the player wouldn't (#308). */
 
 export const INSET = 12
 export const RAIL_WIDTH = 56
@@ -137,6 +146,51 @@ export function playerParts(playerWidth: number): PlayerParts {
 /* The transport alone: the narrowest the player gets. */
 export const PLAYER_MIN_WIDTH = playerContentWidth(PLAYER_STAGES[PLAYER_STAGES.length - 1])
 
+/* What the idle pill shows, with nothing loaded. The button is always
+ * there; without its label it's named for screen readers and in a tooltip. */
+export type IdleParts = {
+  /** "Nothing playing". */
+  sentence: boolean
+  /** "Shuffle library" beside the button's icon. */
+  buttonLabel: boolean
+  /** The space keycap. */
+  shortcut: boolean
+}
+
+/* The idle pill takes the bar's width as its limit and gives way in its own
+ * order (DESIGN.md, Shell). The narrowest bar each set fits:
+ *
+ *   325  everything
+ *   269  no space keycap: it says what the button does
+ *   153  no "Nothing playing": the button alone says it
+ *    52  the button's icon alone, in a round pill
+ *
+ * The last is under the bar's 134px floor, so the pill always fits. */
+const IDLE_STAGES: IdleParts[] = [
+  { sentence: true, buttonLabel: true, shortcut: true },
+  { sentence: true, buttonLabel: true, shortcut: false },
+  { sentence: false, buttonLabel: true, shortcut: false },
+  { sentence: false, buttonLabel: false, shortcut: false },
+]
+
+/* The width a set of idle parts needs: the most the pill draws, since it
+ * hugs its content and the text widths are rounded up. Alone, the button's
+ * icon sits in a circle as wide as the pill is tall. */
+export function idleContentWidth(parts: IdleParts): number {
+  const items = [
+    parts.sentence ? IDLE_SENTENCE_WIDTH : 0,
+    parts.buttonLabel ? IDLE_BUTTON_WIDTH : IDLE_BUTTON_ICON_SIZE,
+    parts.shortcut ? IDLE_SHORTCUT_WIDTH : 0,
+  ].filter((w) => w > 0)
+  const content = items.reduce((sum, w) => sum + w, 0) + IDLE_GAP * (items.length - 1)
+  const paddingLeft = parts.sentence ? IDLE_PADDING_TEXT : IDLE_PADDING
+  return Math.max(IDLE_HEIGHT, PLAYER_BORDER + paddingLeft + content + IDLE_PADDING + PLAYER_BORDER)
+}
+
+export function idleParts(playerWidth: number): IdleParts {
+  return IDLE_STAGES.find((parts) => idleContentWidth(parts) <= playerWidth) ?? IDLE_STAGES[IDLE_STAGES.length - 1]
+}
+
 /* What the capsule shows. A dropped label stays for screen readers, and
  * both controls, the map/library switch and the search field, stay. */
 export type CapsuleParts = {
@@ -203,6 +257,8 @@ export type ShellLayout = {
   /** The player's centre: cx, unless that would push the bar off the window. */
   playerCx: number
   playerParts: PlayerParts
+  /** What the idle pill shows. It centres on playerCx. */
+  idleParts: IdleParts
   /** Where the map's toolbar and legend sit: above the player's row. */
   floatingBottom: number
 }
@@ -231,6 +287,7 @@ export function computeShellLayout(
     playerWidth,
     playerCx: Math.min(Math.max(cx, INSET + playerWidth / 2), width - INSET - playerWidth / 2),
     playerParts: playerParts(playerWidth),
+    idleParts: idleParts(playerWidth),
     floatingBottom: INSET + PLAYER_HEIGHT + INSET,
   }
 }
