@@ -21,8 +21,10 @@ afterEach(async () => {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const NEXT_YEAR = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString();
 
-async function setup(options: { answer?: (report: LegatoReport) => Response | Error; listen?: boolean } = {}) {
-  const fake = startFakeRelay({ accept: (credential) => credential.startsWith("live-") });
+async function setup(
+  options: { answer?: (report: LegatoReport) => Response | Error; listen?: boolean; replace?: boolean; slowAnswerTo?: string } = {},
+) {
+  const fake = startFakeRelay({ accept: (credential) => credential.startsWith("live-"), replace: options.replace });
   cleanups.push(() => fake.stop());
   const db = openDb(":memory:");
   const key = makeTestKey();
@@ -32,6 +34,10 @@ async function setup(options: { answer?: (report: LegatoReport) => Response | Er
   cleanups.push(() => identity.stop());
   const { app } = await buildTestApp(db);
   cleanups.push(() => app.close());
+  // Holds one route's answer back, the way a slow uplink would.
+  app.addHook("onSend", async (request) => {
+    if (request.url === options.slowAnswerTo) await sleep(200);
+  });
   const owner = await createOwnerForTest(app);
   // Listening, for a spec whose requests come down the tunnel and are
   // replayed against this server; otherwise nothing answers on port 9.
@@ -220,6 +226,37 @@ describe("RelayTunnel", () => {
     expect(res.statusCode).toBe(200);
     await until(() => h.tunnel.state, "connected");
     expect(h.fake.auths).toEqual(["live-from-link"]);
+  });
+
+  it("answers a link made through the tunnel before the credential it brings replaces the tunnel", async () => {
+    // From a phone through legato.fm. Once the client signs in with the
+    // link's new credential, legato.fm closes the old connection, failing
+    // whatever is still on its way up it: the phone saw a 502 for a link
+    // that had happened.
+    const h = await setup({
+      listen: true,
+      replace: true,
+      slowAnswerTo: "/api/v1/auth/legato/link",
+      answer: (report) =>
+        report.url.endsWith("/linked-servers")
+          ? Response.json({ linked: {}, tunnel: { credential: "live-from-link", expiresAt: NEXT_YEAR } })
+          : Response.json({ ok: true }),
+    });
+    h.link("42");
+    h.store("42", "live-1");
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+
+    const res = await h.fake.request({
+      method: "POST",
+      path: "/api/v1/auth/legato/link",
+      headers: { authorization: `Bearer ${h.owner.token}`, "content-type": "application/json" },
+      body: Buffer.from(JSON.stringify({ token: h.linkToken("42") })).toString("base64"),
+    });
+    expect(res.status).toBe(200);
+    while (h.fake.auths.length < 2) await sleep(10);
+    await until(() => h.tunnel.state, "connected");
+    expect(h.fake.auths).toEqual(["live-1", "live-from-link"]);
   });
 
   it("linking a different account forgets the old account's credential and closes its tunnel", async () => {

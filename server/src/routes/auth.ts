@@ -463,7 +463,10 @@ export function authRoutes(
             ? await linkLegatoAccount(db, owner.id, linkToken)
             : { ok: false as const, error: CLAIM_CHECK_MESSAGES.lapsed, reason: "claim_lapsed" };
           legato = outcome.ok ? { linked: outcome.linked } : { linked: null, error: outcome.error, reason: outcome.reason };
-          if (outcome.ok) request.log.info("auth: owner linked the legato.fm account that claimed this server");
+          if (outcome.ok) {
+            request.log.info("auth: owner linked the legato.fm account that claimed this server");
+            syncRelayTunnelOnceAnswered(db, reply);
+          }
         }
         claims.drop();
         reply.code(201);
@@ -534,6 +537,7 @@ export function authRoutes(
         return legatoReason === undefined ? { error, reason } : { error, reason, legatoReason };
       }
       request.log.info("auth: owner linked a legato.fm account");
+      syncRelayTunnelOnceAnswered(db, reply);
       return { linked: outcome.linked };
     });
 

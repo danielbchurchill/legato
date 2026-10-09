@@ -3,7 +3,6 @@ import { legatoIdentity } from "./legatoIdentity.js";
 import { VERIFY_FAILURE_MESSAGES } from "./legatoToken.js";
 import { accountLinkedToOtherUser, linkAccount, linkedAccountId } from "./legatoUsers.js";
 import { forgetTunnelCredential, storeTunnelCredential } from "./tunnelCredential.js";
-import { syncRelayTunnel } from "../tunnel/relayTunnel.js";
 
 // Linking a user here to a legato.fm account with a `link` token (issues
 // #114 and #231). Two callers: POST /auth/legato/link, where the owner
@@ -15,8 +14,10 @@ import { syncRelayTunnel } from "../tunnel/relayTunnel.js";
 // reports the link to legato.fm, signed with this server's identity key
 // (auth/serverKey.ts). Nothing changes here unless legato.fm recorded it,
 // so the two can't disagree about a link that just failed. A claim's report
-// also brings back the tunnel credential, stored with the link, and the
-// tunnel opens with it (issue #310, tunnel/relayTunnel.ts).
+// also brings back the tunnel credential, stored with the link. The caller
+// syncs the tunnel once its answer has gone (issue #310, tunnel/
+// relayTunnel.ts's syncRelayTunnelOnceAnswered): a link made through the
+// tunnel comes down the connection a new credential replaces.
 
 export type LinkOutcome =
   | { ok: true; linked: { accountId: string; email: string | null; name: string | null } }
@@ -90,6 +91,5 @@ export async function linkLegatoAccount(db: Database, userId: number, token: str
     await identity.recordUnlink(previous);
   }
   identity.syncSchedule();
-  syncRelayTunnel(db);
   return { ok: true, linked: { accountId, email: result.claims.email, name: result.claims.name } };
 }

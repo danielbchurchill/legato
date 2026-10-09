@@ -32,7 +32,10 @@ export type FakeRelay = {
   stop(): void;
 };
 
-export function startFakeRelay(options: { accept: (credential: string) => boolean; port?: number }): FakeRelay {
+// `replace` does what the real relay does when a server signs in again
+// (relay/src/tunnel-registry.ts, set()): it closes the older connection,
+// failing whatever was still on its way up it.
+export function startFakeRelay(options: { accept: (credential: string) => boolean; port?: number; replace?: boolean }): FakeRelay {
   const signedIn: ServerWebSocket<SocketData>[] = [];
   const waiting = new Map<string, (frame: TunnelFrame) => void>();
   // What each request is waiting on, so a tunnel that closes fails its
@@ -56,6 +59,7 @@ export function startFakeRelay(options: { accept: (credential: string) => boolea
           relay.auths.push(frame.secret);
           relay.userAgents.push(ws.data.userAgent);
           if (options.accept(frame.secret)) {
+            if (options.replace) for (const older of signedIn.splice(0)) older.close(4000, "replaced by a newer tunnel connection");
             signedIn.push(ws);
             ws.send(JSON.stringify({ type: "auth-ok" }));
           } else {
