@@ -864,6 +864,25 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     [playTracks, toggleShuffle],
   )
 
+  // Shuffle library (#307). The tracks come from the map's graph, already
+  // shuffled, and nothing on the way to POST /queue/resolve carries their
+  // titles, so they're cached here as playAlbum caches its tracklist's.
+  // Without them the player's title line was blank and up next showed
+  // artists only.
+  const playLibrary = useCallback(
+    async (tracks: { id: number; title: string }[]) => {
+      if (tracks.length === 0) return
+      for (const t of tracks) titleCache.current.set(t.id, t.title)
+      await playTracks(
+        tracks.map((t) => t.id),
+        0,
+        tracks[0].title,
+        { kind: 'library' },
+      )
+    },
+    [playTracks],
+  )
+
   const stop = useCallback(async () => {
     finalizeCurrentPlay()
     if (IS_TAURI) {
@@ -1220,7 +1239,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     // queued behind one that is — see the `serialized` lock above. Drive
     // button-disabled states off this rather than tracking per-call pending
     // state locally, since any of these operations blocks all the others.
-    // playNode/playAlbum/playRandom/playPlaylist all fire this through
+    // playNode/playAlbum/playRandom/playPlaylist/playLibrary all fire this through
     // playTracks (or, for playPlaylist's optional shuffle, a follow-up
     // toggleShuffle call), so it covers every "play this" button too, not
     // just the transport controls.
@@ -1233,6 +1252,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     playTracks,
     playAlbum,
     playPlaylist,
+    playLibrary,
     playRandom,
     addToQueue,
     playNext,
