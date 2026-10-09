@@ -89,6 +89,11 @@ describe('Capsule geometry', () => {
 
     for (const tab of renderCapsule(900).tabs) expect(tab.classList).toContain(`size-[${controls.TABS_LG_SQUARE}px]`)
   })
+
+  it('clips sideways, so text drawn wider than measured stays inside the pill', () => {
+    // Sideways only: the search button runs the pill's full height, and its focus ring sits outside it.
+    expect(renderCapsule(1440).capsule.classList).toContain('overflow-x-clip')
+  })
 })
 
 // Words on screen: text outside the icons' markup and the screen-reader-only labels.

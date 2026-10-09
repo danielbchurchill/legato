@@ -68,13 +68,15 @@ The handoff puts the compact switch at 600px. Its 56 bars at their 1px minimum w
 
 #### The idle pill as it narrows
 
-With nothing loaded, the idle pill takes the bar's place. It centres where the bar would (`playerCx`) and is never wider than the bar would be, so it follows the same free space and the same 134px floor (#308). It hugs its content, and its parts give way in this order:
+With nothing loaded, the idle pill takes the bar's place. It centres where the bar would (`playerCx`) and is never wider than the bar would be, so it follows the same free space and the same 134px floor (#308). It hugs its content, on one line, and its parts give way in this order:
 
 | Bar under | What goes | Window under, both panels open |
 |---|---|---|
-| 328px | The space keycap. It says what the button does | 1152px |
+| 328px | The space keycap. The button's tooltip says space instead | 1152px |
 | 272px | "Nothing playing". The button alone says it | 1096px |
-| 156px | The button's label. Its icon stays in a round pill, named in a tooltip and for screen readers | 980px |
+| 156px | The button's label. Its icon stays in a round pill, named in the tooltip and for screen readers | 980px |
+
+The button stays one element at every width, so a keyboard user's focus stays on it as the pill narrows. Its tooltip, "Shuffle library" with space, shows once the keycap has gone. Beside the keycap it would only repeat the pill.
 
 At the desktop app's narrowest window with both panels open, the bar would be 276px, and the pill shows "Nothing playing" and the button inside it, clear of both panels. Before #308 the pill was a fixed 324px on the free space's centre: at 1100 it touched the left panel, and in a narrower browser window it overlapped both.
 
@@ -93,7 +95,7 @@ The switch and the search button never go. With the switch's icons and the magni
 
 The words go before the switch's labels because a magnifier needs no caption, and the map and library icons are Legato's own. The keycap is counted at its "Ctrl K" width, the wider of the two, so the thresholds are the same on every platform and a Mac's "⌘K" has some slack.
 
-Unlike the bar's, most of the capsule's and the pill's widths are text, so they're measured rather than added up: in Chromium, with the self-hosted fonts, rounded up to the next pixel (`src/shell/capsuleGeometry.ts`, `src/shell/playerGeometry.ts`). Changing a label or a font means measuring again. Another engine, or a fallback font before Rubik loads, can draw a label a little wider, so every set of parts with text in it keeps 3px to spare. The padding, gaps and icons around the text are the shared controls' own (Tabs, Button and Kbd). `src/shell/controlGeometry.ts` copies them for the arithmetic, and the shell's specs check each copy against the class it's drawn with.
+Unlike the bar's, most of the capsule's and the pill's widths are text, so they're measured rather than added up: in Chromium, with the self-hosted fonts, rounded up to the next pixel (`src/shell/capsuleGeometry.ts`, `src/shell/playerGeometry.ts`). Changing a label or a font means measuring again. Another engine, or a fallback font before Rubik loads, can draw a label a little wider, so every set of parts with text in it keeps 3px to spare. Both pills also clip to their own width, as the bar does, so anything wider still is cut off at the edge rather than spilling out. The padding, gaps and icons around the text are the shared controls' own (Tabs, Button and Kbd). `src/shell/controlGeometry.ts` copies them for the arithmetic, and the shell's specs check each copy against the class it's drawn with.
 
 ### The map
 

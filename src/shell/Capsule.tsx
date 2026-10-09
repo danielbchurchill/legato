@@ -32,7 +32,12 @@ import {
  * As the free space narrows, the placeholder shortens to "Search", then the
  * keycap, the word and the switch's labels go, in the order layout.ts sets
  * out (#308). The switch and the search button never go, and a tab without
- * its label shows it in a tooltip. */
+ * its label shows it in a tooltip.
+ *
+ * The pill clips sideways, as the player's bar does, so a label an engine
+ * draws wider than Chromium measured it is cut off at the pill's edge rather
+ * than spilling past it. Only sideways: the search button runs the pill's
+ * full height, and its focus ring sits 3px outside it. */
 
 export type ViewMode = 'map' | 'library'
 
@@ -53,7 +58,7 @@ export function Capsule({ view, onViewChange, onOpenSearch, hidden }: CapsulePro
   const parts = layout.capsuleParts
   return (
     <Surface
-      className={`absolute top-[var(--inset)] z-20 flex h-[var(--capsule-height)] -translate-x-1/2 items-center rounded-full transition-opacity duration-[var(--motion-fast)] ${
+      className={`absolute top-[var(--inset)] z-20 flex h-[var(--capsule-height)] -translate-x-1/2 items-center overflow-x-clip rounded-full transition-opacity duration-[var(--motion-fast)] ${
         hidden ? 'pointer-events-none opacity-0' : ''
       }`}
       style={{

@@ -20,10 +20,19 @@ beforeEach(() => {
     'matchMedia',
     vi.fn(() => ({ matches: false, addEventListener: () => undefined, removeEventListener: () => undefined })),
   )
+  // Nor ResizeObserver, which a tooltip places itself with.
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  )
 })
 
 afterEach(() => {
   act(() => roots.splice(0).forEach((root) => root.unmount()))
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   document.body.innerHTML = ''
 })
@@ -184,23 +193,36 @@ describe('IdlePlayer as the bar narrows', () => {
     return out
   }
 
+  // One root, so a later width re-renders the same pill, as a resize does.
   function renderIdle(windowWidth: number) {
-    const layout = computeShellLayout(windowWidth, 900, { leftOpen: true, rightOpen: true })
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root = createRoot(container)
     roots.push(root)
-    act(() => {
-      root.render(
-        createElement(
-          ShellLayoutContext.Provider,
-          { value: layout },
-          createElement(IdlePlayer, { onShuffleLibrary: () => undefined, busy: false }),
-        ),
-      )
-    })
-    const pill = container.querySelector<HTMLElement>('[aria-label="Player"]')!
-    return { layout, pill, text: words(pill), button: container.querySelector('button')! }
+    const render = (width: number) => {
+      const layout = computeShellLayout(width, 900, { leftOpen: true, rightOpen: true })
+      act(() => {
+        root.render(
+          createElement(
+            ShellLayoutContext.Provider,
+            { value: layout },
+            createElement(IdlePlayer, { onShuffleLibrary: () => undefined, busy: false }),
+          ),
+        )
+      })
+      const pill = container.querySelector<HTMLElement>('[aria-label="Player"]')!
+      return { layout, pill, text: words(pill), button: container.querySelector('button')! }
+    }
+    return { ...render(windowWidth), rerender: render }
+  }
+
+  // Hovers the button past the tooltip's dwell, and says what the tooltip shows.
+  const tooltipOver = (button: HTMLElement) => {
+    act(() => button.dispatchEvent(new MouseEvent('pointerover', { bubbles: true })))
+    act(() => vi.advanceTimersByTime(400))
+    const text = document.querySelector('[role="tooltip"]')?.textContent ?? null
+    act(() => button.dispatchEvent(new MouseEvent('pointerout', { bubbles: true })))
+    return text
   }
 
   it('centres on the bar and draws at the sizes layout.ts adds up', () => {
@@ -211,6 +233,19 @@ describe('IdlePlayer as the bar narrows', () => {
     expect(pill.style.gap).toBe(px(geometry.IDLE_GAP))
     expect(pill.style.paddingLeft).toBe(px(geometry.IDLE_PADDING_TEXT))
     expect(pill.style.paddingRight).toBe(px(geometry.IDLE_PADDING))
+  })
+
+  it('hugs its content on one line, never wider than the bar, and clips there', () => {
+    const { layout, pill } = renderIdle(1000)
+    // Without w-max the browser caps an absolute box at the room right of its left edge, and
+    // "Nothing playing" wrapped onto two lines at 769–1045px with only the left panel open.
+    expect(pill.classList).toContain('w-max')
+    expect(pill.style.maxWidth).toBe(px(layout.playerWidth))
+    expect(pill.classList).toContain('overflow-hidden')
+    const sentence = renderIdle(1440).pill.firstElementChild!
+    expect(sentence.textContent).toBe('Nothing playing')
+    expect(sentence.classList).toContain('whitespace-nowrap')
+    expect(sentence.classList).toContain('shrink-0')
   })
 
   // The button and the keycap are Button and Kbd, whose sizes are Tailwind
@@ -245,10 +280,29 @@ describe('IdlePlayer as the bar narrows', () => {
     const buttonAlone = renderIdle(1000)
     expect(buttonAlone.text).toEqual(['Shuffle library'])
     expect(buttonAlone.pill.style.paddingLeft).toBe(px(geometry.IDLE_PADDING))
-    document.body.innerHTML = ''
 
     const iconAlone = renderIdle(900)
     expect(iconAlone.text).toEqual([])
     expect(iconAlone.button.getAttribute('aria-label')).toBe('Shuffle library')
+  })
+
+  it('keeps one button, and a keyboard user on it, through every width', () => {
+    const idle = renderIdle(1440)
+    act(() => idle.button.focus())
+    for (const width of [1100, 1000, 900, 1000, 1440]) {
+      const { button } = idle.rerender(width)
+      expect(button, `window ${width}`).toBe(idle.button)
+      expect(document.activeElement, `window ${width}`).toBe(idle.button)
+    }
+  })
+
+  it('says space starts it once the keycap has gone, at every width', () => {
+    vi.useFakeTimers()
+    // With the keycap showing, a tooltip would only repeat the pill.
+    expect(tooltipOver(renderIdle(1440).button)).toBeNull()
+    // The labelled button (every window from 980 to 1151px with both panels open), then the icon alone.
+    expect(tooltipOver(renderIdle(1100).button)).toBe('Shuffle libraryspace')
+    expect(tooltipOver(renderIdle(1000).button)).toBe('Shuffle libraryspace')
+    expect(tooltipOver(renderIdle(900).button)).toBe('Shuffle libraryspace')
   })
 })

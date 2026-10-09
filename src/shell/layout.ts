@@ -212,7 +212,7 @@ export type IdleParts = {
  * order (DESIGN.md, Shell). The narrowest bar each set fits:
  *
  *   328  everything
- *   272  no space keycap: it says what the button does
+ *   272  no space keycap: the button's tooltip carries it instead
  *   156  no "Nothing playing": the button alone says it
  *    52  the button's icon alone, in a round pill
  *
