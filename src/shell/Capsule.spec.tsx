@@ -1,22 +1,32 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Capsule } from './Capsule'
 import { ShellLayoutContext, computeShellLayout } from './layout'
 import * as geometry from './capsuleGeometry'
 
-beforeAll(() => {
+const roots: Root[] = []
+
+beforeEach(() => {
   // jsdom has no ResizeObserver; Tabs measures its thumb with one.
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    disconnect() {}
-  } as unknown as typeof ResizeObserver
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  )
   // Nor matchMedia, which Tabs asks about reduced motion.
-  window.matchMedia ??= (() => ({ matches: false, addEventListener: () => undefined, removeEventListener: () => undefined })) as never
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({ matches: false, addEventListener: () => undefined, removeEventListener: () => undefined })),
+  )
 })
 
 afterEach(() => {
+  act(() => roots.splice(0).forEach((root) => root.unmount()))
+  vi.unstubAllGlobals()
   document.body.innerHTML = ''
 })
 
@@ -24,8 +34,10 @@ function renderCapsule(windowWidth: number) {
   const layout = computeShellLayout(windowWidth, 900, { leftOpen: true, rightOpen: true })
   const container = document.createElement('div')
   document.body.appendChild(container)
+  const root = createRoot(container)
+  roots.push(root)
   act(() => {
-    createRoot(container).render(
+    root.render(
       createElement(
         ShellLayoutContext.Provider,
         { value: layout },

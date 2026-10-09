@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IdlePlayer, Player } from './Player'
 import { ShellLayoutContext, computeShellLayout, type ShellLayout } from './layout'
 import * as geometry from './playerGeometry'
 import type { PlaybackProblem } from '../playback/playbackError'
+
+const roots: Root[] = []
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -20,6 +22,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  act(() => roots.splice(0).forEach((root) => root.unmount()))
   vi.unstubAllGlobals()
   document.body.innerHTML = ''
 })
@@ -28,8 +31,10 @@ function renderPlayer(problem: PlaybackProblem | null, onResolveProblem = () => 
   const container = document.createElement('div')
   document.body.appendChild(container)
   const noop = () => undefined
+  const root = createRoot(container)
+  roots.push(root)
   act(() => {
-    createRoot(container).render(
+    root.render(
       createElement(
         ShellLayoutContext.Provider,
         { value: layout ?? computeShellLayout(1440, 1024, { leftOpen: false, rightOpen: false }) },
@@ -182,8 +187,10 @@ describe('IdlePlayer as the bar narrows', () => {
     const layout = computeShellLayout(windowWidth, 900, { leftOpen: true, rightOpen: true })
     const container = document.createElement('div')
     document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
     act(() => {
-      createRoot(container).render(
+      root.render(
         createElement(
           ShellLayoutContext.Provider,
           { value: layout },
