@@ -62,6 +62,20 @@ export function classifyFailure({ elapsedMs, timedOut }: { elapsedMs: number; ti
   return timedOut || elapsedMs >= REFUSED_WITHIN_MS ? { kind: 'no-answer' } : { kind: 'refused' }
 }
 
+const FAILURE_RANK: Record<CheckFailure['kind'], number> = { refused: 0, 'bad-status': 1, 'no-answer': 2 }
+
+/** How the server has failed over the outage so far, given how it had
+ * failed before and how the latest check failed. The reason is worked out
+ * from this, not from the last check alone: a LAN host that's asleep goes
+ * unanswered on one check and is turned away at once on the next, by this
+ * computer's own network stack, and the words shouldn't swap between
+ * "asleep" and "stopped" every second. Silence outranks an answer from
+ * something else, which outranks a refusal, and an outage keeps the
+ * highest it has seen. */
+export function outageFailure(sofar: CheckFailure | null, latest: CheckFailure): CheckFailure {
+  return sofar && FAILURE_RANK[sofar.kind] >= FAILURE_RANK[latest.kind] ? sofar : latest
+}
+
 /** Fired on window when the server answers again after failing (#119), so
  * whatever the outage broke can pick up: the web player's source, the
  * WebSockets. */

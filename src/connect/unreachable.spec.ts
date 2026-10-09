@@ -7,6 +7,7 @@ import {
   classifyFailure,
   describeOutage,
   inferReason,
+  outageFailure,
   outageFooter,
   pathFor,
   type OutageFacts,
@@ -53,6 +54,32 @@ describe('classifyFailure', () => {
     expect(classifyFailure({ elapsedMs: 12, timedOut: false })).toEqual({ kind: 'refused' })
     expect(classifyFailure({ elapsedMs: 3200, timedOut: false })).toEqual({ kind: 'no-answer' })
     expect(classifyFailure({ elapsedMs: 4000, timedOut: true })).toEqual({ kind: 'no-answer' })
+  })
+})
+
+// The coordinator's review of #346: a sleeping LAN host's reason swapped
+// between "asleep" and "stopped" with every check.
+describe('outageFailure', () => {
+  const refused = { kind: 'refused' } as const
+  const silence = { kind: 'no-answer' } as const
+  const proxy = { kind: 'bad-status', status: 502 } as const
+
+  it('starts from the first failure', () => {
+    expect(outageFailure(null, refused)).toEqual(refused)
+  })
+
+  it('keeps silence once an outage has seen it, whatever the checks after it say', () => {
+    let sofar = outageFailure(null, silence)
+    for (const latest of [refused, silence, refused, proxy, refused]) {
+      sofar = outageFailure(sofar, latest)
+      expect(inferReason(facts({ failure: sofar }), NOW)).toBe('asleep')
+    }
+  })
+
+  it('moves up from a refusal to silence once, and stays', () => {
+    expect(outageFailure(refused, proxy)).toEqual(proxy)
+    expect(outageFailure(proxy, refused)).toEqual(proxy)
+    expect(outageFailure(proxy, silence)).toEqual(silence)
   })
 })
 

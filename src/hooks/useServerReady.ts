@@ -3,7 +3,7 @@ import { API_BASE, SERVER_ORIGIN } from '../config/serverHost'
 import { MIN_SERVER_SCHEMA_VERSION } from '../config/serverVersion'
 import { updateAction, type UpdateAction } from '../config/installChannel'
 import { readLastSeen, rememberSeen } from '../connect/lastSeen'
-import { classifyFailure, HEALTH_TIMEOUT_MS, SERVER_BACK_EVENT, type CheckFailure } from '../connect/unreachable'
+import { classifyFailure, HEALTH_TIMEOUT_MS, outageFailure, SERVER_BACK_EVENT, type CheckFailure } from '../connect/unreachable'
 
 const HEALTH_URL = `${API_BASE}/health`
 const HEARTBEAT_INTERVAL_MS = 3000
@@ -52,6 +52,8 @@ const REMEMBER_SEEN_EVERY_MS = 30_000
 /** What's known about a server that has stopped answering (#119), for
  * src/connect/unreachable.ts to work the likely reason out from. */
 export type Outage = {
+  /** How it has failed over the outage so far (unreachable.ts's
+   * outageFailure), not just the last check. */
   failure: CheckFailure
   /** When the server last answered, in ms: this session's last heartbeat,
    * or what this device remembered from before. Null if it never has. */
@@ -179,10 +181,11 @@ export function useServerReady(): ServerStatus {
     let inFlight: Promise<void> | null = null
     const mountedAt = Date.now()
     let everAnswered = false
-    // When the first check in the current run of failures started, and
-    // whether any of them got no answer at all. Null while it answers.
+    // When the first check in the current run of failures started, and how
+    // the server has failed over that run (outageFailure). Null while it
+    // answers.
     let failingSince: number | null = null
-    let silent = false
+    let failedHow: CheckFailure | null = null
     let down = false
     let downSince = 0
     const remembered = Date.parse(readLastSeen(SERVER_ORIGIN)?.at ?? '')
@@ -225,7 +228,7 @@ export function useServerReady(): ServerStatus {
       if (!failure) {
         const recovered = failingSince !== null
         failingSince = null
-        silent = false
+        failedHow = null
         down = false
         everAnswered = true
         lastSeenAt = now
@@ -249,13 +252,14 @@ export function useServerReady(): ServerStatus {
       }
 
       failingSince ??= started
-      if (failure.kind === 'no-answer') silent = true
-      if (!down && now - failingSince >= (silent ? DOWN_AFTER_SILENCE_MS : DOWN_AFTER_REFUSED_MS)) {
+      failedHow = outageFailure(failedHow, failure)
+      const limit = failedHow.kind === 'no-answer' ? DOWN_AFTER_SILENCE_MS : DOWN_AFTER_REFUSED_MS
+      if (!down && now - failingSince >= limit) {
         down = true
         downSince = now
       }
       if (!down) return
-      const facts = { failure, lastSeenAt, networkChangedAt, deviceOnline: navigator.onLine }
+      const facts = { failure: failedHow, lastSeenAt, networkChangedAt, deviceOnline: navigator.onLine }
       setReady(false)
       setOutage((prev) => ({ ...facts, triedAt: manual ? now : (prev?.triedAt ?? null) }))
     }

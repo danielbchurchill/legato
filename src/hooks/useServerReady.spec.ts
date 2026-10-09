@@ -274,6 +274,22 @@ describe('useServerReady when the server goes away', () => {
     expect(result.current?.outage?.failure).toEqual({ kind: 'no-answer' })
   })
 
+  // A LAN host that's asleep: unanswered at first, then turned away at once
+  // by this computer's own network stack.
+  it('keeps how the outage failed steady when the checks after it fail another way', async () => {
+    const result = await mount()
+    mode = 'silent'
+    await advance(3000 + 2 * HEALTH_TIMEOUT_MS + 300)
+    const outage = result.current?.outage
+    expect(outage?.failure).toEqual({ kind: 'no-answer' })
+
+    mode = 'refused'
+    for (let i = 0; i < 5; i++) {
+      await advance(1000)
+      expect(result.current?.outage?.failure).toEqual({ kind: 'no-answer' })
+    }
+  })
+
   // The coordinator's review of #346: a slow answer isn't an outage.
   it('takes a server that answers after nine seconds as up', async () => {
     const result = await mount()
