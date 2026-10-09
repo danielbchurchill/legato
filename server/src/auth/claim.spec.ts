@@ -372,7 +372,7 @@ describe("a code someone else got to first", () => {
     expect(h.setupCodes.current().code).toBe("BBBB-BBBB");
     const body = (await h.checkIn()).json();
     expect(body.code).toBe("BBBB-BBBB");
-    expect(body.claimUrl).toBe(`${TEST_ISSUER}/claim?code=BBBB-BBBB`);
+    expect(body.claimUrl).toBe(`${TEST_ISSUER}/claim?code=BBBB-BBBB&server=${h.identity.serverId()}`);
   });
 
   it("says a claim of the code expired before this page picked it up", async () => {
@@ -386,7 +386,17 @@ describe("the claim URL", () => {
   it("is legato.fm/claim for legato.fm itself", async () => {
     const h = await setup({ origin: "https://auth.legato.fm" });
     h.relay.goDown();
-    expect((await h.checkIn()).json().claimUrl).toBe("https://legato.fm/claim?code=AAAA-AAAA");
+    expect((await h.checkIn()).json().claimUrl).toBe(`https://legato.fm/claim?code=AAAA-AAAA&server=${h.identity.serverId()}`);
+  });
+
+  // Issue #324: legato.fm keeps the claim for the server the QR names, so
+  // only this server can pick it up.
+  it("names this server, by the id its key makes", async () => {
+    const h = await setup();
+    const url = new URL((await h.checkIn()).json().claimUrl);
+    expect(url.searchParams.get("server")).toBe(h.identity.serverId());
+    expect(url.searchParams.get("server")).toMatch(/^[0-9a-f]{32}$/);
+    expect(serverIdForPublicKey(h.relay.exchanges()[0]!.body!.publicKey as string)).toBe(h.identity.serverId());
   });
 });
 

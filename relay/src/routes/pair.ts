@@ -17,8 +17,10 @@ import { signServerToken, type SigningKeys } from "../signing-keys.js";
 // home server itself, which is never going to have a relay session cookie
 // to present. The single-use code says which account, the same way an
 // OAuth device-authorization-grant code does, and since #237 a signature
-// from the server's identity key says which server. See routes/relay.ts's
-// header comment for the matching design decision on the /relay/* side.
+// from the server's identity key says which server. Since #324 a claim
+// also names the server it's for, from the QR, and only that server's
+// signature redeems it. See routes/relay.ts's header comment for the
+// matching design decision on the /relay/* side.
 //
 // Redeeming a code gets the server a `link` token, not a credential. The
 // server links its owner with it, as any link does (routes/linked-servers.ts),
@@ -26,6 +28,9 @@ import { signServerToken, type SigningKeys } from "../signing-keys.js";
 
 export const CLAIM_FAILURE_MESSAGES: Record<ClaimFailure, string> = {
   bad_code: "That isn't a Legato setup code. Scan the QR code on your server's /setup page again.",
+  outdated_server:
+    "This server is too old to be claimed: its QR code doesn't say which server it is. " +
+    "Update Legato on the server, then scan the QR code on its /setup page again.",
   taken:
     "Another legato.fm account has already claimed this code. If you're the one setting up this server, " +
     "don't link that account on its /setup page.",
@@ -33,7 +38,13 @@ export const CLAIM_FAILURE_MESSAGES: Record<ClaimFailure, string> = {
   too_many: "This account has too many claims waiting. Wait ten minutes for them to expire, then scan the code again.",
 };
 
-const CLAIM_FAILURE_STATUS: Record<ClaimFailure, number> = { bad_code: 400, taken: 409, used: 410, too_many: 429 };
+const CLAIM_FAILURE_STATUS: Record<ClaimFailure, number> = {
+  bad_code: 400,
+  outdated_server: 400,
+  taken: 409,
+  used: 410,
+  too_many: 429,
+};
 
 const CLAIM_PROOF_STATUS: Record<ClaimProofFailure, number> = { malformed: 400, bad_signature: 403, stale: 401 };
 
@@ -62,8 +73,9 @@ export function pairRoutes(
     // The claim page (routes/claim-page.ts) posts here with the session
     // cookie. SameSite=Lax keeps other sites' pages from sending it, but
     // legato.fm and its subdomains count as the same site, so a page that
-    // says where it's from has to be this service's own.
-    app.post<{ Body: { code?: unknown } | null }>("/pair/claim", async (request, reply) => {
+    // says where it's from has to be this service's own. server is the id
+    // the QR carried (issue #324): only that server can redeem the claim.
+    app.post<{ Body: { code?: unknown; server?: unknown } | null }>("/pair/claim", async (request, reply) => {
       const token = sessionToken(request);
       const user = token ? getUserBySessionToken(db, token) : null;
       if (!user) {
@@ -81,7 +93,7 @@ export function pairRoutes(
         reply.code(503);
         return { error: SIGNING_UNAVAILABLE, reason: "signing_not_configured" };
       }
-      const result = claimServerCode(db, user.id, request.body?.code);
+      const result = claimServerCode(db, user.id, request.body?.code, request.body?.server);
       if (!result.ok) {
         reply.code(CLAIM_FAILURE_STATUS[result.reason]);
         return { error: CLAIM_FAILURE_MESSAGES[result.reason], reason: result.reason };
@@ -103,9 +115,10 @@ export function pairRoutes(
     });
 
     // Polled by a home server while its /setup page is open (issue #237):
-    // 404 until someone claims the code, then a `link` token for the
-    // claiming account and this server's id, once. Asking about codes
-    // nobody here knows is rate-limited (rate-limit.ts, issue #324).
+    // 404 until someone claims the code for this server, then a `link`
+    // token for the claiming account and this server's id, once. A code
+    // claimed for another server is a 404 too (issue #324), and asking
+    // about codes nobody here knows is rate-limited (rate-limit.ts).
     app.post<{ Body: Record<string, unknown> | null }>("/pair/exchange", async (request, reply) => {
       if (!signingKeys || !issuer) {
         reply.code(503);
@@ -127,7 +140,7 @@ export function pairRoutes(
         };
       }
 
-      const result = redeemPairingCode(db, proof.code);
+      const result = redeemPairingCode(db, proof.code, proof.serverId);
       if (!result.ok) {
         if (result.reason === "not_found") limiter.recordUnknown(address, proof.code);
         reply.code(result.reason === "not_found" ? 404 : 410);

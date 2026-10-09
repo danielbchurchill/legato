@@ -1,0 +1,15 @@
+-- Issue #324: which server a claim is for.
+--
+-- A setup code is 40 bits, and the proof a server signs to redeem one
+-- (linked-servers.ts, checkClaimProof) costs nothing to make: any key will
+-- do. So whoever guessed a code someone had just claimed could redeem it
+-- for a server of their own, and the claiming account's link would go to a
+-- server its owner never saw. Now the QR on a server's /setup page carries
+-- the server's id as well as its code (legato.fm/claim?code=…&server=…),
+-- the claim page passes it to POST /pair/claim, and it's kept here.
+-- POST /pair/exchange redeems a code only for the server named here, and
+-- answers any other exactly as it would a code nobody claimed.
+--
+-- NULL for a code minted by POST /pair/start, and for a claim made before
+-- this. No server can redeem either.
+ALTER TABLE pairing_codes ADD COLUMN server_id TEXT;

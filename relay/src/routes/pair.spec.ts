@@ -6,7 +6,7 @@ import { buildApp } from "../app.js";
 import { openDb } from "../db.js";
 import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import { claimProof, serverIdForPublicKey, type ServerKey } from "../../../server/src/auth/serverKey.js";
-import { mintPairingCode } from "../pairing.js";
+import { claimServerCode } from "../pairing.js";
 import { parseSigningKeys } from "../signing-keys.js";
 
 async function listenApp(app: FastifyInstance): Promise<string> {
@@ -70,8 +70,18 @@ function homeServer(): ServerKey {
 
 const ISSUER = "http://relay.test";
 
-function exchangeBody(code: string, server = homeServer()) {
+// The server whose QR the account scanned: only it can redeem the claim
+// (issue #324).
+const SERVER = homeServer();
+
+function exchangeBody(code: string, server = SERVER) {
   return claimProof(server, { issuer: ISSUER, code, nowSeconds: Math.floor(Date.now() / 1000) });
+}
+
+function claimFor(db: Database, userId: number, server = SERVER): { code: string } {
+  const result = claimServerCode(db, userId, "K7QM-4XRD", server.serverId);
+  if (!result.ok) throw new Error(result.reason);
+  return result;
 }
 
 describe("POST /pair/exchange", () => {
@@ -99,8 +109,8 @@ describe("POST /pair/exchange", () => {
   it("exchanges a valid code for a link token for the redeeming server", async () => {
     app = signedApp();
     const { userId } = signIn(db);
-    const { code } = mintPairingCode(db, userId);
     const server = homeServer();
+    const { code } = claimFor(db, userId, server);
 
     const response = await exchange(exchangeBody(code, server));
     expect(response.statusCode).toBe(200);
@@ -112,7 +122,7 @@ describe("POST /pair/exchange", () => {
   it("rejects an already-used code", async () => {
     app = signedApp();
     const { userId } = signIn(db);
-    const { code } = mintPairingCode(db, userId);
+    const { code } = claimFor(db, userId);
 
     expect((await exchange(exchangeBody(code))).statusCode).toBe(200);
     const second = await exchange(exchangeBody(code));
@@ -124,8 +134,8 @@ describe("POST /pair/exchange", () => {
     app = signedApp();
     const { userId } = signIn(db);
     db.prepare(
-      "INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES (?, ?, datetime('now', '-1 minute'))",
-    ).run("EXPD-0000", userId);
+      "INSERT INTO pairing_codes (code, relay_user_id, server_id, expires_at) VALUES (?, ?, ?, datetime('now', '-1 minute'))",
+    ).run("EXPD-0000", userId, SERVER.serverId);
 
     // Typed the way a person would: lowercase, no dash, O for 0. The
     // proof signs the code as the server shows it.
@@ -145,7 +155,7 @@ describe("POST /pair/exchange", () => {
   it("rejects a code with no proof, without spending it", async () => {
     app = signedApp();
     const { userId } = signIn(db);
-    const { code } = mintPairingCode(db, userId);
+    const { code } = claimFor(db, userId);
 
     expect((await exchange({ code })).statusCode).toBe(400);
     expect((await exchange({})).statusCode).toBe(400);
@@ -155,7 +165,7 @@ describe("POST /pair/exchange", () => {
   it("refuses while this relay can't sign tokens, without spending the code", async () => {
     app = buildApp({ db, auth: { config: { callbackBaseUrl: ISSUER }, signingKeys: null } });
     const { userId } = signIn(db);
-    const { code } = mintPairingCode(db, userId);
+    const { code } = claimFor(db, userId);
 
     const response = await exchange(exchangeBody(code));
     expect(response.statusCode).toBe(503);

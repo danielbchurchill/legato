@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
+import { legatoIdentity } from "../auth/legatoIdentity.js";
 import { createSession, userForSessionToken } from "../auth/sessions.js";
 import cookie from "@fastify/cookie";
 import Fastify from "fastify";
@@ -295,7 +296,7 @@ describe("GET /auth/setup", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.code).toBe(setupCode());
-    expect(body.claimUrl).toBe(`https://legato.fm/claim?code=${body.code}`);
+    expect(body.claimUrl).toBe(`https://legato.fm/claim?code=${body.code}&server=${legatoIdentity(db).serverId()}`);
     expect(body.expiresInMs).toBeGreaterThan(0);
     expect(body.expiresInMs).toBeLessThanOrEqual(10 * 60 * 1000);
     expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());

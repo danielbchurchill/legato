@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { Database } from "./sqlite.js";
 import { generateCode, normalizeCode } from "./claimCode.js";
+import { SERVER_ID_PATTERN } from "./signing-keys.js";
 import { parseSqliteDatetime } from "./sqlite-datetime.js";
 
 // The pairing-code -> tunnel-credential handoff — see migrations/
@@ -14,6 +15,13 @@ import { parseSqliteDatetime } from "./sqlite-datetime.js";
 // the credential is minted only when the server reports that link, signed
 // with its key (acceptLinkProof). A claim nobody finishes leaves no
 // credential behind.
+//
+// Issue #324 binds a claim to one server. A code is 40 bits and a claim
+// proof costs nothing to make, so without that, anyone who guessed a code
+// someone had just claimed could redeem it with a key of their own. The
+// QR on /setup carries the server's id with the code, the claim stores it
+// (migration 0009), and redeeming answers any other server exactly as it
+// would a code nobody claimed.
 
 // 10 minutes: long enough to type/relay a code between two devices,
 // short enough that a code nobody redeemed isn't a standing liability.
@@ -84,36 +92,42 @@ export function mintTunnelCredential(db: Database, relayUserId: number, serverId
 // every ten minutes, rather than as many as it can post.
 export const OPEN_CODES_PER_ACCOUNT = 5;
 
-export type ClaimFailure = "bad_code" | "taken" | "used" | "too_many";
+export type ClaimFailure = "bad_code" | "outdated_server" | "taken" | "used" | "too_many";
 
 export type ClaimResult = { ok: true; code: string; expiresAt: Date; already: boolean } | { ok: false; reason: ClaimFailure };
 
 // Adopts a code a home server is showing on /setup into pairing_codes, for
-// this account, the same row /pair/start would have minted. The relay can't
-// know whether a server is showing the code; the server finds out by asking
-// /pair/exchange for it.
+// this account and the server the QR named. The relay can't know whether
+// that server is showing the code; the server finds out by asking
+// /pair/exchange for it. A QR with no server id is from a server that
+// predates #324, and nothing could redeem a claim of it.
 //
 // The code is the primary key, so a clash is decided here, never by
 // overwriting:
-//   - the same account again (a reload, a double tap) is the same claim;
+//   - the same account again (a reload, a double tap) is the same claim,
+//     for whichever server it names last;
 //   - another account's live code, claimed or minted, is refused. Which of
 //     the two it was doesn't matter to the person refused: someone else has
 //     it, and the server's next code is theirs to scan;
 //   - a spent code stays spent, so it reads "already used";
 //   - an expired, unspent row is nobody's any more and is replaced.
-export function claimServerCode(db: Database, relayUserId: number, typed: unknown): ClaimResult {
+export function claimServerCode(db: Database, relayUserId: number, typed: unknown, serverId: unknown): ClaimResult {
   const code = normalizeCode(typed);
   if (!code) return { ok: false, reason: "bad_code" };
+  if (typeof serverId !== "string" || !SERVER_ID_PATTERN.test(serverId)) return { ok: false, reason: "outdated_server" };
   return db.transaction((): ClaimResult => {
     const row = db
       .prepare(
-        `SELECT relay_user_id, used_at, expires_at, expires_at > datetime('now') AS live
+        `SELECT relay_user_id, server_id, used_at, expires_at, expires_at > datetime('now') AS live
          FROM pairing_codes WHERE code = ?`,
       )
-      .get(code) as { relay_user_id: number; used_at: string | null; expires_at: string; live: number } | undefined;
+      .get(code) as
+      | { relay_user_id: number; server_id: string | null; used_at: string | null; expires_at: string; live: number }
+      | undefined;
     if (row?.used_at) return { ok: false, reason: "used" };
     if (row?.live) {
       if (row.relay_user_id !== relayUserId) return { ok: false, reason: "taken" };
+      if (row.server_id !== serverId) db.prepare("UPDATE pairing_codes SET server_id = ? WHERE code = ?").run(serverId, code);
       return { ok: true, code, expiresAt: parseSqliteDatetime(row.expires_at), already: true };
     }
     if (row) db.prepare("DELETE FROM pairing_codes WHERE code = ?").run(code);
@@ -128,11 +142,11 @@ export function claimServerCode(db: Database, relayUserId: number, typed: unknow
 
     const inserted = db
       .prepare(
-        `INSERT INTO pairing_codes (code, relay_user_id, expires_at)
-         VALUES (?, ?, datetime('now', ?))
+        `INSERT INTO pairing_codes (code, relay_user_id, server_id, expires_at)
+         VALUES (?, ?, ?, datetime('now', ?))
          RETURNING expires_at`,
       )
-      .get(code, relayUserId, PAIRING_CODE_TTL_SQL) as { expires_at: string };
+      .get(code, relayUserId, serverId, PAIRING_CODE_TTL_SQL) as { expires_at: string };
     return { ok: true, code, expiresAt: parseSqliteDatetime(inserted.expires_at), already: false };
   })();
 }
@@ -169,18 +183,24 @@ export type RedeemResult = { ok: true; relayUserId: number } | { ok: false; reas
 // The code arrives as someone typed it (lowercase, no dash, an O for a 0),
 // so it's normalized before the lookup. Anything that can't be a code at
 // all is simply not found.
-export function redeemPairingCode(db: Database, typed: string): RedeemResult {
+//
+// serverId is the server redeeming, from its signed proof. A code claimed
+// for any other server, or for none (POST /pair/start's, or a claim from
+// before #324), is not found either: whether it's used, expired or live is
+// that server's business, so the answer says nothing about it, and the
+// code stays unspent.
+export function redeemPairingCode(db: Database, typed: string, serverId: string): RedeemResult {
   const code = normalizeCode(typed);
   if (!code) return { ok: false, reason: "not_found" };
   return db.transaction((): RedeemResult => {
     const row = db
       .prepare(
-        `SELECT relay_user_id, used_at, expires_at > datetime('now') AS not_expired
+        `SELECT relay_user_id, server_id, used_at, expires_at > datetime('now') AS not_expired
          FROM pairing_codes WHERE code = ?`,
       )
-      .get(code) as { relay_user_id: number; used_at: string | null; not_expired: number } | undefined;
+      .get(code) as { relay_user_id: number; server_id: string | null; used_at: string | null; not_expired: number } | undefined;
 
-    if (!row) return { ok: false, reason: "not_found" };
+    if (!row || row.server_id !== serverId) return { ok: false, reason: "not_found" };
     if (row.used_at) return { ok: false, reason: "used" };
     if (!row.not_expired) return { ok: false, reason: "expired" };
 
