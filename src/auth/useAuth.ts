@@ -10,8 +10,9 @@ export type AuthStatus = {
   user: { role: 'owner' | 'legacy'; provider: string; displayName: string | null; email: string | null } | null
   oauth: { google: boolean; github: boolean }
   // issuer is null when legato.fm is off on the server; linked is about the
-  // signed-in user's own row (server/src/routes/auth.ts).
-  legato?: { serverId: string; issuer?: string | null; linked?: boolean | null } | null
+  // signed-in user's own row (server/src/routes/auth.ts), and only the owner
+  // is told linkedAccountId, the legato.fm account that row is linked to.
+  legato?: { serverId: string; issuer?: string | null; linked?: boolean | null; linkedAccountId?: string | null } | null
 }
 
 export type AuthState =

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Button } from '../ui/Button'
+import { AlertDialog } from '../ui/Dialog'
 import { Shimmer, Skeleton } from '../ui/Skeleton'
 import { IS_TAURI } from '../config/runtime'
 import { RELAY_ORIGIN } from '../config/relayHost'
@@ -176,12 +177,12 @@ export function LegatoAccountRow() {
 
       {error && <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{error}</p>}
 
-      <ServerLink relaySignedIn={state.kind === 'signed-in'} />
+      <ServerLink relayUser={state.kind === 'signed-in' ? state.user : null} />
     </SettingsGroup>
   )
 }
 
-type LinkStatus = { serverId: string; issuer: string | null; linked: boolean }
+type LinkStatus = { serverId: string; issuer: string | null; linked: boolean; linkedAccountId: string | null }
 
 /** This server's id, which legato.fm it trusts, and whether the signed-in
  * user is linked there; again whenever a link finishes elsewhere. */
@@ -191,7 +192,16 @@ function useLinkStatus(): { status: LinkStatus | null | 'unavailable'; reload: (
     fetch(`${API_BASE}/auth/status`)
       .then((r) => r.json() as Promise<AuthStatus>)
       .then(({ legato }) =>
-        setStatus(legato ? { serverId: legato.serverId, issuer: legato.issuer ?? null, linked: legato.linked === true } : 'unavailable'),
+        setStatus(
+          legato
+            ? {
+                serverId: legato.serverId,
+                issuer: legato.issuer ?? null,
+                linked: legato.linked === true,
+                linkedAccountId: legato.linkedAccountId ?? null,
+              }
+            : 'unavailable',
+        ),
       )
       .catch(() => setStatus('unavailable'))
   }, [])
@@ -219,17 +229,23 @@ function hostOf(origin: string): string {
   }
 }
 
+function accountName(user: RelayUser): string {
+  if (user.displayName && user.email) return `${user.displayName} (${user.email})`
+  return user.displayName ?? user.email ?? "this app's legato.fm account"
+}
+
 /* Issue #325: linking this server to legato.fm from Settings, for a server
  * whose owner was created without a claim, or whose first link failed, or
  * that legato.fm stopped vouching for ("link again"). Both clients end at the
  * server's own link endpoint (src/connect/legatoLink.ts). The desktop app
  * asks legato.fm with the session above; the web client can't hold one, so
  * it goes to legato.fm's /link page and comes back (legatoLinkReturn.ts). */
-function ServerLink({ relaySignedIn }: { relaySignedIn: boolean }) {
+function ServerLink({ relayUser }: { relayUser: RelayUser | null }) {
   const account = useAccount()
   const { status, reload } = useLinkStatus()
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [confirmingReplace, setConfirmingReplace] = useState(false)
 
   // Back from legato.fm with the browser's back button, the page can come
   // back from the back-forward cache exactly as it left: still linking.
@@ -264,12 +280,17 @@ function ServerLink({ relaySignedIn }: { relaySignedIn: boolean }) {
         ? "Only this server's owner can link it."
         : otherIssuer
           ? `It uses legato.fm at ${hostOf(issuer)}, and this app signs in at ${hostOf(RELAY_ORIGIN)}, so it can't link it from here.`
-          : IS_TAURI && !relaySignedIn
+          : IS_TAURI && !relayUser
             ? 'Sign in to legato.fm to link it.'
             : null
-  const canLink = issuer !== null && owner && !otherIssuer && (!IS_TAURI || relaySignedIn)
+  const canLink = issuer !== null && owner && !otherIssuer && (!IS_TAURI || relayUser !== null)
+  // Linking from the desktop app as a different legato.fm account than the
+  // one linked replaces it: the server unlinks the old one
+  // (server/src/auth/legatoLink.ts). So that's asked first.
+  const replaces = IS_TAURI && relayUser !== null && status.linkedAccountId !== null && status.linkedAccountId !== String(relayUser.id)
 
   const link = async () => {
+    setConfirmingReplace(false)
     setNotice(null)
     setBusy(true)
     // The web client leaves for legato.fm here and comes back to the app.
@@ -289,12 +310,27 @@ function ServerLink({ relaySignedIn }: { relaySignedIn: boolean }) {
           {hint && ` ${hint}`}
         </p>
         {canLink && (
-          <Button onClick={() => void link()} disabled={busy}>
+          <Button onClick={() => (replaces ? setConfirmingReplace(true) : void link())} disabled={busy}>
             {busy ? <Shimmer>linking…</Shimmer> : status.linked ? 'link again' : 'link to legato.fm'}
           </Button>
         )}
       </div>
       {notice && <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{notice}</p>}
+      {relayUser && (
+        <AlertDialog
+          open={confirmingReplace}
+          onCancel={() => setConfirmingReplace(false)}
+          onConfirm={() => void link()}
+          title="link a different account"
+          description={
+            <p>
+              This server is linked to another legato.fm account. Link it to {accountName(relayUser)} instead? The other account will stop
+              opening it.
+            </p>
+          }
+          confirmLabel="link instead"
+        />
+      )}
     </>
   )
 }

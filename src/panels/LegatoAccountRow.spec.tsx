@@ -81,6 +81,28 @@ afterEach(() => {
 })
 
 describe('linking this server from Settings', () => {
+  it('asks before the desktop app links its account in place of a different one', async () => {
+    serverSays({ linked: true, linkedAccountId: '9' })
+    await render()
+    await act(async () => button('link again').click())
+    expect(linkWithLegato).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain(
+      'This server is linked to another legato.fm account. Link it to Rowan (rowan@example.com) instead? The other account will stop opening it.',
+    )
+
+    await act(async () => button('link instead').click())
+    expect(linkWithLegato).toHaveBeenCalledWith(SERVER_ID)
+    expect(document.body.textContent).toContain('Linked to Rowan.')
+  })
+
+  it("links again without asking when it's the account already linked", async () => {
+    serverSays({ linked: true, linkedAccountId: '7' })
+    await render()
+    await act(async () => button('link again').click())
+    expect(linkWithLegato).toHaveBeenCalledWith(SERVER_ID)
+    expect(document.body.textContent).not.toContain('link a different account')
+  })
+
   it('says why instead of offering a link the desktop app would get refused', async () => {
     serverSays({ issuer: 'https://id.example.net' })
     const container = await render()

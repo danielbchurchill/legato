@@ -177,6 +177,19 @@ describe("linking the owner", () => {
 
     const status = await h.app.inject({ method: "GET", url: "/api/v1/auth/status", headers: bearer(owner) });
     expect(status.json().legato.linked).toBe(true);
+    // The owner learns which account, so the desktop app can ask before
+    // linking a different one in its place (issue #325).
+    expect(status.json().legato.linkedAccountId).toBe("42");
+  });
+
+  it("tells only the owner which account is linked", async () => {
+    const h = await setup();
+    const { token: owner } = await createOwnerForTest(h.app);
+    const status = (headers: Record<string, string>) => h.app.inject({ method: "GET", url: "/api/v1/auth/status", headers });
+    expect((await status(bearer(owner))).json().legato.linkedAccountId).toBeNull();
+    await linkOwner(h, owner);
+    expect((await status(bearer(owner))).json().legato.linkedAccountId).toBe("42");
+    expect((await status({})).json().legato).not.toHaveProperty("linkedAccountId");
   });
 
   it("unlinking stops the daily refresh and the token stops working", async () => {
