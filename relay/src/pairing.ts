@@ -152,11 +152,15 @@ export function isClaimedFor(db: Database, code: string, serverId: string): bool
   return db.prepare("SELECT 1 FROM pairing_codes WHERE code = ? AND server_id = ?").get(code, serverId) !== undefined;
 }
 
-export type RedeemResult = { ok: true; relayUserId: number } | { ok: false; reason: "not_found" | "expired" | "used" };
+export type RedeemResult =
+  | { ok: true; relayUserId: number; linkToken: string; again: boolean }
+  | { ok: false; reason: "not_found" | "expired" | "used" };
 
 // A transaction so two near-simultaneous redemptions of the same code
 // can't both pass the used_at check — the UPDATE below only ever succeeds
-// in "spending" the code once.
+// in "spending" the code once. issue signs the link token for the account
+// that claimed it, once per code, inside that transaction, and the token is
+// kept with the code.
 //
 // The code arrives as someone typed it (lowercase, no dash, an O for a 0),
 // so it's normalized before the lookup. Anything that can't be a code at
@@ -164,26 +168,37 @@ export type RedeemResult = { ok: true; relayUserId: number } | { ok: false; reas
 //
 // serverId is the server redeeming, from its signed proof. A code claimed
 // for any other server, or for none (a row from before #324), is not found
-// either: whether it's used, expired or live is
-// that server's business, so the answer says nothing about it, and the
-// code stays unspent.
-export function redeemPairingCode(db: Database, typed: string, serverId: string): RedeemResult {
+// either: whether it's used, expired or live is that server's business, so
+// the answer says nothing about it, and the code stays unspent.
+//
+// The server it's claimed for gets the same answer again while the claim
+// lasts (again: true): the token it was handed, so the answer it never got
+// is never lost (issue #324). With the claim bound to it, nothing else can
+// have spent the code, so "used" only ever means this server's own
+// redemption, after the claim ran out.
+export function redeemPairingCode(db: Database, typed: string, serverId: string, issue: (relayUserId: number) => string): RedeemResult {
   const code = normalizeCode(typed);
   if (!code) return { ok: false, reason: "not_found" };
   return db.transaction((): RedeemResult => {
     const row = db
       .prepare(
-        `SELECT relay_user_id, server_id, used_at, expires_at > datetime('now') AS not_expired
+        `SELECT relay_user_id, server_id, used_at, link_token, expires_at > datetime('now') AS not_expired
          FROM pairing_codes WHERE code = ?`,
       )
-      .get(code) as { relay_user_id: number; server_id: string | null; used_at: string | null; not_expired: number } | undefined;
+      .get(code) as
+      | { relay_user_id: number; server_id: string | null; used_at: string | null; link_token: string | null; not_expired: number }
+      | undefined;
 
     if (!row || row.server_id !== serverId) return { ok: false, reason: "not_found" };
-    if (row.used_at) return { ok: false, reason: "used" };
+    if (row.used_at) {
+      if (row.not_expired && row.link_token) return { ok: true, relayUserId: row.relay_user_id, linkToken: row.link_token, again: true };
+      return { ok: false, reason: "used" };
+    }
     if (!row.not_expired) return { ok: false, reason: "expired" };
 
-    db.prepare("UPDATE pairing_codes SET used_at = datetime('now') WHERE code = ?").run(code);
-    return { ok: true, relayUserId: row.relay_user_id };
+    const linkToken = issue(row.relay_user_id);
+    db.prepare("UPDATE pairing_codes SET used_at = datetime('now'), link_token = ? WHERE code = ?").run(linkToken, code);
+    return { ok: true, relayUserId: row.relay_user_id, linkToken, again: false };
   })();
 }
 

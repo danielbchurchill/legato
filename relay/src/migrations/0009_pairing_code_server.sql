@@ -14,3 +14,9 @@
 -- /pair/start, which #353 removed. No server can redeem either, and both
 -- expire ten minutes after they were made.
 ALTER TABLE pairing_codes ADD COLUMN server_id TEXT;
+
+-- The link token redeeming the code handed its server, kept so that if the
+-- answer never reached the server, asking again gets the same token for as
+-- long as the claim lasts (routes/pair.ts). One claim, one token, and so one
+-- credential, however often the answer is lost.
+ALTER TABLE pairing_codes ADD COLUMN link_token TEXT;

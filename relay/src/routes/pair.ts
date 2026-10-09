@@ -4,7 +4,7 @@ import { getUserBySessionToken, sessionToken, type RelayUserRow } from "../accou
 import { claimProofSigned, PROOF_FAILURE_MESSAGES, readClaimProof, type ClaimProofFailure } from "../linked-servers.js";
 import { claimServerCode, claimStatus, isClaimedFor, redeemPairingCode, type ClaimFailure } from "../pairing.js";
 import { clientAddress, type ExchangeLimiter } from "../rate-limit.js";
-import { signServerToken, type SigningKeys } from "../signing-keys.js";
+import { issuedTokenExpiresAt, signServerToken, type SigningKeys } from "../signing-keys.js";
 
 // Links a headless home server, which has no relay session of its own, to
 // the legato.fm account someone signed in with. pairing.ts has the design.
@@ -101,7 +101,9 @@ export function pairRoutes(
 
     // Polled by a home server while its /setup page is open (issue #237):
     // 404 until someone claims the code for this server, then a `link`
-    // token for the claiming account and this server's id, once.
+    // token for the claiming account and this server's id. The same token
+    // again if it asks again while the claim lasts, since the first answer
+    // may never have reached it; "used" after that (pairing.ts).
     //
     // A code claimed for the server the proof names is that server's claim
     // (issue #324). It's looked up first, by primary key, and checked and
@@ -139,7 +141,10 @@ export function pairRoutes(
         return { error: PROOF_FAILURE_MESSAGES.bad_signature, reason: "bad_signature" };
       }
 
-      const result = redeemPairingCode(db, proof.code, proof.serverId);
+      const result = redeemPairingCode(db, proof.code, proof.serverId, (relayUserId) => {
+        const user = db.prepare("SELECT * FROM relay_users WHERE id = ?").get(relayUserId) as RelayUserRow;
+        return signServerToken(signingKeys, { issuer, user, serverId: proof.serverId, scope: "link", tunnel: true }).token;
+      });
       if (!result.ok) {
         reply.code(result.reason === "not_found" ? 404 : 410);
         return {
@@ -148,10 +153,12 @@ export function pairRoutes(
         };
       }
 
-      const user = db.prepare("SELECT * FROM relay_users WHERE id = ?").get(result.relayUserId) as RelayUserRow;
-      const issued = signServerToken(signingKeys, { issuer, user, serverId: proof.serverId, scope: "link", tunnel: true });
-      request.log.info(`pair: server ${proof.serverId} picked up account ${user.id}'s claim`);
-      return { linkToken: issued.token, expiresAt: issued.expiresAt.toISOString() };
+      request.log.info(
+        result.again
+          ? `pair: server ${proof.serverId} asked again for account ${result.relayUserId}'s claim, and got the same token`
+          : `pair: server ${proof.serverId} picked up account ${result.relayUserId}'s claim`,
+      );
+      return { linkToken: result.linkToken, expiresAt: issuedTokenExpiresAt(result.linkToken).toISOString() };
     });
   };
 }

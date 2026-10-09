@@ -139,6 +139,29 @@ describe("a claim, start to finish", () => {
     expect(h.credentials()).toHaveLength(1);
   });
 
+  // Issue #324: the answer to the server's exchange can be lost on the way
+  // back, and the code is spent by then.
+  it("hands the server the same token if it asks again, and the link still mints one credential", async () => {
+    const h = setup();
+    const { user, cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD");
+    const lost = (await h.exchangeAs(SERVER, "K7QM-4XRD")).json();
+    const { linkToken, expiresAt } = lost as { linkToken: string; expiresAt: string };
+    const { exp } = JSON.parse(Buffer.from(linkToken.split(".")[1]!, "base64url").toString()) as { exp: number };
+    expect(expiresAt).toBe(new Date(exp * 1000).toISOString());
+
+    const retried = await h.exchangeAs(SERVER, "K7QM-4XRD");
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json()).toEqual(lost);
+    expect(await h.status(cookie, "K7QM-4XRD")).toBe("picked_up");
+    // Other servers still hear nothing about it.
+    expect((await h.exchangeAs(homeServer(), "K7QM-4XRD")).statusCode).toBe(404);
+
+    expect((await h.report(linkProof(SERVER, linkToken))).statusCode).toBe(200);
+    expect((await h.report(linkProof(SERVER, linkToken))).json()).toMatchObject({ reason: "used" });
+    expect(h.credentials()).toEqual([{ relay_user_id: user.id, server_id: SERVER.serverId }]);
+  });
+
   it("leaves no credential and no pair when the server never reports the link", async () => {
     const h = setup();
     const { cookie } = h.signIn();

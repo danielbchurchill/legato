@@ -73,8 +73,9 @@ export function maskEmail(email: string | null): string | null {
 
 export class ServerClaims {
   private pending: { linkToken: string; account: ClaimAccount; lapsesAt: number } | null = null;
-  // Codes this server redeemed itself. legato.fm says "used" for them from
-  // then on, which means nothing here, so they aren't asked about again.
+  // Codes this server redeemed itself, which aren't asked about again:
+  // legato.fm would only hand back the same token, or say "used" once the
+  // claim ran out.
   private readonly spent = new Set<string>();
   // The last thing worth telling /setup while nothing is pending.
   private notice: Notice | null = null;
@@ -208,8 +209,15 @@ export class ServerClaims {
       // Only the live code's answers are worth showing: the page has
       // already moved on from the one before it.
       if (code !== live) continue;
+      // legato.fm keeps a claim for this server alone and answers it again
+      // while it lasts, so "used" means this server redeemed it, the answer
+      // never got here, and the claim ran out before it asked again.
       if (result.legatoReason === "used") {
-        this.log("warn", "legato.fm: this setup code was already used to claim a different server, so it's been replaced");
+        this.log(
+          "warn",
+          "legato.fm: the answer to a claim of this setup code never got here, and the claim has run out, " +
+            "so nothing was linked; the code's been replaced",
+        );
         this.notice = { state: "used" };
         setupCodes.replace();
       } else if (result.legatoReason === "expired") {

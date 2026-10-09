@@ -31,11 +31,16 @@ type Call = { url: string; body: Record<string, unknown> | null };
 function fakeRelay(nowSeconds: () => number) {
   const key = makeTestKey();
   const claimed = new Map<string, { sub: string; name: string; email: string }>();
+  // What legato.fm answered for a code it redeemed: asked again while the
+  // claim lasts, it answers the same (relay/src/pairing.ts).
+  const answered = new Map<string, { linkToken: string; expiresAt: string }>();
+  // Redeemed, and the claim has run out since.
   const used = new Set<string>();
   const expired = new Set<string>();
   const calls: Call[] = [];
   let down = false;
   let refuseLinks = false;
+  let loseNextAnswer = false;
   // Retry-After for a 429 from /pair/exchange: a number, "none" for a 429
   // without one, or null for no 429 at all.
   let limited: number | "none" | null = null;
@@ -57,10 +62,11 @@ function fakeRelay(nowSeconds: () => number) {
       const code = body!.code as string;
       if (used.has(code)) return Response.json({ error: "pairing code used", reason: "used" }, { status: 410 });
       if (expired.has(code)) return Response.json({ error: "pairing code expired", reason: "expired" }, { status: 410 });
+      const again = answered.get(code);
+      if (again) return Response.json(again);
       const claim = claimed.get(code);
       if (!claim) return Response.json({ error: "pairing code not found", reason: "not_found" }, { status: 404 });
       claimed.delete(code);
-      used.add(code);
       const aud = serverIdForPublicKey(body!.publicKey as string);
       const claims = {
         ...testClaims(aud, nowSeconds()),
@@ -70,7 +76,14 @@ function fakeRelay(nowSeconds: () => number) {
         name: claim.name,
         email: claim.email,
       };
-      return Response.json({ linkToken: signTestToken(key, claims), expiresAt: "" });
+      const answer = { linkToken: signTestToken(key, claims), expiresAt: "" };
+      answered.set(code, answer);
+      // Redeemed here, and lost on the way back.
+      if (loseNextAnswer) {
+        loseNextAnswer = false;
+        throw new Error("connection reset");
+      }
+      return Response.json(answer);
     }
     if (url.endsWith("/linked-servers")) {
       if (refuseLinks) return Response.json({ error: "That proof has already been used.", reason: "used" }, { status: 409 });
@@ -92,6 +105,9 @@ function fakeRelay(nowSeconds: () => number) {
     },
     refuseLinks: () => {
       refuseLinks = true;
+    },
+    loseNextAnswer: () => {
+      loseNextAnswer = true;
     },
     limit: (retryAfter: number | "none" | null) => {
       limited = retryAfter;
@@ -442,8 +458,24 @@ describe("a claim", () => {
   });
 });
 
-describe("a code someone else got to first", () => {
-  it("is replaced when legato.fm says it was used, and /setup says why", async () => {
+// Issue #324: legato.fm keeps a claim for the server its QR names, so only
+// this server can spend it, and it answers this server again while the
+// claim lasts.
+describe("a claim whose answer was lost", () => {
+  it("is picked up the next time the server asks, with the same token", async () => {
+    const h = await setup();
+    h.relay.claim("AAAA-AAAA");
+    h.relay.loseNextAnswer();
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: true, busy: false });
+    h.advance(5_000);
+    expect(await h.view()).toMatchObject({ state: "claimed", account: { id: "7", name: "Rowan" } });
+    expect(h.relay.exchanges().map((call) => call.body!.code)).toEqual(["AAAA-AAAA", "AAAA-AAAA"]);
+
+    const res = await h.createOwner({ linkAccountId: "7" });
+    expect(res.json().legato).toEqual({ linked: { accountId: "7", email: "rowan@example.com", name: "Rowan" } });
+  });
+
+  it("gets a new code once the claim has run out, and never says it was another server's", async () => {
     const h = await setup();
     h.relay.use("AAAA-AAAA");
     expect(await h.view()).toEqual({ state: "used" });
@@ -451,9 +483,15 @@ describe("a code someone else got to first", () => {
     const body = (await h.checkIn()).json();
     expect(body.code).toBe("BBBB-BBBB");
     expect(body.claimUrl).toBe(`${TEST_ISSUER}/claim?code=BBBB-BBBB&server=${h.identity.serverId()}`);
+    expect(h.logs).toContain(
+      "legato.fm: the answer to a claim of this setup code never got here, and the claim has run out, so nothing was linked; the code's been replaced",
+    );
+    expect(h.logs.join("\n")).not.toContain("different server");
   });
+});
 
-  it("says a claim of the code expired before this page picked it up", async () => {
+describe("a claim that ran out before anything asked", () => {
+  it("says so on /setup", async () => {
     const h = await setup();
     h.relay.expire("AAAA-AAAA");
     expect(await h.view()).toEqual({ state: "expired" });

@@ -55,7 +55,7 @@ function claimCaption(claim: ClaimView | null): string | null {
     case 'lapsed':
       return `The claim for ${accountLabel(claim.account)} lapsed before the owner was created, so nothing was linked. To claim again, scan the new code.`
     case 'used':
-      return 'Someone used the last code to claim a different server on legato.fm, so this server made a new one. To claim this server, scan this.'
+      return 'A claim of the last code ran out on legato.fm before it reached this server, so nothing was linked and this server made a new code. To claim this server, scan this.'
     case 'expired':
       return 'A claim of this code expired on legato.fm before this page picked it up. To claim this server, scan it again.'
     case 'refused':

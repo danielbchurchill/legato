@@ -148,6 +148,13 @@ function decodeSegment(segment: string): Record<string, unknown> | null {
   }
 }
 
+// When a token this service signed runs out, read straight off it. Only for
+// one it kept itself (pairing.ts), so there's nothing to check.
+export function issuedTokenExpiresAt(token: string): Date {
+  const exp = decodeSegment(token.split(".")[1] ?? "")?.exp;
+  return new Date(typeof exp === "number" ? exp * 1000 : 0);
+}
+
 // Reads back a token this service signed, when a home server returns one as
 // part of a proof (issue #231). The checks a home server makes on the way in
 // (server/src/auth/legatoToken.ts) are mostly beside the point here: this is

@@ -145,7 +145,7 @@ describe('OwnerGate on /setup, before a claim', () => {
 
   it.each([
     [{ state: 'lapsed', account: ROWAN } as ClaimView, 'The claim for Rowan (r•••@example.com) lapsed before the owner was created'],
-    [{ state: 'used' } as ClaimView, 'Someone used the last code to claim a different server'],
+    [{ state: 'used' } as ClaimView, 'A claim of the last code ran out on legato.fm before it reached this server'],
     [{ state: 'expired' } as ClaimView, 'A claim of this code expired on legato.fm'],
   ])('explains a claim that went nowhere (%o)', async (claim, text) => {
     serve(claim)

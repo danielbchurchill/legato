@@ -80,15 +80,22 @@ describe("POST /pair/exchange", () => {
     expect(claims).toMatchObject({ sub: String(userId), aud: server.serverId, scope: "link", tunnel: true, iss: ISSUER });
   });
 
-  it("rejects an already-used code", async () => {
+  // Issue #324: a server whose first answer was lost asks again.
+  it("answers the same token again while the claim lasts, and says the code is used after", async () => {
     app = signedApp();
     const { userId } = signIn(db);
     const { code } = claimFor(db, userId);
 
-    expect((await exchange(exchangeBody(code))).statusCode).toBe(200);
-    const second = await exchange(exchangeBody(code));
-    expect(second.statusCode).toBe(410);
-    expect(second.json()).toMatchObject({ reason: "used" });
+    const first = await exchange(exchangeBody(code));
+    expect(first.statusCode).toBe(200);
+    const again = await exchange(exchangeBody(code));
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toEqual(first.json());
+
+    db.prepare("UPDATE pairing_codes SET expires_at = datetime('now', '-1 second') WHERE code = ?").run(code);
+    const after = await exchange(exchangeBody(code));
+    expect(after.statusCode).toBe(410);
+    expect(after.json()).toMatchObject({ reason: "used" });
   });
 
   it("rejects an expired code", async () => {
