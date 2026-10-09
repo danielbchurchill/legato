@@ -22,7 +22,7 @@ import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type S
 import { createSession, deleteSession, spendAccessToken, type SessionUser } from "../auth/sessions.js";
 import { IDENTITY_NONCE_PATTERN, identityProof, loadServerKey } from "../auth/serverKey.js";
 import { forgetTunnelCredential } from "../auth/tunnelCredential.js";
-import { syncRelayTunnel } from "../tunnel/relayTunnel.js";
+import { syncRelayTunnelOnceAnswered } from "../tunnel/relayTunnel.js";
 
 // Sign-in for this server (issue #112): the local owner's password, plus
 // the Google/GitHub accounts provisioned before the owner existed. The
@@ -562,7 +562,7 @@ export function authRoutes(
       unlinkAccount(db, request.authUser.id);
       if (accountId) forgetTunnelCredential(db, accountId);
       identity.syncSchedule();
-      reply.raw.once("close", () => syncRelayTunnel(db));
+      syncRelayTunnelOnceAnswered(db, reply);
       const legatoNotified = accountId && identity.enabled ? (await identity.recordUnlink(accountId)).ok : null;
       return { ok: true, legatoNotified };
     });

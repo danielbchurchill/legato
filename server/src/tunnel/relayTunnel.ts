@@ -1,3 +1,4 @@
+import type { FastifyReply } from "fastify";
 import { legatoIdentity } from "../auth/legatoIdentity.js";
 import { isLinkedAccount } from "../auth/legatoUsers.js";
 import { forgetTunnelCredential, readTunnelCredential } from "../auth/tunnelCredential.js";
@@ -115,4 +116,20 @@ export function installRelayTunnel(db: Database, tunnel: RelayTunnel): void {
 
 export function syncRelayTunnel(db: Database): void {
   instances.get(db)?.sync();
+}
+
+// Syncs once `reply` has gone: a link change made from a phone through
+// legato.fm comes down the very tunnel the sync may close, and its answer
+// has to reach the phone first. That runs from the response's close,
+// outside Fastify's error handling, where a throw is uncaught and Bun
+// exits. So SQLITE_BUSY (the recompute Worker holding the write lock past
+// busy_timeout), or a database already closed at shutdown, is logged.
+export function syncRelayTunnelOnceAnswered(db: Database, reply: FastifyReply): void {
+  reply.raw.once("close", () => {
+    try {
+      syncRelayTunnel(db);
+    } catch (err) {
+      reply.log.error(err, "legato.fm: couldn't bring the tunnel in line with this server's link");
+    }
+  });
 }

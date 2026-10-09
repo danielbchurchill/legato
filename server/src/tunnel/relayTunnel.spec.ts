@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { openDb } from "../db.js";
 import { installLegatoIdentity, LegatoIdentity } from "../auth/legatoIdentity.js";
 import { fakeLegatoFetch, makeTestKey, signTestToken, testClaims, type LegatoReport } from "../auth/legato-test-keys.js";
@@ -172,6 +172,36 @@ describe("RelayTunnel", () => {
     expect(stored(h.db, h.fake.origin)).toBeNull();
     while (h.fake.closed < 1) await sleep(10);
     expect(h.fake.opened).toBe(1);
+  });
+
+  it("keeps the server up when syncing the tunnel after an unlink throws", async () => {
+    // The sync runs once the unlink's answer has gone, outside Fastify's
+    // error handling. SQLITE_BUSY there (the recompute Worker holding the
+    // write lock past busy_timeout) or a database already closed at
+    // shutdown was an uncaught exception, and Bun exits on one.
+    const h = await setup();
+    h.link("42");
+    h.store("42", "live-1");
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+    const failing = spyOn(h.tunnel, "sync").mockImplementation(() => {
+      throw new Error("database is locked");
+    });
+    const uncaught: unknown[] = [];
+    const onUncaught = (err: unknown) => uncaught.push(err);
+    process.on("uncaughtException", onUncaught);
+    cleanups.push(() => process.off("uncaughtException", onUncaught));
+
+    const res = await h.app.inject({
+      method: "DELETE",
+      url: "/api/v1/auth/legato/link",
+      headers: { authorization: `Bearer ${h.owner.token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    await sleep(50);
+    expect(failing).toHaveBeenCalledTimes(1);
+    expect(uncaught).toEqual([]);
+    expect((await h.app.inject({ method: "GET", url: "/api/v1/health" })).statusCode).toBe(200);
   });
 
   it("opens the tunnel as soon as a link brings a credential", async () => {
