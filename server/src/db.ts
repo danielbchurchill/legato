@@ -59,6 +59,20 @@ function formatMegabytes(bytes: number): string {
 // waveforms/) is gigabytes of cache the server rebuilds on its own, and
 // copying it on every upgrade would be exactly the disk-full failure this
 // is meant to protect against.
+//
+// Issue #320: the free-space check covers the migrations too, not just the
+// backup. A migration writes every page it changes to legato.db-wal first,
+// on the same disk, and a disk with room for the backup and no more let
+// the backup succeed and the migration fill the disk and roll back, on
+// every start. 0041, deleting 1.6M era ties from a 3,626 MB database, grew
+// the -wal to 197 MB, 5.4% of the file. Rebuilding a table to widen a
+// CHECK, as 0014, 0019 and 0029 did, writes about that table and its
+// indexes, and apart from the similarity vectors the biggest table in that
+// database is edges, 11% of it with its indexes. A quarter of the database
+// covers either with room to spare. A migration that rewrites the
+// similarity vectors, most of the file, has to raise this.
+export const MIGRATION_WAL_SHARE = 0.25;
+
 function backupBeforeMigrating(
   db: Database,
   dbPath: string,
@@ -73,7 +87,9 @@ function backupBeforeMigrating(
   // VACUUM INTO will write at most (less, once free pages are dropped).
   const { page_count: pageCount } = db.prepare("PRAGMA page_count").get() as { page_count: number };
   const { page_size: pageSize } = db.prepare("PRAGMA page_size").get() as { page_size: number };
-  const bytesNeeded = pageCount * pageSize;
+  const backupBytes = pageCount * pageSize;
+  const walBytes = Math.ceil(backupBytes * MIGRATION_WAL_SHARE);
+  const bytesNeeded = backupBytes + walBytes;
 
   let bytesFree: number | undefined;
   try {
@@ -90,10 +106,10 @@ function backupBeforeMigrating(
     // H9: say what failed, where, and what it would take to fix it — the
     // person reading this is looking at a server that refused to start.
     const cause = err instanceof Error ? err.message : String(err);
-    const space =
-      bytesFree === undefined
-        ? `needs about ${formatMegabytes(bytesNeeded)} free`
-        : `needs about ${formatMegabytes(bytesNeeded)} free, ${formatMegabytes(bytesFree)} available`;
+    const needed =
+      `needs about ${formatMegabytes(bytesNeeded)} free (${formatMegabytes(backupBytes)} for the backup, ` +
+      `${formatMegabytes(walBytes)} for what the migrations write)`;
+    const space = bytesFree === undefined ? needed : `${needed}, ${formatMegabytes(bytesFree)} available`;
     throw new Error(
       `Couldn't back up the database before migrating it, so no migrations were applied and ` +
         `${dbPath} is unchanged. Tried to write ${backupPath} (${space}): ${cause}. ` +
@@ -183,6 +199,14 @@ export function openDb(dbPath: string = path.join(DATA_DIR, "legato.db"), option
       db.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
     })();
   }
+
+  // Issue #320: a migration that changes much of the database leaves the
+  // -wal at its peak size (197 MB for 0041 at 30,000 albums) for as long as
+  // the server runs. SQLite reuses the file but only shrinks it at a
+  // TRUNCATE checkpoint, and nothing else has the database open yet. The
+  // pages a migration frees stay in legato.db, where SQLite reuses them for
+  // new rows; a VACUUM to return them would rewrite the whole file on start.
+  if (pending.length > 0 && dbPath !== ":memory:") db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 
   return db;
 }

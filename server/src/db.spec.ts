@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { BACKUPS_KEPT, openDb } from "./db.js";
+import { BACKUPS_KEPT, MIGRATION_WAL_SHARE, openDb } from "./db.js";
 import { MIGRATIONS } from "./migrations/manifest.generated.js";
 import { openSqlite } from "./sqlite.js";
 import { openDbAt } from "./testing.js";
@@ -134,5 +135,64 @@ describe("openDb pre-migration backup", () => {
 
     expect(highestApplied(dbPath)).toBe(PREVIOUS);
     expect(readdirSync(backupsDir)).toEqual([]);
+  });
+
+  // Issue #320: the backup and the migrations write to the same disk.
+  describe("free space", () => {
+    // What openDb asks for: the backup, and a share of it for the -wal.
+    function bytesFor(dbPath: string) {
+      const db = openSqlite(dbPath);
+      const { n } = db.prepare("SELECT page_count * page_size AS n FROM pragma_page_count(), pragma_page_size()").get() as {
+        n: number;
+      };
+      db.close();
+      return { backup: n, wal: Math.ceil(n * MIGRATION_WAL_SHARE) };
+    }
+
+    function freeSpace(bytes: number) {
+      return spyOn(fs, "statfsSync").mockReturnValue({ bavail: bytes, bsize: 1 } as fs.StatsFs);
+    }
+
+    test("refuses to migrate when the disk has room for the backup but not for what the migrations write", () => {
+      openDbAt(dbPath, PREVIOUS).close();
+      const { backup, wal } = bytesFor(dbPath);
+      const statfs = freeSpace(backup + wal - 1);
+      try {
+        expect(() => openDb(dbPath, { log: () => {} })).toThrow(
+          /needs about [\d.]+ MB free \([\d.]+ MB for the backup, [\d.]+ MB for what the migrations write\), [\d.]+ MB available/,
+        );
+      } finally {
+        statfs.mockRestore();
+      }
+
+      expect(highestApplied(dbPath)).toBe(PREVIOUS);
+      expect(readdirSync(backupsDir)).toEqual([]);
+    });
+
+    test("migrates when the disk has room for both", () => {
+      openDbAt(dbPath, PREVIOUS).close();
+      const { backup, wal } = bytesFor(dbPath);
+      const statfs = freeSpace(backup + wal);
+      try {
+        openDb(dbPath, { log: () => {} }).close();
+      } finally {
+        statfs.mockRestore();
+      }
+
+      expect(highestApplied(dbPath)).toBe(LATEST);
+      expect(MIGRATION_WAL_SHARE).toBe(0.25);
+    });
+  });
+
+  test("empties the write-ahead log after migrating, rather than leave it at the migrations' size", () => {
+    openDbAt(dbPath, PREVIOUS).close();
+
+    const db = openDb(dbPath, { log: () => {} });
+    try {
+      expect(highestApplied(dbPath)).toBe(LATEST);
+      expect(statSync(`${dbPath}-wal`).size).toBe(0);
+    } finally {
+      db.close();
+    }
   });
 });
