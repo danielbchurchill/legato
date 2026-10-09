@@ -308,6 +308,9 @@ function Workspace({
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      // #119: the connect screen and the unreachable state cover the shell,
+      // and nothing under them answers the keyboard, ⌘K included.
+      if (unreachable || document.querySelector('[data-connect-screen]')) return
       // ⌘K / Ctrl-K opens search from anywhere, mid-typing included — it's
       // the one shortcut whose whole point is not having to go find a field.
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
@@ -355,7 +358,7 @@ function Workspace({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [searchOpen, playback, mapPresets, shuffleLibrary])
+  }, [searchOpen, playback, mapPresets, shuffleLibrary, unreachable])
 
   // The right panel's wash: the playing cover for now playing, the
   // selected node's for details. Fades out down the panel so the content
@@ -698,7 +701,7 @@ export default function App() {
       {main}
       {unreachableWindow && <ServerUnreachableWindow view={unreachable} theme={resolvedTheme} />}
       {connect.reason && (
-        <div role="dialog" aria-modal="true" aria-label="Connect to a server" className="relative z-50">
+        <div role="dialog" aria-modal="true" aria-label="Connect to a server" data-connect-screen className="relative z-50">
           <ConnectScreen theme={resolvedTheme} reason={connect.reason} onClose={connect.close} />
         </div>
       )}

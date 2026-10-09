@@ -244,6 +244,45 @@ describe('App across an outage', () => {
     }
   })
 
+  const press = (init: KeyboardEventInit) =>
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }))
+    })
+
+  const searchOpen = () => container.querySelector('[data-testid="search"]') != null
+
+  // The coordinator's review of #346: ⌘K opened search under the connect
+  // screen and took the focus from it.
+  it('answers no shortcut while the connect screen is open', async () => {
+    await mount()
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(OPEN_CONNECT_EVENT, { detail: 'switch' }))
+    })
+    await press({ key: 'k', metaKey: true })
+    await press({ key: 'k', ctrlKey: true })
+    await press({ key: '/' })
+    expect(searchOpen()).toBe(false)
+
+    // Back to the app, and they work again.
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="close-connect"]')?.click()
+    })
+    await press({ key: 'k', metaKey: true })
+    expect(searchOpen()).toBe(true)
+  })
+
+  it('answers no shortcut while the unreachable state covers the shell', async () => {
+    await mount()
+    await setStatus({ ready: false, outage: asleep() })
+    await press({ key: 'k', metaKey: true })
+    await press({ key: '/' })
+    expect(searchOpen()).toBe(false)
+
+    await setStatus({ ready: true, outage: null })
+    await press({ key: '/' })
+    expect(searchOpen()).toBe(true)
+  })
+
   // The coordinator's review of #346: the connect screen moved in the tree
   // when the server first answered, which lost what was typed.
   it('keeps the connect screen, and what was typed in it, when the server answers for the first time', async () => {
