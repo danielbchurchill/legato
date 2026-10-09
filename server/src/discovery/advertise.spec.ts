@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { NetworkInterfaceInfo } from "node:os";
 import { PassThrough } from "node:stream";
-import { describe, expect, it, jest } from "bun:test";
+import { describe, expect, it, jest, spyOn } from "bun:test";
 import type { Answer, Packet } from "dns-packet";
 
 // Every record the responder makes carries ttl and data; dns-packet's union
@@ -19,6 +19,7 @@ import {
   serviceRecords,
   startDnsSd,
   startResponder,
+  stillJoined,
   subnetList,
   type LanInterface,
   type MdnsSocket,
@@ -50,34 +51,41 @@ const PI = {
 
 const lan = (name: string, cidr: string, ...more: string[]): LanInterface => {
   const address = cidr.split("/")[0]!;
-  return { name, address, subnets: [cidr], addresses: [address, ...more] };
+  return { name, address, ipv4: [address], subnets: [cidr], addresses: [address, ...more] };
 };
-const LO: LanInterface = { name: "lo", address: "127.0.0.1", subnets: ["127.0.0.1/8"], addresses: [], loopback: true };
+const LO: LanInterface = { name: "lo", address: "127.0.0.1", ipv4: ["127.0.0.1"], subnets: ["127.0.0.1/8"], addresses: [], loopback: true };
 const WLAN = lan("wlan0", "192.168.2.121/24", "2a02:c7c:1234::121");
 const TAILSCALE = lan("tailscale0", "100.88.83.70/32", "fd7a:115c:a1e0::4401:5346");
 const EVERY = [...WLAN.addresses, ...TAILSCALE.addresses];
 
 const cgnat = (address: string) => /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(address);
 
+// A send error as node:dgram gives one.
+const sendError = (code: string) => Object.assign(new Error(`send ${code} 224.0.0.251:5353`), { code });
+
 // A stand-in socket for each interface, opened through the responder's
 // `openSocket`. It joins a tick later, as a real one does once it's bound,
 // fails for an interface named in `failing`, and waits to be told for one
-// in `waiting`. A send fails while `sendError` is set.
-function fakeSockets({ failing = [] as string[], waiting = [] as string[] } = {}) {
+// in `waiting`. A send fails while `sendError` is set, and every send after
+// a socket's first fails for an interface in `flaky`. Its membership is
+// `gone` once its interface has been re-created.
+function fakeSockets({ failing = [] as string[], waiting = [] as string[], flaky = [] as string[] } = {}) {
   type Fake = {
     name: string;
     address: string;
     events: EventEmitter;
     sent: Sent[];
+    tries: number;
     destroyed: boolean;
     sendError?: Error;
+    gone?: boolean;
     join(skipped?: string[]): void;
   };
   const opened: Fake[] = [];
   const openSocket = (iface: LanInterface): MdnsSocket => {
     const events = new EventEmitter();
     const join = (skipped?: string[]) => events.emit("joined", skipped);
-    const fake: Fake = { name: iface.name, address: iface.address, events, sent: [], destroyed: false, join };
+    const fake: Fake = { name: iface.name, address: iface.address, events, sent: [], tries: 0, destroyed: false, join };
     opened.push(fake);
     if (!waiting.includes(iface.name)) {
       queueMicrotask(() =>
@@ -87,10 +95,13 @@ function fakeSockets({ failing = [] as string[], waiting = [] as string[] } = {}
     return {
       on: (event: string, listener: (...args: never[]) => void) => events.on(event, listener as (...args: unknown[]) => void),
       respond: (packet, cb) => {
+        fake.tries += 1;
         if (fake.sendError) return cb?.(fake.sendError);
+        if (flaky.includes(iface.name) && fake.tries > 1) return cb?.(sendError("ENODEV"));
         fake.sent.push(packet);
         cb?.(null);
       },
+      stillJoined: () => !fake.gone,
       destroy: (cb) => {
         fake.destroyed = true;
         cb?.();
@@ -146,22 +157,36 @@ describe("interfaces", () => {
     expect(WLAN.addresses.some(cgnat)).toBe(false);
   });
 
-  it("leave out link-local addresses and an interface with no IPv4 address, and keep an alias label with its interface", () => {
-    const list = lanInterfaces({
-      lo0: [entry("127.0.0.1/8", { internal: true })],
-      en0: [entry("192.168.1.20/24"), entry("fe80::1/64", { scopeid: 4 })],
-      en1: [entry("fd00::5/64")],
-      eth0: [entry("10.0.0.20/24"), entry("fd00::20/64")],
-      "eth0:1": [entry("10.0.5.1/16")],
-      // networkInterfaces() gives no cidr for a netmask that isn't one.
-      eth1: [entry("172.16.0.9/32", { cidr: null })],
-    });
+  it("leave out link-local addresses and an interface with no IPv4 address, and keep an alias label with its interface on Linux", () => {
+    const list = lanInterfaces(
+      {
+        lo0: [entry("127.0.0.1/8", { internal: true })],
+        en0: [entry("192.168.1.20/24"), entry("fe80::1/64", { scopeid: 4 })],
+        en1: [entry("fd00::5/64")],
+        eth0: [entry("10.0.0.20/24"), entry("fd00::20/64")],
+        "eth0:1": [entry("10.0.5.1/16")],
+        // networkInterfaces() gives no cidr for a netmask that isn't one.
+        eth1: [entry("172.16.0.9/32", { cidr: null })],
+      },
+      "linux",
+    );
     expect(list).toEqual([
       { ...LO, name: "lo0" },
       lan("en0", "192.168.1.20/24"),
-      { name: "eth0", address: "10.0.0.20", subnets: ["10.0.0.20/24", "10.0.5.1/16"], addresses: ["10.0.0.20", "fd00::20", "10.0.5.1"] },
+      {
+        name: "eth0",
+        address: "10.0.0.20",
+        ipv4: ["10.0.0.20", "10.0.5.1"],
+        subnets: ["10.0.0.20/24", "10.0.5.1/16"],
+        addresses: ["10.0.0.20", "fd00::20", "10.0.5.1"],
+      },
       lan("eth1", "172.16.0.9/32"),
     ]);
+  });
+
+  it("keep a name with a colon whole everywhere but Linux", () => {
+    const vpns = { "VPN: Work": [entry("10.8.0.2/24")], "VPN: Home": [entry("10.9.0.2/24")] };
+    expect(lanInterfaces(vpns, "win32")).toEqual([lan("VPN: Work", "10.8.0.2/24"), lan("VPN: Home", "10.9.0.2/24")]);
   });
 
   it("take a client's address as on their link when it's on one of their subnets", () => {
@@ -176,22 +201,42 @@ describe("interfaces", () => {
     expect(subnetList(["192.168.2.121/24", "10.0.5.1/16"]).check("10.0.200.7", "ipv4")).toBe(true);
   });
 
-  it("join the group, and only a failed join stops one", () => {
+  it("join the group and send through their own interface, or not at all", () => {
     const calls: string[] = [];
-    const socket = {
-      addMembership: (group: string, address?: string) => void calls.push(`join ${group} on ${address}`),
-      setMulticastInterface: () => {
-        throw new Error("EADDRNOTAVAIL: address not available, setsockopt");
-      },
-      setMulticastTTL: (ttl: number) => (calls.push(`ttl ${ttl}`), ttl),
-      setMulticastLoopback: (on: boolean) => (calls.push(`loopback ${on}`), on),
-    };
-    expect(joinGroup(socket, "192.168.2.121")).toEqual(["the multicast interface (EADDRNOTAVAIL: address not available, setsockopt)"]);
-    expect(calls).toEqual(["join 224.0.0.251 on 192.168.2.121", "ttl 255", "loopback true"]);
-    socket.addMembership = () => {
+    const refuse = () => {
       throw new Error("EADDRNOTAVAIL: address not available, setsockopt");
     };
+    const socket = {
+      addMembership: (group: string, address?: string) => void calls.push(`join ${group} on ${address}`),
+      setMulticastInterface: (address: string) => void calls.push(`send through ${address}`),
+      setMulticastTTL: refuse as (ttl: number) => number,
+      setMulticastLoopback: (on: boolean) => (calls.push(`loopback ${on}`), on),
+    };
+    // TTL 255 and loopback are optional, as they are in multicast-dns.
+    expect(joinGroup(socket, "192.168.2.121")).toEqual(["TTL 255 (EADDRNOTAVAIL: address not available, setsockopt)"]);
+    expect(calls).toEqual(["join 224.0.0.251 on 192.168.2.121", "send through 192.168.2.121", "loopback true"]);
+    // Sending through the default interface instead would carry this
+    // interface's addresses onto another's link.
+    socket.setMulticastInterface = refuse;
+    expect(() => joinGroup(socket, "192.168.2.121")).toThrow("sending through 192.168.2.121: EADDRNOTAVAIL");
+    socket.addMembership = refuse;
     expect(() => joinGroup(socket, "192.168.2.121")).toThrow("joining 224.0.0.251: EADDRNOTAVAIL");
+  });
+
+  it("tell a membership that's still there from one that went with its interface", () => {
+    const joined = new Set<string>();
+    const socket = {
+      addMembership: (group: string, address?: string) => {
+        if (joined.has(`${group} ${address}`)) throw Object.assign(new Error("EADDRINUSE: address already in use, setsockopt"), { code: "EADDRINUSE" });
+        joined.add(`${group} ${address}`);
+      },
+    };
+    joinGroup({ ...socket, setMulticastInterface: () => {}, setMulticastTTL: (t) => t, setMulticastLoopback: (l) => l }, "192.168.2.121");
+    expect(stillJoined(socket, "192.168.2.121")).toBe(true);
+    // The interface is re-created: the kernel dropped the membership, and
+    // joining again works.
+    joined.clear();
+    expect(stillJoined(socket, "192.168.2.121")).toBe(false);
   });
 });
 
@@ -283,7 +328,7 @@ describe("startResponder", () => {
     await advertiser.stop();
   });
 
-  it("answers a client on none of its subnets once, with every address, on the link the route to it leaves by", async () => {
+  it("answers a client on none of its subnets once, on the link the route to it leaves by, with that link's addresses only", async () => {
     const sockets = fakeSockets();
     const routed: string[] = [];
     const advertiser = startResponder(AD, {
@@ -295,13 +340,49 @@ describe("startResponder", () => {
     await tick();
     sockets.clear();
 
-    // A client whose DHCP failed, heard by both sockets.
+    // A client whose DHCP failed, heard by both sockets. The answer goes out
+    // on the LAN with the cache-flush bit, so the Tailscale address would
+    // wipe 192.168.2.121 from every client there.
     sockets.deliver("query", browse, "169.254.7.7");
     await tick();
     expect(routed).toEqual(["169.254.7.7"]);
     expect(sockets.on("192.168.2.121").sent).toHaveLength(1);
-    expect(addresses(sockets.on("192.168.2.121").sent[0])).toEqual(EVERY);
+    expect(addresses(sockets.on("192.168.2.121").sent[0])).toEqual(WLAN.addresses);
     expect(sockets.on("100.88.83.70").sent).toEqual([]);
+    await advertiser.stop();
+  });
+
+  it("answers a client the route names no link for through the first LAN link, never loopback, and hears it again if nothing went out", async () => {
+    const sockets = fakeSockets({ waiting: ["wlan0"] });
+    const advertiser = startResponder(AD, {
+      log: () => {},
+      openSocket: sockets.openSocket,
+      interfaces: () => [LO, WLAN],
+      route: async (source) => (source === "169.254.7.7" ? null : "0.0.0.0"),
+    });
+    await tick();
+    sockets.clear();
+
+    // wlan0 hasn't joined, and loopback's every address mustn't reach the
+    // LAN: nothing goes out.
+    sockets.deliver("query", browse, "169.254.7.7");
+    await tick();
+    expect(sockets.opened.map((f) => f.sent.length)).toEqual([0, 0]);
+
+    // So the client asking again, sooner than the duplicate window, is
+    // answered once wlan0 has joined.
+    sockets.on("192.168.2.121").join();
+    sockets.clear();
+    sockets.deliver("query", browse, "169.254.7.7");
+    await tick();
+    expect(sockets.on("127.0.0.1").sent).toEqual([]);
+    expect(sockets.on("192.168.2.121").sent).toHaveLength(1);
+    expect(addresses(sockets.on("192.168.2.121").sent[0])).toEqual(WLAN.addresses);
+
+    // A route through no interface of the server's falls back the same way.
+    sockets.deliver("query", browse, "10.99.0.7");
+    await tick();
+    expect(sockets.on("192.168.2.121").sent).toHaveLength(2);
     await advertiser.stop();
   });
 
@@ -314,7 +395,7 @@ describe("startResponder", () => {
       interfaces: () => [LO, WLAN, TAILSCALE],
     });
     await tick();
-    expect(lines).toEqual(['mdns: advertising _legato._tcp as "musicbox" on port 8899 (lo, wlan0, tailscale0)']);
+    expect(lines).toEqual(['mdns: advertising _legato._tcp as "musicbox" on port 8899 (wlan0, tailscale0)']);
     // A client on this machine can reach every address, and never needs
     // 127.0.0.1 to be told.
     expect(addresses(sockets.on("127.0.0.1").sent[0])).toEqual(EVERY);
@@ -323,6 +404,13 @@ describe("startResponder", () => {
     sockets.deliver("query", browse, "127.0.0.1");
     expect(sockets.opened.map((f) => f.sent.length)).toEqual([1, 0, 0]);
     expect(addresses(sockets.on("127.0.0.1").sent[0])).toEqual(EVERY);
+    await advertiser.stop();
+  });
+
+  it("says there's no network yet when loopback is all there is", async () => {
+    const lines: string[] = [];
+    const advertiser = startResponder(AD, { log: (_l, m) => void lines.push(m), openSocket: fakeSockets().openSocket, interfaces: () => [LO] });
+    expect(lines).toEqual(['mdns: advertising _legato._tcp as "musicbox" on port 8899 (no network yet)']);
     await advertiser.stop();
   });
 
@@ -341,29 +429,80 @@ describe("startResponder", () => {
     await advertiser.stop();
   });
 
-  it("advertises the addresses of interfaces on one subnet together, so none flushes another's", async () => {
+  it("announces interfaces on one subnet at the same moment, each with its own addresses, so none flushes another's", async () => {
+    jest.useFakeTimers();
+    try {
+      const sockets = fakeSockets();
+      const eth = lan("eth0", "192.168.2.10/24");
+      let table = [eth, WLAN];
+      const advertiser = startResponder(AD, { log: () => {}, openSocket: sockets.openSocket, interfaces: () => table });
+      const recheck = async () => {
+        jest.advanceTimersByTime(30_000);
+        await Promise.resolve();
+      };
+      await Promise.resolve();
+      expect(addresses(sockets.on("192.168.2.10").sent[0])).toEqual(["192.168.2.10"]);
+      expect(addresses(sockets.on("192.168.2.121").sent[0])).toEqual(WLAN.addresses);
+      jest.advanceTimersByTime(1000);
+      const wlan = sockets.on("192.168.2.121");
+      sockets.clear();
+
+      // The query comes in on both interfaces, and both sockets hear both
+      // copies: one answer on each, at once, with its own addresses.
+      sockets.deliver("query", browse);
+      sockets.deliver("query", browse);
+      expect(sockets.opened.map((f) => f.sent.length)).toEqual([1, 1]);
+      expect(addresses(sockets.on("192.168.2.10").sent[0])).toEqual(["192.168.2.10"]);
+      expect(addresses(wlan.sent[0])).toEqual(WLAN.addresses);
+      sockets.clear();
+
+      // eth0 is re-created and opened again: as its new socket announces,
+      // wlan0 announces too, and both again a second later.
+      sockets.on("192.168.2.10").gone = true;
+      await recheck();
+      expect(sockets.on("192.168.2.10").sent).toHaveLength(1);
+      expect(addresses(wlan.sent[0])).toEqual(WLAN.addresses);
+      jest.advanceTimersByTime(1000);
+      expect([sockets.on("192.168.2.10").sent.length, wlan.sent.length]).toEqual([2, 2]);
+      sockets.clear();
+
+      // wlan0 gains an address: eth0 announces with it.
+      table = [eth, { ...WLAN, addresses: [...WLAN.addresses, "fd00::121"] }];
+      await recheck();
+      expect(addresses(wlan.sent[0])).toEqual([...WLAN.addresses, "fd00::121"]);
+      expect(addresses(sockets.on("192.168.2.10").sent[0])).toEqual(["192.168.2.10"]);
+      sockets.clear();
+
+      // wlan0 goes: eth0 announces, which flushes wlan0's addresses from the
+      // clients' caches.
+      table = [eth];
+      await recheck();
+      expect(sockets.on("192.168.2.10").sent).toHaveLength(1);
+      expect(addresses(sockets.on("192.168.2.10").sent[0])).toEqual(["192.168.2.10"]);
+      await advertiser.stop();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("answers on every interface whose subnet holds the client, since two networks can use one range", async () => {
     const sockets = fakeSockets();
-    const eth = lan("eth0", "192.168.2.10/24");
-    let table = [eth, WLAN];
-    const advertiser = startResponder(AD, { log: () => {}, openSocket: sockets.openSocket, interfaces: () => table, recheckMs: 5 });
+    // eth0 on one router and wlan0 on another, both handing out 192.168.1.0/24.
+    const advertiser = startResponder(AD, {
+      log: () => {},
+      openSocket: sockets.openSocket,
+      interfaces: () => [lan("eth0", "192.168.1.10/24"), lan("wlan0", "192.168.1.20/24")],
+    });
     await tick();
-    // Each announcement carries both, its own first.
-    expect(addresses(sockets.on("192.168.2.10").sent[0])).toEqual(["192.168.2.10", ...WLAN.addresses]);
-    expect(addresses(sockets.on("192.168.2.121").sent[0])).toEqual([...WLAN.addresses, "192.168.2.10"]);
     sockets.clear();
-
-    // The query comes in on both interfaces, and both sockets hear both
-    // copies: one answer, with both addresses.
-    sockets.deliver("query", browse);
-    sockets.deliver("query", browse);
-    expect(sockets.opened.map((f) => f.sent.length)).toEqual([1, 0]);
-    expect(addresses(sockets.on("192.168.2.10").sent[0])).toEqual(["192.168.2.10", ...WLAN.addresses]);
-
-    // wlan0 goes: eth0 announces itself alone, which flushes wlan0's
-    // addresses from the clients' caches.
-    table = [eth];
-    await Bun.sleep(30);
-    expect(addresses(sockets.on("192.168.2.10").sent.at(-1))).toEqual(["192.168.2.10"]);
+    // A client on wlan0's network, long after the announcements expired.
+    // Every socket hears it, and no address says which network it's on.
+    sockets.deliver("query", browse, "192.168.1.50");
+    sockets.deliver("query", lookup, "192.168.1.50");
+    expect(sockets.opened.map((f) => f.sent.length)).toEqual([2, 2]);
+    // Each with its own address alone: the other is on the other network.
+    expect(addresses(sockets.on("192.168.1.10").sent[0])).toEqual(["192.168.1.10"]);
+    expect(addresses(sockets.on("192.168.1.20").sent[0])).toEqual(["192.168.1.20"]);
     await advertiser.stop();
   });
 
@@ -376,6 +515,43 @@ describe("startResponder", () => {
       expect(fake.sent.at(-1)!.answers!.every((r) => rec(r).ttl === 0)).toBe(true);
       expect(fake.destroyed).toBe(true);
     }
+  });
+
+  it("sends nothing after the goodbye, even an answer still finding its way", async () => {
+    const sockets = fakeSockets();
+    let routed: (address: string) => void = () => {};
+    const advertiser = startResponder(AD, {
+      log: () => {},
+      openSocket: sockets.openSocket,
+      interfaces: () => [WLAN],
+      route: () => new Promise((resolve) => (routed = resolve)),
+    });
+    await tick();
+    sockets.deliver("query", browse, "169.254.7.7");
+    await advertiser.stop();
+    routed("192.168.2.121");
+    await tick();
+    // The last thing out is the goodbye, or clients would list a stopped
+    // server for the PTR record's 75 minutes.
+    expect(sockets.on("192.168.2.121").sent.at(-1)!.answers!.every((r) => rec(r).ttl === 0)).toBe(true);
+  });
+
+  it("forgets a query half a second later on the monotonic clock, whatever the wall clock does", async () => {
+    const sockets = fakeSockets();
+    const advertiser = startResponder(AD, { log: () => {}, openSocket: sockets.openSocket, interfaces: () => [WLAN] });
+    await tick();
+    sockets.clear();
+    sockets.deliver("query", browse);
+    // A Pi with no real-time clock steps its wall clock as it syncs.
+    const wall = spyOn(Date, "now").mockReturnValue(Date.now() - 3_600_000);
+    try {
+      await Bun.sleep(520);
+      sockets.deliver("query", browse);
+    } finally {
+      wall.mockRestore();
+    }
+    expect(sockets.on("192.168.2.121").sent).toHaveLength(2);
+    await advertiser.stop();
   });
 
   it("moves to \"name (2)\" when another server answers for the same instance name", async () => {
@@ -503,8 +679,9 @@ describe("startResponder", () => {
     const before = sockets.on("192.168.2.121");
 
     // wlan0 re-created under the same name and address (a USB adapter
-    // replugged): the socket's membership points at the one that's gone.
-    before.sendError = new Error("send ENODEV 224.0.0.251:5353");
+    // replugged): the socket's multicast interface points at the one that's
+    // gone. ENXIO and EADDRNOTAVAIL say the same.
+    before.sendError = sendError("ENODEV");
     sockets.deliver("query", browse);
     expect(lines.at(-1)).toBe("mdns: couldn't send on wlan0 (send ENODEV 224.0.0.251:5353); opening it again");
     await Bun.sleep(30);
@@ -512,12 +689,65 @@ describe("startResponder", () => {
     expect(names(sockets.on("192.168.2.121").sent[0]!.answers)).toContain("PTR _legato._tcp.local");
     expect(lines.at(-1)).toBe("mdns: now advertising on wlan0");
 
-    // A link opened again starts fresh: DHCP moves it, and a socket that
-    // can't join on the new address says so.
+    // Healthy for a whole recheck, its failure is forgiven: DHCP moves it,
+    // and a socket that can't join on the new address says so.
     failing.push("wlan0");
     table = [lan("wlan0", "192.168.2.140/24")];
     await Bun.sleep(30);
     expect(lines.at(-1)).toBe("mdns: not advertising on wlan0 (joining 224.0.0.251: EADDRNOTAVAIL)");
+    await advertiser.stop();
+  });
+
+  it("keeps an interface through a send error that passes, says so once, and tries again with the next send", async () => {
+    const sockets = fakeSockets();
+    const lines: string[] = [];
+    const advertiser = startResponder(AD, {
+      log: (_l, m) => void lines.push(m),
+      openSocket: sockets.openSocket,
+      interfaces: () => [WLAN],
+      recheckMs: 5,
+    });
+    await tick();
+    const wlan = sockets.on("192.168.2.121");
+    sockets.clear();
+    // Wi-Fi re-associating.
+    wlan.sendError = sendError("EHOSTUNREACH");
+    sockets.deliver("query", browse);
+    wlan.sendError = sendError("ENOBUFS");
+    sockets.deliver("query", lookup);
+    expect(lines.slice(1)).toEqual(["mdns: couldn't send on wlan0 (send EHOSTUNREACH 224.0.0.251:5353); trying again with the next one"]);
+    await Bun.sleep(30);
+    expect(sockets.opened).toHaveLength(1);
+
+    wlan.sendError = undefined;
+    sockets.deliver("query", { questions: [{ name: "musicbox._legato._tcp.local", type: "TXT" }] });
+    // The announcement, the two that failed, and this one.
+    expect(wlan.tries).toBe(4);
+    expect(names(wlan.sent[0]!.answers)).toEqual(["TXT musicbox._legato._tcp.local"]);
+    expect(lines).toHaveLength(2);
+    await advertiser.stop();
+  });
+
+  it("notices an interface re-created under the same name and address, with nothing sent through it", async () => {
+    const sockets = fakeSockets();
+    const lines: string[] = [];
+    const advertiser = startResponder(AD, {
+      log: (_l, m) => void lines.push(m),
+      openSocket: sockets.openSocket,
+      interfaces: () => [WLAN, TAILSCALE],
+      recheckMs: 5,
+    });
+    await tick();
+    const before = sockets.on("100.88.83.70");
+    // tailscaled restarts: tailscale0 comes back as a new interface, and the
+    // kernel drops the socket's membership. No query reaches it now, so
+    // nothing is sent and no send fails.
+    before.gone = true;
+    await Bun.sleep(30);
+    expect(before.destroyed).toBe(true);
+    expect(addresses(sockets.on("100.88.83.70").sent[0])).toEqual(TAILSCALE.addresses);
+    expect(sockets.opened.filter((f) => f.name === "wlan0")).toHaveLength(1);
+    expect(lines.slice(1)).toEqual(["mdns: tailscale0 was re-created; opening it again"]);
     await advertiser.stop();
   });
 
@@ -530,13 +760,19 @@ describe("startResponder", () => {
       interfaces: () => [WLAN],
       recheckMs: 5,
     });
-    sockets.on("192.168.2.121").join(["the multicast interface (EADDRNOTAVAIL: address not available, setsockopt)"]);
-    expect(lines.at(-1)).toBe(
-      "mdns: couldn't set the multicast interface (EADDRNOTAVAIL: address not available, setsockopt) on wlan0; advertising there anyway",
-    );
+    const skipped = ["TTL 255 (EINVAL: invalid argument, setsockopt)"];
+    sockets.on("192.168.2.121").join(skipped);
+    expect(lines.at(-1)).toBe("mdns: couldn't set TTL 255 (EINVAL: invalid argument, setsockopt) on wlan0; advertising there anyway");
     expect(sockets.on("192.168.2.121").sent).toHaveLength(1);
     await Bun.sleep(30);
     expect(sockets.opened).toHaveLength(1);
+
+    // Its socket opened again says nothing new.
+    sockets.on("192.168.2.121").gone = true;
+    await Bun.sleep(30);
+    sockets.on("192.168.2.121").join(skipped);
+    expect(sockets.on("192.168.2.121").sent).toHaveLength(1);
+    expect(lines.filter((l) => l.includes("advertising there anyway"))).toHaveLength(1);
     await advertiser.stop();
   });
 
@@ -561,6 +797,47 @@ describe("startResponder", () => {
       // 30 s after the first failure, then 1, 2 and 4 minutes apart.
       expect(retriedAt).toEqual([1, 3, 7, 15, 23]);
       expect(lines.slice(1)).toEqual(["mdns: not advertising on tailscale0 (joining 224.0.0.251: EADDRNOTAVAIL)"]);
+      await advertiser.stop();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("backs off an interface whose sends fail after its first, until it has stayed healthy a whole recheck", async () => {
+    jest.useFakeTimers();
+    try {
+      const flaky = ["wlan0"];
+      const sockets = fakeSockets({ flaky });
+      const lines: string[] = [];
+      const advertiser = startResponder(AD, { log: (_l, m) => void lines.push(m), openSocket: sockets.openSocket, interfaces: () => [WLAN] });
+      const recheck = async () => {
+        await Promise.resolve();
+        const before = sockets.opened.length;
+        jest.advanceTimersByTime(30_000);
+        return sockets.opened.length > before;
+      };
+      // Each socket's first announcement works, and its second, a second
+      // later, fails: a first send working isn't health.
+      const retriedAt: number[] = [];
+      for (let n = 1; n <= 23; n++) if (await recheck()) retriedAt.push(n);
+      expect(retriedAt).toEqual([1, 3, 7, 15, 23]);
+      expect(lines.slice(1)).toEqual([
+        "mdns: couldn't send on wlan0 (send ENODEV 224.0.0.251:5353); opening it again",
+        "mdns: now advertising on wlan0",
+      ]);
+
+      // It stops failing, and stays up from one recheck to the next: a new
+      // failure is said again, and tried again 30 s later.
+      flaky.length = 0;
+      await recheck();
+      await recheck();
+      sockets.opened.at(-1)!.sendError = sendError("ENXIO");
+      sockets.deliver("query", browse);
+      expect(lines.at(-1)).toBe("mdns: couldn't send on wlan0 (send ENXIO 224.0.0.251:5353); opening it again");
+      expect(await recheck()).toBe(true);
+      await Promise.resolve();
+      expect(lines.at(-1)).toBe("mdns: now advertising on wlan0");
+      expect(lines).toHaveLength(5);
       await advertiser.stop();
     } finally {
       jest.useRealTimers();
