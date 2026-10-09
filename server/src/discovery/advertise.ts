@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createSocket, type RemoteInfo } from "node:dgram";
+import { createSocket, type RemoteInfo, type Socket } from "node:dgram";
 import { existsSync } from "node:fs";
-import { networkInterfaces } from "node:os";
+import { BlockList, isIPv4 } from "node:net";
+import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import type { Answer, Packet, Question } from "dns-packet";
 import makeMdns from "multicast-dns";
 
@@ -28,8 +29,9 @@ import makeMdns from "multicast-dns";
 //     with SO_REUSEADDR, alongside avahi-daemon or Windows' own responder.
 //
 // The responder answers on each interface separately (issue #326), the way
-// mDNSResponder and avahi do: one socket per interface, sending through it,
-// and telling a client only the addresses on its own link. A Pi on wlan0
+// mDNSResponder and avahi do: one socket per interface, loopback included,
+// sending through it, and telling a client only the addresses on its own
+// link. A Pi on wlan0
 // and tailscale0 must not hand a LAN client its Tailscale address, which
 // that client can't reach, and a server on two subnets has to be heard on
 // both.
@@ -70,43 +72,56 @@ export function hostLabel(serverId: string): string {
 }
 
 // An interface the responder answers on. It joins the mDNS group and sends
-// from `address`, takes questions from clients on its IPv4 `subnets`, and
-// advertises `addresses`: its own, and no other interface's. A client
-// on wlan0 can reach wlan0's address, but not necessarily eth0's, and never
-// tailscale0's 100.64.0.0/10 one unless it runs Tailscale itself.
+// from `address`, takes a client on one of its IPv4 `subnets` (CIDRs, as
+// networkInterfaces() gives them) to be on its link, and has `addresses` of
+// its own to advertise there. A client on wlan0 can reach wlan0's address,
+// but not necessarily eth0's, and never tailscale0's 100.64.0.0/10 one
+// unless it runs Tailscale itself. The `loopback` interface answers clients
+// on this same machine, which can reach every address, so it has none of
+// its own.
 export type LanInterface = {
   name: string;
   address: string;
-  subnets: { address: string; netmask: string }[];
+  subnets: string[];
   addresses: string[];
+  loopback?: boolean;
 };
 
-// Every interface a LAN client could be on. Loopback is left out, and so is
-// an interface with no IPv4 address, since the responder multicasts over
-// IPv4. IPv6 link-local addresses aren't advertised: a URL can't use one
-// without its interface's scope id.
+// Every interface a client could ask on: each one with an IPv4 address,
+// since the responder multicasts over IPv4, and loopback. Linux lists an
+// alias label (eth0:1) under a name of its own, but it's the same link as
+// eth0, so its addresses go with eth0's. IPv6 link-local addresses aren't
+// advertised: a URL can't use one without its interface's scope id.
 export function lanInterfaces(table: ReturnType<typeof networkInterfaces> = networkInterfaces()): LanInterface[] {
-  const out: LanInterface[] = [];
+  const devices = new Map<string, NetworkInterfaceInfo[]>();
   for (const [name, entries] of Object.entries(table)) {
-    const usable = (entries ?? []).filter((e) => !e.internal && !(e.family === "IPv6" && /^fe80:/i.test(e.address)));
-    const subnets = usable.filter((e) => e.family === "IPv4").map(({ address, netmask }) => ({ address, netmask }));
-    if (subnets.length === 0) continue;
-    out.push({ name, address: subnets[0]!.address, subnets, addresses: usable.map((e) => e.address) });
+    const device = name.replace(/:.*$/, "");
+    devices.set(device, [...(devices.get(device) ?? []), ...(entries ?? [])]);
+  }
+  const out: LanInterface[] = [];
+  for (const [name, entries] of devices) {
+    const ipv4 = entries.filter((e) => e.family === "IPv4");
+    if (ipv4.length === 0) continue;
+    // A netmask that isn't one (no cidr) still leaves the address itself.
+    const subnets = ipv4.map((e) => e.cidr ?? `${e.address}/32`);
+    if (ipv4.some((e) => e.internal)) {
+      if (!out.some((i) => i.loopback)) out.push({ name, address: ipv4[0]!.address, subnets, addresses: [], loopback: true });
+      continue;
+    }
+    const usable = entries.filter((e) => !e.internal && !(e.family === "IPv6" && /^fe80:/i.test(e.address)));
+    out.push({ name, address: ipv4[0]!.address, subnets, addresses: usable.map((e) => e.address) });
   }
   return out;
 }
 
-function ipv4(address: string): number {
-  return address.split(".").reduce((n, octet) => ((n << 8) | Number(octet)) >>> 0, 0);
-}
-
-// Whether a question from `source` came from this interface's link. On
-// Linux a socket on 5353 gets the group's multicast from every interface,
-// not just the one it joined on, so this is how each socket picks out the
-// questions that are its own to answer. One from no interface's subnet
-// gets no answer: none of this server's addresses is on its link.
-export function onLink(iface: LanInterface, source: string): boolean {
-  return iface.subnets.some(({ address, netmask }) => ((ipv4(source) ^ ipv4(address)) & ipv4(netmask)) === 0);
+// Subnets in CIDR form, to check a client's address against.
+export function subnetList(cidrs: string[]): BlockList {
+  const list = new BlockList();
+  for (const cidr of cidrs) {
+    const [address, prefix] = cidr.split("/");
+    list.addSubnet(address!, Number(prefix), "ipv4");
+  }
+  return list;
 }
 
 type Records = { instance: string; host: string; ptr: Answer; srv: Answer; txt: Answer; addresses: Answer[] };
@@ -130,9 +145,11 @@ function sameName(a: string, b: string): boolean {
   return a.toLowerCase().replace(/\.$/, "") === b.toLowerCase().replace(/\.$/, "");
 }
 
+type Reply = Pick<Packet, "answers" | "additionals">;
+
 // What this responder says to one question, or null when it isn't about
 // this service. Additional records save the client a second round trip.
-export function answerQuestion(records: Records, question: Question): Pick<Packet, "answers" | "additionals"> | null {
+export function answerQuestion(records: Records, question: Question): Reply | null {
   const { name, type } = question;
   // dns-packet's RecordType leaves out ANY, which a query can still ask.
   const any = (type as string) === "ANY";
@@ -153,134 +170,300 @@ export function answerQuestion(records: Records, question: Question): Pick<Packe
 }
 
 const MDNS_GROUP = "224.0.0.251";
+const MDNS_PORT = 5353;
 
 // The part of a multicast-dns instance the responder uses, so the spec can
 // drive it without a socket. "joined" says the socket has joined the group
-// on its interface and sends through it.
+// on its interface, and lists any optional setting that failed.
 export type MdnsSocket = {
   on(event: "query" | "response", listener: (packet: Packet, rinfo: RemoteInfo) => void): unknown;
-  on(event: "joined", listener: () => void): unknown;
+  on(event: "joined", listener: (skipped?: string[]) => void): unknown;
   on(event: "error" | "warning", listener: (err: Error) => void): unknown;
-  respond(packet: Pick<Packet, "answers" | "additionals">, cb?: (err: Error | null) => void): void;
+  respond(packet: Reply, cb?: (err: Error | null) => void): void;
   destroy(cb?: () => void): void;
 };
 
 // One interface's socket. It binds 5353 on every address, because on Linux
 // a socket bound to one address gets no multicast, then joins the group on
-// this interface alone and sends through it, so an answer goes out on the
-// link its question came in on. Until it has joined, and if joining fails,
-// the responder sends nothing on it: the kernel would pick the default
-// interface, and this interface's addresses would go out on another link.
+// this interface alone. Until it has joined, and if joining fails, the
+// responder sends nothing on it. The other settings are optional, as they
+// are in multicast-dns itself: without its multicast interface, a socket
+// still hears its link, and sends through the system's default one.
 export function openMdnsSocket(iface: LanInterface): MdnsSocket {
   const socket = createSocket({ type: "udp4", reuseAddr: true });
   const mdns = makeMdns({ socket, bind: "0.0.0.0", multicast: false });
   mdns.once("ready", () => {
+    let skipped: string[];
     try {
-      socket.addMembership(MDNS_GROUP, iface.address);
-      socket.setMulticastInterface(iface.address);
-      // RFC 6762 §11: responses go out with IP TTL 255.
-      socket.setMulticastTTL(255);
-      // So avahi, or a browser, on this same machine hears it too.
-      socket.setMulticastLoopback(true);
+      skipped = joinGroup(socket, iface.address);
     } catch (err) {
       mdns.emit("error", err);
       return;
     }
-    mdns.emit("joined");
+    mdns.emit("joined", skipped);
   });
   return mdns as unknown as MdnsSocket;
+}
+
+type MulticastSetting = "addMembership" | "setMulticastInterface" | "setMulticastTTL" | "setMulticastLoopback";
+
+// Joins the group on the interface at `address` and sends through it.
+// Throws if it can't join; returns what else it couldn't set.
+export function joinGroup(socket: Pick<Socket, MulticastSetting>, address: string): string[] {
+  try {
+    socket.addMembership(MDNS_GROUP, address);
+  } catch (err) {
+    throw new Error(`joining ${MDNS_GROUP}: ${(err as Error).message}`);
+  }
+  const optional: [string, () => void][] = [
+    // So an answer goes out on this interface's link.
+    ["the multicast interface", () => socket.setMulticastInterface(address)],
+    // RFC 6762 §11: responses go out with IP TTL 255.
+    ["TTL 255", () => socket.setMulticastTTL(255)],
+    // So avahi, or a browser, on this same machine hears it too.
+    ["multicast loopback", () => socket.setMulticastLoopback(true)],
+  ];
+  const skipped: string[] = [];
+  for (const [what, set] of optional) {
+    try {
+      set();
+    } catch (err) {
+      skipped.push(`${what} (${(err as Error).message})`);
+    }
+  }
+  return skipped;
+}
+
+// The address this machine reaches `source` from. For a client on none of
+// the server's subnets, that's the best guess at which link it's on: on
+// Linux every socket hears the group on every interface, so the socket
+// that heard it doesn't say. Connecting a UDP socket sends nothing; it only
+// asks the routing table.
+export function localAddressToward(source: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const probe = createSocket("udp4");
+    let settled = false;
+    const done = (address: string | null) => {
+      if (settled) return;
+      settled = true;
+      probe.close();
+      resolve(address);
+    };
+    const local = () => {
+      try {
+        return probe.address().address;
+      } catch {
+        return null;
+      }
+    };
+    probe.on("error", () => done(null));
+    try {
+      probe.connect(MDNS_PORT, source, () => done(local()));
+    } catch {
+      done(null);
+    }
+  });
 }
 
 export type ResponderOptions = {
   log: AdvertiseLog;
   interfaces?: () => LanInterface[];
   openSocket?: (iface: LanInterface) => MdnsSocket;
+  // localAddressToward, so the spec can say where a client is.
+  route?: (source: string) => Promise<string | null>;
   // How often to look for an interface or address that came or went (DHCP,
   // a cable plugged in, a laptop changing networks), and announce on it.
   recheckMs?: number;
 };
 
+// The same query heard on several sockets, or on two interfaces on one
+// network, within this long is one query. A client asks again no sooner
+// than a second later (RFC 6762 §5.2).
+const DUPLICATE_MS = 500;
+
 // One interface's socket, and where it's got to.
 type Link = {
   iface: LanInterface;
   socket: MdnsSocket;
+  subnets: BlockList;
+  // What it announces and answers with, and its addresses as one string to
+  // spot a change.
+  records: Records;
+  advertised: string;
   joined: boolean;
   failed: boolean;
-  warned: boolean;
+  // A send through it has worked.
+  sent: boolean;
+  // Failures in a row, and rechecks left before the next try.
+  failures: number;
+  wait: number;
+  // Says "now advertising" once a send works: an interface that came after
+  // startup, or one that had failed.
+  sayWhenUp: boolean;
   second?: ReturnType<typeof setTimeout>;
 };
+
+const unique = (list: string[]) => [...new Set(list)];
+const ipv4Of = (iface: LanInterface) => iface.subnets.map((cidr) => cidr.split("/")[0]!);
 
 export function startResponder(ad: Advertisement, options: ResponderOptions): Advertiser {
   const { log } = options;
   const interfaces = options.interfaces ?? (() => lanInterfaces());
   const openSocket = options.openSocket ?? openMdnsSocket;
-  const links = new Map<string, Link>();
+  const route = options.route ?? localAddressToward;
+  const host = hostLabel(ad.serverId);
+  let links = new Map<string, Link>();
   let label = instanceLabel(ad.name);
+  let instance = `${label}.${SERVICE}`;
+  // What a client on none of the server's subnets is told: every address.
+  let everywhere = serviceRecords(ad, label, []);
+  let everyAddress = "";
   let stopped = false;
+  const heard = new Map<string, number>();
 
-  const records = (link: Link) => serviceRecords(ad, label, link.iface.addresses);
   const live = (link: Link) => !stopped && links.get(link.iface.name) === link;
+  const onLink = (link: Link, address: string) => isIPv4(address) && link.subnets.check(address, "ipv4");
+  const shareSubnet = (a: Link, b: Link) => ipv4Of(b.iface).some((x) => onLink(a, x)) || ipv4Of(a.iface).some((x) => onLink(b, x));
 
-  const send = (link: Link, packet: Pick<Packet, "answers" | "additionals">) => {
+  // Rebuilds what a link says when its addresses change, and every link's
+  // after a rename, and returns the links whose addresses changed.
+  // Interfaces that share a subnet (eth0 and wlan0 on one router) are one
+  // network to a client there, so each of them advertises all of their
+  // addresses, its own first: the cache-flush bit on an answer with only
+  // some of them would wipe the rest from that client's cache.
+  const refresh = (renamed = false): Link[] => {
+    const all = [...links.values()];
+    for (const link of all) link.subnets = subnetList(link.iface.subnets);
+    const lan = all.filter((link) => !link.iface.loopback);
+    const every = unique(lan.flatMap((link) => link.iface.addresses));
+    if (renamed || every.join() !== everyAddress) everywhere = serviceRecords(ad, label, every);
+    everyAddress = every.join();
+    const changed: Link[] = [];
+    for (const link of all) {
+      const addresses = link.iface.loopback
+        ? every
+        : unique([link, ...lan.filter((other) => other !== link && shareSubnet(link, other))].flatMap((l) => l.iface.addresses));
+      if (!renamed && addresses.join() === link.advertised) continue;
+      if (addresses.join() !== link.advertised) changed.push(link);
+      link.advertised = addresses.join();
+      link.records = serviceRecords(ad, label, addresses);
+    }
+    return changed;
+  };
+
+  // A socket that couldn't bind, join or send sends nothing more, and the
+  // next recheck opens it again, backing off while it keeps failing. A send
+  // fails for good once its interface has been re-created under the same
+  // name and address (a USB adapter replugged, tailscaled restarting): the
+  // socket's membership points at the interface that's gone. One line says
+  // it failed, and one more says when it works again.
+  const fail = (link: Link, message: string) => {
+    if (link.failed) return;
+    link.failed = true;
+    link.joined = false;
+    clearTimeout(link.second);
+    link.failures += 1;
+    link.wait = Math.min(2 ** (link.failures - 1), 8) - 1;
+    if (link.failures === 1) log("warn", `mdns: ${message}`);
+  };
+
+  const send = (link: Link, packet: Reply) => {
     if (!link.joined) return;
     link.socket.respond(packet, (err) => {
-      // A send that fails (no route, a network going away) is retried by
-      // the next query or announcement; one line says it's happening.
-      if (err && !link.warned) {
-        link.warned = true;
-        log("warn", `mdns: couldn't send on ${link.iface.name} (${err.message}); clients there may not find this server`);
-      }
+      if (!live(link)) return;
+      if (err) return fail(link, `couldn't send on ${link.iface.name} (${err.message}); opening it again`);
+      if (link.sent) return;
+      link.sent = true;
+      if (link.sayWhenUp) log("info", `mdns: now advertising on ${link.iface.name}`);
+      link.failures = 0;
     });
   };
   const announce = (link: Link) => {
-    const { ptr, srv, txt, addresses } = records(link);
+    const { ptr, srv, txt, addresses } = link.records;
     send(link, { answers: [ptr, srv, txt, ...addresses], additionals: [] });
   };
 
-  const open = (iface: LanInterface, warned = false) => {
-    const link: Link = { iface, socket: openSocket(iface), joined: false, failed: false, warned };
+  const firstHeard = (packet: Packet, rinfo: RemoteInfo) => {
+    const key = `${rinfo.address} ${rinfo.port} ${packet.id} ${(packet.questions ?? []).map((q) => `${q.name} ${q.type}`).join(" ")}`;
+    const now = Date.now();
+    for (const [each, at] of heard) if (now - at >= DUPLICATE_MS) heard.delete(each);
+    if (heard.has(key)) return false;
+    heard.set(key, now);
+    return true;
+  };
+
+  // A query can reach any of the sockets: on Linux every one of them hears
+  // the group on every interface, and a unicast query (RFC 6762 §5.5)
+  // reaches just one, maybe another interface's. So whichever socket heard
+  // it, the answer goes by the client's address: on the link whose subnet
+  // it's on, with that link's addresses. A client on none of them (a
+  // 169.254 address after DHCP failed, a static address on a second subnet
+  // of the same LAN) gets every address, as before issue #326, on the link
+  // this machine's route to it leaves by, since that's all that says where
+  // it is. Each query is answered once, however many sockets heard it.
+  const answer = (heardOn: Link, packet: Packet, rinfo: RemoteInfo) => {
+    const all = [...links.values()];
+    const local = all.filter((link) => onLink(link, rinfo.address));
+    const via = local.find((link) => link.joined);
+    if (local.length > 0 && !via) return;
+    const records = via?.records ?? everywhere;
+    const replies = (packet.questions ?? []).flatMap((question) => answerQuestion(records, question) ?? []);
+    if (replies.length === 0 || !firstHeard(packet, rinfo)) return;
+    if (via) {
+      for (const reply of replies) send(via, reply);
+      return;
+    }
+    void route(rinfo.address).then((address) => {
+      const out = all.find((link) => address !== null && ipv4Of(link.iface).includes(address)) ?? heardOn;
+      for (const reply of replies) send(out, reply);
+    });
+  };
+
+  // Another server already answers for this instance name (two machines
+  // both called "musicbox"): this one moves to "musicbox (2)" and so on,
+  // which is what mDNSResponder and avahi do. The TXT name doesn't change.
+  // Every socket hears it; the first renames, and the rest no longer match.
+  const clashes = (records: Answer[] = []) =>
+    records.some((r) => r.type === "SRV" && sameName(r.name, instance) && !sameName(r.data.target, host));
+  const checkName = (packet: Packet) => {
+    if (!clashes(packet.answers) && !clashes(packet.additionals)) return;
+    const taken = /\((\d+)\)$/.exec(label);
+    label = `${instanceLabel(ad.name).replace(/ \(\d+\)$/, "").slice(0, 57)} (${taken ? Number(taken[1]) + 1 : 2})`;
+    instance = `${label}.${SERVICE}`;
+    log("info", `mdns: another server is advertising as "${ad.name}", so this one is "${label}"`);
+    refresh(true);
+    for (const link of links.values()) announce(link);
+  };
+
+  const open = (iface: LanInterface, { failures = 0, later = true } = {}) => {
+    const link: Link = {
+      iface,
+      socket: openSocket(iface),
+      subnets: subnetList(iface.subnets),
+      records: everywhere,
+      advertised: "",
+      joined: false,
+      failed: false,
+      sent: false,
+      failures,
+      wait: 0,
+      sayWhenUp: later || failures > 0,
+    };
     links.set(iface.name, link);
-    link.socket.on("joined", () => {
-      if (!live(link)) return;
+    link.socket.on("joined", (skipped = []) => {
+      if (!live(link) || link.failed) return;
       link.joined = true;
+      if (skipped.length > 0 && failures === 0) {
+        log("warn", `mdns: couldn't set ${skipped.join(" or ")} on ${iface.name}; advertising there anyway`);
+      }
       // RFC 6762 §8.3: at least two announcements, a second apart.
       announce(link);
       link.second = setTimeout(() => live(link) && announce(link), 1000);
       link.second.unref?.();
     });
-
-    link.socket.on("query", (packet, rinfo) => {
-      if (!live(link) || !onLink(link.iface, rinfo.address)) return;
-      for (const question of packet.questions ?? []) {
-        const reply = answerQuestion(records(link), question);
-        if (reply) send(link, reply);
-      }
-    });
-
-    // Another server already answers for this instance name (two machines
-    // both called "musicbox"): this one moves to "musicbox (2)" and so on,
-    // which is what mDNSResponder and avahi do. The TXT name doesn't change.
-    link.socket.on("response", (packet) => {
-      if (!live(link)) return;
-      const { instance, host } = records(link);
-      const clash = [...(packet.answers ?? []), ...(packet.additionals ?? [])].some(
-        (r) => r.type === "SRV" && sameName(r.name, instance) && !sameName(r.data.target, host),
-      );
-      if (!clash) return;
-      const taken = /\((\d+)\)$/.exec(label);
-      label = `${instanceLabel(ad.name).replace(/ \(\d+\)$/, "").slice(0, 57)} (${taken ? Number(taken[1]) + 1 : 2})`;
-      log("info", `mdns: another server is advertising as "${ad.name}", so this one is "${label}"`);
-      for (const each of links.values()) announce(each);
-    });
-
-    // A socket that couldn't bind or join sends nothing. The next recheck
-    // tries that interface again, without another log line.
-    link.socket.on("error", (err) => {
-      link.joined = false;
-      link.failed = true;
-      if (!link.warned) log("warn", `mdns: not advertising on ${iface.name} (${err.message})`);
-      link.warned = true;
-    });
+    link.socket.on("query", (packet, rinfo) => live(link) && answer(link, packet, rinfo));
+    link.socket.on("response", (packet) => live(link) && checkName(packet));
+    link.socket.on("error", (err) => live(link) && fail(link, `not advertising on ${iface.name} (${err.message})`));
     link.socket.on("warning", () => {});
   };
 
@@ -291,30 +474,37 @@ export function startResponder(ad: Advertisement, options: ResponderOptions): Ad
   };
 
   const first = interfaces();
-  for (const iface of first) open(iface);
+  for (const iface of first) open(iface, { later: false });
+  refresh();
   const recheck = setInterval(() => {
-    const next = new Map(interfaces().map((iface) => [iface.name, iface]));
+    const next = interfaces();
+    const names = new Set(next.map((iface) => iface.name));
     for (const link of [...links.values()]) {
-      const iface = next.get(link.iface.name);
-      if (!iface) {
-        close(link);
-        log("info", `mdns: no longer advertising on ${link.iface.name}`);
-      } else if (link.failed || iface.address !== link.iface.address) {
+      if (names.has(link.iface.name)) continue;
+      close(link);
+      log("info", `mdns: no longer advertising on ${link.iface.name}`);
+    }
+    for (const iface of next) {
+      const link = links.get(iface.name);
+      if (!link) {
+        open(iface);
+      } else if (iface.address !== link.iface.address) {
         // The socket joined the group on the old address; a new one joins
         // on the new address, and announces there.
         close(link);
-        open(iface, link.warned);
+        open(iface, { failures: link.failed ? link.failures : 0, later: false });
+      } else if (link.failed && link.wait === 0) {
+        close(link);
+        open(iface, { failures: link.failures, later: false });
       } else {
-        const changed = iface.addresses.join() !== link.iface.addresses.join();
+        if (link.failed) link.wait -= 1;
         link.iface = iface;
-        if (changed) announce(link);
       }
     }
-    for (const iface of next.values()) {
-      if (links.has(iface.name)) continue;
-      open(iface);
-      log("info", `mdns: now advertising on ${iface.name}`);
-    }
+    // In the order the system lists them, which is the order an answer
+    // picks a link in.
+    links = new Map(next.map((iface) => [iface.name, links.get(iface.name)!]));
+    for (const link of refresh()) announce(link);
   }, options.recheckMs ?? 30_000);
   recheck.unref?.();
 
@@ -336,7 +526,7 @@ export function startResponder(ad: Advertisement, options: ResponderOptions): Ad
               if (!link.joined) return destroy();
               // A goodbye (TTL 0) takes it off every client's list at once
               // rather than when the records expire.
-              const { ptr, srv, txt } = records(link);
+              const { ptr, srv, txt } = link.records;
               const goodbye = [ptr, srv, txt].map((r) => ({ ...r, ttl: 0 }) as Answer);
               link.socket.respond({ answers: goodbye, additionals: [] }, destroy);
             }),
