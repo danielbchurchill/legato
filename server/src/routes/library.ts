@@ -71,6 +71,12 @@ const ARTIST_SORTS = {
 } as const;
 export type ArtistSort = keyof typeof ARTIST_SORTS;
 
+// `sort in SORTS` is true of "constructor" and every other key a plain
+// object inherits, which then reached the SQL as `undefined`.
+function pickSort<Sort extends string>(sorts: Record<Sort, unknown>, raw: string | undefined, fallback: Sort): Sort {
+  return raw != null && Object.hasOwn(sorts, raw) ? (raw as Sort) : fallback;
+}
+
 type LibraryQuery = {
   q?: string;
   sort?: string;
@@ -300,10 +306,9 @@ function listTracks(
 export function libraryRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Querystring: LibraryQuery }>("/library/albums", async (request) => {
-      const sort = (request.query.sort ?? "title") as AlbumSort;
       return listAlbums(db, {
         q: request.query.q?.trim() || null,
-        sort: sort in ALBUM_SORTS ? sort : "title",
+        sort: pickSort(ALBUM_SORTS, request.query.sort, "title"),
         dir: request.query.dir === "desc" ? "desc" : "asc",
         limit: clampLimit(request.query.limit),
         offset: clampOffset(request.query.offset),
@@ -313,9 +318,8 @@ export function libraryRoutes(db: Database) {
     // No search: since v2 the library has no filter, and an artist is found
     // through the search palette like anything else.
     app.get<{ Querystring: LibraryQuery }>("/library/artists", async (request) => {
-      const sort = (request.query.sort ?? "name") as ArtistSort;
       return listArtists(db, {
-        sort: sort in ARTIST_SORTS ? sort : "name",
+        sort: pickSort(ARTIST_SORTS, request.query.sort, "name"),
         dir: request.query.dir === "desc" ? "desc" : "asc",
         limit: clampLimit(request.query.limit),
         offset: clampOffset(request.query.offset),
@@ -323,10 +327,9 @@ export function libraryRoutes(db: Database) {
     });
 
     app.get<{ Querystring: LibraryQuery }>("/library/tracks", async (request) => {
-      const sort = (request.query.sort ?? "title") as TrackSort;
       return listTracks(db, {
         q: request.query.q?.trim() || null,
-        sort: sort in TRACK_SORTS ? sort : "title",
+        sort: pickSort(TRACK_SORTS, request.query.sort, "title"),
         dir: request.query.dir === "desc" ? "desc" : "asc",
         limit: clampLimit(request.query.limit),
         offset: clampOffset(request.query.offset),

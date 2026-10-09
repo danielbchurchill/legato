@@ -406,6 +406,29 @@ describe("GET /library/artists", () => {
   });
 });
 
+// A sort key a plain object inherits isn't a sort: `sort in SORTS` let
+// "constructor" through, and the route answered 500 with the SQL error.
+describe("a sort key every object inherits", () => {
+  for (const [route, fallback] of [
+    ["albums", "title"],
+    ["artists", "name"],
+    ["tracks", "title"],
+  ] as const) {
+    it(`falls back to the default sort on /library/${route}`, async () => {
+      const artist = makeNode("artist", "Beck");
+      makeAlbum("Odelay", { artistId: artist });
+      makeRecording("Devils Haircut");
+
+      const expected = (await app.inject({ method: "GET", url: `/api/v1/library/${route}?sort=${fallback}` })).json();
+      for (const key of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+        const res = await app.inject({ method: "GET", url: `/api/v1/library/${route}?sort=${key}` });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual(expected);
+      }
+    });
+  }
+});
+
 // #263 split the tracks query so the count and the ordering join only what
 // they read. This is the query as it was before, every join on every row,
 // kept as the reference the new one has to agree with exactly.
