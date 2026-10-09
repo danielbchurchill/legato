@@ -79,6 +79,11 @@ export function useLibraryPage<Row>(
   const loadedPages = useRef<Set<number>>(new Set())
   // The range the grid last asked for, which a refresh fetches again.
   const shownRange = useRef<[number, number]>([0, 0])
+  // The total the rows were last merged at, null before any. A page that
+  // lands with another total drops every other page (mergePage).
+  const mergedTotal = useRef<number | null>(null)
+  // Goes up when that happens, to fetch the range on screen again.
+  const [dropped, setDropped] = useState(0)
   // Bumped on every filter/sort change so a page fetch that was already in
   // flight when the user typed the next character lands as a no-op instead
   // of splicing stale rows into the new result set.
@@ -88,6 +93,7 @@ export function useLibraryPage<Row>(
     generation.current += 1
     loadedPages.current = new Set()
     shownRange.current = [0, 0]
+    mergedTotal.current = null
     // A new query drops the old pages together with the generation bump above, so no stale page lands in the new result.
     // oxlint-disable-next-line react/set-state-in-effect
     setRows([])
@@ -113,6 +119,14 @@ export function useLibraryPage<Row>(
         })
         .then((data: { items: Row[]; total: number }) => {
           if (gen !== generation.current) return
+          // The total moved, so this page is now the only one in the rows,
+          // and the rest have to count as unfetched or no scroll would ask
+          // for them again.
+          if (mergedTotal.current != null && mergedTotal.current !== data.total) {
+            loadedPages.current = new Set([pageIndex])
+            setDropped((n) => n + 1)
+          }
+          mergedTotal.current = data.total
           setTotal(data.total)
           setRows((prev) => mergePage(prev, data.total, offset, data.items))
           if (pageIndex === 0) setLoading(false)
@@ -149,10 +163,16 @@ export function useLibraryPage<Row>(
     [loadPage],
   )
 
+  // A page that dropped the others (above) leaves skeletons where they were,
+  // so the range on screen is fetched again.
+  useEffect(() => {
+    if (dropped > 0) ensureRange(...shownRange.current)
+  }, [dropped, ensureRange])
+
   // A page from before the change lands as a no-op (the generation), and
   // every page counts as unfetched again, so one scrolled back to later is
   // fetched afresh. If the total moved, the first page to land drops the
-  // rest (mergePage), and the grid asks for its range again.
+  // rest (mergePage), and the range on screen is fetched again (above).
   const fetchedRevision = useRef(revision)
   useEffect(() => {
     if (revision === fetchedRevision.current) return
