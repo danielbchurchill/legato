@@ -164,7 +164,7 @@ describe('useServerReady', () => {
 describe('useServerReady when the server goes away', () => {
   let root: Root | null = null
   // What the fake server does with the next health check.
-  let mode: 'ok' | 'refused' | 'silent' | 502 = 'ok'
+  let mode: 'ok' | 'refused' | 'silent' | 'cut-body' | 'not-json' | 502 = 'ok'
 
   beforeEach(() => {
     vi.useFakeTimers()
@@ -180,6 +180,17 @@ describe('useServerReady when the server goes away', () => {
         }
         if (mode === 'refused') return Promise.reject(new TypeError('Failed to fetch'))
         if (mode === 502) return Promise.resolve({ ok: false, status: 502, json: async () => null } as Response)
+        // Headers arrived, then the body was cut off on the way.
+        if (mode === 'cut-body') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.reject(new DOMException('The operation was aborted.', 'AbortError')),
+          } as Response)
+        }
+        if (mode === 'not-json') {
+          return Promise.resolve({ ok: true, status: 200, json: () => Promise.reject(new SyntaxError('Unexpected token <')) } as Response)
+        }
         // No answer at all: only the hook's own timeout ends it.
         return new Promise<Response>((_, reject) =>
           init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError'))),
@@ -257,6 +268,32 @@ describe('useServerReady when the server goes away', () => {
     await advance(3000 + 300 + 300)
 
     expect(result.current?.outage?.failure).toEqual({ kind: 'bad-status', status: 502 })
+  })
+
+  // The coordinator's review of #346: an empty answer read as "out of
+  // date", and the app remounted around that and lost the queue.
+  it('fails a check whose body was cut off, rather than reading the server as out of date', async () => {
+    const result = await mount()
+    const server = result.current?.server
+    expect(server?.outOfDate).toBe(false)
+
+    mode = 'cut-body'
+    await advance(3000)
+    expect(result.current?.server).toBe(server)
+    expect(result.current?.ready).toBe(true)
+    await advance(20_000)
+
+    expect(result.current?.server).toBe(server)
+    expect(result.current?.outage).not.toBeNull()
+  })
+
+  it("takes a 200 that isn't JSON for something other than Legato answering", async () => {
+    const result = await mount()
+    mode = 'not-json'
+    await advance(3000 + 20_000)
+
+    expect(result.current?.server?.outOfDate).toBe(false)
+    expect(result.current?.outage?.failure).toEqual({ kind: 'bad-status', status: 200 })
   })
 
   it('clears the outage when the server answers again, and says so once', async () => {

@@ -168,10 +168,22 @@ export function useServerReady(): ServerStatus {
       let body: unknown = null
       try {
         const res = await fetch(HEALTH_URL, { signal: controller.signal })
-        // A body that won't parse still came from a server that answered,
-        // so it reads as "too old to say" rather than as an outage.
-        if (res.ok) body = await res.json().catch(() => null)
-        else failure = { kind: 'bad-status', status: res.status }
+        if (!res.ok) failure = { kind: 'bad-status', status: res.status }
+        else {
+          // Only a body that arrived whole is an answer. One cut off on the
+          // way, by the timeout or the server going, fails the check like
+          // any other (the catch below): read as an empty answer it would
+          // mark the server out of date, and the app would remount around
+          // that and lose the queue. A 200 that isn't JSON isn't Legato's
+          // health. A pre-#193 server's {"status":"ok"} still parses, and
+          // reads as out of date because it is.
+          try {
+            body = await res.json()
+          } catch (err) {
+            if (!(err instanceof SyntaxError)) throw err
+            failure = { kind: 'bad-status', status: res.status }
+          }
+        }
       } catch {
         failure = classifyFailure({ elapsedMs: Date.now() - started, timedOut: controller.signal.aborted })
       } finally {
