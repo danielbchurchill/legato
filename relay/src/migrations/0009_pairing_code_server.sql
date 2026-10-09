@@ -10,6 +10,7 @@
 -- POST /pair/exchange redeems a code only for the server named here, and
 -- answers any other exactly as it would a code nobody claimed.
 --
--- NULL for a code minted by POST /pair/start, and for a claim made before
--- this. No server can redeem either.
+-- NULL for a claim made before this, and for a code minted by POST
+-- /pair/start, which #353 removed. No server can redeem either, and both
+-- expire ten minutes after they were made.
 ALTER TABLE pairing_codes ADD COLUMN server_id TEXT;

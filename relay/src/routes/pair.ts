@@ -1,27 +1,24 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
-import { getUserBySessionToken, SESSION_COOKIE, sessionToken, type RelayUserRow } from "../accounts.js";
+import { getUserBySessionToken, sessionToken, type RelayUserRow } from "../accounts.js";
 import { normalizeCode } from "../claimCode.js";
 import { checkClaimProof, PROOF_FAILURE_MESSAGES, type ClaimProofFailure } from "../linked-servers.js";
-import { claimServerCode, claimStatus, mintPairingCode, redeemPairingCode, type ClaimFailure } from "../pairing.js";
+import { claimServerCode, claimStatus, redeemPairingCode, type ClaimFailure } from "../pairing.js";
 import { clientAddress, type ExchangeLimiter } from "../rate-limit.js";
 import { signServerToken, type SigningKeys } from "../signing-keys.js";
 
-// Bridges an authenticated browser session to a headless home server that
-// has no session cookie of its own — see migrations/
-// 0002_tunnel_credentials.sql for the two-step design.
+// Links a headless home server, which has no relay session of its own, to
+// the legato.fm account someone signed in with. pairing.ts has the design.
 //
-// /pair/start and /pair/claim require a real relay session: the first
-// mints a code *for* a signed-in account, the second adopts a code a home
-// server is showing on its /setup page (issue #237). /pair/exchange
-// deliberately does NOT check for one: the caller redeeming a code is the
-// home server itself, which is never going to have a relay session cookie
-// to present. The single-use code says which account, the same way an
-// OAuth device-authorization-grant code does, and since #237 a signature
-// from the server's identity key says which server. Since #324 a claim
-// also names the server it's for, from the QR, and only that server's
-// signature redeems it. See routes/relay.ts's header comment for the
-// matching design decision on the /relay/* side.
+// /pair/claim needs a real relay session: it adopts a code a home server is
+// showing on its /setup page (issue #237), for the server whose QR was
+// scanned (issue #324). /pair/exchange deliberately does NOT check for one:
+// the caller redeeming a code is the home server itself, which is never
+// going to have a relay session cookie to present. The single-use code says
+// which account, the same way an OAuth device-authorization-grant code does,
+// and a signature from the server's identity key says which server, the
+// only one that can redeem the claim. See routes/relay.ts's header comment
+// for the matching design decision on the /relay/* side.
 //
 // Redeeming a code gets the server a `link` token, not a credential. The
 // server links its owner with it, as any link does (routes/linked-servers.ts),
@@ -59,18 +56,6 @@ export function pairRoutes(
   const ownOrigin = issuer ? new URL(issuer).origin : null;
 
   return async function routes(app: FastifyInstance) {
-    app.post("/pair/start", async (request, reply) => {
-      const token = request.cookies[SESSION_COOKIE];
-      const user = token ? getUserBySessionToken(db, token) : null;
-      if (!user) {
-        reply.code(401);
-        return { error: "sign in first" };
-      }
-
-      const { code, expiresAt } = mintPairingCode(db, user.id);
-      return { code, expiresAt: expiresAt.toISOString() };
-    });
-
     // The claim page (routes/claim-page.ts) posts here with the session
     // cookie. SameSite=Lax keeps other sites' pages from sending it, but
     // legato.fm and its subdomains count as the same site, so a page that

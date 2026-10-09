@@ -9,10 +9,6 @@ import { claimProof, serverIdForPublicKey, type ServerKey } from "../../../serve
 import { claimServerCode } from "../pairing.js";
 import { parseSigningKeys } from "../signing-keys.js";
 
-async function listenApp(app: FastifyInstance): Promise<string> {
-  return app.listen({ port: 0, host: "127.0.0.1" });
-}
-
 function signIn(db: Database): { userId: number; cookieHeader: string } {
   const user = upsertUser(db, "google", {
     providerUserId: "pair-test-user",
@@ -23,41 +19,6 @@ function signIn(db: Database): { userId: number; cookieHeader: string } {
   const { token } = createSession(db, user.id);
   return { userId: user.id, cookieHeader: `relay_session=${token}` };
 }
-
-describe("POST /pair/start", () => {
-  let db: Database;
-  let app: FastifyInstance | undefined;
-
-  beforeEach(() => {
-    db = openDb(":memory:");
-  });
-
-  afterEach(async () => {
-    await app?.close();
-    app = undefined;
-  });
-
-  it("requires a relay session", async () => {
-    app = buildApp({ db });
-    const httpUrl = await listenApp(app);
-
-    const response = await fetch(`${httpUrl}/pair/start`, { method: "POST" });
-    expect(response.status).toBe(401);
-  });
-
-  it("mints a code tied to the signed-in account", async () => {
-    app = buildApp({ db });
-    const httpUrl = await listenApp(app);
-    const { cookieHeader } = signIn(db);
-
-    const response = await fetch(`${httpUrl}/pair/start`, { method: "POST", headers: { cookie: cookieHeader } });
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { code: string; expiresAt: string };
-    expect(body.code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
-    expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
-  });
-});
 
 // What a home server sends since issue #237: the code, signed with its
 // identity key by its own signer. claim.spec.ts covers what the proof

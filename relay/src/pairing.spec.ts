@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "./sqlite.js";
 import { upsertUser } from "./accounts.js";
 import { openDb } from "./db.js";
-import { claimServerCode, mintPairingCode, mintTunnelCredential, redeemPairingCode, tunnelCredentialHolder } from "./pairing.js";
+import { claimServerCode, mintTunnelCredential, redeemPairingCode, tunnelCredentialHolder } from "./pairing.js";
 
 let db: Database;
 let userId: number;
@@ -15,26 +15,6 @@ beforeEach(() => {
     displayName: null,
     avatarUrl: null,
   }).id;
-});
-
-describe("mintPairingCode", () => {
-  it("mints a code tied to the given account, expiring in the future", () => {
-    const { code, expiresAt } = mintPairingCode(db, userId);
-
-    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
-    expect(expiresAt.getTime()).toBeGreaterThan(Date.now());
-
-    const row = db.prepare("SELECT relay_user_id, used_at FROM pairing_codes WHERE code = ?").get(code) as {
-      relay_user_id: number;
-      used_at: string | null;
-    };
-    expect(row.relay_user_id).toBe(userId);
-    expect(row.used_at).toBeNull();
-  });
-
-  it("produces a different code on every call", () => {
-    expect(mintPairingCode(db, userId).code).not.toBe(mintPairingCode(db, userId).code);
-  });
 });
 
 describe("mintTunnelCredential", () => {
@@ -111,7 +91,12 @@ describe("redeemPairingCode", () => {
     db.prepare(
       "INSERT INTO pairing_codes (code, relay_user_id, server_id, expires_at) VALUES ('EXPD-0000', ?, ?, datetime('now', '-1 minute'))",
     ).run(userId, SERVER_ID);
-    const { code: unbound } = mintPairingCode(db, userId);
+    // A row from before #324, or one POST /pair/start minted before #353.
+    const unbound = "NSRV-0000";
+    db.prepare("INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES (?, ?, datetime('now', '+5 minutes'))").run(
+      unbound,
+      userId,
+    );
 
     for (const code of [live, spent, "EXPD-0000"]) {
       expect(redeemPairingCode(db, code, OTHER_SERVER_ID)).toEqual({ ok: false, reason: "not_found" });
@@ -120,15 +105,6 @@ describe("redeemPairingCode", () => {
     const unspent = db.prepare("SELECT code FROM pairing_codes WHERE used_at IS NULL ORDER BY code").all();
     expect(unspent).toEqual([{ code: "EXPD-0000" }, { code: live }, { code: unbound }].sort((a, b) => a.code.localeCompare(b.code)));
     expect(redeemPairingCode(db, live, SERVER_ID).ok).toBe(true);
-  });
-
-  it("draws again when a new code clashes with a stored one", () => {
-    db.prepare(
-      "INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES ('K7QM-4XRD', ?, datetime('now', '+10 minutes'))",
-    ).run(userId);
-    const draws = ["K7QM-4XRD", "K7QM-4XRD", "AAAA-BBBB"];
-    const { code } = mintPairingCode(db, userId, () => draws.shift()!);
-    expect(code).toBe("AAAA-BBBB");
   });
 
   it("rejects a code that was never issued", () => {

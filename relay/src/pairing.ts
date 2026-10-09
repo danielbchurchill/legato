@@ -1,20 +1,19 @@
 import { randomBytes } from "node:crypto";
 import type { Database } from "./sqlite.js";
-import { generateCode, normalizeCode } from "./claimCode.js";
+import { normalizeCode } from "./claimCode.js";
 import { SERVER_ID_PATTERN } from "./signing-keys.js";
 import { parseSqliteDatetime } from "./sqlite-datetime.js";
 
-// The pairing-code -> tunnel-credential handoff — see migrations/
-// 0002_tunnel_credentials.sql for the two-step design this implements.
+// Pairing codes: how a headless home server, which has no relay session,
+// gets linked to the legato.fm account someone signed in with.
 //
-// Issue #237 adds a third step and a second way in. The way in: a code can
-// start on a headless server's /setup page instead of here, and an account
-// claims it (claimServerCode). The step: redeeming a code no longer hands
-// over a credential. The server proves which server it is (linked-servers.ts,
-// checkClaimProof) and gets a `link` token for that account and its own id;
-// the credential is minted only when the server reports that link, signed
-// with its key (acceptLinkProof). A claim nobody finishes leaves no
-// credential behind.
+// Every code starts on a server's /setup page (issue #237). An account
+// claims it on the claim page (claimServerCode), for the server whose QR it
+// scanned. That server proves which server it is (linked-servers.ts,
+// checkClaimProof) and redeems the code for a `link` token for that account
+// and its own id. The tunnel credential is minted only when the server
+// reports that link, signed with its key (acceptLinkProof), so a claim
+// nobody finishes leaves no credential behind.
 //
 // Issue #324 binds a claim to one server. A code is 40 bits and a claim
 // proof costs nothing to make, so without that, anyone who guessed a code
@@ -22,6 +21,12 @@ import { parseSqliteDatetime } from "./sqlite-datetime.js";
 // QR on /setup carries the server's id with the code, the claim stores it
 // (migration 0009), and redeeming answers any other server exactly as it
 // would a code nobody claimed.
+//
+// Until #353 an account could also mint a code here (POST /pair/start), the
+// first step of the design in migrations/0002_tunnel_credentials.sql.
+// Nothing called it, and since #324 nothing could redeem what it minted.
+// The rows it left, like claims made before 0009, have no server_id: no
+// server can redeem them, and they expire within ten minutes like any other.
 
 // 10 minutes: long enough to type/relay a code between two devices,
 // short enough that a code nobody redeemed isn't a standing liability.
@@ -32,38 +37,6 @@ const PAIRING_CODE_TTL_SQL = "+10 minutes";
 // pairs once and stays paired. Real rotation/revocation is a follow-up,
 // not something this prototype needs yet.
 const TUNNEL_CREDENTIAL_TTL_SQL = "+1 year";
-
-export interface PairingCodeMinted {
-  code: string;
-  expiresAt: Date;
-}
-
-// Codes are short enough to type now (issue #113: the same K7QM-4XRD
-// format a headless server shows on /setup), stored in that display form so
-// a row reads the way the person saw it. 40 bits makes a clash with a live
-// row unlikely rather than impossible, and the primary key would turn one
-// into a 500, so a clash just draws again. Spent and expired rows are never
-// deleted today, which only makes a clash fractionally likelier.
-const MINT_ATTEMPTS = 5;
-
-export function mintPairingCode(db: Database, relayUserId: number, generate = generateCode): PairingCodeMinted {
-  for (let attempt = 1; ; attempt++) {
-    const code = generate();
-    try {
-      const row = db
-        .prepare(
-          `INSERT INTO pairing_codes (code, relay_user_id, expires_at)
-           VALUES (?, ?, datetime('now', ?))
-           RETURNING expires_at`,
-        )
-        .get(code, relayUserId, PAIRING_CODE_TTL_SQL) as { expires_at: string };
-      return { code, expiresAt: parseSqliteDatetime(row.expires_at) };
-    } catch (err) {
-      const clash = err instanceof Error && /UNIQUE constraint failed/.test(err.message);
-      if (!clash || attempt >= MINT_ATTEMPTS) throw err;
-    }
-  }
-}
 
 export interface TunnelCredentialMinted {
   token: string;
@@ -86,10 +59,10 @@ export function mintTunnelCredential(db: Database, relayUserId: number, serverId
 
 // --- claiming a code a server made (issue #237) ---
 
-// How many unredeemed codes one account may hold at once, claimed or
-// minted. A server's code is random, so an account that claimed codes in
-// advance would be guessing at 40 bits; this keeps the guesses to a handful
-// every ten minutes, rather than as many as it can post.
+// How many unredeemed codes one account may hold at once. A server's code
+// is random, so an account that claimed codes in advance would be guessing
+// at 40 bits; this keeps the guesses to a handful every ten minutes, rather
+// than as many as it can post.
 export const OPEN_CODES_PER_ACCOUNT = 5;
 
 export type ClaimFailure = "bad_code" | "outdated_server" | "taken" | "used" | "too_many";
@@ -106,9 +79,8 @@ export type ClaimResult = { ok: true; code: string; expiresAt: Date; already: bo
 // overwriting:
 //   - the same account again (a reload, a double tap) is the same claim,
 //     for whichever server it names last;
-//   - another account's live code, claimed or minted, is refused. Which of
-//     the two it was doesn't matter to the person refused: someone else has
-//     it, and the server's next code is theirs to scan;
+//   - another account's live code is refused: someone else has it, and
+//     the server's next code is theirs to scan;
 //   - a spent code stays spent, so it reads "already used";
 //   - an expired, unspent row is nobody's any more and is replaced.
 export function claimServerCode(db: Database, relayUserId: number, typed: unknown, serverId: unknown): ClaimResult {
@@ -185,8 +157,8 @@ export type RedeemResult = { ok: true; relayUserId: number } | { ok: false; reas
 // all is simply not found.
 //
 // serverId is the server redeeming, from its signed proof. A code claimed
-// for any other server, or for none (POST /pair/start's, or a claim from
-// before #324), is not found either: whether it's used, expired or live is
+// for any other server, or for none (a row from before #324), is not found
+// either: whether it's used, expired or live is
 // that server's business, so the answer says nothing about it, and the
 // code stays unspent.
 export function redeemPairingCode(db: Database, typed: string, serverId: string): RedeemResult {

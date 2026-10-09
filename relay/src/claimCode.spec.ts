@@ -1,15 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { CODE_ALPHABET, generateCode, normalizeCode } from "./claimCode.js";
+import { CODE_ALPHABET, normalizeCode } from "./claimCode.js";
 
-describe("generateCode", () => {
-  it("makes eight Crockford base32 characters with a dash in the middle", () => {
-    for (let i = 0; i < 200; i++) {
-      const code = generateCode();
-      expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
-    }
-  });
-
-  it("never uses the letters Crockford drops", () => {
+describe("CODE_ALPHABET", () => {
+  it("is Crockford base32, without the letters Crockford drops", () => {
     expect(CODE_ALPHABET).toHaveLength(32);
     for (const letter of "ILOU") expect(CODE_ALPHABET).not.toContain(letter);
   });

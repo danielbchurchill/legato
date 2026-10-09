@@ -1,22 +1,14 @@
-import { randomInt } from "node:crypto";
-
 // The code a person reads off one screen and types (or scans) into another:
-// a legato.fm pairing code here, and the home server's own setup code in
-// server/src/auth/setupCode.ts. Plan 02 ("Claiming a headless server") has
-// both use one format, so the code a headless server shows on /setup can
-// also be the one that pairs it. The two packages share no code, so this is
-// a deliberate copy of the server's rules; a change here belongs there too.
+// the home server's setup code (server/src/auth/setupCode.ts), which is also
+// the legato.fm pairing code that claims it (plan 02, "Claiming a headless
+// server"). Every code starts on a server since #353, so this side only
+// reads them. The two packages share no code, so this is a deliberate copy
+// of the server's rules; a change here belongs there too.
 
 // Crockford base32: digits plus the alphabet minus I, L, O and U. Eight
 // characters is 40 bits, shown as K7QM-4XRD.
 export const CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const CODE_LENGTH = 8;
-
-export function generateCode(): string {
-  let code = "";
-  for (let i = 0; i < CODE_LENGTH; i++) code += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
-  return `${code.slice(0, 4)}-${code.slice(4)}`;
-}
 
 /**
  * What a person typed, in the K7QM-4XRD form, or null when it can't be a

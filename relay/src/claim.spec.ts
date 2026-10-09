@@ -8,7 +8,7 @@ import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
 import { claimProofMessage, isLinkedServer, linkProofMessage, unlinkProofMessage, verifyServerSignature } from "./linked-servers.js";
-import { mintPairingCode, OPEN_CODES_PER_ACCOUNT, tunnelCredentialHolder } from "./pairing.js";
+import { OPEN_CODES_PER_ACCOUNT, tunnelCredentialHolder } from "./pairing.js";
 import { FREE_CODES } from "./rate-limit.js";
 import { claimReturnPath } from "./routes/claim-page.js";
 import { parseSigningKeys, type SigningKeys } from "./signing-keys.js";
@@ -197,21 +197,31 @@ describe("the exchange proof", () => {
     expect((await h.exchangeAs(homeServer(), "K7QM-4XRD")).json()).toEqual(nobodys.json());
   });
 
-  it("lets no server redeem a code that isn't bound to one: a /pair/start code, or a claim from before the binding", async () => {
+  // POST /pair/start minted codes like that until #353, and claims made
+  // before #324 are the same.
+  it("lets no server redeem a code that isn't bound to one", async () => {
     const h = setup();
-    const { cookie } = h.signIn();
-    const started = await h.app.inject({ method: "POST", url: "/pair/start", headers: { cookie } });
-    const { code } = started.json() as { code: string };
+    const { user } = h.signIn();
+    h.db
+      .prepare("INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES ('NSRV-0000', ?, datetime('now', '+5 minutes'))")
+      .run(user.id);
     const nobodys = await h.exchangeAs(homeServer(), "AAAA-BBBB");
     for (const server of [SERVER, homeServer(), homeServer()]) {
-      const res = await h.exchangeAs(server, code);
+      const res = await h.exchangeAs(server, "NSRV-0000");
       expect(res.statusCode).toBe(404);
       expect(res.json()).toEqual(nobodys.json());
     }
-    expect(h.db.prepare("SELECT server_id, used_at FROM pairing_codes WHERE code = ?").get(code)).toEqual({
+    expect(h.db.prepare("SELECT server_id, used_at FROM pairing_codes WHERE code = 'NSRV-0000'").get()).toEqual({
       server_id: null,
       used_at: null,
     });
+  });
+
+  it("is gone with POST /pair/start: no route mints a code nobody's server showed", async () => {
+    const h = setup();
+    const { cookie } = h.signIn();
+    expect((await h.app.inject({ method: "POST", url: "/pair/start", headers: { cookie } })).statusCode).toBe(404);
+    expect(h.db.prepare("SELECT COUNT(*) AS n FROM pairing_codes").get()).toEqual({ n: 0 });
   });
 
   it("refuses a signature by another key, over another code, or for another service", async () => {
@@ -318,17 +328,6 @@ describe("POST /pair/claim", () => {
     const { linkToken } = (await h.exchangeAs(SERVER, "K7QM-4XRD")).json() as { linkToken: string };
     const claims = JSON.parse(Buffer.from(linkToken.split(".")[1]!, "base64url").toString()) as { sub: string };
     expect(claims.sub).toBe(String(first.user.id));
-  });
-
-  it("refuses a code that clashes with another account's live pairing code, and never overwrites it", async () => {
-    const h = setup();
-    const minter = h.signIn("minter");
-    const claimer = h.signIn("claimer");
-    const { code } = mintPairingCode(h.db, minter.user.id, () => "K7QM-4XRD");
-    expect(code).toBe("K7QM-4XRD");
-
-    expect((await h.claim(claimer.cookie, code)).json()).toMatchObject({ reason: "taken" });
-    expect(h.db.prepare("SELECT relay_user_id FROM pairing_codes WHERE code = ?").get(code)).toEqual({ relay_user_id: minter.user.id });
   });
 
   it("says a spent code is used, and takes over an expired one nobody spent", async () => {
