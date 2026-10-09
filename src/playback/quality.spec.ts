@@ -10,7 +10,7 @@ import {
   streamUrl,
   watchForDrops,
 } from './quality'
-import { SERVER_BACK_EVENT } from '../connect/unreachable'
+import { SERVER_BACK_EVENT } from '../connect/reconnect'
 
 function memoryStorage(): Storage {
   const data = new Map<string, string>()

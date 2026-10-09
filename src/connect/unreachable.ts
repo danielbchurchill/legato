@@ -76,11 +76,6 @@ export function outageFailure(sofar: CheckFailure | null, latest: CheckFailure):
   return sofar && FAILURE_RANK[sofar.kind] >= FAILURE_RANK[latest.kind] ? sofar : latest
 }
 
-/** Fired on window when the server answers again after failing (#119), so
- * whatever the outage broke can pick up: the web player's source, the
- * WebSockets. */
-export const SERVER_BACK_EVENT = 'legato:server-back'
-
 export type OutageFacts = {
   path: ServerPath
   failure: CheckFailure

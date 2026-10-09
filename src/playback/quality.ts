@@ -1,6 +1,6 @@
 import { API_BASE as API } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
-import { SERVER_BACK_EVENT } from '../connect/unreachable'
+import { SERVER_BACK_EVENT } from '../connect/reconnect'
 
 /* Issue #120: which rung of the server's quality ladder a browser
  * client asks GET /files/:id/stream for. Only the web <audio> path uses

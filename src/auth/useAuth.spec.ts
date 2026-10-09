@@ -7,7 +7,7 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SERVER_BACK_EVENT } from '../connect/unreachable'
+import { announceServerBack, reconnectEpoch, SERVER_BACK_EVENT } from '../connect/reconnect'
 import { useAuth, type AuthState } from './useAuth'
 
 const SIGNED_IN = {
@@ -92,10 +92,40 @@ describe('useAuth across a server outage', () => {
 
     server.up = true
     await act(async () => {
-      window.dispatchEvent(new Event(SERVER_BACK_EVENT))
+      await announceServerBack(0)
     })
     await settle()
 
     expect(result.current?.kind).toBe('signed-in')
+  })
+
+  // The coordinator's review of #346: the web player reloaded its source
+  // on the same event that set off the session's renewal, so the reload
+  // could go out with a media ticket that had run out.
+  it('has the server back only once the session check has finished', async () => {
+    const result = await mount()
+    expect(result.current?.kind).toBe('signed-in')
+
+    let answer: (res: Response) => void = () => undefined
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>((resolve) => (answer = resolve)))
+    const back = vi.fn()
+    window.addEventListener(SERVER_BACK_EVENT, back)
+    const epoch = reconnectEpoch()
+
+    let announced: Promise<void> = Promise.resolve()
+    await act(async () => {
+      announced = announceServerBack(0)
+    })
+    await settle()
+    expect(back).not.toHaveBeenCalled()
+    expect(reconnectEpoch()).toBe(epoch)
+
+    await act(async () => {
+      answer({ ok: true, status: 200, json: async () => SIGNED_IN } as Response)
+      await announced
+    })
+    expect(back).toHaveBeenCalledTimes(1)
+    expect(reconnectEpoch()).toBe(epoch + 1)
+    window.removeEventListener(SERVER_BACK_EVENT, back)
   })
 })

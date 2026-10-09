@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
 import { API_BASE as API } from '../config/serverHost'
-import { SERVER_BACK_EVENT } from '../connect/unreachable'
+import { SERVER_BACK_EVENT } from '../connect/reconnect'
 
 export { API }
 

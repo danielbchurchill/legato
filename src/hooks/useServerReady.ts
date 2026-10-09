@@ -3,7 +3,8 @@ import { API_BASE, SERVER_ORIGIN } from '../config/serverHost'
 import { MIN_SERVER_SCHEMA_VERSION } from '../config/serverVersion'
 import { updateAction, type UpdateAction } from '../config/installChannel'
 import { readLastSeen, rememberSeen } from '../connect/lastSeen'
-import { classifyFailure, HEALTH_TIMEOUT_MS, outageFailure, SERVER_BACK_EVENT, type CheckFailure } from '../connect/unreachable'
+import { announceServerBack } from '../connect/reconnect'
+import { classifyFailure, HEALTH_TIMEOUT_MS, outageFailure, type CheckFailure } from '../connect/unreachable'
 
 const HEALTH_URL = `${API_BASE}/health`
 const HEARTBEAT_INTERVAL_MS = 3000
@@ -243,7 +244,10 @@ export function useServerReady(): ServerStatus {
       const now = Date.now()
 
       if (!failure) {
-        const recovered = failingSince !== null
+        // Back after an outage, not after a check or two that failed: those
+        // are a hiccup, and nothing needs to load again for one.
+        const recovered = down
+        const since = lastSeenAt ?? 0
         failingSince = null
         failedHow = null
         shown = null
@@ -266,7 +270,7 @@ export function useServerReady(): ServerStatus {
         setServer((prev) => (sameServerVersion(prev, next) ? prev : next))
         if (seenName) setName(seenName)
         setOutage(null)
-        if (recovered) window.dispatchEvent(new Event(SERVER_BACK_EVENT))
+        if (recovered) void announceServerBack(since)
         return
       }
 

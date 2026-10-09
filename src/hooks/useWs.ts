@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { WS_BASE } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
-import { SERVER_BACK_EVENT } from '../connect/unreachable'
+import { SERVER_BACK_EVENT } from '../connect/reconnect'
 
 const WS_URL = `${WS_BASE}/ws`
 

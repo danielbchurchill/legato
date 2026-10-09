@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { API_BASE, SERVER_ORIGIN } from '../config/serverHost'
 import { rememberServer } from '../connect/knownServers'
 import { renewLegatoSession } from '../connect/legatoSignIn'
-import { SERVER_BACK_EVENT } from '../connect/unreachable'
+import { provideSessionCheck } from '../connect/reconnect'
 import { AUTH_REQUIRED_EVENT, clearSession, readSession, storeSession } from './session'
 
 export type AuthStatus = {
@@ -81,12 +81,14 @@ export function useAuth() {
     const onAuthRequired = () => void refresh()
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired)
     window.addEventListener('focus', onAuthRequired)
-    // A check the outage broke runs again once the server answers.
-    window.addEventListener(SERVER_BACK_EVENT, onAuthRequired)
+    // #119: once an outage ends, the session is checked (and a legato.fm one
+    // renewed, if it ran out meanwhile) before anything reads from the
+    // server again (connect/reconnect.ts).
+    const withdraw = provideSessionCheck(refresh)
     return () => {
       window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired)
       window.removeEventListener('focus', onAuthRequired)
-      window.removeEventListener(SERVER_BACK_EVENT, onAuthRequired)
+      withdraw()
     }
   }, [refresh])
 
