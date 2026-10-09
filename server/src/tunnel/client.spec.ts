@@ -59,6 +59,32 @@ async function listen(app: FastifyInstance): Promise<string> {
   return app.listen({ port: 0, host: "127.0.0.1" });
 }
 
+// Completes the WebSocket handshake, says auth-ok, then goes silent: what
+// a network change looks like before TCP notices.
+async function silentRelay(): Promise<{ url: string; sockets: Socket[] }> {
+  const sockets: Socket[] = [];
+  const silent: Server = createServer((socket) => {
+    sockets.push(socket);
+    socket.once("data", (data) => {
+      const key = /sec-websocket-key: (.+)\r\n/i.exec(data.toString())![1]!.trim();
+      const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+      socket.write(
+        `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+      );
+      const payload = Buffer.from(JSON.stringify({ type: "auth-ok" }));
+      socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
+    });
+    socket.on("error", () => {});
+  });
+  await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
+  cleanups.push(() => {
+    for (const socket of sockets) socket.destroy();
+    return new Promise((resolve) => silent.close(resolve));
+  });
+  const { port } = silent.address() as { port: number };
+  return { url: `ws://127.0.0.1:${port}/tunnel`, sockets };
+}
+
 describe("backoffDelay", () => {
   it("doubles from the base up to the cap, with up to half of each delay left to chance", () => {
     const backoff = { baseMs: 1_000, capMs: 60_000 };
@@ -392,34 +418,31 @@ describe("TunnelClient", () => {
   });
 
   it("reconnects when the relay stops answering its pings", async () => {
-    // Completes the WebSocket handshake, says auth-ok, then goes silent:
-    // what a network change looks like before TCP notices.
-    const sockets: Socket[] = [];
-    const silent: Server = createServer((socket) => {
-      sockets.push(socket);
-      socket.once("data", (data) => {
-        const key = /sec-websocket-key: (.+)\r\n/i.exec(data.toString())![1]!.trim();
-        const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
-        socket.write(
-          `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
-        );
-        const payload = Buffer.from(JSON.stringify({ type: "auth-ok" }));
-        socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
-      });
-      socket.on("error", () => {});
-    });
-    await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
-    cleanups.push(() => {
-      for (const socket of sockets) socket.destroy();
-      return new Promise((resolve) => silent.close(resolve));
-    });
-    const { port } = silent.address() as { port: number };
-
-    const tunnel = client(`ws://127.0.0.1:${port}/tunnel`, "http://127.0.0.1:9", { heartbeatMs: 30 });
+    const silent = await silentRelay();
+    const tunnel = client(silent.url, "http://127.0.0.1:9", { heartbeatMs: 30 });
     await waitFor(tunnel, "connected");
     await waitFor(tunnel, "waiting");
     await waitFor(tunnel, "connected");
-    expect(sockets.length).toBeGreaterThanOrEqual(2);
+    expect(silent.sockets.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("drops a connection that stopped answering, rather than closing it", async () => {
+    // A close lets what's queued on the socket go first, and Bun keeps the
+    // socket open until it has. On a dead connection nothing goes, so the
+    // socket and its queue would stay until the OS gave up on it, one for
+    // every outage.
+    const close = spyOn(WebSocket.prototype, "close");
+    const terminate = spyOn(WebSocket.prototype, "terminate");
+    cleanups.push(() => {
+      close.mockRestore();
+      terminate.mockRestore();
+    });
+    const silent = await silentRelay();
+    const tunnel = client(silent.url, "http://127.0.0.1:9", { heartbeatMs: 30, backoff: { baseMs: 5_000, capMs: 5_000 } });
+    await waitFor(tunnel, "connected");
+    await waitFor(tunnel, "waiting");
+    expect(terminate).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
   });
 
   it("keeps one heartbeat however many times it's told it signed in", async () => {

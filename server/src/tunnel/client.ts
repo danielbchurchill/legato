@@ -252,8 +252,11 @@ export class TunnelClient {
   }
 
   // Closes the current socket and everything riding on it, and forgets it,
-  // so its own close event, when it comes, finds nothing to do.
-  private teardown(): void {
+  // so its own close event, when it comes, finds nothing to do. A socket
+  // that stopped answering is dropped (`dead`): a close lets what's queued
+  // go first, and Bun keeps the socket open until it has, which on a dead
+  // connection is until the OS gives up.
+  private teardown(dead = false): void {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.beatTimer) clearInterval(this.beatTimer);
     this.retryTimer = null;
@@ -262,13 +265,13 @@ export class TunnelClient {
     // through requestOver().
     const socket = this.socket;
     this.socket = null;
-    const graceful = this.requests.size === 0;
+    const graceful = !dead && this.requests.size === 0;
     for (const request of [...this.requests.values()]) request.cancel();
     this.requests.clear();
     try {
       // A close frame goes after whatever is still queued, so the last
-      // answers aren't cut off. A socket with requests still riding on it,
-      // or one that stopped answering, is just dropped.
+      // answers aren't cut off. A socket with requests still riding on it
+      // is just dropped.
       if (graceful && socket?.readyState === WebSocket.OPEN) socket.close(1000, "stopped");
       else socket?.terminate();
     } catch {
@@ -288,7 +291,7 @@ export class TunnelClient {
     const upFor = this.connectedAt === null ? 0 : this.now() - this.connectedAt;
     const wasConnected = this.connectedAt !== null;
     this.connectedAt = null;
-    this.teardown();
+    this.teardown(true);
     if (upFor >= STABLE_MS) this.attempt = 0;
     this.retry(why, wasConnected);
   }
