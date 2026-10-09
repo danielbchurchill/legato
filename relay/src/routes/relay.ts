@@ -106,8 +106,12 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
 
       await new Promise<void>((resolve) => {
         registry.registerPending(requestId, tunnel.socket, {
+          // Flushed at once, so the device has the status while the body
+          // is still on its way, and so a failure after it can only break
+          // the connection off (onError).
           onStart: (status, responseHeaders) => {
             reply.raw.writeHead(status, withoutSetCookie(responseHeaders));
+            reply.raw.flushHeaders();
           },
           onChunk: (buf) => {
             reply.raw.write(buf);
@@ -116,12 +120,15 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
             reply.raw.end();
             resolve();
           },
+          // Once the status has gone out, a failure breaks the connection
+          // off rather than ending the body cleanly: a cut-short stream
+          // must not look like a whole one.
           onError: (message) => {
             if (!reply.raw.headersSent) {
               reply.raw.writeHead(502, { "content-type": "application/json" });
               reply.raw.end(JSON.stringify({ error: message }));
             } else {
-              reply.raw.end();
+              reply.raw.destroy();
             }
             resolve();
           },

@@ -10,6 +10,9 @@ export interface PendingHandlers {
 
 interface PendingEntry extends PendingHandlers {
   socket: WebSocket;
+  // Whether response-start has come: a chunk before it, or a second one,
+  // isn't something a Legato server sends.
+  started: boolean;
 }
 
 export interface Tunnel {
@@ -24,6 +27,16 @@ export interface Tunnel {
   // at the next beat means the connection is dead.
   alive: boolean;
 }
+
+// What handleFrame() made of a frame. "hostile" means the tunnel sent
+// something no Legato server sends, and routes/tunnel.ts closes it.
+export type FrameVerdict = "ok" | "hostile";
+
+// A header a response may carry to a device: the name an HTTP token, the
+// value free of CR, LF and anything else Node's writeHead() refuses.
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const HEADER_VALUE = /^[\t\x20-\x7e\x80-\xff]*$/;
+const MAX_ERROR_MESSAGE = 500;
 
 // Owns every authenticated home-server tunnel this relay currently has,
 // one per server id (issue #310), and the demultiplexing table that routes
@@ -77,7 +90,7 @@ export class TunnelRegistry {
   }
 
   registerPending(requestId: string, socket: WebSocket, handlers: PendingHandlers): void {
-    this.#pending.set(requestId, { socket, ...handlers });
+    this.#pending.set(requestId, { socket, started: false, ...handlers });
   }
 
   // Lets an HTTP-side abort (mobile client hung up) drop its slot without
@@ -93,28 +106,81 @@ export class TunnelRegistry {
   // `socket` is the tunnel the frame arrived on. A response is only
   // accepted from the tunnel its request went down, so one server can't
   // answer, or cut short, a request meant for another.
-  handleFrame(socket: WebSocket, frame: TunnelFrame): void {
-    if (!("requestId" in frame)) return;
+  //
+  // Nothing in a frame is taken on trust: anyone can claim a server and
+  // get a credential, and before this a status of 99999 threw inside the
+  // tunnel's message listener and took the relay down. The home server's
+  // client builds every frame from what its own HTTP parser accepted
+  // (server/src/tunnel/client.ts), so:
+  //   * a value HTTP can't carry fails only what it touches: a header is
+  //     left off, and a status outside 200–599 (a 1xx is never a final
+  //     answer) fails its request with a 502;
+  //   * a frame no Legato server sends, a field of the wrong type, a chunk
+  //     before the status or a second status, fails its request and comes
+  //     back "hostile", and the caller closes the tunnel.
+  // Anything that still throws is caught here and counts as hostile.
+  handleFrame(socket: WebSocket, frame: TunnelFrame): FrameVerdict {
+    if (!("requestId" in frame)) return "ok";
     const entry = this.#pending.get(frame.requestId);
-    if (!entry || entry.socket !== socket) return; // unknown, late, already settled, or not this tunnel's
-
-    switch (frame.type) {
-      case "response-start":
-        entry.onStart(frame.status, frame.headers);
-        return;
-      case "response-chunk":
-        entry.onChunk(Buffer.from(frame.data, "base64"));
-        return;
-      case "response-end":
-        this.#pending.delete(frame.requestId);
-        entry.onEnd();
-        return;
-      case "response-error":
-        this.#pending.delete(frame.requestId);
-        entry.onError(frame.message);
-        return;
-      default:
-        return;
+    if (!entry || entry.socket !== socket) return "ok"; // unknown, late, already settled, or not this tunnel's
+    try {
+      return this.#dispatch(frame.requestId, entry, frame);
+    } catch {
+      this.#fail(frame.requestId, entry, "the home server sent a response legato.fm couldn't pass on");
+      return "hostile";
     }
   }
+
+  #dispatch(requestId: string, entry: PendingEntry, frame: TunnelFrame): FrameVerdict {
+    switch (frame.type) {
+      case "response-start": {
+        if (entry.started || typeof frame.status !== "number" || !isRecord(frame.headers)) return this.#hostile(requestId, entry);
+        if (!Number.isInteger(frame.status) || frame.status < 200 || frame.status > 599) {
+          this.#fail(requestId, entry, `the home server answered with a status legato.fm can't pass on (${frame.status})`);
+          return "ok";
+        }
+        entry.started = true;
+        entry.onStart(frame.status, passableHeaders(frame.headers));
+        return "ok";
+      }
+      case "response-chunk":
+        if (!entry.started || typeof frame.data !== "string") return this.#hostile(requestId, entry);
+        entry.onChunk(Buffer.from(frame.data, "base64"));
+        return "ok";
+      case "response-end":
+        this.#pending.delete(requestId);
+        entry.onEnd();
+        return "ok";
+      case "response-error":
+        this.#pending.delete(requestId);
+        entry.onError(
+          typeof frame.message === "string" ? frame.message.slice(0, MAX_ERROR_MESSAGE) : "the home server couldn't answer",
+        );
+        return "ok";
+      default:
+        return "ok";
+    }
+  }
+
+  #fail(requestId: string, entry: PendingEntry, message: string): void {
+    this.#pending.delete(requestId);
+    entry.onError(message);
+  }
+
+  #hostile(requestId: string, entry: PendingEntry): FrameVerdict {
+    this.#fail(requestId, entry, "the home server sent a response legato.fm couldn't pass on");
+    return "hostile";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function passableHeaders(headers: Record<string, unknown>): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (HEADER_NAME.test(name) && typeof value === "string" && HEADER_VALUE.test(value)) result[name] = value;
+  }
+  return result;
 }

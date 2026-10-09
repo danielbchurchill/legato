@@ -270,3 +270,123 @@ describe("relay HTTP forwarding", () => {
     expect(await response.text()).toBe("path //example.com/x");
   });
 });
+
+// What a home server sends back is checked before any of it reaches a
+// device's response. Anyone can claim a server and get a credential, so a
+// tunnel's frames are untrusted input: before this, a response-start with
+// a status of 99999 threw inside the relay's message listener and took the
+// whole relay down.
+describe("frames a home server sends back", () => {
+  let db: Database;
+  let app: FastifyInstance | undefined;
+  let sockets: WebSocket[] = [];
+
+  beforeEach(() => {
+    db = openDb(":memory:");
+  });
+
+  afterEach(async () => {
+    for (const socket of sockets) socket.close();
+    await app?.close();
+    app = undefined;
+    sockets = [];
+  });
+
+  // A tunnel that answers every request with whatever frames `answer` makes
+  // for it, the way a modified home server could.
+  async function rawHomeServer(tunnelUrl: string, credential: string, answer: (requestId: string) => object[]) {
+    const socket = new WebSocket(tunnelUrl);
+    sockets.push(socket);
+    const state = { closed: false, cancelled: [] as string[] };
+    socket.addEventListener("close", () => (state.closed = true));
+    await new Promise<void>((resolve) => {
+      socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "auth", secret: credential })));
+      socket.addEventListener("message", (event) => {
+        const frame = JSON.parse(String(event.data)) as { type: string; requestId: string };
+        if (frame.type === "auth-ok") resolve();
+        if (frame.type === "cancel") state.cancelled.push(frame.requestId);
+        if (frame.type !== "request") return;
+        for (const out of answer(frame.requestId)) socket.send(JSON.stringify({ requestId: frame.requestId, ...out }));
+      });
+    });
+    return state;
+  }
+
+  async function setUp(answer: (requestId: string) => object[]) {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const account = signIn(db);
+    const { serverId, credential } = linkServer(db, account.userId);
+    const tunnel = await rawHomeServer(tunnelUrl, credential, answer);
+    const get = (path = "/x") => fetch(`${httpUrl}/relay/${serverId}${path}`, { headers: { cookie: account.cookieHeader } });
+    return { tunnel, get, httpUrl };
+  }
+
+  const start = (status: unknown, headers: unknown = {}) => ({ type: "response-start", status, headers });
+  const chunk = (data: unknown) => ({ type: "response-chunk", data });
+  const end = { type: "response-end" };
+
+  it("answers a status HTTP can't carry with a 502, and keeps the tunnel", async () => {
+    let status: unknown = 99999;
+    const { tunnel, get } = await setUp(() => [start(status), chunk(Buffer.from("x").toString("base64")), end]);
+
+    for (const bad of [99999, 99, 600, 101, 200.5]) {
+      status = bad;
+      const response = await get();
+      expect(response.status).toBe(502);
+    }
+    status = 201;
+    const fine = await get();
+    expect(fine.status).toBe(201);
+    expect(await fine.text()).toBe("x");
+    expect(tunnel.closed).toBe(false);
+  });
+
+  it("drops a header HTTP can't carry and passes the rest", async () => {
+    const { tunnel, get } = await setUp(() => [
+      start(200, {
+        "content-type": "text/plain",
+        "x-split": "a\r\nset-cookie: relay_session=planted",
+        "bad name": "x",
+        "x-wide": "日本",
+        "x-number": 5,
+        "x-fine": "kept",
+      }),
+      chunk(Buffer.from("body").toString("base64")),
+      end,
+    ]);
+
+    const response = await get();
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("body");
+    expect(response.headers.get("x-fine")).toBe("kept");
+    for (const name of ["x-split", "set-cookie", "x-wide", "x-number"]) expect(response.headers.get(name)).toBeNull();
+    expect(tunnel.closed).toBe(false);
+  });
+
+  it("closes a tunnel that sends frames no Legato server sends, failing only that server's requests", async () => {
+    const shapes: object[][] = [
+      [start("200")],
+      [start(200, "headers")],
+      [start(200, ["x", "y"])],
+      [start(200), chunk(42)],
+      [start(200), chunk(undefined)],
+      [chunk(Buffer.from("early").toString("base64"))],
+      [start(200), start(200)],
+    ];
+    for (const frames of shapes) {
+      const { tunnel, get, httpUrl } = await setUp(() => frames);
+      const response = await get().catch(() => null);
+      // A 502 if nothing had gone out yet. Once a status has, the body
+      // breaks off rather than ending as if it were whole.
+      if (response && response.status !== 502) await expect(response.text()).rejects.toThrow();
+      const until = Date.now() + 2_000;
+      while (!tunnel.closed && Date.now() < until) await sleep(10);
+      expect(tunnel.closed).toBe(true);
+      // The relay itself is still up.
+      expect((await fetch(`${httpUrl}/health`)).status).toBe(200);
+      await app!.close();
+      app = undefined;
+    }
+  });
+});

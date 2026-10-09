@@ -77,25 +77,43 @@ export function tunnelRoutes(registry: TunnelRegistry, db: Database, options: { 
         if (!tunnel) socket.close(4001, "auth timeout");
       }, AUTH_TIMEOUT_MS);
 
+      // Whatever a frame holds, nothing it does may throw out of this
+      // listener: an exception here would take down the relay, and every
+      // other server's tunnel with it. A tunnel whose frames are hostile
+      // (tunnel-registry.ts) is closed, and so is one that makes this
+      // listener throw; a genuine server reconnects through its backoff.
+      let closing = false;
+      const close = (code: number, reason: string) => {
+        closing = true;
+        if (tunnel) registry.drop(tunnel.serverId, socket);
+        socket.close(code, reason);
+      };
+
       socket.on("message", (raw: Buffer) => {
-        const frame = parseFrame(raw.toString("utf8"));
-        if (!frame) return;
+        if (closing) return;
+        try {
+          const frame = parseFrame(raw.toString("utf8"));
+          if (!frame) return;
 
-        if (!tunnel) {
-          clearTimeout(authTimeout);
-          const credential = frame.type === "auth" && typeof frame.secret === "string" ? frame.secret : undefined;
-          const holder = credential ? tunnelCredentialHolder(db, credential) : null;
-          if (!credential || !holder) return refuse(socket, INVALID_CREDENTIAL);
-          if (!holder.serverId) return refuse(socket, UNBOUND_CREDENTIAL);
-          tunnel = { socket, serverId: holder.serverId, credential, connectedAt: new Date(), alive: true };
-          registry.set(tunnel);
-          markSeen(db, [tunnel.serverId]);
-          socket.send(JSON.stringify({ type: "auth-ok" }));
-          return;
+          if (!tunnel) {
+            clearTimeout(authTimeout);
+            const credential = frame.type === "auth" && typeof frame.secret === "string" ? frame.secret : undefined;
+            const holder = credential ? tunnelCredentialHolder(db, credential) : null;
+            if (!credential || !holder) return refuse(socket, INVALID_CREDENTIAL);
+            if (!holder.serverId) return refuse(socket, UNBOUND_CREDENTIAL);
+            tunnel = { socket, serverId: holder.serverId, credential, connectedAt: new Date(), alive: true };
+            registry.set(tunnel);
+            markSeen(db, [tunnel.serverId]);
+            socket.send(JSON.stringify({ type: "auth-ok" }));
+            return;
+          }
+
+          tunnel.alive = true;
+          if (registry.handleFrame(socket, frame) === "hostile") close(4002, "sent a frame no Legato server sends");
+        } catch (err) {
+          app.log.warn(`tunnel: closed a connection whose frame couldn't be handled: ${err instanceof Error ? err.message : String(err)}`);
+          close(1011, "couldn't handle a frame");
         }
-
-        tunnel.alive = true;
-        registry.handleFrame(socket, frame);
       });
 
       socket.on("pong", () => {
