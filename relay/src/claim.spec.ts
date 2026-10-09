@@ -37,6 +37,9 @@ const now = () => Math.floor(Date.now() / 1000);
 // The server whose QR the tests' claims come from, unless one says otherwise.
 const SERVER = homeServer();
 
+// Which view of itself the claim page drew.
+const view = (html: string) => /<body data-view="([a-z_]+)"/.exec(html)?.[1];
+
 const apps: FastifyInstance[] = [];
 afterEach(async () => {
   while (apps.length) await apps.pop()!.close();
@@ -324,14 +327,23 @@ describe("POST /pair/claim", () => {
     const h = setup();
     const { cookie } = h.signIn();
     const unnamed = await h.app.inject({ method: "POST", url: "/pair/claim", headers: { cookie }, payload: { code: "K7QM-4XRD" } });
-    for (const res of [
-      unnamed,
-      ...(await Promise.all(
-        [null, "", "not-a-server-id", 42, SERVER.serverId.toUpperCase()].map((id) => h.claim(cookie, "K7QM-4XRD", id)),
-      )),
-    ]) {
+    for (const res of [unnamed, await h.claim(cookie, "K7QM-4XRD", null), await h.claim(cookie, "K7QM-4XRD", "")]) {
       expect(res.statusCode).toBe(400);
       expect(res.json()).toMatchObject({ reason: "outdated_server" });
+    }
+    expect(h.db.prepare("SELECT COUNT(*) AS n FROM pairing_codes").get()).toEqual({ n: 0 });
+  });
+
+  // GET /claim calls the same link a bad one, rather than asking for an
+  // update that wouldn't help.
+  it("calls a server id that can't be one a broken link, as the claim page does, and stores nothing", async () => {
+    const h = setup();
+    const { cookie } = h.signIn();
+    for (const id of ["not-a-server-id", 42, SERVER.serverId.toUpperCase(), `${SERVER.serverId}0`]) {
+      const res = await h.claim(cookie, "K7QM-4XRD", id);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ reason: "bad_code" });
+      if (typeof id === "string") expect(view((await h.page("K7QM-4XRD", cookie, id)).body)).toBe("bad_code");
     }
     expect(h.db.prepare("SELECT COUNT(*) AS n FROM pairing_codes").get()).toEqual({ n: 0 });
   });
@@ -553,8 +565,6 @@ describe("GET /pair/claim", () => {
 });
 
 describe("the claim page", () => {
-  const view = (html: string) => /<body data-view="([a-z_]+)"/.exec(html)?.[1];
-
   it("asks a signed-out visitor to sign in, and comes back to the same code and server", async () => {
     const h = setup({ github: true });
     const back = `/claim?code=K7QM-4XRD&server=${SERVER.serverId}`;

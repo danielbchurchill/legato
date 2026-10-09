@@ -24,7 +24,7 @@ import { issuedTokenExpiresAt, signServerToken, type SigningKeys } from "../sign
 // and that report is what mints the credential. pairing.ts has why.
 
 export const CLAIM_FAILURE_MESSAGES: Record<ClaimFailure, string> = {
-  bad_code: "That isn't a Legato setup code. Scan the QR code on your server's /setup page again.",
+  bad_code: "That isn't a link from a Legato server's setup page. Scan the QR code on your server's /setup page again.",
   outdated_server:
     "This server is too old to be claimed: its QR code doesn't say which server it is. " +
     "Update Legato on the server, then scan the QR code on its /setup page again.",

@@ -88,7 +88,7 @@ function codeBlock(code: string): string {
 function content(view: ClaimView): { title: string; body: string } {
   switch (view.kind) {
     case "bad_code":
-      return { title: "That isn't a setup code", body: `<p>${CLAIM_FAILURE_MESSAGES.bad_code}</p>` };
+      return { title: "That isn't a setup link", body: `<p>${CLAIM_FAILURE_MESSAGES.bad_code}</p>` };
     case "outdated_server":
       return {
         title: "Update this server first",

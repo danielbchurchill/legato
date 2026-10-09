@@ -73,7 +73,9 @@ export type ClaimResult = { ok: true; code: string; expiresAt: Date; already: bo
 // this account and the server the QR named. The relay can't know whether
 // that server is showing the code; the server finds out by asking
 // /pair/exchange for it. A QR with no server id is from a server that
-// predates #324, and nothing could redeem a claim of it.
+// predates #324, and nothing could redeem a claim of it. One with an id
+// that can't be one is a broken link, like a code that can't be one, and
+// GET /claim calls both the same (routes/claim-page.ts).
 //
 // The code is the primary key, so a clash is decided here, never by
 // overwriting:
@@ -86,7 +88,8 @@ export type ClaimResult = { ok: true; code: string; expiresAt: Date; already: bo
 export function claimServerCode(db: Database, relayUserId: number, typed: unknown, serverId: unknown): ClaimResult {
   const code = normalizeCode(typed);
   if (!code) return { ok: false, reason: "bad_code" };
-  if (typeof serverId !== "string" || !SERVER_ID_PATTERN.test(serverId)) return { ok: false, reason: "outdated_server" };
+  if (serverId === undefined || serverId === null || serverId === "") return { ok: false, reason: "outdated_server" };
+  if (typeof serverId !== "string" || !SERVER_ID_PATTERN.test(serverId)) return { ok: false, reason: "bad_code" };
   return db.transaction((): ClaimResult => {
     const row = db
       .prepare(
