@@ -12,8 +12,8 @@ export interface PendingHandlers {
 interface PendingEntry extends PendingHandlers {
   socket: WebSocket;
   method: string;
-  // Whether response-start has come: a chunk before it, or a second one,
-  // isn't something a Legato server sends.
+  // Whether response-start has come: a chunk or an end before it, or a
+  // second one, isn't something a Legato server sends.
   started: boolean;
   // How many body bytes the device's response has room for: the
   // Content-Length response-start declared, none for an answer HTTP gives
@@ -134,8 +134,10 @@ export class TunnelRegistry {
   //     left off, and a status outside 200–599 (a 1xx is never a final
   //     answer) fails its request with a 502;
   //   * a frame no Legato server sends, a field of the wrong type, a chunk
-  //     before the status or a second status, fails its request and comes
-  //     back "hostile", and the caller closes the tunnel;
+  //     or an end before the status, or a second status, fails its request
+  //     and comes back "hostile", and the caller closes the tunnel. An end
+  //     before the status used to answer with a bare 200, so any request,
+  //     a DELETE say, could be made to look as if it had worked;
   //   * so does a body that runs past the Content-Length it declared, or
   //     ends short of it. The relay frames each response itself, on a
   //     connection Fly's proxy goes on to use for other people's requests:
@@ -178,7 +180,7 @@ export class TunnelRegistry {
         return "ok";
       }
       case "response-end":
-        if (entry.room !== null && entry.sent < entry.room) return this.#hostile(requestId, entry);
+        if (!entry.started || (entry.room !== null && entry.sent < entry.room)) return this.#hostile(requestId, entry);
         this.#pending.delete(requestId);
         entry.onEnd();
         return "ok";

@@ -732,6 +732,15 @@ describe("frames a home server sends back", () => {
     expect(tunnel.closed).toBe(false);
   });
 
+  it("fails a request whose answer ends before it starts, rather than passing it off as a success", async () => {
+    const { tunnel, get } = await setUp(() => [end]);
+
+    const response = await fetch(get.url("/api/v1/nodes/7"), { method: "DELETE", headers: get.headers });
+    expect(response.status).toBe(502);
+    await waitForClose(tunnel);
+    expect(tunnel.closed).toBe(true);
+  });
+
   it("closes a tunnel that sends frames no Legato server sends, failing only that server's requests", async () => {
     const shapes: object[][] = [
       [start("200")],
