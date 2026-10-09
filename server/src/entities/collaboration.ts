@@ -279,7 +279,9 @@ export function recomputeCollaborationEdges(db: Database): void {
   // for seconds on every scan; a rescan that changed nothing now writes
   // nothing. Every edge of these types that isn't wanted goes, a duplicate
   // or one from another source included, as the wholesale delete always
-  // did.
+  // did. (A database from before the cap doesn't rely on this to lose its
+  // old era ties: migration 0041 deletes them all, and the next recompute
+  // writes the capped ones.)
   const existing = db
     .prepare(
       `SELECT id, from_node AS fromNode, to_node AS toNode, type, source, label FROM edges

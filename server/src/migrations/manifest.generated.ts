@@ -42,6 +42,7 @@ import m0037_server_identity_key from "./0037_server_identity_key.sql" with { ty
 import m0038_member_of_indexes from "./0038_member_of_indexes.sql" with { type: "text" };
 import m0039_tunnel_credential from "./0039_tunnel_credential.sql" with { type: "text" };
 import m0040_legato_sessions from "./0040_legato_sessions.sql" with { type: "text" };
+import m0041_clear_same_era_ties from "./0041_clear_same_era_ties.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -89,4 +90,5 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 38, file: "0038_member_of_indexes.sql", sql: m0038_member_of_indexes },
   { version: 39, file: "0039_tunnel_credential.sql", sql: m0039_tunnel_credential },
   { version: 40, file: "0040_legato_sessions.sql", sql: m0040_legato_sessions },
+  { version: 41, file: "0041_clear_same_era_ties.sql", sql: m0041_clear_same_era_ties },
 ];

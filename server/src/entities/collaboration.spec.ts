@@ -1,6 +1,10 @@
-import { describe, expect, it } from "bun:test";
-import type { Database } from "../sqlite.js";
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { openSqlite, type Database } from "../sqlite.js";
 import { openDb } from "../db.js";
+import { MIGRATIONS } from "../migrations/manifest.generated.js";
 import { computeArtistClusters } from "../similarity/features.js";
 import {
   computeAlbumRelations,
@@ -484,7 +488,8 @@ describe("recomputeCollaborationEdges — writing only what changed", () => {
     expect(collaborations(db)).toEqual(first);
   });
 
-  // Issue #320: a database from before the cap holds every pair in a decade.
+  // Issue #320: migration 0041 clears a database's old era ties on upgrade,
+  // but a recompute given every pair in a decade converges on its own too.
   it("removes the era ties past the cap, and leaves the rows of the ones within it alone", () => {
     const db = openDb(":memory:");
     const artists = Array.from({ length: 8 }, (_, i) => makeNode(db, "artist", `Artist ${i}`));
@@ -510,5 +515,88 @@ describe("recomputeCollaborationEdges — writing only what changed", () => {
     // id and all: nothing was deleted and written again.
     const beforeByPair = new Map(before.map((e) => [`${e.fromNode}-${e.toNode}`, e]));
     for (const e of after) expect(e).toEqual(beforeByPair.get(`${e.fromNode}-${e.toNode}`)!);
+  });
+});
+
+// Issue #320: the upgrade clears the old era ties itself, since nothing runs
+// a recompute at startup.
+describe("migration 0041", () => {
+  let dataDir: string | null = null;
+
+  afterEach(() => {
+    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+    dataDir = null;
+  });
+
+  // A database migrated up to 0040, with the old schema's rows written in.
+  function upgradeFrom0040(write: (old: Database) => void): Database {
+    dataDir = mkdtempSync(path.join(tmpdir(), "legato-0041-"));
+    const dbPath = path.join(dataDir, "legato.db");
+    const old = openSqlite(dbPath);
+    old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))");
+    for (const { version, sql } of MIGRATIONS) {
+      if (version >= 41) break;
+      old.exec(sql);
+      old.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
+    }
+    write(old);
+    old.close();
+    return openDb(dbPath, { log: () => {} });
+  }
+
+  const node = (db: Database, type: string, title: string) =>
+    (db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as { id: number }).id;
+  const edgeRows = (db: Database) =>
+    db.prepare("SELECT id, from_node AS fromNode, to_node AS toNode, type, source, label FROM edges ORDER BY id").all() as {
+      id: number;
+      type: string;
+      label: string | null;
+    }[];
+
+  it("deletes every same_era tie, and nothing else", () => {
+    let kept: unknown[] = [];
+    const db = upgradeFrom0040((old) => {
+      const [a, b, c, d] = ["A", "B", "C", "D"].map((title) => node(old, "artist", title));
+      const [first, second] = ["First", "Second"].map((title) => node(old, "release", title));
+      const edge = old.prepare("INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, ?, ?, ?)");
+      edge.run(a, b, "collaborated_with", "local", "same_era");
+      edge.run(a, c, "collaborated_with", "local", "same_era");
+      edge.run(b, c, "collaborated_with", "local", "same_label");
+      edge.run(c, d, "collaborated_with", "local", "same_credit");
+      edge.run(a, d, "collaborated_with", "local", null);
+      edge.run(b, d, "collaborated_with", "manual", null);
+      edge.run(first, second, "same_label", "local", null);
+      edge.run(b, a, "member_of", "musicbrainz", null);
+      kept = edgeRows(old).filter((e) => e.label !== "same_era");
+    });
+
+    expect(edgeRows(db)).toEqual(kept as ReturnType<typeof edgeRows>);
+    expect(kept).toHaveLength(6);
+    db.close();
+  });
+
+  it("leaves the next recompute to tie each decade again, capped", () => {
+    const db = upgradeFrom0040((old) => {
+      const artists = Array.from({ length: 8 }, (_, i) => node(old, "artist", `Artist ${i}`));
+      artists.forEach((artist, i) => {
+        const release = node(old, "release", `Album ${i}`);
+        old.prepare("INSERT INTO albums (node_id, primary_artist_node_id, track_count, year_min) VALUES (?, ?, 1, ?)").run(
+          release,
+          artist,
+          1960 + i,
+        );
+      });
+      const insert = old.prepare(
+        "INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, 'collaborated_with', 'local', 'same_era')",
+      );
+      for (let i = 0; i < artists.length; i++) for (let j = i + 1; j < artists.length; j++) insert.run(artists[i], artists[j]);
+    });
+    const eraTies = () => edgeRows(db).filter((e) => e.label === "same_era");
+    expect(eraTies()).toHaveLength(0);
+
+    recomputeCollaborationEdges(db);
+
+    expect(eraTies()).toHaveLength(ERA_NEIGHBOURS * 8 - (ERA_NEIGHBOURS * (ERA_NEIGHBOURS + 1)) / 2);
+    db.close();
   });
 });
