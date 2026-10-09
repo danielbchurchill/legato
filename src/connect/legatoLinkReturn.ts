@@ -1,5 +1,4 @@
-import { sha256 } from '@noble/hashes/sha2.js'
-import { base64url } from '../auth/relaySession'
+import { createPkcePair } from '../auth/relaySession'
 import { sendLinkToken, type LinkDeps, type LinkResult } from './legatoLink'
 
 /* The web client's link to legato.fm (issue #325). A page a home server
@@ -41,15 +40,6 @@ function readPending(storage: Storage): Pending | null {
 
 type Here = Pick<Location, 'origin' | 'pathname' | 'hash' | 'search'>
 
-/** A fresh RFC 7636 verifier and its S256 challenge, hashed in JavaScript:
- * this page is usually plain http on a LAN address, which isn't a secure
- * context, so crypto.subtle isn't there (the same reason identity.ts verifies
- * with @noble). getRandomValues is there either way. */
-export function createLinkPkcePair(): { verifier: string; challenge: string } {
-  const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)))
-  return { verifier, challenge: base64url(sha256(new TextEncoder().encode(verifier))) }
-}
-
 /** Leaves for legato.fm's /link page. The issuer is the legato.fm this server
  * trusts (GET /auth/status's legato.issuer), not one baked into the build. */
 export function startBrowserLink(
@@ -59,7 +49,7 @@ export function startBrowserLink(
 ): void {
   const storage = deps.storage ?? sessionStorage
   const location = deps.location ?? window.location
-  const { verifier, challenge } = createLinkPkcePair()
+  const { verifier, challenge } = createPkcePair()
   storage.setItem(PENDING_KEY, JSON.stringify({ issuer, verifier }))
   const query = new URLSearchParams({ server: serverId, return_to: `${location.origin}${location.pathname}`, code_challenge: challenge })
   location.assign(`${issuer}/link?${query}`)

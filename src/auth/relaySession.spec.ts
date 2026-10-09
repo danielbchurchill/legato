@@ -43,8 +43,19 @@ describe('resolveRelayOrigin', () => {
 
 describe('createPkcePair', () => {
   it('makes a 43-character verifier whose S256 is the challenge', async () => {
-    const { verifier, challenge } = await createPkcePair()
+    const { verifier, challenge } = createPkcePair()
     expect(verifier).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+    expect(challenge).toBe(base64url(new Uint8Array(digest)))
+  })
+
+  // A page on http://192.168.1.20:8899 isn't a secure context, so it has
+  // getRandomValues but no crypto.subtle (caught in headless Chrome, #325).
+  it('works on a page that has no crypto.subtle', async () => {
+    const real = globalThis.crypto
+    vi.stubGlobal('crypto', { getRandomValues: (bytes: Uint8Array<ArrayBuffer>) => real.getRandomValues(bytes) })
+    const { verifier, challenge } = createPkcePair()
+    vi.unstubAllGlobals()
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
     expect(challenge).toBe(base64url(new Uint8Array(digest)))
   })
