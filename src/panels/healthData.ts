@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
 import { API_BASE as API } from '../config/serverHost'
 import type { DbInspectorSnapshot } from './DatabaseInspector'
@@ -48,16 +48,70 @@ export const GAP_FIELDS: { field: GapField; chip: string; row: string }[] = [
 ]
 export type GapRow = { id: number; title: string; artist: string | null }
 
-function useFetched<T>(path: string | null, events: string[]): { data: T | null; reload: () => void } {
+// The first fetch's retries, when `keep` is set: 1 s, 2 s, 4 s, … then
+// every 30 s until one succeeds.
+const FIRST_RETRY_MS = 1_000
+const MAX_RETRY_MS = 30_000
+
+type FetchedOptions = {
+  /** Fetched again whenever this changes, as well as on `events`. */
+  revision?: number
+  /** A failed fetch (a 5xx, a 401, the server gone) keeps what was fetched
+   * before, rather than going back to null. Until something has been
+   * fetched, it tries again on a backoff, because the event that would
+   * fetch again may not come for days, and the socket that carries it
+   * doesn't reconnect after a server restart. */
+  keep?: boolean
+}
+
+/** GET `path`, fetched again on each of `events`. An answer that arrives
+ * after a newer request was sent is dropped. */
+export function useFetched<T>(
+  path: string | null,
+  events: string[],
+  { revision = 0, keep = false }: FetchedOptions = {},
+): { data: T | null; reload: () => void } {
   const [data, setData] = useState<T | null>(null)
+  const latest = useRef(0)
+  const fetched = useRef(false)
+  const retry = useRef<{ timer: ReturnType<typeof setTimeout> | null; delay: number }>({ timer: null, delay: FIRST_RETRY_MS })
+  const reloadRef = useRef<() => void>(() => undefined)
+
   const reload = useCallback(() => {
     if (!path) return
+    const request = ++latest.current
+    if (retry.current.timer != null) clearTimeout(retry.current.timer)
+    retry.current.timer = null
+    const failed = () => {
+      if (request !== latest.current || !keep || fetched.current) return
+      retry.current.timer = setTimeout(() => reloadRef.current(), retry.current.delay)
+      retry.current.delay = Math.min(retry.current.delay * 2, MAX_RETRY_MS)
+    }
     fetch(`${API}${path}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((value: T | null) => setData(value))
-      .catch(() => undefined)
-  }, [path])
-  useEffect(reload, [reload])
+      .then((r) => (r.ok ? (r.json() as Promise<T>) : null))
+      .then((value) => {
+        if (request !== latest.current) return
+        if (value === null) {
+          if (!keep) setData(null)
+          failed()
+          return
+        }
+        fetched.current = true
+        setData(value)
+      })
+      .catch(failed)
+  }, [path, keep])
+  reloadRef.current = reload
+
+  useEffect(() => {
+    reload()
+  }, [reload, revision])
+  useEffect(
+    () => () => {
+      if (retry.current.timer != null) clearTimeout(retry.current.timer)
+    },
+    [],
+  )
   useWsEvent(events, reload)
   return { data, reload }
 }

@@ -17,7 +17,7 @@ const STATS = { albums: 30_000, artists: 3_000, tracks: 300_000, totalBytes: 0, 
 
 // What the fake server answers with, which a test changes to stand for a
 // rescan or a merge, and how often it was asked.
-let server: { stats: typeof STATS; statsStatus: number; artistsStatus: number }
+let server: { stats: typeof STATS; statsStatus: number; statsUnreachable: boolean; artistsStatus: number }
 let requests: Record<string, number>
 
 // The first 5,000 nodes by id of the synthetic library, as GET /nodes sent
@@ -56,7 +56,7 @@ function libraryChanged(at = ++revision) {
 let root: Root | null = null
 
 beforeEach(() => {
-  server = { stats: STATS, statsStatus: 200, artistsStatus: 200 }
+  server = { stats: STATS, statsStatus: 200, statsUnreachable: false, artistsStatus: 200 }
   requests = {}
   sockets = []
   vi.stubGlobal(
@@ -65,7 +65,10 @@ beforeEach(() => {
       const url = new URL(input)
       const route = url.pathname.replace(/^.*\/api\/v1/, '')
       requests[route] = (requests[route] ?? 0) + 1
-      if (route === '/stats') return Response.json(server.stats, { status: server.statsStatus })
+      if (route === '/stats') {
+        if (server.statsUnreachable) throw new TypeError('Failed to fetch')
+        return Response.json(server.stats, { status: server.statsStatus })
+      }
       if (route === '/library/artists') {
         return server.artistsStatus === 200 ? Response.json(artistsPage(url)) : Response.json({ error: 'nope' }, { status: server.artistsStatus })
       }
@@ -127,7 +130,8 @@ async function render(graph: GraphData) {
   })
   // Let every fetch the first render started land.
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0)
+    else await new Promise((resolve) => setTimeout(resolve, 0))
   })
   return container
 }
@@ -266,6 +270,49 @@ describe('Library header and Artists tab after the library changes (#302)', () =
       expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
       expect(countsLine(container)).toBe('30,000 albums · 3,000 artists · 300,000 tracks')
       expect(tabCount(container)).toBe('3,000')
+      // A refetch that failed isn't tried again: the counts are there.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+      expect(requests['/stats']).toBe(2)
+    })
+  }
+})
+
+describe("Library header when /stats doesn't answer at first (#302)", () => {
+  // Nothing else would fetch it again: the next library:changed may be days
+  // away on a library that's caught up, and the socket doesn't reconnect.
+  for (const failure of ['500', 'network'] as const) {
+    it(`tries again after 1, 2, 4… s, then every 30 s, until it answers (${failure})`, async () => {
+      vi.useFakeTimers()
+      if (failure === '500') server.statsStatus = 500
+      else server.statsUnreachable = true
+      const container = await render(cappedGraph())
+      expect(countsLine(container)).toBe('Loading…')
+      expect(requests['/stats']).toBe(1)
+
+      const after = async (ms: number) =>
+        act(async () => {
+          await vi.advanceTimersByTimeAsync(ms)
+        })
+      // 1 + 2 + 4 + 8 + 16 s, then 30 s at a time.
+      await after(1_000)
+      expect(requests['/stats']).toBe(2)
+      await after(2_000 + 4_000 + 8_000 + 16_000)
+      expect(requests['/stats']).toBe(6)
+      await after(29_000)
+      expect(requests['/stats']).toBe(6)
+      await after(1_000)
+      expect(requests['/stats']).toBe(7)
+      expect(countsLine(container)).toBe('Loading…')
+
+      server.statsStatus = 200
+      server.statsUnreachable = false
+      await after(30_000)
+      expect(requests['/stats']).toBe(8)
+      expect(countsLine(container)).toBe('30,000 albums · 3,000 artists · 300,000 tracks')
+      await after(120_000)
+      expect(requests['/stats']).toBe(8)
     })
   }
 })

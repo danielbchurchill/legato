@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useCoalescedWsEvent } from '../hooks/useCoalescedWsEvent'
-import { API_BASE as API } from '../config/serverHost'
-import type { Stats } from '../panels/healthData'
+import { useFetched, type Stats } from '../panels/healthData'
 
 /* When the Library header's counts and the Artists tab fetch again (#302).
  * Both read the albums table and the track count, which change when a
@@ -39,21 +38,7 @@ export function useLibraryChanges(): number {
 
 /** GET /stats, fetched again on every `revision`. A failed refetch (a 5xx, a
  * 401, the server gone) keeps the counts already shown rather than going
- * back to "Loading…", and an answer that arrives after a newer request was
- * sent is dropped. */
+ * back to "Loading…", and the first fetch is tried again until it answers. */
 export function useLibraryStats(revision: number): Stats | null {
-  const [stats, setStats] = useState<Stats | null>(null)
-  useEffect(() => {
-    let current = true
-    fetch(`${API}/stats`)
-      .then((r) => (r.ok ? (r.json() as Promise<Stats>) : null))
-      .then((value) => {
-        if (current && value) setStats(value)
-      })
-      .catch(() => undefined)
-    return () => {
-      current = false
-    }
-  }, [revision])
-  return stats
+  return useFetched<Stats>('/stats', [], { revision, keep: true }).data
 }
