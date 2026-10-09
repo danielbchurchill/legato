@@ -596,6 +596,17 @@ describe("the claim URL", () => {
   });
 });
 
+// Issue #324, review: /setup checks in every three seconds, and the id never
+// changes once the server has started.
+describe("the server id", () => {
+  it("is read once, not on every check-in", async () => {
+    const h = await setup();
+    const id = h.identity.serverId();
+    h.db.prepare("UPDATE server_identity SET server_id = ? WHERE id = 1").run("f".repeat(32));
+    expect(new URL((await h.checkIn()).json().claimUrl).searchParams.get("server")).toBe(id);
+  });
+});
+
 describe("the tunnel credential", () => {
   it("never appears in a response or a log line", async () => {
     const h = await setup();

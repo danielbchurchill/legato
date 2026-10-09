@@ -85,6 +85,7 @@ export class LegatoIdentity {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   private readonly log: (level: "info" | "warn", message: string) => void;
+  private readonly id: string;
   private keyCache: { raw: string | null; keys: Map<string, KeyObject> } | null = null;
   private lastUnknownKidRefetch = Number.NEGATIVE_INFINITY;
   private inFlight: Promise<boolean> | null = null;
@@ -114,6 +115,9 @@ export class LegatoIdentity {
         );
       }
     }
+    // Read once: it's fixed from here on, and /setup's QR asks for it on
+    // every check-in (routes/auth.ts, claimUrl).
+    this.id = this.row().server_id;
   }
 
   get enabled(): boolean {
@@ -125,7 +129,7 @@ export class LegatoIdentity {
   }
 
   serverId(): string {
-    return this.row().server_id;
+    return this.id;
   }
 
   // Parsed once per stored value, not per request.
