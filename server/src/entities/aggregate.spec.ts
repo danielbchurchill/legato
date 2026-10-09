@@ -300,6 +300,21 @@ describe("recomputeEntities", () => {
     expect(db.prepare("SELECT node_id FROM artists WHERE node_id = ?").get(artist)).toBeTruthy();
   });
 
+  it("gives no artist to the row a hand-drawn appears_on gives a node that isn't a release", () => {
+    db = openDb(":memory:");
+    const artist = makeNode("artist", "The Artist");
+    const label = makeNode("label", "Not A Record");
+    const recording = makeNode("recording", "Track");
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+    giveFile(db, recording);
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'manual')").run(recording, label);
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(recording, artist);
+
+    recomputeEntities(db);
+
+    expect(db.prepare("SELECT primary_artist_node_id AS id FROM albums WHERE node_id = ?").get(label)).toEqual({ id: null });
+  });
+
   it("gives a featured-only artist a real artists table row", () => {
     db = openDb(":memory:");
     const primary = makeNode("artist", "The Beatles");

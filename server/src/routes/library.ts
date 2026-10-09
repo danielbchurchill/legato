@@ -133,14 +133,11 @@ export type ArtistRow = {
 // One definition, read twice: the Artists tab pages through it below, and
 // GET /stats counts it for the Library header, so the two can't disagree.
 // Both used to read the map's graph, which stops at 5,000 nodes (#302).
-//
-// A record is a release node, as the map only clusters those.
 const LIBRARY_ARTISTS = `
   SELECT a.id AS id, a.title AS name, COUNT(*) AS releases
   FROM albums al
-  JOIN nodes r ON r.id = al.node_id
   JOIN nodes a ON a.id = al.primary_artist_node_id
-  WHERE r.type = 'release' AND a.type = 'artist'
+  WHERE a.type = 'artist'
   GROUP BY al.primary_artist_node_id`;
 
 export function countLibraryArtists(db: Database): number {

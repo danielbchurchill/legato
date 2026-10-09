@@ -227,6 +227,15 @@ export function recomputeEntities(db: Database): void {
   const albums = computeAlbumAggregates(appearsOn, performedBy, recordingDurationMs, recordingYear);
   const artists = computeArtistAggregates(appearsOn, performerEdges);
 
+  // The map clusters release nodes only, so the row a hand-drawn appears_on
+  // gives any other node has no artist either. Decided here, once per
+  // recompute, rather than checked by every read of the Artists tab and
+  // /stats: that join cost each of them about 16 ms at 30,000 albums.
+  const releaseIds = new Set(
+    (db.prepare("SELECT id FROM nodes WHERE type = 'release'").all() as { id: number }[]).map((r) => r.id),
+  );
+  for (const album of albums) if (!releaseIds.has(album.nodeId)) album.primaryArtistNodeId = null;
+
   const upsertAlbum = db.prepare(
     `INSERT INTO albums (node_id, primary_artist_node_id, track_count, total_duration_ms, year_min, year_max)
      VALUES (?, ?, ?, ?, ?, ?)
