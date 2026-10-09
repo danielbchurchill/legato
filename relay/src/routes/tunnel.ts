@@ -2,7 +2,7 @@ import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 import { tunnelCredentialHolder } from "../pairing.js";
-import { parseFrame } from "../protocol.js";
+import { parseFrame, type TunnelFrame } from "../protocol.js";
 import type { Tunnel, TunnelRegistry } from "../tunnel-registry.js";
 
 const AUTH_TIMEOUT_MS = 5000;
@@ -25,19 +25,34 @@ function refuse(socket: WebSocket, message: string): void {
   socket.close(4001, message.slice(0, 120));
 }
 
-function markSeen(db: Database, serverIds: string[]): void {
-  if (serverIds.length === 0) return;
+// Who a new tunnel's first frame says it is: the server its credential was
+// minted for, or why it's refused. The one place a tunnel's credential is
+// looked up when it signs in.
+function signIn(db: Database, frame: TunnelFrame): { serverId: string; credential: string } | { refused: string } {
+  const credential = frame.type === "auth" && typeof frame.secret === "string" ? frame.secret : undefined;
+  const holder = credential ? tunnelCredentialHolder(db, credential) : null;
+  if (!credential || !holder) return { refused: INVALID_CREDENTIAL };
+  if (!holder.serverId) return { refused: UNBOUND_CREDENTIAL };
+  return { serverId: holder.serverId, credential };
+}
+
+// Writes when legato.fm last heard from each tunnel: its last frame or
+// pong, not the moment the relay wrote it down or gave up on it. A server
+// that lost power is dropped a beat or two later, and "offline since"
+// should still say when it went quiet.
+function markSeen(db: Database, tunnels: Tunnel[]): void {
+  if (tunnels.length === 0) return;
   const upsert = db.prepare(
-    `INSERT INTO server_tunnels (server_id, last_seen_at) VALUES (?, datetime('now'))
+    `INSERT INTO server_tunnels (server_id, last_seen_at) VALUES (?, datetime(?, 'unixepoch'))
      ON CONFLICT (server_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`,
   );
   db.transaction(() => {
-    for (const serverId of serverIds) upsert.run(serverId);
+    for (const tunnel of tunnels) upsert.run(tunnel.serverId, Math.floor(tunnel.lastHeardAt.getTime() / 1000));
   })();
 }
 
 function heartbeat(registry: TunnelRegistry, db: Database): void {
-  const seen: string[] = [];
+  const seen: Tunnel[] = [];
   for (const tunnel of registry.all()) {
     if (tunnelCredentialHolder(db, tunnel.credential)?.serverId !== tunnel.serverId) {
       registry.drop(tunnel.serverId, tunnel.socket);
@@ -48,7 +63,7 @@ function heartbeat(registry: TunnelRegistry, db: Database): void {
     } else {
       tunnel.alive = false;
       tunnel.socket.ping();
-      seen.push(tunnel.serverId);
+      seen.push(tunnel);
     }
   }
   markSeen(db, seen);
@@ -97,18 +112,18 @@ export function tunnelRoutes(registry: TunnelRegistry, db: Database, options: { 
 
           if (!tunnel) {
             clearTimeout(authTimeout);
-            const credential = frame.type === "auth" && typeof frame.secret === "string" ? frame.secret : undefined;
-            const holder = credential ? tunnelCredentialHolder(db, credential) : null;
-            if (!credential || !holder) return refuse(socket, INVALID_CREDENTIAL);
-            if (!holder.serverId) return refuse(socket, UNBOUND_CREDENTIAL);
-            tunnel = { socket, serverId: holder.serverId, credential, connectedAt: new Date(), alive: true };
+            const signedIn = signIn(db, frame);
+            if ("refused" in signedIn) return refuse(socket, signedIn.refused);
+            const now = new Date();
+            tunnel = { socket, ...signedIn, connectedAt: now, lastHeardAt: now, alive: true };
             registry.set(tunnel);
-            markSeen(db, [tunnel.serverId]);
+            markSeen(db, [tunnel]);
             socket.send(JSON.stringify({ type: "auth-ok" }));
             return;
           }
 
           tunnel.alive = true;
+          tunnel.lastHeardAt = new Date();
           if (registry.handleFrame(socket, frame) === "hostile") close(4002, "sent a frame no Legato server sends");
         } catch (err) {
           app.log.warn(`tunnel: closed a connection whose frame couldn't be handled: ${err instanceof Error ? err.message : String(err)}`);
@@ -117,14 +132,16 @@ export function tunnelRoutes(registry: TunnelRegistry, db: Database, options: { 
       });
 
       socket.on("pong", () => {
-        if (tunnel) tunnel.alive = true;
+        if (!tunnel) return;
+        tunnel.alive = true;
+        tunnel.lastHeardAt = new Date();
       });
 
       socket.on("close", () => {
         clearTimeout(authTimeout);
         if (!tunnel) return;
         registry.drop(tunnel.serverId, socket);
-        markSeen(db, [tunnel.serverId]);
+        markSeen(db, [tunnel]);
       });
     });
   };

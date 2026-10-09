@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setSystemTime } from "bun:test";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
@@ -158,6 +158,31 @@ describe("tunnel lifecycle", () => {
     socket.pause();
     await until(async () => !(await yourServers(httpUrl, account.token))[0]!.tunnel.connected);
     expect((await yourServers(httpUrl, account.token))[0]!.tunnel.lastSeenAt).not.toBeNull();
+    socket.terminate();
+  });
+
+  it("records when it last heard from a server that went quiet, not when it gave up on it", async () => {
+    const { httpUrl, tunnelUrl } = await relay();
+    const account = signIn(db);
+    const { credential } = linkServer(db, account.userId);
+
+    // The relay's clock says 2026-01-01 while this server signs in.
+    // SQLite's own datetime('now') doesn't follow it, so what's written
+    // when the tunnel closes shows which time the relay recorded.
+    setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const socket = new WebSocket(tunnelUrl);
+    try {
+      await new Promise<void>((resolve) => {
+        socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "auth", secret: credential })));
+        socket.addEventListener("message", () => resolve());
+      });
+      socket.pause();
+    } finally {
+      setSystemTime();
+    }
+
+    await until(async () => !(await yourServers(httpUrl, account.token))[0]!.tunnel.connected);
+    expect((await yourServers(httpUrl, account.token))[0]!.tunnel.lastSeenAt).toBe("2026-01-01T00:00:00.000Z");
     socket.terminate();
   });
 

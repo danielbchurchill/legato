@@ -4,10 +4,11 @@
 -- is the relay's own in-memory registry (tunnel-registry.ts); this row is
 -- what survives a relay restart.
 --
--- last_seen_at moves when a tunnel authenticates, on every heartbeat while
--- it stays up (routes/tunnel.ts), and when it closes. The heartbeat keeps it
--- close to the truth even when the relay itself stops without closing
--- anything.
+-- last_seen_at is when the relay last heard from the tunnel: its last frame
+-- or pong. It's written when a tunnel authenticates, on every heartbeat
+-- while it stays up (routes/tunnel.ts), and when it closes. The heartbeat
+-- keeps it close to the truth even when the relay itself stops without
+-- closing anything.
 --
 -- Keyed by server id, like the registry, not by account: one server has one
 -- tunnel, whichever accounts have linked it. No foreign key, for the reason

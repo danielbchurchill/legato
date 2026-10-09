@@ -23,6 +23,8 @@ export interface Tunnel {
   // up stops working within one beat rather than at the next reconnect.
   credential: string;
   connectedAt: Date;
+  // Its last frame or pong: what "last seen" means once it's gone.
+  lastHeardAt: Date;
   // Cleared when the heartbeat pings, set again by the pong. Still clear
   // at the next beat means the connection is dead.
   alive: boolean;
