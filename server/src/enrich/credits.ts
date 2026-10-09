@@ -1,5 +1,6 @@
 import type { Database } from "../sqlite.js";
 import { findOrCreatePerson } from "../match/edges.js";
+import { markBoundMayHaveShrunk } from "./members.js";
 import type { MbCredit, MbReleaseDetail } from "./mbClient.js";
 
 // M-8: producer/engineer/mix/mastering/conductor/arranger/remixer/DJ-mixer
@@ -37,8 +38,14 @@ const PERFORMED_CREDIT_TYPES = new Set(["vocal", "instrument", "performer"]);
 // relationship edits recording the same fact. Deduping here rather than
 // trusting the source, since "Produced by George Martin" showing twice in
 // the UI is a real defect regardless of which side introduced it.
+//
+// Issue #321: a person credited before and not now may have left the
+// membership bound, so the next start prunes.
 export function applyCredits(db: Database, recordingNodeId: number, credits: MbCredit[]): void {
-  db.prepare("DELETE FROM edges WHERE from_node = ? AND source = 'musicbrainz'").run(recordingNodeId);
+  const before = db
+    .prepare("DELETE FROM edges WHERE from_node = ? AND source = 'musicbrainz' RETURNING to_node")
+    .all(recordingNodeId) as { to_node: number }[];
+  const after = new Set<number>();
 
   const insertPerformed = db.prepare(
     "INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, 'performed_credit', 'musicbrainz', ?)",
@@ -59,12 +66,16 @@ export function applyCredits(db: Database, recordingNodeId: number, credits: MbC
     const creditNodeId = findOrCreatePerson(db, "credit", credit.artistName);
     if (PERFORMED_CREDIT_TYPES.has(credit.type)) {
       insertPerformed.run(recordingNodeId, creditNodeId, credit.attributes[0] ?? credit.type);
+      after.add(creditNodeId);
       continue;
     }
     const edgeType = CREDIT_EDGE_TYPE[credit.type];
     if (!edgeType) continue; // an MB relation type this product has no use for yet
     insertRole.run(recordingNodeId, creditNodeId, edgeType);
+    after.add(creditNodeId);
   }
+
+  if (before.some(({ to_node }) => !after.has(to_node))) markBoundMayHaveShrunk(db);
 }
 
 // M-8: release-level identifiers and facts, written through field_provenance

@@ -20,7 +20,7 @@ import { reconcileInterruptedScans } from "./scan/scanner.js";
 import { backfillFuzzyIndex } from "./match/backfill-fuzzy-index.js";
 import { mergeDuplicatePeople } from "./match/people.js";
 import { enqueueArtistCreditLookups } from "./enrich/artistCredit.js";
-import { pruneBeyondMemberBoundOnce } from "./enrich/members.js";
+import { pruneBeyondMemberBoundIfDue } from "./enrich/members.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 import { startUpdateChecks } from "./update/check.js";
@@ -143,12 +143,14 @@ if (!ownerExists(db)) {
 // database from then holds what it found, 180,000 artists on the Pi. This
 // removes everything past the bound (enrich/members.ts). After the merge
 // above, so merged producers count as the library artists they are. Issue
-// #321: once per database. Reading the bound takes seconds on a large
-// library, so every start after the first one skips it. A failure is
-// logged, not fatal: the next start tries again, and a server carrying the
-// old crawl still works. The time is in the line because that first start
-// holds the server up while it runs.
-pruneBeyondMemberBoundOnce(db, (level, message) => app.log[level](message));
+// #321: reading the bound takes seconds on a large library, so a start only
+// prunes when the bound has changed or may have shrunk since the last
+// prune, and otherwise reads one row. A failed prune is logged, not fatal:
+// the next start tries again, and a server carrying the old crawl still
+// works. The one failure that does stop the start is foreign keys that
+// won't come back on afterwards. The time is in the line because a start
+// that prunes is held up while it runs.
+pruneBeyondMemberBoundIfDue(db, (level, message) => app.log[level](message));
 
 // Same one-line-diagnosis reasoning as the database log above: if a
 // packaged build silently falls back to PATH resolution instead of the

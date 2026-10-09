@@ -1,5 +1,6 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
+import { markBoundMayHaveShrunk } from "../enrich/members.js";
 
 // Manual, user-authored edges — the free-text "sounds like"/"sampled in"
 // layer that sits on top of the edges derived from tags and MusicBrainz.
@@ -46,13 +47,19 @@ export function edgesRoutes(db: Database) {
     );
 
     app.delete<{ Params: { id: string } }>("/edges/:id", async (request, reply) => {
-      const result = db
-        .prepare("DELETE FROM edges WHERE id = ? AND source = 'manual'")
-        .run(request.params.id);
-      if (result.changes === 0) {
+      const removed = db
+        .prepare("DELETE FROM edges WHERE id = ? AND source = 'manual' RETURNING from_node, to_node")
+        .get(request.params.id) as { from_node: number; to_node: number } | undefined;
+      if (!removed) {
         reply.code(404);
         return { error: "not found (or not a manual edge)" };
       }
+      // Issue #321: the membership bound is read through edges to artists,
+      // manual ones included, so losing one may have shrunk it.
+      const touchesArtist = db
+        .prepare("SELECT 1 FROM nodes WHERE id IN (?, ?) AND type = 'artist'")
+        .get(removed.from_node, removed.to_node);
+      if (touchesArtist) markBoundMayHaveShrunk(db);
       reply.code(204);
     });
   };

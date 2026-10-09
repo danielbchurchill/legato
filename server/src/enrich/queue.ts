@@ -127,7 +127,9 @@ const BOUND_TABLES = ["performers", "member_lookup_artists", "artists_in_bound"]
 /** Issue #321: the statements withBound reads the bound with, in order.
  *  Written out in full, the two sets read the performers twelve times
  *  between them, and each read walks every recording's edges. Here the
- *  performers are read once, and each set is built from the one before it. */
+ *  performers are read once, and each set is built from the one before it.
+ *  The startup prune (members.ts) records a hash of this text, so a change
+ *  to what the bound reads prunes every database again. */
 export const BOUND_SQL: readonly string[] = [
   `INSERT OR IGNORE INTO temp.performers SELECT id FROM (${PERFORMERS})`,
   `INSERT INTO temp.member_lookup_artists

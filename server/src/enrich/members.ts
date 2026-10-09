@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import type { Database } from "../sqlite.js";
 import type { MbArtistRelation } from "./mbClient.js";
-import { withBound } from "./queue.js";
+import { BOUND_SQL, withBound } from "./queue.js";
 
 // Mirrors match/edges.ts's findOrCreateNode and credits.ts's
 // findOrCreateCreditNode, scoped to 'artist' nodes — same case/whitespace-
@@ -42,14 +43,20 @@ function findOrCreateArtistNode(db: Database, title: string): { id: number; crea
 // rather than waiting for the next full recompute to notice them. Whether
 // they get a member lookup of their own is the bound's call (#269,
 // enrich/queue.ts), not this function's.
+//
+// Issue #321: a pair that was there before and isn't now may have taken an
+// artist out of the bound, so the next start prunes.
 export function applyMemberRelations(
   db: Database,
   artistNodeId: number,
   relations: MbArtistRelation[],
 ): number[] {
-  db.prepare(
-    "DELETE FROM edges WHERE (from_node = ? OR to_node = ?) AND type = 'member_of' AND source = 'musicbrainz'",
-  ).run(artistNodeId, artistNodeId);
+  const before = db
+    .prepare(
+      `DELETE FROM edges WHERE (from_node = ? OR to_node = ?) AND type = 'member_of' AND source = 'musicbrainz'
+       RETURNING from_node, to_node`,
+    )
+    .all(artistNodeId, artistNodeId) as { from_node: number; to_node: number }[];
 
   const insertEdge = db.prepare(
     "INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'member_of', 'musicbrainz')",
@@ -75,6 +82,7 @@ export function applyMemberRelations(
     insertEdge.run(fromNode, toNode);
   }
 
+  if (before.some((edge) => !seenPairs.has(`${edge.from_node}-${edge.to_node}`))) markBoundMayHaveShrunk(db);
   return newNodeIds;
 }
 
@@ -83,8 +91,8 @@ export function applyMemberRelations(
 // and about 541,000 done lookups for a library with 98 artists. This brings
 // a database back inside the bound. index.ts runs it before the server
 // listens, after the #273 merge, so the bound it reads already counts merged
-// producers as library artists. Issue #321: once per database
-// (pruneBeyondMemberBoundOnce, below).
+// producers as library artists. Issue #321: only on a start when it may
+// have something to do (pruneBeyondMemberBoundIfDue, below).
 
 type NodeReference = { table: string; column: string };
 
@@ -136,23 +144,33 @@ const DERIVED_ROWS: Record<string, string> = {
 // and a start that prunes a handful of artists isn't worth the rewrite.
 const VACUUM_FREE_SHARE = 0.25;
 
-// Issue #321: once a prune has committed, a settings row holds this, and
-// later starts skip it. Reading the bound takes seconds on a large library
-// (withBound in queue.ts), and nothing answers meanwhile, so it can't run on
-// every start. A change to what the bound keeps bumps this, so every
-// database is pruned once more.
-export const PRUNE_VERSION = 1;
-export const PRUNE_VERSION_SETTING = "memberBoundPruneVersion";
+// Issue #321: what a prune records in migration 0043's member_bound_prune
+// row. A start whose BOUND_SQL hashes to something else prunes again, so a
+// change to the bound needs no version bumped by hand. Compared for
+// equality: a rollback to an older build prunes against that build's bound,
+// as that build always did.
+export const BOUND_HASH = createHash("sha256").update(BOUND_SQL.join("\n")).digest("hex");
 
-/** What a prune removed. `reclaimError` is set when the prune committed but
- *  the VACUUM after it failed. */
-export type MemberBoundPrune = {
-  artists: number;
-  memberEdges: number;
-  jobs: number;
-  reclaimedBytes: number;
-  reclaimError?: string;
-};
+/** Issue #321: whatever removes an edge the bound is read through calls
+ *  this, so the next start prunes: a re-derive that drops a person edge
+ *  from a recording (match/edges.ts, enrich/credits.ts), a member lookup
+ *  that drops a member_of pair (applyMemberRelations), or deleting a manual
+ *  edge that touches an artist (routes/edges.ts). Each calls it only after
+ *  a write of its own, and it writes nothing once the row is set. */
+export function markBoundMayHaveShrunk(db: Database): void {
+  db.prepare("UPDATE member_bound_prune SET bound_may_have_shrunk = 1 WHERE id = 1 AND bound_may_have_shrunk = 0").run();
+}
+
+/** What a prune removed. */
+export type MemberBoundPrune = { artists: number; memberEdges: number; jobs: number };
+
+/** What a start's prune did. `reclaimError` is set when the prune committed
+ *  but the VACUUM after it failed. */
+export type StartupPrune = MemberBoundPrune & { reclaimedBytes: number; reclaimError?: string };
+
+/** Thrown when foreign keys won't come back on after a prune. Nothing may
+ *  use the connection with them off, so index.ts lets it stop the start. */
+export class ForeignKeysOffError extends Error {}
 
 function count(db: Database, sql: string): number {
   return (db.prepare(sql).get() as { n: number }).n;
@@ -166,29 +184,58 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Deletes what the unbounded crawl left past the bound: member_of edges
- *  that no member-lookup artist is on, the member lookups of artists that
- *  no longer get one, and artist nodes outside the bound that carry no user
- *  data, with every row that references them. Records PRUNE_VERSION in the
- *  same transaction, then reclaims the space. */
-export function pruneBeyondMemberBound(db: Database): MemberBoundPrune {
-  const references = nodeReferences(db);
-  const totals = () => ({
+function totals(db: Database): MemberBoundPrune {
+  return {
     artists: count(db, "SELECT COUNT(*) AS n FROM nodes WHERE type = 'artist'"),
     memberEdges: count(db, "SELECT COUNT(*) AS n FROM edges WHERE type = 'member_of'"),
     jobs: count(db, "SELECT COUNT(*) AS n FROM enrich_jobs"),
-  });
-  const before = totals();
+  };
+}
 
-  // Foreign keys are off for the transaction (the pragma can't change
-  // inside one). Every column that references a node is cleared of the
-  // pruned ids before they're deleted, so the check would find nothing, but
-  // finding nothing means scanning each unindexed referencing column once
-  // per deleted node: 11.7 s instead of 0.4 s for 180,000 nodes on a
-  // synthetic copy of the Pi's database.
+// Foreign keys are off for the prune's transaction (the pragma can't change
+// inside one). Every column that references a node is cleared of the
+// pruned ids before they're deleted, so the check would find nothing, but
+// finding nothing means scanning each unindexed referencing column once
+// per deleted node: 11.7 s instead of 0.4 s for 180,000 nodes on a
+// synthetic copy of the Pi's database. They're on again afterwards, or
+// this throws, whether or not `fn` did.
+function withForeignKeysOff<T>(db: Database, fn: () => T): T {
   db.exec("PRAGMA foreign_keys = OFF");
+  let result: T;
   try {
+    result = fn();
+  } catch (err) {
+    turnForeignKeysOn(db, `a prune that failed (${errorMessage(err)})`);
+    throw err;
+  }
+  turnForeignKeysOn(db, "the prune, which committed");
+  return result;
+}
+
+function turnForeignKeysOn(db: Database, after: string): void {
+  let reason = "they're still off";
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    if (pragma(db, "foreign_keys") === 1) return;
+  } catch (err) {
+    reason = errorMessage(err);
+  }
+  throw new ForeignKeysOffError(`membership: couldn't turn foreign keys back on after ${after}: ${reason}`);
+}
+
+/** Deletes what the unbounded crawl left past the bound: member_of edges
+ *  that no member-lookup artist is on, the member lookups of artists that
+ *  no longer get one, and artist nodes outside the bound that carry no user
+ *  data, with every row that references them. `inTransaction` runs
+ *  last in the prune's transaction, so what it writes commits with the
+ *  prune or not at all. Returns what was removed, counted in the
+ *  transaction too, so nothing after the commit can fail but the foreign
+ *  keys. */
+export function pruneBeyondMemberBound(db: Database, inTransaction: () => void = () => {}): MemberBoundPrune {
+  const references = nodeReferences(db);
+  return withForeignKeysOff(db, () =>
     db.transaction(() => {
+      const before = totals(db);
       withBound(db, () => {
         // The bounded crawl only writes member_of edges from the lookups of
         // member-lookup artists, so an edge with neither end among them was
@@ -228,74 +275,96 @@ export function pruneBeyondMemberBound(db: Database): MemberBoundPrune {
         }
         db.exec("DROP TABLE temp.artists_past_bound");
       });
-      db.prepare(
-        `INSERT INTO settings (key, value) VALUES (?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      ).run(PRUNE_VERSION_SETTING, String(PRUNE_VERSION));
-    })();
-  } finally {
-    db.exec("PRAGMA foreign_keys = ON");
-  }
+      inTransaction();
+      const after = totals(db);
+      return {
+        artists: before.artists - after.artists,
+        memberEdges: before.memberEdges - after.memberEdges,
+        jobs: before.jobs - after.jobs,
+      };
+    })(),
+  );
+}
 
-  const after = totals();
-  const pruned: MemberBoundPrune = {
-    artists: before.artists - after.artists,
-    memberEdges: before.memberEdges - after.memberEdges,
-    jobs: before.jobs - after.jobs,
-    reclaimedBytes: 0,
-  };
-  if (pruned.artists + pruned.memberEdges + pruned.jobs === 0) return pruned;
+// Why a start prunes, for its log line, or null if it needn't.
+function pruneReason(db: Database): string | null {
+  const state = db.prepare("SELECT bound_hash, bound_may_have_shrunk FROM member_bound_prune WHERE id = 1").get() as
+    | { bound_hash: string | null; bound_may_have_shrunk: number }
+    | undefined;
+  if (!state?.bound_hash) return "this database hadn't been checked";
+  if (state.bound_hash !== BOUND_HASH) return "the bound's definition changed";
+  if (state.bound_may_have_shrunk) return "something removed since the last prune may have shrunk the bound";
+  return null;
+}
 
-  // Outside the transaction: VACUUM can't run inside one. The copy from
-  // before the prune is the backup openDb took to apply migration 0033. A
-  // VACUUM that fails leaves the file as it was, pruned: SQLite reuses the
-  // free pages for new rows, so the space isn't lost, only not returned.
-  try {
-    const pagesBefore = pragma(db, "page_count");
-    if (pragma(db, "freelist_count") >= pagesBefore * VACUUM_FREE_SHARE) {
-      db.exec("VACUUM");
-      // In WAL mode the file only shrinks once the rewrite is checkpointed.
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-      pruned.reclaimedBytes = (pagesBefore - pragma(db, "page_count")) * pragma(db, "page_size");
-    }
-  } catch (err) {
-    pruned.reclaimError = errorMessage(err);
-  }
-  return pruned;
+// Outside the prune's transaction, since VACUUM can't run inside one. A
+// VACUUM that fails leaves the file as it was, pruned: SQLite reuses the
+// free pages for new rows, so the space isn't lost, only not returned.
+function reclaimFreedSpace(db: Database): number {
+  const pagesBefore = pragma(db, "page_count");
+  if (pragma(db, "freelist_count") < pagesBefore * VACUUM_FREE_SHARE) return 0;
+  db.exec("VACUUM");
+  // In WAL mode the file only shrinks once the rewrite is checkpointed.
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  return (pagesBefore - pragma(db, "page_count")) * pragma(db, "page_size");
 }
 
 /** Issue #321: index.ts's call, on every start before the server listens.
- *  Skips the prune, without reading the bound, once this database has had
- *  one at PRUNE_VERSION. Otherwise prunes, and logs what it did with its
- *  time, even when it found nothing, since that's once. A failed prune is
- *  logged, not thrown: nothing is marked, so the next start tries again,
- *  and a server carrying the old crawl still works. Returns what it pruned,
- *  or null if it skipped or failed.
+ *  It reads one row and returns, without reading the bound, unless a prune
+ *  is due: this database has never had one, the bound's SQL has changed
+ *  since the last one (BOUND_HASH), or something has removed an edge the
+ *  bound is read through since then (markBoundMayHaveShrunk). Then it
+ *  prunes, and in the prune's transaction records BOUND_HASH and clears
+ *  the flag. It logs what it did, why, and how long it took, even when it
+ *  found nothing.
+ *
+ *  A failed prune is logged, not thrown: nothing is recorded, so the next
+ *  start tries again, and a server carrying the old crawl still works.
+ *  After the prune commits, a VACUUM that fails is logged as space not
+ *  reclaimed, and foreign keys that won't come back on throw
+ *  ForeignKeysOffError, which stops the start. Returns what it did, or null
+ *  if it skipped or failed.
  *
  *  Before listen, not after it on recompute's worker: there it would hold
  *  the write lock while the request loop and the enrichment poller write,
  *  its VACUUM would block every write for the whole rewrite, and it could
  *  land between a member lookup's writes. */
-export function pruneBeyondMemberBoundOnce(
+export function pruneBeyondMemberBoundIfDue(
   db: Database,
   log: (level: "info" | "warn" | "error", message: string) => void,
-): MemberBoundPrune | null {
-  const marked = db.prepare("SELECT value FROM settings WHERE key = ?").get(PRUNE_VERSION_SETTING) as
-    | { value: string }
-    | undefined;
-  if (marked?.value === String(PRUNE_VERSION)) return null;
+): StartupPrune | null {
+  const reason = pruneReason(db);
+  if (reason === null) return null;
 
   const started = performance.now();
-  let pruned: MemberBoundPrune;
+  let pruned: StartupPrune;
   try {
-    pruned = pruneBeyondMemberBound(db);
+    const removed = pruneBeyondMemberBound(db, () =>
+      db
+        .prepare(
+          `INSERT INTO member_bound_prune (id, bound_hash, bound_may_have_shrunk) VALUES (1, ?, 0)
+           ON CONFLICT (id) DO UPDATE SET bound_hash = excluded.bound_hash, bound_may_have_shrunk = 0`,
+        )
+        .run(BOUND_HASH),
+    );
+    pruned = { ...removed, reclaimedBytes: 0 };
   } catch (err) {
+    if (err instanceof ForeignKeysOffError) throw err;
     log("error", `membership: couldn't prune past the membership bound: ${errorMessage(err)}`);
     return null;
   }
+
+  const removedAny = pruned.artists + pruned.memberEdges + pruned.jobs > 0;
+  if (removedAny) {
+    try {
+      pruned.reclaimedBytes = reclaimFreedSpace(db);
+    } catch (err) {
+      pruned.reclaimError = errorMessage(err);
+    }
+  }
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
-  if (pruned.artists + pruned.memberEdges + pruned.jobs === 0) {
-    log("info", `membership: nothing past the membership bound (checked once for this database, in ${seconds} s)`);
+  if (!removedAny) {
+    log("info", `membership: nothing past the membership bound (checked in ${seconds} s, because ${reason})`);
     return pruned;
   }
   const reclaimed =
@@ -303,7 +372,7 @@ export function pruneBeyondMemberBoundOnce(
   log(
     "info",
     `membership: removed ${pruned.artists} artist(s), ${pruned.memberEdges} member_of edge(s) and ` +
-      `${pruned.jobs} enrichment job(s) past the membership bound${reclaimed} in ${seconds} s`,
+      `${pruned.jobs} enrichment job(s) past the membership bound${reclaimed} in ${seconds} s (because ${reason})`,
   );
   if (pruned.reclaimError !== undefined) {
     log(

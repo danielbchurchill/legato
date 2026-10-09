@@ -2,6 +2,7 @@ import type { Database } from "../sqlite.js";
 import { extraCreditedArtists, splitArtistCredit, splitJoinedNames } from "../scan/artist-credit.js";
 import { creditEvidence, performerEvidence } from "./evidence.js";
 import { retireNodeInto } from "./people.js";
+import { markBoundMayHaveShrunk } from "../enrich/members.js";
 
 type LocalTags = {
   artist?: string | null;
@@ -101,10 +102,14 @@ function localPersonTargets(db: Database, recordingNodeId: number): number[] {
 // credits, so an artist dropped because a tag was edited is left alone, as
 // it always has been. The derived types recomputeCollaborationEdges
 // (entities/collaboration.ts) rebuilds from scratch don't count as use.
-function retireSplitLines(db: Database, recordingNodeId: number, before: number[], evidence: string[]): void {
-  const after = new Set(localPersonTargets(db, recordingNodeId));
-  for (const id of before) {
-    if (after.has(id)) continue;
+function retireSplitLines(
+  db: Database,
+  recordingNodeId: number,
+  dropped: number[],
+  after: Set<number>,
+  evidence: string[],
+): void {
+  for (const id of dropped) {
     const node = db.prepare("SELECT title FROM nodes WHERE id = ? AND type IN ('artist', 'credit')").get(id) as
       | { title: string }
       | undefined;
@@ -166,7 +171,10 @@ function deriveFileEdges(db: Database, fileId: number): void {
 
   db.prepare("DELETE FROM edges WHERE from_node = ? AND source = 'local'").run(recordingNodeId);
 
-  if (!tags) return;
+  if (!tags) {
+    if (before.length > 0) markBoundMayHaveShrunk(db);
+    return;
+  }
 
   // One edge per artist the credit names, in credit order. A single ARTIST
   // tag routinely carries several artists ("JPEGMAFIA; Danny Brown"), and
@@ -231,7 +239,14 @@ function deriveFileEdges(db: Database, fileId: number): void {
     insertEdge(db, recordingNodeId, findOrCreatePerson(db, "artist", name), "featured_artist");
   }
 
-  if (before.length > 0) retireSplitLines(db, recordingNodeId, before, [...performers, ...credited]);
+  if (before.length === 0) return;
+  const after = new Set(localPersonTargets(db, recordingNodeId));
+  const dropped = before.filter((id) => !after.has(id));
+  if (dropped.length === 0) return;
+  // Issue #321: an artist this recording no longer credits may have left
+  // the membership bound with it, so the next start prunes.
+  markBoundMayHaveShrunk(db);
+  retireSplitLines(db, recordingNodeId, dropped, after, [...performers, ...credited]);
 }
 
 /** Re-derives every present file of one recording, for evidence that
