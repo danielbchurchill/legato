@@ -1,10 +1,10 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { appendFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { cachePath, ensureVariant, readGrowing, TranscodeJob } from "./cache.js";
+import { cachePath, ensureVariant, readGrowing, stopFfmpeg, TranscodeJob } from "./cache.js";
 
 const HASH = "0123456789abcdef0123456789abcdef01234567";
 
@@ -158,5 +158,30 @@ describe("ensureVariant", () => {
 
     const shard = path.dirname(cachePath(HASH, "opus160", cacheDir));
     expect(existsSync(shard) ? readdirSync(shard) : []).toEqual([]);
+  });
+});
+
+describe("stopFfmpeg", () => {
+  it("stops an ffmpeg whose output is paused for backpressure", async () => {
+    // What a slow disk leaves behind: stdout paused and the pipe full, with
+    // ffmpeg blocked writing to it. A plain SIGTERM never ended that one
+    // (first seen on CI's Linux runner), so its slot was never given back.
+    const ffmpeg = spawn("ffmpeg", ["-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=600", "-f", "wav", "pipe:1"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let bytes = 0;
+    ffmpeg.stdout.on("data", (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > 256 * 1024) ffmpeg.stdout.pause();
+    });
+    while (!ffmpeg.stdout.isPaused()) await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const closed = new Promise<boolean>((resolve) => ffmpeg.once("close", () => resolve(true)));
+    stopFfmpeg(ffmpeg);
+    const timedOut = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000));
+    const stopped = await Promise.race([closed, timedOut]);
+    if (!stopped) ffmpeg.kill("SIGKILL");
+    expect(stopped).toBe(true);
   });
 });

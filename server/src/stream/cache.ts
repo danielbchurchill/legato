@@ -1,8 +1,9 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { access, mkdir, open, rename, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import { DATA_DIR } from "../config.js";
 import { FFMPEG_PATH } from "../mediaBinaries.js";
 import { runMediaTask } from "../media/queue.js";
@@ -136,6 +137,16 @@ export async function* readGrowing(job: TranscodeJob, chunkSize = 64 * 1024): As
   }
 }
 
+// Its stdout goes before the signal. ffmpeg traps SIGTERM to write out
+// what it has, and if its stdout is paused for backpressure
+// (transcodeToFile), that write blocks on the full pipe for ever: the
+// process never exits, and never gives its media-queue slot back. With
+// the pipe's read end gone, the write fails and it exits at once.
+export function stopFfmpeg(ffmpeg: ChildProcessByStdio<null, Readable, Readable>): void {
+  ffmpeg.stdout.destroy();
+  ffmpeg.kill();
+}
+
 // Writes ffmpeg's stdout to the temp file chunk by chunk, telling the job
 // about each chunk only once its write has completed. Backpressure is
 // manual (pause stdout until the file drains) because pipeline() has no
@@ -165,7 +176,7 @@ function transcodeToFile(sourcePath: string, quality: TranscodedQuality, job: Tr
     const fail = (err: Error) => {
       if (failed) return;
       failed = true;
-      ffmpeg.kill();
+      stopFfmpeg(ffmpeg);
       out.destroy();
       reject(err);
     };
