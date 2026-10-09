@@ -215,9 +215,13 @@ function Workspace({
   const playingArtist = playingNodeId != null ? (graph.byId.get(playingNodeId)?.subtitle ?? null) : null
 
   const shuffleLibrary = useCallback(() => {
-    const ids = graph.nodes.filter((n) => n.type === 'recording').map((n) => n.id)
-    if (ids.length === 0) return
-    void playback.playTracks(shuffled(ids).slice(0, SHUFFLE_LIBRARY_SIZE), 0, '')
+    const tracks = graph.nodes.filter((n) => n.type === 'recording')
+    if (tracks.length === 0) return
+    void playback.playLibrary(
+      shuffled(tracks)
+        .slice(0, SHUFFLE_LIBRARY_SIZE)
+        .map((n) => ({ id: n.id, title: n.title })),
+    )
   }, [graph.nodes, playback])
 
   const openDetails = useCallback((id: number, tab: DetailsTab = 'overview') => {
