@@ -308,14 +308,16 @@ function Workspace({
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      // #119: the connect screen and the unreachable state cover the shell,
-      // and nothing under them answers the keyboard, ⌘K included.
-      if (unreachable || document.querySelector('[data-connect-screen]')) return
+      // #119: the connect screen covers the whole shell, and nothing under
+      // it answers the keyboard, ⌘K included. The unreachable state sits
+      // under the player on purpose, so buffered audio can still be paused:
+      // under it, only what would open something it covers is held back.
+      if (document.querySelector('[data-connect-screen]')) return
       // ⌘K / Ctrl-K opens search from anywhere, mid-typing included — it's
       // the one shortcut whose whole point is not having to go find a field.
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
         e.preventDefault()
-        setSearchOpen(true)
+        if (!unreachable) setSearchOpen(true)
         return
       }
       if (searchOpen || e.defaultPrevented) return
@@ -344,7 +346,8 @@ function Workspace({
       if (e.code === 'Space') {
         e.preventDefault()
         if (playback.currentTitle == null) {
-          shuffleLibrary()
+          // Nothing could start while the server's unreachable.
+          if (!unreachable) shuffleLibrary()
           return
         }
         if (playback.status.playing) playback.pause()
@@ -353,7 +356,7 @@ function Workspace({
       }
       if (e.key === '/') {
         e.preventDefault()
-        setSearchOpen(true)
+        if (!unreachable) setSearchOpen(true)
       }
     }
     window.addEventListener('keydown', handleKeyDown)

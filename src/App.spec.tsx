@@ -80,18 +80,28 @@ vi.mock('./connect/ConnectScreen', async () => {
   }
 })
 
+// What usePlayback returns, which a test can change between key presses.
+// Every function on it is a spy, made once per name.
+const playbackState = vi.hoisted(() => ({
+  currentTitle: null as string | null,
+  status: { playing: false, positionMs: 0, currentRecordingNodeId: null, currentFileId: null, currentDurationMs: null, volume: 1 },
+  queueBusy: false,
+  shuffled: false,
+  problem: null,
+  upNext: [],
+  pause: vi.fn(),
+  resume: vi.fn(async () => undefined),
+  playLibrary: vi.fn(async () => undefined),
+}))
+
 vi.mock('./playback/usePlayback', () => {
-  const playback = new Proxy(
-    {
-      currentTitle: null,
-      status: { playing: false, positionMs: 0, currentRecordingNodeId: null, currentFileId: null, currentDurationMs: null, volume: 1 },
-      queueBusy: false,
-      shuffled: false,
-      problem: null,
-      upNext: [],
-    } as Record<string | symbol, unknown>,
-    { get: (target, key) => (key in target ? target[key] : vi.fn(async () => undefined)) },
-  )
+  const target = playbackState as unknown as Record<string | symbol, unknown>
+  const playback = new Proxy(target, {
+    get: (t, key) => {
+      if (!(key in t)) t[key] = vi.fn(async () => undefined)
+      return t[key]
+    },
+  })
   return { usePlayback: () => playback }
 })
 
@@ -107,8 +117,9 @@ const SIGNED_IN = {
   oauth: { google: false, github: false },
 }
 
-// What the fake server answers for library-roots.
+// What the fake server answers for library-roots, and for the map's nodes.
 let libraryRoots: { status: number; body: unknown } = { status: 200, body: [{ id: 1, path: '/music' }] }
+let graphNodes: unknown[] = []
 
 function json(status: number, body: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response
@@ -133,6 +144,11 @@ describe('App across an outage', () => {
   beforeEach(() => {
     harness.railRenders = 0
     harness.railMounts = 0
+    playbackState.currentTitle = null
+    playbackState.status = { ...playbackState.status, playing: false }
+    playbackState.pause.mockClear()
+    playbackState.resume.mockClear()
+    playbackState.playLibrary.mockClear()
     harness.connectMounts = 0
     harness.status = {
       ready: true,
@@ -144,6 +160,7 @@ describe('App across an outage', () => {
       retrying: false,
     }
     libraryRoots = { status: 200, body: [{ id: 1, path: '/music' }] }
+    graphNodes = []
     localStorage.clear()
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: false,
@@ -172,7 +189,8 @@ describe('App across an outage', () => {
         if (url.endsWith('/auth/status')) return json(200, SIGNED_IN)
         if (url.endsWith('/library-roots')) return json(libraryRoots.status, libraryRoots.body)
         if (url.endsWith('/settings')) return json(200, {})
-        if (url.endsWith('/nodes') || url.endsWith('/edges') || url.endsWith('/scan-jobs')) return json(200, [])
+        if (url.endsWith('/nodes')) return json(200, graphNodes)
+        if (url.endsWith('/edges') || url.endsWith('/scan-jobs')) return json(200, [])
         return json(200, {})
       }),
     )
@@ -281,16 +299,44 @@ describe('App across an outage', () => {
     expect(searchOpen()).toBe(true)
   })
 
-  it('answers no shortcut while the unreachable state covers the shell', async () => {
+  it('opens nothing from the keyboard under the unreachable state', async () => {
     await mount()
     await setStatus({ ready: false, outage: asleep() })
     await press({ key: 'k', metaKey: true })
+    await press({ key: 'k', ctrlKey: true })
     await press({ key: '/' })
     expect(searchOpen()).toBe(false)
 
     await setStatus({ ready: true, outage: null })
     await press({ key: '/' })
     expect(searchOpen()).toBe(true)
+  })
+
+  // The coordinator's second review of #346: the state sits under the
+  // player so buffered audio can still be paused, and 12e2345 had taken
+  // Space away with everything else.
+  it('pauses and resumes with Space under the unreachable state, and starts nothing when nothing plays', async () => {
+    graphNodes = [{ id: 1, type: 'recording', title: 'Track 1', subtitle: null, cover_hash: null }]
+    await mount()
+    await setStatus({ ready: false, outage: asleep() })
+
+    playbackState.currentTitle = 'Track 1'
+    playbackState.status = { ...playbackState.status, playing: true }
+    await press({ key: ' ', code: 'Space' })
+    expect(playbackState.pause).toHaveBeenCalledTimes(1)
+
+    playbackState.status = { ...playbackState.status, playing: false }
+    await press({ key: ' ', code: 'Space' })
+    expect(playbackState.resume).toHaveBeenCalledTimes(1)
+
+    playbackState.currentTitle = null
+    await press({ key: ' ', code: 'Space' })
+    expect(playbackState.playLibrary).not.toHaveBeenCalled()
+
+    // With the server back, the same key shuffles the library.
+    await setStatus({ ready: true, outage: null })
+    await press({ key: ' ', code: 'Space' })
+    expect(playbackState.playLibrary).toHaveBeenCalledTimes(1)
   })
 
   // The coordinator's review of #346: the connect screen moved in the tree
