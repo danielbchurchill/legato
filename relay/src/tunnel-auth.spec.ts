@@ -92,7 +92,7 @@ describe("tunnel auth handshake", () => {
       displayName: null,
       avatarUrl: null,
     });
-    const { token } = mintTunnelCredential(db, user.id);
+    const { token } = mintTunnelCredential(db, user.id, "a".repeat(32));
 
     app = buildApp({ db });
     const wsUrl = await listenWs(app);
@@ -114,11 +114,26 @@ describe("tunnel auth handshake", () => {
     socket.close();
   });
 
+  // Issue #310: a tunnel is registered under the server its credential was
+  // minted for, and one minted before migration 0006 names none.
+  it("rejects a credential that isn't bound to a server", async () => {
+    const user = upsertUser(db, "google", { providerUserId: "unbound", email: null, displayName: null, avatarUrl: null });
+    const { token } = mintTunnelCredential(db, user.id);
+
+    app = buildApp({ db });
+    const wsUrl = await listenWs(app);
+
+    const result = await authAttempt(wsUrl, token);
+
+    expect(result.code).toBe(4001);
+    expect(result.authError).toContain("isn't bound to a server");
+  });
+
   it("lets two different accounts each authenticate their own tunnel at once", async () => {
     const userA = upsertUser(db, "google", { providerUserId: "a", email: null, displayName: null, avatarUrl: null });
     const userB = upsertUser(db, "google", { providerUserId: "b", email: null, displayName: null, avatarUrl: null });
-    const credentialA = mintTunnelCredential(db, userA.id).token;
-    const credentialB = mintTunnelCredential(db, userB.id).token;
+    const credentialA = mintTunnelCredential(db, userA.id, "a".repeat(32)).token;
+    const credentialB = mintTunnelCredential(db, userB.id, "b".repeat(32)).token;
 
     app = buildApp({ db });
     const wsUrl = await listenWs(app);

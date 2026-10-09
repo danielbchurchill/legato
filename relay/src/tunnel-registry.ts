@@ -9,51 +9,63 @@ export interface PendingHandlers {
 }
 
 interface PendingEntry extends PendingHandlers {
-  relayUserId: number;
+  socket: WebSocket;
 }
 
-// Owns every authenticated home-server tunnel this relay currently has —
-// one per relay_user_id (a map, not a single field, now that auth is
-// per-account rather than one global shared secret — see routes/tunnel.ts)
-// — and the demultiplexing table that routes response-* frames back to
-// the HTTP request that's waiting on them. Many /relay/* HTTP requests,
-// from many different accounts, can be in flight at once; each pending
-// entry remembers which account's tunnel it belongs to so a disconnect
-// only fails that account's own in-flight requests, not everyone else's.
+export interface Tunnel {
+  socket: WebSocket;
+  serverId: string;
+}
+
+// Owns every authenticated home-server tunnel this relay currently has,
+// one per server id (issue #310), and the demultiplexing table that routes
+// response-* frames back to the HTTP request that's waiting on them.
+//
+// Keyed by server, not by account: one account can link several servers,
+// and each keeps its own tunnel. The credential a tunnel authenticates
+// with names the server it was minted for (migration 0006), so the key
+// comes from legato.fm's own records, never from anything the connection
+// says about itself.
+//
+// Many /relay/* HTTP requests can be in flight at once, through many
+// tunnels. Each pending entry remembers the socket its request went down,
+// so a socket that closes fails only its own requests, including one
+// that a newer connection from the same server has already replaced.
 export class TunnelRegistry {
-  #tunnels = new Map<number, WebSocket>();
+  #tunnels = new Map<string, Tunnel>();
   #pending = new Map<string, PendingEntry>();
 
-  getTunnel(relayUserId: number): WebSocket | undefined {
-    return this.#tunnels.get(relayUserId);
+  get(serverId: string): Tunnel | undefined {
+    return this.#tunnels.get(serverId);
   }
 
-  // A second home server authenticating as the same account replaces the
-  // first rather than being rejected — the common case is a restart or a
-  // flaky network, not a genuinely second device racing for the slot.
-  setTunnel(relayUserId: number, socket: WebSocket): void {
-    const existing = this.#tunnels.get(relayUserId);
-    if (existing && existing !== socket) {
-      existing.close(4000, "replaced by a newer tunnel connection");
+  // A second connection for the same server replaces the first rather than
+  // being rejected: the common case is a restart or a network change that
+  // the old connection hasn't noticed yet, not two servers racing for one
+  // slot. The old one is closed, and that fails whatever was still pending
+  // on it.
+  set(tunnel: Tunnel): void {
+    const existing = this.#tunnels.get(tunnel.serverId);
+    if (existing && existing.socket !== tunnel.socket) {
+      existing.socket.close(4000, "replaced by a newer tunnel connection");
     }
-    this.#tunnels.set(relayUserId, socket);
+    this.#tunnels.set(tunnel.serverId, tunnel);
   }
 
-  // Only clears if `socket` is still this account's active tunnel — an
-  // old, already-replaced socket closing later must not clobber a newer
-  // one's state.
-  clearTunnel(relayUserId: number, socket: WebSocket): void {
-    if (this.#tunnels.get(relayUserId) !== socket) return;
-    this.#tunnels.delete(relayUserId);
+  // A socket closed. Fails its pending requests, and forgets the tunnel
+  // only if `socket` is still this server's: an old, already-replaced
+  // socket closing later must not clobber the newer one.
+  drop(serverId: string, socket: WebSocket): void {
+    if (this.#tunnels.get(serverId)?.socket === socket) this.#tunnels.delete(serverId);
     for (const [requestId, entry] of this.#pending) {
-      if (entry.relayUserId !== relayUserId) continue;
-      entry.onError("home server tunnel disconnected");
+      if (entry.socket !== socket) continue;
       this.#pending.delete(requestId);
+      entry.onError("home server tunnel disconnected");
     }
   }
 
-  registerPending(requestId: string, relayUserId: number, handlers: PendingHandlers): void {
-    this.#pending.set(requestId, { relayUserId, ...handlers });
+  registerPending(requestId: string, socket: WebSocket, handlers: PendingHandlers): void {
+    this.#pending.set(requestId, { socket, ...handlers });
   }
 
   // Lets an HTTP-side abort (mobile client hung up) drop its slot without
@@ -66,10 +78,13 @@ export class TunnelRegistry {
     socket.send(JSON.stringify(frame));
   }
 
-  handleFrame(frame: TunnelFrame): void {
+  // `socket` is the tunnel the frame arrived on. A response is only
+  // accepted from the tunnel its request went down, so one server can't
+  // answer, or cut short, a request meant for another.
+  handleFrame(socket: WebSocket, frame: TunnelFrame): void {
     if (!("requestId" in frame)) return;
     const entry = this.#pending.get(frame.requestId);
-    if (!entry) return; // unknown, late, or already-settled requestId
+    if (!entry || entry.socket !== socket) return; // unknown, late, already settled, or not this tunnel's
 
     switch (frame.type) {
       case "response-start":

@@ -194,9 +194,13 @@ export function redeemPairingCode(db: Database, typed: string): RedeemResult {
 // is a high-entropy random token (32 bytes) looked up by exact match,
 // the same reasoning that already makes session tokens safe to look up
 // this way rather than timing-compare against every stored value.
-export function getRelayUserIdByCredential(db: Database, token: string): number | null {
+//
+// serverId is the server the credential was minted for (migration 0006),
+// null for one minted before that. The tunnel (routes/tunnel.ts) refuses
+// those: it's keyed by server, and no home server holds one.
+export function tunnelCredentialHolder(db: Database, token: string): { relayUserId: number; serverId: string | null } | null {
   const row = db
-    .prepare(`SELECT relay_user_id FROM tunnel_credentials WHERE token = ? AND expires_at > datetime('now')`)
-    .get(token) as { relay_user_id: number } | undefined;
-  return row?.relay_user_id ?? null;
+    .prepare(`SELECT relay_user_id, server_id FROM tunnel_credentials WHERE token = ? AND expires_at > datetime('now')`)
+    .get(token) as { relay_user_id: number; server_id: string | null } | undefined;
+  return row ? { relayUserId: row.relay_user_id, serverId: row.server_id } : null;
 }

@@ -1,77 +1,84 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "./sqlite.js";
 import type { FastifyInstance } from "fastify";
-import { upsertUser, createSession } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
-import { mintTunnelCredential } from "./pairing.js";
-import { connectFakeHomeServer, type FakeHomeServerHandle } from "./testing/fake-home-server.js";
+import { connectHomeServer, linkServer, listenApp, signIn } from "./testing/tunnel-harness.js";
 import { startFixtureServer, sleep, type FixtureServerHandle } from "./testing/fixture-http-server.js";
-
-async function listenApp(app: FastifyInstance): Promise<{ httpUrl: string; wsUrl: string }> {
-  const address = await app.listen({ port: 0, host: "127.0.0.1" });
-  return { httpUrl: address, wsUrl: address.replace(/^http/, "ws") };
-}
-
-// Every /relay/* request in these tests needs a signed-in relay account —
-// see routes/relay.ts's header comment for why the session, not a URL
-// segment, decides which tunnel a request reaches. Signing in for real
-// means a live OAuth round trip, so tests provision the account and
-// session directly against the db (the same way server/'s auth.spec.ts
-// tests its own upsertUser/createSession without a live round trip) and
-// hand back a Cookie header any fetch() call below can reuse.
-let signInCounter = 0;
-function signIn(db: Database): { userId: number; cookieHeader: string } {
-  signInCounter += 1;
-  const user = upsertUser(db, "google", {
-    providerUserId: `test-user-${signInCounter}`,
-    email: "test@example.com",
-    displayName: "Test User",
-    avatarUrl: null,
-  });
-  const { token } = createSession(db, user.id);
-  return { userId: user.id, cookieHeader: `relay_session=${token}` };
-}
+import type { TunnelClient } from "../../server/src/tunnel/client.js";
 
 describe("relay HTTP forwarding", () => {
-  let db: Database | undefined;
+  let db: Database;
   let app: FastifyInstance | undefined;
-  let homeServer: FakeHomeServerHandle | undefined;
-  let fixture: FixtureServerHandle | undefined;
+  let homeServers: TunnelClient[] = [];
+  let fixtures: FixtureServerHandle[] = [];
 
   beforeEach(() => {
     db = openDb(":memory:");
   });
 
   afterEach(async () => {
-    homeServer?.close();
+    for (const homeServer of homeServers) homeServer.stop();
     await app?.close();
-    await fixture?.close();
+    for (const fixture of fixtures) await fixture.close();
     app = undefined;
-    homeServer = undefined;
-    fixture = undefined;
-    db = undefined;
+    homeServers = [];
+    fixtures = [];
   });
 
+  async function fixture(handler: Parameters<typeof startFixtureServer>[0]): Promise<FixtureServerHandle> {
+    const started = await startFixtureServer(handler);
+    fixtures.push(started);
+    return started;
+  }
+
+  // An account, a server it has linked, that server's tunnel connected, and
+  // the fixture standing in for the server's own port behind it.
+  async function linkedAndConnected(
+    tunnelUrl: string,
+    handler: Parameters<typeof startFixtureServer>[0],
+    account = signIn(db),
+  ): Promise<{ serverId: string; cookieHeader: string }> {
+    const target = await fixture(handler);
+    const { serverId, credential } = linkServer(db, account.userId);
+    homeServers.push(await connectHomeServer({ tunnelUrl, credential, targetBaseUrl: target.url }));
+    return { serverId, cookieHeader: account.cookieHeader };
+  }
+
   it("returns 401 when the caller has no relay session", async () => {
-    app = buildApp({ db: db! });
+    app = buildApp({ db });
     const { httpUrl } = await listenApp(app);
 
-    const response = await fetch(`${httpUrl}/relay/anything`);
+    const response = await fetch(`${httpUrl}/relay/${"a".repeat(32)}/anything`);
     expect(response.status).toBe(401);
   });
 
-  it("returns 503 when the caller is signed in but has no home server tunnel connected", async () => {
-    app = buildApp({ db: db! });
-    const { httpUrl } = await listenApp(app);
-    const { cookieHeader } = signIn(db!);
+  it("returns 404 for a server the account hasn't linked, connected or not", async () => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const someoneElses = await linkedAndConnected(tunnelUrl, (_req, res) => res.end("not yours"));
+    const { cookieHeader } = signIn(db);
 
-    const response = await fetch(`${httpUrl}/relay/anything`, { headers: { cookie: cookieHeader } });
+    for (const serverId of [someoneElses.serverId, "b".repeat(32), "not-a-server-id"]) {
+      const response = await fetch(`${httpUrl}/relay/${serverId}/anything`, { headers: { cookie: cookieHeader } });
+      expect(response.status).toBe(404);
+    }
+  });
+
+  it("returns 503 for a linked server whose tunnel isn't connected", async () => {
+    app = buildApp({ db });
+    const { httpUrl } = await listenApp(app);
+    const { userId, cookieHeader } = signIn(db);
+    const { serverId } = linkServer(db, userId);
+
+    const response = await fetch(`${httpUrl}/relay/${serverId}/anything`, { headers: { cookie: cookieHeader } });
     expect(response.status).toBe(503);
   });
 
   it("round-trips a small JSON request end to end", async () => {
-    fixture = await startFixtureServer((req, res) => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const { serverId, cookieHeader } = await linkedAndConnected(tunnelUrl, (req, res) => {
       if (req.method === "GET" && req.url === "/api/v1/stats") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ tracks: 337, artists: 42 }));
@@ -80,17 +87,7 @@ describe("relay HTTP forwarding", () => {
       res.writeHead(404).end();
     });
 
-    app = buildApp({ db: db! });
-    const { httpUrl, wsUrl } = await listenApp(app);
-    const { userId, cookieHeader } = signIn(db!);
-    const { token: credential } = mintTunnelCredential(db!, userId);
-    homeServer = await connectFakeHomeServer({
-      tunnelUrl: `${wsUrl}/tunnel`,
-      secret: credential,
-      targetBaseUrl: fixture.url,
-    });
-
-    const response = await fetch(`${httpUrl}/relay/api/v1/stats`, { headers: { cookie: cookieHeader } });
+    const response = await fetch(`${httpUrl}/relay/${serverId}/api/v1/stats`, { headers: { cookie: cookieHeader } });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ tracks: 337, artists: 42 });
   });
@@ -102,7 +99,9 @@ describe("relay HTTP forwarding", () => {
     // a naive wildcard-only registration silently parses-then-drops any
     // JSON body a mobile client sends — see routes/relay.ts's header
     // comment on its content-type-parser registration.
-    fixture = await startFixtureServer((req, res) => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const { serverId, cookieHeader } = await linkedAndConnected(tunnelUrl, (req, res) => {
       const chunks: Buffer[] = [];
       req.on("data", (chunk: Buffer) => chunks.push(chunk));
       req.on("end", () => {
@@ -116,18 +115,8 @@ describe("relay HTTP forwarding", () => {
       });
     });
 
-    app = buildApp({ db: db! });
-    const { httpUrl, wsUrl } = await listenApp(app);
-    const { userId, cookieHeader } = signIn(db!);
-    const { token: credential } = mintTunnelCredential(db!, userId);
-    homeServer = await connectFakeHomeServer({
-      tunnelUrl: `${wsUrl}/tunnel`,
-      secret: credential,
-      targetBaseUrl: fixture.url,
-    });
-
     const requestBody = JSON.stringify({ name: "Late Night Debugging" });
-    const response = await fetch(`${httpUrl}/relay/api/v1/playlists`, {
+    const response = await fetch(`${httpUrl}/relay/${serverId}/api/v1/playlists`, {
       method: "POST",
       headers: { cookie: cookieHeader, "content-type": "application/json" },
       body: requestBody,
@@ -145,7 +134,9 @@ describe("relay HTTP forwarding", () => {
     const CHUNK_COUNT = 12; // 3MB total, well past anything that fits in one TCP write
     const chunkPayload = Buffer.alloc(CHUNK_SIZE, "x");
 
-    fixture = await startFixtureServer(async (req, res) => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const { serverId, cookieHeader } = await linkedAndConnected(tunnelUrl, async (req, res) => {
       if (req.url !== "/big") {
         res.writeHead(404).end();
         return;
@@ -158,17 +149,7 @@ describe("relay HTTP forwarding", () => {
       res.end();
     });
 
-    app = buildApp({ db: db! });
-    const { httpUrl, wsUrl } = await listenApp(app);
-    const { userId, cookieHeader } = signIn(db!);
-    const { token: credential } = mintTunnelCredential(db!, userId);
-    homeServer = await connectFakeHomeServer({
-      tunnelUrl: `${wsUrl}/tunnel`,
-      secret: credential,
-      targetBaseUrl: fixture.url,
-    });
-
-    const response = await fetch(`${httpUrl}/relay/big`, { headers: { cookie: cookieHeader } });
+    const response = await fetch(`${httpUrl}/relay/${serverId}/big`, { headers: { cookie: cookieHeader } });
     expect(response.status).toBe(200);
     expect(response.body).not.toBeNull();
 
@@ -193,7 +174,9 @@ describe("relay HTTP forwarding", () => {
   });
 
   it("demultiplexes two concurrent requests over the same tunnel connection", async () => {
-    fixture = await startFixtureServer(async (req, res) => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const { serverId, cookieHeader } = await linkedAndConnected(tunnelUrl, async (req, res) => {
       if (req.url === "/echo/a") {
         res.writeHead(200, { "content-type": "text/plain" });
         res.write("alpha-first-");
@@ -217,19 +200,9 @@ describe("relay HTTP forwarding", () => {
       res.writeHead(404).end();
     });
 
-    app = buildApp({ db: db! });
-    const { httpUrl, wsUrl } = await listenApp(app);
-    const { userId, cookieHeader } = signIn(db!);
-    const { token: credential } = mintTunnelCredential(db!, userId);
-    homeServer = await connectFakeHomeServer({
-      tunnelUrl: `${wsUrl}/tunnel`,
-      secret: credential,
-      targetBaseUrl: fixture.url,
-    });
-
     const [responseA, responseB] = await Promise.all([
-      fetch(`${httpUrl}/relay/echo/a`, { headers: { cookie: cookieHeader } }),
-      fetch(`${httpUrl}/relay/echo/b`, { headers: { cookie: cookieHeader } }),
+      fetch(`${httpUrl}/relay/${serverId}/echo/a`, { headers: { cookie: cookieHeader } }),
+      fetch(`${httpUrl}/relay/${serverId}/echo/b`, { headers: { cookie: cookieHeader } }),
     ]);
     const [bodyA, bodyB] = await Promise.all([responseA.text(), responseB.text()]);
 
@@ -240,45 +213,60 @@ describe("relay HTTP forwarding", () => {
     expect(bodyB).toBe("bravo-first-bravo-second");
   });
 
+  it("keeps two servers on one account connected at once, and each request reaches the server it names", async () => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const account = signIn(db);
+    const serverA = await linkedAndConnected(tunnelUrl, (req, res) => res.end(`server-A ${req.url}`), account);
+    const serverB = await linkedAndConnected(tunnelUrl, (req, res) => res.end(`server-B ${req.url}`), account);
+    expect(serverA.serverId).not.toBe(serverB.serverId);
+
+    const [responseA, responseB, rootA] = await Promise.all([
+      fetch(`${httpUrl}/relay/${serverA.serverId}/whoami`, { headers: { cookie: account.cookieHeader } }),
+      fetch(`${httpUrl}/relay/${serverB.serverId}/whoami?x=1`, { headers: { cookie: account.cookieHeader } }),
+      fetch(`${httpUrl}/relay/${serverA.serverId}`, { headers: { cookie: account.cookieHeader } }),
+    ]);
+    expect(await responseA.text()).toBe("server-A /whoami");
+    expect(await responseB.text()).toBe("server-B /whoami?x=1");
+    expect(await rootA.text()).toBe("server-A /");
+    expect(homeServers.map((homeServer) => homeServer.state)).toEqual(["connected", "connected"]);
+  });
+
   it("routes two accounts' requests to their own separate home-server tunnels", async () => {
-    const fixtureA = await startFixtureServer((_req, res) => {
-      res.writeHead(200, { "content-type": "text/plain" }).end("home-server-A");
-    });
-    const fixtureB = await startFixtureServer((_req, res) => {
-      res.writeHead(200, { "content-type": "text/plain" }).end("home-server-B");
-    });
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const serverA = await linkedAndConnected(tunnelUrl, (_req, res) => res.end("home-server-A"));
+    const serverB = await linkedAndConnected(tunnelUrl, (_req, res) => res.end("home-server-B"));
 
-    app = buildApp({ db: db! });
-    const { httpUrl, wsUrl } = await listenApp(app);
+    const [responseA, responseB] = await Promise.all([
+      fetch(`${httpUrl}/relay/${serverA.serverId}/whoami`, { headers: { cookie: serverA.cookieHeader } }),
+      fetch(`${httpUrl}/relay/${serverB.serverId}/whoami`, { headers: { cookie: serverB.cookieHeader } }),
+    ]);
+    expect(await responseA.text()).toBe("home-server-A");
+    expect(await responseB.text()).toBe("home-server-B");
+  });
 
-    const accountA = signIn(db!);
-    const accountB = signIn(db!);
-    const credentialA = mintTunnelCredential(db!, accountA.userId).token;
-    const credentialB = mintTunnelCredential(db!, accountB.userId).token;
-
-    const homeServerA = await connectFakeHomeServer({
-      tunnelUrl: `${wsUrl}/tunnel`,
-      secret: credentialA,
-      targetBaseUrl: fixtureA.url,
-    });
-    const homeServerB = await connectFakeHomeServer({
-      tunnelUrl: `${wsUrl}/tunnel`,
-      secret: credentialB,
-      targetBaseUrl: fixtureB.url,
+  it("keeps legato.fm's cookies on legato.fm, both ways", async () => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const { serverId, cookieHeader } = await linkedAndConnected(tunnelUrl, (req, res) => {
+      res.writeHead(200, { "content-type": "application/json", "set-cookie": "relay_session=planted; Path=/" });
+      res.end(JSON.stringify({ cookie: req.headers.cookie ?? null, authorization: req.headers.authorization ?? null }));
     });
 
-    try {
-      const [responseA, responseB] = await Promise.all([
-        fetch(`${httpUrl}/relay/whoami`, { headers: { cookie: accountA.cookieHeader } }),
-        fetch(`${httpUrl}/relay/whoami`, { headers: { cookie: accountB.cookieHeader } }),
-      ]);
-      expect(await responseA.text()).toBe("home-server-A");
-      expect(await responseB.text()).toBe("home-server-B");
-    } finally {
-      homeServerA.close();
-      homeServerB.close();
-      await fixtureA.close();
-      await fixtureB.close();
-    }
+    const response = await fetch(`${httpUrl}/relay/${serverId}/api/v1/me`, {
+      headers: { cookie: `${cookieHeader}; other=1`, authorization: "Bearer home-server-session" },
+    });
+    expect(await response.json()).toEqual({ cookie: null, authorization: "Bearer home-server-session" });
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("keeps a path that looks like a URL on the home server", async () => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const { serverId, cookieHeader } = await linkedAndConnected(tunnelUrl, (req, res) => res.end(`path ${req.url}`));
+
+    const response = await fetch(`${httpUrl}/relay/${serverId}//example.com/x`, { headers: { cookie: cookieHeader } });
+    expect(await response.text()).toBe("path //example.com/x");
   });
 });
