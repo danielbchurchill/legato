@@ -303,6 +303,20 @@ describe("relay HTTP forwarding", () => {
     }
   });
 
+  it("forwards the path after the id as the device sent it, however the id was written", async () => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const { serverId, cookieHeader } = await linkedAndConnected(tunnelUrl, (req, res) => res.end(`path ${req.url}`));
+    const get = async (path: string) => (await fetch(`${httpUrl}${path}`, { headers: { cookie: cookieHeader } })).text();
+
+    // The decoded id is shorter than the raw one, which used to cut the
+    // path short: this reached the server as /01/api/v1/health.
+    const encodedId = `%${serverId.charCodeAt(0).toString(16)}${serverId.slice(1)}`;
+    expect(await get(`/relay/${encodedId}/api/v1/health?x=1`)).toBe("path /api/v1/health?x=1");
+    expect(await get(`/relay/${encodedId}?x=1`)).toBe("path /?x=1");
+    expect(await get(`/relay/${serverId}/a%2Fb/c%20d?q=%E6%97%A5`)).toBe("path /a%2Fb/c%20d?q=%E6%97%A5");
+  });
+
   it("keeps a path that looks like a URL on the home server", async () => {
     app = buildApp({ db });
     const { httpUrl, tunnelUrl } = await listenApp(app);

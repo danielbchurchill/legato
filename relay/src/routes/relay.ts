@@ -102,8 +102,7 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
       }
 
       const requestId = randomUUID();
-      const rest = request.url.slice(`/relay/${serverId}`.length);
-      const targetPath = rest.startsWith("/") ? rest : `/${rest}`;
+      const targetPath = pathOnServer(request.url);
       const bodyBuffer = request.body instanceof Buffer ? request.body : undefined;
       const headers = sanitizeHeaders(request.headers);
       delete headers.cookie;
@@ -174,6 +173,17 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
     app.all("/relay/:serverId", forward);
     app.all("/relay/:serverId/*", forward);
   };
+}
+
+// The path the device asked for past /relay/<id>, with its query, exactly
+// as it sent it: cut at the end of the raw id segment. The decoded id
+// can't be used to measure it, since a percent-encoded id is longer on
+// the wire than once decoded.
+const AFTER_ID = /^\/[^/?]*\/[^/?]*(.*)$/s;
+
+function pathOnServer(url: string): string {
+  const rest = AFTER_ID.exec(url)?.[1] ?? "";
+  return rest.startsWith("/") ? rest : `/${rest}`;
 }
 
 const SANDBOX = "sandbox";
