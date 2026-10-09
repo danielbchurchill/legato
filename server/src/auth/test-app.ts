@@ -6,6 +6,7 @@ import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Database } from "../sqlite.js";
 import { registerRoutes } from "../routes/register.js";
+import { installClientAddress } from "./clientAddress.js";
 import { installAuthGate } from "./gate.js";
 import { hasLegatoIdentity, installLegatoIdentity, LegatoIdentity } from "./legatoIdentity.js";
 
@@ -28,6 +29,7 @@ export async function buildTestApp(db: Database): Promise<{ app: FastifyInstance
   });
   await app.register(cookie);
   await app.register(websocket);
+  installClientAddress(app);
   installAuthGate(app, db);
   await registerRoutes(app, db);
   return { app, routes };

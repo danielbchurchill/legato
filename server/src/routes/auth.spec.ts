@@ -35,8 +35,8 @@ function createOwner(payload: Record<string, unknown>, from: { remoteAddress?: s
   return app.inject({ method: "POST", url: "/api/v1/auth/owner", payload, ...from });
 }
 
-function signIn(password: string, remoteAddress = "127.0.0.1") {
-  return app.inject({ method: "POST", url: "/api/v1/auth/sign-in", payload: { password }, remoteAddress });
+function signIn(password: string, remoteAddress = "127.0.0.1", headers: Record<string, string> = {}) {
+  return app.inject({ method: "POST", url: "/api/v1/auth/sign-in", payload: { password }, remoteAddress, headers });
 }
 
 describe("first-run owner creation", () => {
@@ -196,6 +196,20 @@ describe("owner sign-in", () => {
 
     // Someone else on the network isn't punished for it.
     expect((await signIn("correct horse battery", "192.168.1.51")).statusCode).toBe(200);
+  });
+
+  it("keeps a guesser through legato.fm's tunnel apart from this machine's own sign-ins", async () => {
+    // Every tunneled request arrives from 127.0.0.1, like the desktop
+    // app's. They used to share one bucket: a remote guesser locked the
+    // app out, and the app signing in wiped the guesser's record.
+    const throughTunnel = (password: string, device: string) => signIn(password, "127.0.0.1", { "x-legato-tunnel": device });
+    for (let i = 0; i < 5; i++) await throughTunnel("wrong password", "203.0.113.9");
+    expect((await throughTunnel("correct horse battery", "203.0.113.9")).statusCode).toBe(429);
+
+    expect((await signIn("correct horse battery")).statusCode).toBe(200);
+    expect((await throughTunnel("correct horse battery", "203.0.113.9")).statusCode).toBe(429);
+    // Another device through the tunnel isn't punished for it either.
+    expect((await throughTunnel("correct horse battery", "198.51.100.4")).statusCode).toBe(200);
   });
 
   it("says to create the owner when there isn't one", async () => {

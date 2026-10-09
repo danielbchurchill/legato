@@ -1,4 +1,5 @@
 import { request as httpRequest, type ClientRequest, type IncomingHttpHeaders } from "node:http";
+import { isIP } from "node:net";
 import type { RequestFrame, TunnelFrame } from "../../../relay/src/protocol.js";
 
 // This server's end of legato.fm's tunnel (issue #310): one outbound
@@ -19,7 +20,9 @@ import type { RequestFrame, TunnelFrame } from "../../../relay/src/protocol.js";
 // It does mean every such request reaches the server from 127.0.0.1, which
 // is what this machine's own pages look like (auth/setupCode.ts,
 // isLocalRequest). So each one carries TUNNEL_HEADER, set here whatever
-// the device sent, and a request that carries it never counts as local.
+// the device sent, to the device's address as legato.fm saw it (or "1"
+// when legato.fm didn't say). auth/clientAddress.ts turns that into the
+// request's address, which is never loopback.
 //
 // Staying connected. A dropped connection, a relay restart or a network
 // change all look the same from here: the socket closes, or stops
@@ -400,7 +403,7 @@ function replayable(frame: RequestFrame): Replay | string {
     if (HOP_BY_HOP.has(key) || key === TUNNEL_HEADER || !TOKEN.test(key)) continue;
     if (typeof value === "string" && HEADER_VALUE.test(value)) headers[key] = value;
   }
-  headers[TUNNEL_HEADER] = "1";
+  headers[TUNNEL_HEADER] = typeof frame.clientAddress === "string" && isIP(frame.clientAddress) !== 0 ? frame.clientAddress : "1";
   const bytes = body ? Buffer.from(body, "base64") : undefined;
   if (bytes) headers["content-length"] = String(bytes.length);
 

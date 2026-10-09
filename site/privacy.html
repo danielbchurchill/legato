@@ -103,6 +103,9 @@
         credential down, the server asks again once an hour, and when you link it again, until
         legato.fm accepts it or you unlink. Nothing travels over it except
         the requests your devices send your server through legato.fm and your server's answers.
+        Each request carries the IP address legato.fm saw your device at, so your server can tell
+        your devices apart when it limits wrong passwords, and so its own log shows where a request
+        came from.
         Unlinking closes the connection and deletes the credential from your server.
       </p>
       <p>

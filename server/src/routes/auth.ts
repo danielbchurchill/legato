@@ -16,6 +16,7 @@ import { legatoIdentity } from "../auth/legatoIdentity.js";
 import { linkLegatoAccount } from "../auth/legatoLink.js";
 import { linkedAccountId, unlinkAccount } from "../auth/legatoUsers.js";
 import { createOwner, ownerExists, passwordProblem, verifyOwnerPassword } from "../auth/owner.js";
+import { clientAddress } from "../auth/clientAddress.js";
 import { SignInLimiter } from "../auth/rateLimit.js";
 import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type SetupCodes } from "../auth/setupCode.js";
 import { createSession, deleteSession, spendAccessToken, type SessionUser } from "../auth/sessions.js";
@@ -295,7 +296,7 @@ export function authRoutes(
   const setupCodes = options.setupCodes ?? serverSetupCodes;
 
   function tooManyAttempts(request: FastifyRequest, reply: FastifyReply) {
-    const retryAfter = limiter.retryAfterSeconds(request.ip);
+    const retryAfter = limiter.retryAfterSeconds(clientAddress(request));
     if (retryAfter === 0) return null;
     reply.code(429).header("Retry-After", String(retryAfter));
     return { error: "Too many attempts. Wait a moment, then try again.", reason: "rate_limited", retryAfter };
@@ -424,7 +425,7 @@ export function authRoutes(
           if (limited) return limited;
           const check = setupCodes.check(request.body?.setupCode);
           if (check !== "ok") {
-            limiter.recordFailure(request.ip);
+            limiter.recordFailure(clientAddress(request));
             reply.code(403);
             return check === "expired"
               ? {
@@ -433,7 +434,7 @@ export function authRoutes(
                 }
               : { error: `That setup code doesn't match. ${SETUP_CODE_HELP}`, reason: "bad_setup_code" };
           }
-          limiter.recordSuccess(request.ip);
+          limiter.recordSuccess(clientAddress(request));
         }
 
         const linkAccountId = request.body?.linkAccountId;
@@ -480,11 +481,11 @@ export function authRoutes(
       const password = request.body?.password;
       const owner = typeof password === "string" && !passwordProblem(password) ? await verifyOwnerPassword(db, password) : null;
       if (!owner) {
-        limiter.recordFailure(request.ip);
+        limiter.recordFailure(clientAddress(request));
         reply.code(401);
         return { error: "That password doesn't match this server's owner.", reason: "bad_password" };
       }
-      limiter.recordSuccess(request.ip);
+      limiter.recordSuccess(clientAddress(request));
       return issueSession(db, reply, owner);
     });
 

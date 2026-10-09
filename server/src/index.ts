@@ -7,6 +7,7 @@ import { openDb } from "./db.js";
 import { PORT, DATA_DIR, MDNS_ENABLED, SERVER_NAME } from "./config.js";
 import { FFMPEG_PATH, FPCALC_PATH } from "./mediaBinaries.js";
 import { installAuthGate, redactCredentials } from "./auth/gate.js";
+import { clientAddress, installClientAddress } from "./auth/clientAddress.js";
 import { registerRoutes } from "./routes/register.js";
 import { setupCodes } from "./auth/setupCode.js";
 import { ownerExists } from "./auth/owner.js";
@@ -44,7 +45,7 @@ const app = Fastify({
         method: request.method,
         url: redactCredentials(request.url),
         host: request.host,
-        remoteAddress: request.ip,
+        remoteAddress: clientAddress(request),
         remotePort: request.socket?.remotePort,
       }),
     },
@@ -199,7 +200,9 @@ app.addContentTypeParser(
 // Issue #112: the owner gate goes on before any route exists, so every
 // route registered after it (registerRoutes below, and anything added
 // straight to `app` later in this file) is behind it. auth/gate.ts has the
-// rules.
+// rules. The client address comes first, so every hook and route sees a
+// request through legato.fm's tunnel as the tunnel's (auth/clientAddress.ts).
+installClientAddress(app);
 installAuthGate(app, db);
 await registerRoutes(app, db);
 

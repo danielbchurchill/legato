@@ -3,6 +3,7 @@ import type { Database } from "../sqlite.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { getUserBySessionToken, SESSION_COOKIE } from "../accounts.js";
 import { sanitizeHeaders } from "../headers.js";
+import { clientAddress } from "../rate-limit.js";
 import { isLinkedServer } from "../linked-servers.js";
 import type { RequestFrame } from "../protocol.js";
 import { SERVER_ID_PATTERN } from "../signing-keys.js";
@@ -118,6 +119,7 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
         path: targetPath,
         headers,
         ...(bodyBuffer && bodyBuffer.length > 0 ? { body: bodyBuffer.toString("base64") } : {}),
+        clientAddress: clientAddress(request.headers, request.ip),
       };
 
       // Fastify would otherwise manage (and buffer) the reply itself; hijack

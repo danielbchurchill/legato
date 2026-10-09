@@ -28,9 +28,14 @@ export interface AuthErrorFrame {
 
 // Sent by the relay down the tunnel when a mobile client's HTTP request
 // arrives. `path` includes the query string. `body` is only present when
-// the inbound request actually carried one (base64-encoded, buffered whole —
-// unlike responses, request bodies aren't chunked in this prototype since
-// none of the target test scenarios need an upload path; see relay/routes/relay.ts).
+// the inbound request actually carried one (base64-encoded, buffered whole
+// up to REQUEST_BODY_LIMIT in routes/relay.ts).
+//
+// `clientAddress` is the device's address as legato.fm saw it, so the home
+// server's sign-in limits and logs tell one device from another rather
+// than seeing every tunneled request come from its own loopback (server/
+// src/auth/clientAddress.ts). A relay from before it sends none, and the
+// server then counts the request as from "the tunnel".
 export interface RequestFrame {
   type: "request";
   requestId: string;
@@ -38,6 +43,7 @@ export interface RequestFrame {
   path: string;
   headers: Record<string, string>;
   body?: string;
+  clientAddress?: string;
 }
 
 export interface ResponseStartFrame {

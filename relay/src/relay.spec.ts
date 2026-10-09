@@ -356,6 +356,20 @@ describe("relay HTTP forwarding", () => {
     expect(await get(`/relay/${serverId}/a%2Fb/c%20d?q=%E6%97%A5`)).toBe("path /a%2Fb/c%20d?q=%E6%97%A5");
   });
 
+  it("tells the home server the device's address, which no device can put there itself", async () => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const { serverId, cookieHeader } = await linkedAndConnected(tunnelUrl, (req, res) => res.end(String(req.headers["x-legato-tunnel"])));
+
+    // Behind Fly's proxy, its header names the device (rate-limit.ts).
+    const viaFly = await fetch(`${httpUrl}/relay/${serverId}/x`, {
+      headers: { cookie: cookieHeader, "fly-client-ip": "203.0.113.9", "x-legato-tunnel": "127.0.0.1" },
+    });
+    expect(await viaFly.text()).toBe("203.0.113.9");
+    const direct = await fetch(`${httpUrl}/relay/${serverId}/x`, { headers: { cookie: cookieHeader, "x-legato-tunnel": "10.0.0.1" } });
+    expect(await direct.text()).toBe("127.0.0.1");
+  });
+
   it("keeps a path that looks like a URL on the home server", async () => {
     app = buildApp({ db });
     const { httpUrl, tunnelUrl } = await listenApp(app);
