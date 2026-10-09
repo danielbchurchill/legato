@@ -5,8 +5,8 @@ import { Button } from '../ui/Button'
 import { formatCount } from '../ui/format'
 import { API_BASE as API } from '../config/serverHost'
 import { useLibraryPage } from './useLibraryPage'
-import { useCoverGrid } from './useCoverGrid'
-import { CellSkeleton, GridSkeleton } from './LibrarySkeleton'
+import { CoverGrid } from './CoverGrid'
+import { GridSkeleton } from './LibrarySkeleton'
 import { LibraryEmpty } from './LibraryEmpty'
 import { readPx } from './tokens'
 import type { AlbumRow, AlbumSort, SortDir } from './types'
@@ -15,7 +15,7 @@ import type { AlbumRow, AlbumSort, SortDir } from './types'
  * album as a cover grid. The shelf sits 28px under the header with its
  * covers 12px under its heading; "All albums" is 32px under the shelf and
  * the grid 14px under that. The grid is virtualised and paged
- * (useCoverGrid, useLibraryPage), as the artists grid is. */
+ * (CoverGrid, useLibraryPage), as the artists grid is. */
 
 type AlbumsGridProps = {
   scrollRef: RefObject<HTMLDivElement | null>
@@ -151,7 +151,6 @@ function RecentlyAdded({
 
 export function AlbumsGrid({ scrollRef, sort, dir, onOpen, onPlay, onShowRecent }: AlbumsGridProps) {
   const { rows, total, loading, waitVisible, ensureRange } = useLibraryPage<AlbumRow>('library/albums', '', sort, dir)
-  const { gridRef, columns, items, height, scrollMargin } = useCoverGrid({ scrollRef, total, loading, ensureRange })
 
   if (loading) return waitVisible ? <GridSkeleton label="Loading albums" /> : null
   if (total === 0) return <LibraryEmpty title="No albums yet" body="Tracks without an album tag are listed under tracks." />
@@ -163,32 +162,13 @@ export function AlbumsGrid({ scrollRef, sort, dir, onOpen, onPlay, onShowRecent 
         <h2 className="text-heading text-[var(--color-ink)]">{sort === 'dateAdded' && dir === 'desc' ? 'Newest first' : 'All albums'}</h2>
         <span className="mono text-mono text-[var(--color-ink-2)]">{formatCount(total)}</span>
       </div>
-      <div ref={gridRef} className="relative mt-[14px] w-full" style={{ height }}>
-        {items.map((item) => {
-          const start = item.index * columns
-          return (
-            <div
-              key={item.key}
-              className="absolute top-0 left-0 grid w-full gap-x-[var(--library-column-gap)]"
-              style={{
-                transform: `translateY(${item.start - scrollMargin}px)`,
-                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-              }}
-            >
-              {Array.from({ length: columns }, (_, col) => {
-                const index = start + col
-                if (index >= total) return null
-                const album = rows[index]
-                return album ? (
-                  <AlbumCell key={album.id} album={album} onOpen={onOpen} onPlay={onPlay} />
-                ) : (
-                  <CellSkeleton key={`pending-${index}`} />
-                )
-              })}
-            </div>
-          )
-        })}
-      </div>
+      <CoverGrid
+        scrollRef={scrollRef}
+        rows={rows}
+        total={total}
+        ensureRange={ensureRange}
+        renderCell={(album) => <AlbumCell album={album} onOpen={onOpen} onPlay={onPlay} />}
+      />
     </>
   )
 }

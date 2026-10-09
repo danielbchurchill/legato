@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { readPx } from './tokens'
 
 /* The albums and artists grids' virtualisation, one copy for both, so the
- * two scroll and page alike (#302).
+ * two scroll and page alike (#302). CoverGrid renders the rows it places.
  *
  * The grid is repeat(auto-fill, minmax(--library-cell-min, 1fr)) with
  * --library-column-gap and --library-row-gap between cells, worked out here
@@ -25,17 +25,18 @@ type Geometry = { columns: number; cell: number; rowGap: number; offset: number 
 type CoverGridOptions = {
   scrollRef: RefObject<HTMLDivElement | null>
   total: number
-  loading: boolean
   ensureRange: (startIndex: number, endIndex: number) => void
 }
 
-export function useCoverGrid({ scrollRef, total, loading, ensureRange }: CoverGridOptions) {
+export function useCoverGrid({ scrollRef, total, ensureRange }: CoverGridOptions) {
   const gridRef = useRef<HTMLDivElement>(null)
   const [geometry, setGeometry] = useState<Geometry | null>(null)
 
   // Columns from the grid's width, the same answer auto-fill gives the
   // skeleton, and the grid's distance from the top of the scroll area for
-  // the virtualiser.
+  // the virtualiser. CoverGrid only mounts once the first page is in, with
+  // the grid element, so measuring on mount and on every resize after it
+  // is enough.
   useLayoutEffect(() => {
     const grid = gridRef.current
     if (!grid) return
@@ -57,7 +58,7 @@ export function useCoverGrid({ scrollRef, total, loading, ensureRange }: CoverGr
     observer.observe(grid)
     if (grid.parentElement) observer.observe(grid.parentElement)
     return () => observer.disconnect()
-  }, [loading, total])
+  }, [])
 
   const columns = geometry?.columns ?? 1
   const rowHeight = geometry ? geometry.cell + TEXT_BLOCK + geometry.rowGap : 0

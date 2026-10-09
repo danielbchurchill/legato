@@ -2,8 +2,8 @@ import { memo, type RefObject } from 'react'
 import { CoverArt } from '../ui/CoverArt'
 import { formatCount, plural } from '../ui/format'
 import { useLibraryPage } from './useLibraryPage'
-import { useCoverGrid } from './useCoverGrid'
-import { CellSkeleton, GridSkeleton } from './LibrarySkeleton'
+import { CoverGrid } from './CoverGrid'
+import { GridSkeleton } from './LibrarySkeleton'
 import { LibraryEmpty } from './LibraryEmpty'
 import type { ArtistRow, SortDir } from './types'
 
@@ -54,7 +54,6 @@ const ArtistCell = memo(function ArtistCell({ artist, onOpen }: { artist: Artist
 
 export function ArtistsGrid({ scrollRef, sortDir, onOpen }: ArtistsGridProps) {
   const { rows, total, loading, waitVisible, ensureRange } = useLibraryPage<ArtistRow>('library/artists', '', 'name', sortDir)
-  const { gridRef, columns, items, height, scrollMargin } = useCoverGrid({ scrollRef, total, loading, ensureRange })
 
   if (loading) return waitVisible ? <GridSkeleton round label="Loading artists" /> : null
   if (total === 0) return <LibraryEmpty title="No artists yet" body="Tracks without an artist tag are listed under tracks." />
@@ -65,32 +64,14 @@ export function ArtistsGrid({ scrollRef, sortDir, onOpen }: ArtistsGridProps) {
         <h2 className="text-heading text-[var(--color-ink)]">All artists</h2>
         <span className="mono text-mono text-[var(--color-ink-2)]">{formatCount(total)}</span>
       </div>
-      <div ref={gridRef} className="relative mt-[14px] w-full" style={{ height }}>
-        {items.map((item) => {
-          const start = item.index * columns
-          return (
-            <div
-              key={item.key}
-              className="absolute top-0 left-0 grid w-full gap-x-[var(--library-column-gap)]"
-              style={{
-                transform: `translateY(${item.start - scrollMargin}px)`,
-                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-              }}
-            >
-              {Array.from({ length: columns }, (_, col) => {
-                const index = start + col
-                if (index >= total) return null
-                const artist = rows[index]
-                return artist ? (
-                  <ArtistCell key={artist.id} artist={artist} onOpen={onOpen} />
-                ) : (
-                  <CellSkeleton key={`pending-${index}`} round />
-                )
-              })}
-            </div>
-          )
-        })}
-      </div>
+      <CoverGrid
+        scrollRef={scrollRef}
+        rows={rows}
+        total={total}
+        ensureRange={ensureRange}
+        round
+        renderCell={(artist) => <ArtistCell artist={artist} onOpen={onOpen} />}
+      />
     </>
   )
 }
