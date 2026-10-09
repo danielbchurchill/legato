@@ -277,6 +277,26 @@ describe("the link page", () => {
     expect(parseReturnTo("https://music.example/legato/?t=secret#x")?.href).toBe("https://music.example/legato/");
     expect(parseReturnTo("http://[::1]:5182")?.href).toBe("http://[::1]:5182/");
     expect(parseReturnTo("http://a".padEnd(2100, "a"))).toBeNull();
+    // Short as typed, but six times longer once the path is percent-encoded.
+    expect(parseReturnTo(`http://music.example/${"é".repeat(100)}`)).toBeNull();
+  });
+
+  it("keeps the sign-in's return cookie well under 4 KB, however long the address", async () => {
+    const h = setup();
+    const server = homeServer().serverId;
+    // The longest address it takes, all of it characters that are encoded
+    // again at each step: a lone % stays as it is in a URL's path.
+    const origin = "http://music.example:8899";
+    const longest = `${origin}/${"%".repeat(512 - origin.length - 1)}`;
+    expect(parseReturnTo(longest)?.href).toBe(longest);
+    expect(parseReturnTo(`${longest}%`)).toBeNull();
+
+    const { url } = h.start(server, longest);
+    const begin = await h.app.inject({ method: "GET", url: `/auth/github?return_to=${encodeURIComponent(url)}` });
+    const setCookies = ([] as string[]).concat(begin.headers["set-cookie"] ?? []);
+    const returnCookie = setCookies.find((c) => c.startsWith("relay_return_to="));
+    expect(returnCookie).toBeDefined();
+    expect(returnCookie!.length).toBeLessThan(3 * 1024);
   });
 
   it("clears a return left by an earlier sign-in when the next one has nowhere to go back to", async () => {

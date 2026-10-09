@@ -22,7 +22,12 @@ const CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 // RFC 7636 §4.1: 43 to 128 characters from the unreserved set.
 const VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
 
-const RETURN_TO_MAX_LENGTH = 2048;
+// A return address goes into the sign-in's return cookie twice encoded
+// (routes/auth.ts): once into the /link path, once as the cookie value. So
+// one character of it can take five there: % becomes %25, then %2525. This
+// keeps the cookie well under the 4 KB a browser stores, with room for a
+// long host name and a path behind a reverse proxy.
+const RETURN_TO_MAX_LENGTH = 512;
 
 // What the fragment the page comes back to carries. Matches
 // src/connect/legatoLinkReturn.ts.
@@ -48,7 +53,9 @@ export function parseReturnTo(candidate: unknown): URL | null {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   if (url.username || url.password) return null;
-  return new URL(`${url.origin}${url.pathname}`);
+  const kept = new URL(`${url.origin}${url.pathname}`);
+  // Parsing percent-encodes what the address didn't, so it's measured again.
+  return kept.href.length <= RETURN_TO_MAX_LENGTH ? kept : null;
 }
 
 export type LinkRequest = { serverId: string; returnTo: URL; codeChallenge: string };
