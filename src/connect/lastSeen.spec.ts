@@ -1,7 +1,7 @@
 // Issue #119: when this device last reached a server, by origin, so a
 // launch that finds it gone can still say since when.
 import { describe, expect, it } from 'vitest'
-import { readLastSeen, rememberSeen } from './lastSeen'
+import { formatSince, readLastSeen, rememberSeen } from './lastSeen'
 
 function memoryStorage(): Storage {
   const data = new Map<string, string>()
@@ -43,5 +43,25 @@ describe('lastSeen', () => {
     store.setItem('legato:last-seen', JSON.stringify({ 'http://192.168.1.20:8899': { name: 'musicbox' } }))
     expect(readLastSeen('http://192.168.1.20:8899', store)).toBeNull()
     expect(readLastSeen('http://192.168.1.20:8899', null)).toBeNull()
+  })
+})
+
+// One way of saying since when, for the connect screen and the unreachable
+// state alike.
+describe('formatSince', () => {
+  const now = new Date(2026, 9, 9, 15, 0).getTime()
+
+  it('gives only the time for earlier today, from a timestamp or an ISO string', () => {
+    const at = new Date(2026, 9, 9, 8, 10)
+    const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    expect(formatSince(at.getTime(), now)).toBe(time)
+    expect(formatSince(at.toISOString(), now)).toBe(time)
+  })
+
+  it('adds the date for any day before today', () => {
+    const at = new Date(2026, 9, 8, 17, 14)
+    const day = at.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+    const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    expect(formatSince(at.getTime(), now)).toBe(`${day}, ${time}`)
   })
 })

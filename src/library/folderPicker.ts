@@ -1,5 +1,6 @@
 import { IS_TAURI } from '../config/runtime'
 import { SERVER_HOST } from '../config/serverHost'
+import { isLoopbackHost } from '../connect/address'
 
 /* Which folder picker "add folder" opens (issue #121).
  *
@@ -16,11 +17,6 @@ import { SERVER_HOST } from '../config/serverHost'
  * doubtful case goes to the one that can't be wrong. */
 
 export type FolderPickerKind = 'native' | 'server'
-
-export function isLoopbackHost(host: string): boolean {
-  const bare = host.replace(/^\[|\]$/g, '').toLowerCase()
-  return bare === 'localhost' || bare === '::1' || /^127(\.\d{1,3}){3}$/.test(bare)
-}
 
 export function folderPickerKind({ isTauri, serverHost }: { isTauri: boolean; serverHost: string }): FolderPickerKind {
   return isTauri && isLoopbackHost(serverHost) ? 'native' : 'server'

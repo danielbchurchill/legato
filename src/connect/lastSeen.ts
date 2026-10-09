@@ -33,6 +33,16 @@ export function readLastSeen(origin: string, store: Storage | null = storage()):
   return seen && typeof seen.at === 'string' ? { at: seen.at, name: typeof seen.name === 'string' ? seen.name : null } : null
 }
 
+/** When a server was last seen, as a time today or a date and time before
+ * that: the connect screen's "offline since …" and the unreachable state's
+ * "stopped answering at …". */
+export function formatSince(at: string | number, now: number = Date.now()): string {
+  const date = new Date(at)
+  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  if (date.toDateString() === new Date(now).toDateString()) return time
+  return `${date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}, ${time}`
+}
+
 /** Records that `origin` answered just now. A name it didn't give keeps the
  * one remembered from before. */
 export function rememberSeen(origin: string, name: string | null, now: Date = new Date(), store: Storage | null = storage()): void {

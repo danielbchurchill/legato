@@ -1,4 +1,5 @@
-import { isLanHost } from './address'
+import { isLanHost, isLoopbackHost } from './address'
+import { formatSince } from './lastSeen'
 
 /* The server-unreachable state (issue #119, plan 03's "Server unreachable"):
  * what happened, the likely why, and one action. Nothing tells a client why
@@ -27,16 +28,11 @@ export type ServerPath =
   /** Anything else: a Tailscale address, a domain. */
   | 'custom'
 
-function isLoopback(host: string): boolean {
-  const h = host.replace(/^\[|\]$/g, '').toLowerCase()
-  return h === 'localhost' || h === '::1' || /^127\./.test(h)
-}
-
 /** Which path `origin` is. `embedded` says the desktop app started the
  * server at that origin itself. */
 export function pathFor(origin: string, embedded: boolean): ServerPath {
   const host = new URL(origin).hostname
-  if (isLoopback(host)) return embedded ? 'embedded' : 'this-device'
+  if (isLoopbackHost(host)) return embedded ? 'embedded' : 'this-device'
   return isLanHost(host) ? 'home' : 'custom'
 }
 
@@ -102,15 +98,6 @@ export function inferReason(facts: OutageFacts, now: number): UnreachableReason 
 
 export type OutageCopy = { title: string; why: string; hint: string | null }
 
-/** Same shape as the connect screen's "offline since …": a time today, a
- * date and time before that. */
-export function formatSeen(at: number, now: number): string {
-  const date = new Date(at)
-  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-  if (date.toDateString() === new Date(now).toDateString()) return time
-  return `${date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}, ${time}`
-}
-
 /** What the state says: what happened as the title, the likely why, and a
  * hint where there's something the person can do beyond trying again. */
 export function describeOutage(
@@ -119,7 +106,7 @@ export function describeOutage(
 ): OutageCopy {
   const label = ctx.path === 'embedded' ? "this computer's server" : (ctx.name ?? ctx.host)
   const title = `Can't reach ${label}`
-  const seen = ctx.lastSeenAt != null ? formatSeen(ctx.lastSeenAt, ctx.now) : null
+  const seen = ctx.lastSeenAt != null ? formatSince(ctx.lastSeenAt, ctx.now) : null
   const keepAwake = `If ${label} runs the Legato desktop app, Settings → serving → awake there keeps it from sleeping while you listen.`
 
   switch (reason) {

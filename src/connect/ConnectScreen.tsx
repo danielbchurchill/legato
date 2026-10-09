@@ -23,6 +23,7 @@ import { originFor } from './address'
 import { useDiscoveredServers, useYourServers, type Discovery, type YourServers } from './hooks'
 import { verifyServerIdentity } from './identity'
 import { rememberServer } from './knownServers'
+import { formatSince } from './lastSeen'
 import { describeLegatoFailure, signInWithLegato } from './legatoSignIn'
 import type { ConnectReason } from './openConnect'
 import { probeAddress, type NativeProbe } from './probe'
@@ -325,13 +326,6 @@ export function ConnectScreenView(props: ConnectScreenViewProps) {
 
 function hostOf(origin: string): string {
   return new URL(origin).host
-}
-
-function formatSince(iso: string): string {
-  const date = new Date(iso)
-  const sameDay = date.toDateString() === new Date().toDateString()
-  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-  return sameDay ? time : `${date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}, ${time}`
 }
 
 function reachRow(reach: Reach): { status: Status; detail: ReactNode } {
