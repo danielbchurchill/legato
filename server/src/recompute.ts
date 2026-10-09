@@ -57,10 +57,10 @@ export function recompute(db: Database): void {
   writeInChunks(db, neverAttempted, ({ id }) => enqueueEnrichmentIfNeeded(db, id));
 
   // Same order scanner.ts's executeScan already established: entities before
-  // collaboration edges (collaboration reads albums.primary_artist_node_id),
-  // both before layout (clustering uses the collaboration edges) and before
-  // similarity (artist-cluster feature group) and articles (reads all of
-  // the above).
+  // collaboration edges (collaboration reads albums.primary_artist_node_id)
+  // and layout (it seeds releases and artists from the albums and artists
+  // tables), collaboration edges before similarity (its artist-cluster
+  // feature group reads them), and articles last (reads all of the above).
   recomputeEntities(db);
   recomputeCollaborationEdges(db);
   recomputeAllLayouts(db);
