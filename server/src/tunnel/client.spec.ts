@@ -250,8 +250,9 @@ describe("TunnelClient", () => {
       log: (level, message) => lines.push({ level, message }),
     });
     await waitFor(tunnel, "refused");
-    while (fake.opened < 3) await sleep(10);
-    expect(tunnel.state).toBe("refused");
+    // Refused at least twice more, each time on the long wait's schedule.
+    while (fake.auths.length < 3) await sleep(10);
+    await waitFor(tunnel, "refused");
 
     accepting = true;
     await waitFor(tunnel, "connected", 1_000);
@@ -364,6 +365,39 @@ describe("TunnelClient", () => {
     const atStop = fake.pings;
     await sleep(200);
     expect(fake.pings).toBe(atStop);
+  });
+
+  it("lets an answer already under way go back before it stops, but doesn't wait on a long one", async () => {
+    const app = Fastify();
+    app.get("/quick", async () => {
+      await sleep(50);
+      return "quick";
+    });
+    // A stream that never ends, like audio still playing.
+    app.get("/endless", (_request, reply) => {
+      reply.raw.writeHead(200, { "content-type": "audio/flac" });
+      reply.raw.write("x");
+    });
+    const origin = await listen(app);
+    const fake = relay();
+    const tunnel = client(fake.url, origin);
+    await waitFor(tunnel, "connected");
+
+    const quick = fake.request({ method: "GET", path: "/quick", headers: {} });
+    await sleep(10);
+    tunnel.stop();
+    expect((await quick).body.toString()).toBe("quick");
+    while (fake.closed < 1) await sleep(10);
+
+    const again = client(fake.url, origin);
+    await waitFor(again, "connected");
+    const endless = fake.request({ method: "GET", path: "/endless", headers: {} });
+    await sleep(50);
+    const stoppedAt = Date.now();
+    again.stop();
+    await expect(endless).rejects.toThrow("disconnected");
+    expect(Date.now() - stoppedAt).toBeGreaterThanOrEqual(1_900);
+    expect(Date.now() - stoppedAt).toBeLessThan(3_000);
   });
 
   it("stops when told to, and stays stopped", async () => {

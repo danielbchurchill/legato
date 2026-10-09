@@ -33,6 +33,9 @@ export type FakeRelay = {
 export function startFakeRelay(options: { accept: (credential: string) => boolean; port?: number }): FakeRelay {
   const signedIn: ServerWebSocket<SocketData>[] = [];
   const waiting = new Map<string, (frame: TunnelFrame) => void>();
+  // What each request is waiting on, so a tunnel that closes fails its
+  // requests the way the relay does, rather than leaving them hanging.
+  const waitingOn = new Map<string, ServerWebSocket<SocketData>>();
   let nextId = 0;
 
   const server = Bun.serve<SocketData>({
@@ -66,6 +69,9 @@ export function startFakeRelay(options: { accept: (credential: string) => boolea
       },
       close(ws) {
         relay.closed += 1;
+        for (const [requestId, socket] of waitingOn) {
+          if (socket === ws) waiting.get(requestId)?.({ type: "response-error", requestId, message: "home server tunnel disconnected" });
+        }
         const at = signedIn.indexOf(ws);
         if (at >= 0) signedIn.splice(at, 1);
       },
@@ -96,12 +102,15 @@ export function startFakeRelay(options: { accept: (credential: string) => boolea
             parts.push(Buffer.from(answer.data, "base64"));
           } else if (answer.type === "response-end") {
             waiting.delete(requestId);
+            waitingOn.delete(requestId);
             resolve({ status, headers, body: Buffer.concat(parts), chunks: parts.length });
           } else if (answer.type === "response-error") {
             waiting.delete(requestId);
+            waitingOn.delete(requestId);
             reject(new Error(answer.message));
           }
         });
+        waitingOn.set(requestId, socket);
         socket.send(JSON.stringify({ type: "request", requestId, ...frame }));
       });
     },

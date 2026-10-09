@@ -50,6 +50,8 @@ const HEARTBEAT_MS = 30_000;
 // From starting to connect until the relay answers the credential. Covers
 // a connect that hangs as well as an answer that never comes.
 const AUTH_TIMEOUT_MS = 15_000;
+// How long stop() waits for answers already under way before it closes.
+const STOP_GRACE_MS = 2_000;
 // After a refusal: about an hour, plus up to a quarter more by chance, so
 // every server refused by one incident doesn't come back in one burst.
 const REFUSED_RETRY_MS = 60 * 60_000;
@@ -132,9 +134,19 @@ export class TunnelClient {
     this.connect();
   }
 
+  // Answers already under way still go back first, for up to
+  // STOP_GRACE_MS: an unlink made through the tunnel is one of them, and
+  // its answer must reach the device before the tunnel it came down
+  // closes. Nothing new is taken on meanwhile.
   stop(): void {
     this.setState("stopped");
-    this.teardown();
+    if (this.requests.size === 0 || this.socket?.readyState !== WebSocket.OPEN) {
+      this.teardown();
+      return;
+    }
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    if (this.beatTimer) clearInterval(this.beatTimer);
+    this.retryTimer = setTimeout(() => this.teardown(), STOP_GRACE_MS);
   }
 
   /** After a refusal, asks again now rather than at the next hourly try. */
@@ -239,15 +251,27 @@ export class TunnelClient {
     if (this.beatTimer) clearInterval(this.beatTimer);
     this.retryTimer = null;
     this.beatTimer = null;
+    const graceful = this.requests.size === 0;
     for (const request of this.requests.values()) request.destroy();
     this.requests.clear();
     const socket = this.socket;
     this.socket = null;
     try {
-      socket?.terminate();
+      // A close frame goes after whatever is still queued, so the last
+      // answers aren't cut off. A socket with requests still riding on it,
+      // or one that stopped answering, is just dropped.
+      if (graceful && socket?.readyState === WebSocket.OPEN) socket.close(1000, "stopped");
+      else socket?.terminate();
     } catch {
       // Already closed.
     }
+  }
+
+  // A request is over, answered or failed. A client that's stopping
+  // closes once the last one is.
+  private requestOver(requestId: string): void {
+    this.requests.delete(requestId);
+    if (this.current === "stopped" && this.requests.size === 0 && this.socket) this.teardown();
   }
 
   private lost(socket: WebSocket, why: string): void {
@@ -309,8 +333,8 @@ export class TunnelClient {
     const fail = (message: string) => {
       if (settled) return;
       settled = true;
-      this.requests.delete(requestId);
       send({ type: "response-error", requestId, message });
+      this.requestOver(requestId);
     };
 
     const replay = replayable(frame);
@@ -336,8 +360,8 @@ export class TunnelClient {
       response.on("end", () => {
         if (settled) return;
         settled = true;
-        this.requests.delete(requestId);
         send({ type: "response-end", requestId });
+        this.requestOver(requestId);
       });
       response.on("error", (err) => fail(err.message));
       response.on("close", () => fail("the server ended the response early"));

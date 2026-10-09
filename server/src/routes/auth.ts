@@ -540,7 +540,9 @@ export function authRoutes(
     // server goes back to never contacting legato.fm. The cached keys stay;
     // they're public and harmless, and a relink can use them. The tunnel
     // credential doesn't (issue #310): it's forgotten, and the tunnel it
-    // kept open closes.
+    // kept open closes, once this answer has gone. An unlink made from a
+    // phone through legato.fm comes down that very tunnel, and closing it
+    // first would turn an unlink that happened into a 502.
     //
     // legato.fm is told (issue #231), but the unlink here happens first and
     // doesn't depend on it: the owner wants out, and may be offline. If
@@ -559,7 +561,7 @@ export function authRoutes(
       unlinkAccount(db, request.authUser.id);
       if (accountId) forgetTunnelCredential(db, accountId);
       identity.syncSchedule();
-      syncRelayTunnel(db);
+      reply.raw.once("close", () => syncRelayTunnel(db));
       const legatoNotified = accountId && identity.enabled ? (await identity.recordUnlink(accountId)).ok : null;
       return { ok: true, legatoNotified };
     });

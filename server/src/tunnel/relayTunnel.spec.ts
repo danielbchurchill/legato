@@ -21,7 +21,7 @@ afterEach(async () => {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const NEXT_YEAR = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString();
 
-async function setup(options: { answer?: (report: LegatoReport) => Response | Error } = {}) {
+async function setup(options: { answer?: (report: LegatoReport) => Response | Error; listen?: boolean } = {}) {
   const fake = startFakeRelay({ accept: (credential) => credential.startsWith("live-") });
   cleanups.push(() => fake.stop());
   const db = openDb(":memory:");
@@ -33,9 +33,12 @@ async function setup(options: { answer?: (report: LegatoReport) => Response | Er
   const { app } = await buildTestApp(db);
   cleanups.push(() => app.close());
   const owner = await createOwnerForTest(app);
+  // Listening, for a spec whose requests come down the tunnel and are
+  // replayed against this server; otherwise nothing answers on port 9.
+  const port = options.listen ? Number(new URL(await app.listen({ port: 0, host: "127.0.0.1" })).port) : 9;
   const lines: { level: string; message: string }[] = [];
   const tunnel = new RelayTunnel(db, {
-    port: 9,
+    port,
     log: (level, message) => lines.push({ level, message }),
     client: { backoff: { baseMs: 20, capMs: 80 } },
   });
@@ -141,10 +144,33 @@ describe("RelayTunnel", () => {
       headers: { authorization: `Bearer ${h.owner.token}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(h.tunnel.state).toBe("stopped");
+    await until(() => h.tunnel.state, "stopped");
     expect(stored(h.db, h.fake.origin)).toBeNull();
     await sleep(100);
     expect(h.fake.closed).toBe(1);
+    expect(h.fake.opened).toBe(1);
+  });
+
+  it("answers an unlink made through the tunnel before it closes the tunnel", async () => {
+    // From a phone through legato.fm: the tunnel carrying the request is
+    // the one the unlink closes. It used to close before the answer went
+    // back, so the phone saw a 502 for an unlink that had happened.
+    const h = await setup({ listen: true });
+    h.link("42");
+    h.store("42", "live-1");
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+
+    const res = await h.fake.request({
+      method: "DELETE",
+      path: "/api/v1/auth/legato/link",
+      headers: { authorization: `Bearer ${h.owner.token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body.toString())).toEqual({ ok: true, legatoNotified: true });
+    await until(() => h.tunnel.state, "stopped");
+    expect(stored(h.db, h.fake.origin)).toBeNull();
+    while (h.fake.closed < 1) await sleep(10);
     expect(h.fake.opened).toBe(1);
   });
 
