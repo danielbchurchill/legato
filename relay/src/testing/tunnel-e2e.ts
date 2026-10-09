@@ -1,10 +1,11 @@
 // Local end-to-end for issue #310: two home servers claimed to one
 // account both hold their tunnels open through a real relay process, a
 // request through the relay reaches the server it names, audio streams
-// through the existing stream route, the servers come back after the relay
-// is killed and restarted, a revoked credential stops its server, and
-// unlinking closes the other's tunnel. No real provider, and nothing sent
-// to auth.legato.fm.
+// through the existing stream route, the inputs that used to crash the
+// relay or a server don't, the servers come back after the relay is killed
+// and restarted, a revoked credential stops its server, and unlinking
+// closes the other's tunnel. No real provider, and nothing sent to
+// auth.legato.fm.
 //
 // It starts everything itself, as child processes, so it can kill the
 // relay outright (SIGKILL, no goodbye) the way a crash or a deploy would:
@@ -22,8 +23,10 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { connect } from "node:net";
 import { createSession, upsertUser } from "../accounts.js";
 import { openDb } from "../db.js";
+import { mintTunnelCredential } from "../pairing.js";
 import { openSqlite } from "../sqlite.js";
 
 const RELAY_PORT = process.env.RELAY_PORT;
@@ -246,6 +249,74 @@ check(opus.body.subarray(0, 4).toString() === "OggS", "opus160 is an Ogg stream"
 check(opus.worstHealth < 250, `the request loop kept answering while it transcoded (worst /health ${opus.worstHealth.toFixed(0)} ms)`);
 step("opus160 through the relay, fresh transcode", describe(opus));
 
+// 3b. What used to crash a server or the relay, from PR #341's review.
+// Each runs against the live processes, then both still answer.
+const stillUp = async (label: string) => {
+  check((await fetch(`${RELAY}/health`)).ok, `the relay is still up after ${label}`);
+  for (const server of servers) check((await fetch(`${server.api}/health`)).ok, `${server.name} is still up after ${label}`);
+  check((await tunnelOf(servers[0]!.id))?.connected === true, `server-a's tunnel is still up after ${label}`);
+};
+
+// A path with raw UTF-8 in it, sent as bytes the way a careless client
+// would: fetch() would percent-encode it first.
+const rawUtf8 = await new Promise<string>((resolve, reject) => {
+  const socket = connect(Number(RELAY_PORT), "127.0.0.1", () => {
+    socket.write(
+      Buffer.from(
+        `GET /relay/${servers[0]!.id}/api/v1/search?q=日本 HTTP/1.1\r\nHost: 127.0.0.1:${RELAY_PORT}\r\n` +
+          `Cookie: ${cookie}\r\nAuthorization: Bearer ${servers[0]!.token}\r\nConnection: close\r\n\r\n`,
+        "utf8",
+      ),
+    );
+  });
+  let answer = "";
+  socket.on("data", (chunk) => (answer += chunk.toString("utf8")));
+  socket.on("end", () => resolve(answer.split("\r\n")[0]!));
+  socket.on("error", reject);
+});
+await stillUp("a raw UTF-8 path");
+step("raw UTF-8 path through the relay", `${rawUtf8}; relay and both servers still up`);
+
+// A percent-encoded server id, which used to cut the forwarded path short.
+const encodedId = `%${servers[0]!.id.charCodeAt(0).toString(16)}${servers[0]!.id.slice(1)}`;
+const viaEncoded = await fetch(`${RELAY}/relay/${encodedId}/api/v1/health`, { headers: { cookie } });
+const encodedBody = (await viaEncoded.json()) as { status?: string };
+check(viaEncoded.status === 200 && encodedBody.status === "ok", `an encoded id reaches /api/v1/health (${viaEncoded.status})`);
+step("percent-encoded server id", "reached the server's own /api/v1/health");
+
+// A hostile home server: a third server linked to the account, whose
+// tunnel answers every request with a status HTTP can't carry, then with
+// a frame no Legato server sends.
+const hostileId = "e2e0".padEnd(32, "0");
+relayDb.prepare("INSERT INTO linked_servers (relay_user_id, server_id, public_key) VALUES (?, ?, ?)").run(account.id, hostileId, "e2e");
+const hostileCredential = mintTunnelCredential(relayDb, account.id, hostileId).token;
+let hostileFrames: object[] = [];
+const hostile = new WebSocket(`ws://127.0.0.1:${RELAY_PORT}/tunnel`);
+let hostileClosed = false;
+hostile.addEventListener("close", () => (hostileClosed = true));
+await new Promise<void>((resolve) => {
+  hostile.addEventListener("open", () => hostile.send(JSON.stringify({ type: "auth", secret: hostileCredential })));
+  hostile.addEventListener("message", (event) => {
+    const frame = JSON.parse(String(event.data)) as { type: string; requestId: string };
+    if (frame.type === "auth-ok") resolve();
+    if (frame.type === "request") for (const out of hostileFrames) hostile.send(JSON.stringify({ requestId: frame.requestId, ...out }));
+  });
+});
+hostileFrames = [{ type: "response-start", status: 99999, headers: {} }];
+const badStatus = await fetch(`${RELAY}/relay/${hostileId}/x`, { headers: { cookie } });
+check(badStatus.status === 502, `a status of 99999 becomes a 502 (${badStatus.status})`);
+await stillUp("a status of 99999");
+hostileFrames = [{ type: "response-start", status: 200, headers: {} }, { type: "response-chunk", data: 42 }];
+await fetch(`${RELAY}/relay/${hostileId}/x`, { headers: { cookie } })
+  .then((res) => res.arrayBuffer())
+  .catch(() => null);
+await until("the relay closes the hostile tunnel", async () => hostileClosed, 5_000);
+await stillUp("a chunk that isn't base64 text");
+step("hostile tunnel", "status 99999 → 502, a bad chunk closed its tunnel; relay and both servers still up");
+// Off the account again, so "your servers" is the two real ones.
+relayDb.prepare("DELETE FROM linked_servers WHERE server_id = ?").run(hostileId);
+relayDb.prepare("DELETE FROM tunnel_credentials WHERE server_id = ?").run(hostileId);
+
 // 4. Kill the relay outright, then bring it back: both servers reconnect.
 relayProcess.kill("SIGKILL");
 await new Promise((resolve) => relayProcess.once("exit", resolve));
@@ -282,12 +353,14 @@ const gone = await fetch(`${RELAY}/relay/${servers[1]!.id}/api/v1/auth/status`, 
 check(gone.status === 503, `server-b can't be reached through the relay (${gone.status})`);
 step("credential revoked", `server-b stopped with one warning; server-a still connected; GET /relay/<b>/… → ${gone.status}`);
 
-// 6. server-a's owner unlinks: its tunnel closes and the credential goes.
-const unlink = await fetch(`${servers[0]!.api}/auth/legato/link`, {
+// 6. server-a's owner unlinks from a phone, through legato.fm: the answer
+// comes back down the tunnel the unlink closes, then the tunnel closes and
+// the credential goes.
+const unlink = await fetch(`${RELAY}/relay/${servers[0]!.id}/api/v1/auth/legato/link`, {
   method: "DELETE",
-  headers: { authorization: `Bearer ${servers[0]!.token}` },
+  headers: { cookie, authorization: `Bearer ${servers[0]!.token}` },
 });
-check(unlink.ok, `server-a unlinks (${unlink.status})`);
+check(unlink.ok, `server-a unlinks through the relay and hears back (${unlink.status})`);
 await until("server-a's tunnel closes", async () => {
   const listedNow = await yourServers();
   return !listedNow.some((s) => s.serverId === servers[0]!.id && s.tunnel.connected);
@@ -296,7 +369,7 @@ const serverADb = openSqlite(path.join(servers[0]!.dataDir, "legato.db"));
 const left = serverADb.prepare("SELECT COUNT(*) AS n FROM tunnel_credential").get() as { n: number };
 serverADb.close();
 check(left.n === 0, "server-a forgot its credential");
-step("server-a unlinked", "tunnel closed, credential forgotten");
+step("server-a unlinked through the relay", `answered ${unlink.status}, then the tunnel closed and the credential was forgotten`);
 
 for (const child of children) child.kill("SIGTERM");
 relayDb.close();
