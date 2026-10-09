@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { getUserBySessionToken, SESSION_COOKIE, sessionToken, type RelayUserRow } from "../accounts.js";
+import { normalizeCode } from "../claimCode.js";
 import { checkClaimProof, PROOF_FAILURE_MESSAGES, type ClaimProofFailure } from "../linked-servers.js";
 import { claimServerCode, claimStatus, mintPairingCode, redeemPairingCode, type ClaimFailure } from "../pairing.js";
 import { clientAddress, type ExchangeLimiter } from "../rate-limit.js";
@@ -124,20 +125,23 @@ export function pairRoutes(
         reply.code(503);
         return { error: SIGNING_UNAVAILABLE, reason: "signing_not_configured" };
       }
-      const proof = checkClaimProof(issuer, request.body);
-      if (!proof.ok) {
-        reply.code(CLAIM_PROOF_STATUS[proof.reason]);
-        return { error: PROOF_FAILURE_MESSAGES[proof.reason], reason: proof.reason };
-      }
-
+      // Before the signature check, so an address that's locked out costs
+      // a map lookup and nothing more. Something that can't be a code
+      // fails that check anyway.
       const address = clientAddress(request.headers, request.ip);
-      const retryAfter = limiter.retryAfterSeconds(address, proof.code);
+      const code = normalizeCode(request.body?.code);
+      const retryAfter = code ? limiter.retryAfterSeconds(address, code) : 0;
       if (retryAfter > 0) {
         reply.code(429).header("Retry-After", String(retryAfter));
         return {
           error: `Too many unknown setup codes from this address. Try again in ${retryAfter} seconds.`,
           reason: "rate_limited",
         };
+      }
+      const proof = checkClaimProof(issuer, request.body);
+      if (!proof.ok) {
+        reply.code(CLAIM_PROOF_STATUS[proof.reason]);
+        return { error: PROOF_FAILURE_MESSAGES[proof.reason], reason: proof.reason };
       }
 
       const result = redeemPairingCode(db, proof.code, proof.serverId);

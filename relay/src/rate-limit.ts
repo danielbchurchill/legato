@@ -1,3 +1,6 @@
+import { isIPv6 } from "node:net";
+import { ON_FLY } from "./config.js";
+
 // Brute-force brake for POST /auth/token. The same shape as server/'s
 // SignInLimiter (server/src/auth/rateLimit.ts); relay/ is its own package
 // and can't import from server/, so this is a copy, not a share. A
@@ -62,27 +65,30 @@ export class TokenLimiter {
   }
 }
 
-// The same brake for POST /pair/exchange (issue #324). Whoever calls it
-// needs a claim proof, but a server key costs nothing to make, so the
-// 40-bit pairing code is all that stands between a script and a claim
-// someone made for their own server. Here a failure is a code this relay
-// doesn't know, and only a new one: a home server asks about its own code
-// every five seconds while its /setup page is open and gets a 404 every
-// time until someone claims it. So each address remembers the unknown codes
-// it asked about, for CODE_MEMORY_MS from the first time, and asking about
-// one of those again is free and never refused.
+// A lighter brake for POST /pair/exchange (issue #324), and only defense
+// in depth. A claim names the server whose QR was scanned, and the exchange
+// redeems it for that server only (pairing.ts), so a guessed code is
+// worthless: a code claimed for another server gets the same 404 as one
+// nobody claimed. What's left to stop is a script asking as fast as the
+// relay answers, each ask a database lookup and a signature check.
 //
-// Two layers, as for /auth/token:
-//   * per client address: FREE_CODES remembered codes are free; each new
-//     one past them locks the address out of new codes for a minute,
-//     doubling with each further one, up to fifteen. Codes it already
-//     asked about still get answered, so a server polling its own code
-//     keeps working behind an address someone else tripped;
-//   * across all addresses: GLOBAL_MAX_CODES new unknown codes in a minute
-//     lock everyone out of new codes until the window drains. That's twice
-//     FREE_CODES, so no one address can trip it alone.
-// A code that turns out to be known (claimed, used or expired) counts for
-// nothing either way.
+// A failure is a code this relay doesn't know, and only a new one: a home
+// server asks about its own code every five seconds while its /setup page
+// is open and gets a 404 every time until someone claims it. So each
+// address remembers the unknown codes it asked about, for CODE_MEMORY_MS
+// from the first time, and asking about one of those again is free and
+// never refused, during a lockout too. FREE_CODES remembered codes are
+// free; each new one past them locks the address out of new codes for a
+// minute, doubling with each further one, up to fifteen.
+//
+// Per address only. A global cap would let anyone with enough addresses
+// refuse every server's first ask, everywhere at once. An IPv6 address
+// counts as its /64, the block one subscriber is given, so one host can't
+// step through its own addresses for a fresh allowance each time.
+//
+// The clock is monotonic, so a wall-clock step can't lift or stretch a
+// lockout. Memory stays bounded: a record goes once its codes age out, and
+// past MAX_ADDRESSES the oldest record makes room.
 
 // A server asks about one code for at most twelve minutes: ten while it's
 // live, two more as the code it replaced (server/src/auth/claim.ts). So
@@ -91,68 +97,107 @@ export class TokenLimiter {
 // address fit in FREE_CODES.
 export const CODE_MEMORY_MS = 15 * 60_000;
 export const FREE_CODES = 30;
-const GLOBAL_MAX_CODES = 2 * FREE_CODES;
+export const MAX_ADDRESSES = 10_000;
+// How often recording a new code also drops other addresses' aged-out
+// codes. Each address's own are dropped whenever it's looked up.
+const SWEEP_EVERY_MS = 60_000;
 
 type ExchangeRecord = { codes: Map<string, number>; lockedUntil: number };
 
 export class ExchangeLimiter {
-  private readonly byAddress = new Map<string, ExchangeRecord>();
-  private globalCodes: number[] = [];
+  private readonly byBlock = new Map<string, ExchangeRecord>();
+  private lastSweepAt: number;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(private readonly now: () => number = () => performance.now()) {
+    this.lastSweepAt = now();
+  }
 
   /** Seconds until this address may ask about this code, or 0 if it may now. */
   retryAfterSeconds(address: string, code: string): number {
     const now = this.now();
-    const record = this.record(address, now);
-    if (record?.codes.has(code)) return 0;
-    this.globalCodes = this.globalCodes.filter((at) => at > now - GLOBAL_WINDOW_MS);
-    let waitMs = 0;
-    if (this.globalCodes.length >= GLOBAL_MAX_CODES) {
-      waitMs = this.globalCodes[0]! + GLOBAL_WINDOW_MS - now;
-    }
-    if (record && record.lockedUntil > now) waitMs = Math.max(waitMs, record.lockedUntil - now);
-    return Math.ceil(waitMs / 1000);
+    const record = this.record(addressBlock(address), now);
+    if (!record || record.codes.has(code)) return 0;
+    return Math.max(0, Math.ceil((record.lockedUntil - now) / 1000));
   }
 
-  /** This relay has no such code. */
+  /** This relay has no such code for the server that asked. */
   recordUnknown(address: string, code: string): void {
     const now = this.now();
-    this.forget(now);
-    const record = this.byAddress.get(address) ?? { codes: new Map<string, number>(), lockedUntil: 0 };
-    if (record.codes.has(code)) return;
+    const block = addressBlock(address);
+    let record = this.record(block, now);
+    if (record?.codes.has(code)) return;
+    this.sweep(now);
+    if (!record) {
+      if (this.byBlock.size >= MAX_ADDRESSES) this.byBlock.delete(this.byBlock.keys().next().value!);
+      record = { codes: new Map<string, number>(), lockedUntil: 0 };
+      this.byBlock.set(block, record);
+    }
     record.codes.set(code, now);
-    this.globalCodes.push(now);
     if (record.codes.size > FREE_CODES) {
       const doublings = record.codes.size - FREE_CODES - 1;
       record.lockedUntil = now + Math.min(MAX_LOCKOUT_MS, FIRST_LOCKOUT_MS * 2 ** doublings);
     }
-    this.byAddress.set(address, record);
   }
 
-  // A lockout never outlasts the code that set it, so a record with no
-  // codes left has nothing more to say.
-  private record(address: string, now: number): ExchangeRecord | undefined {
-    const record = this.byAddress.get(address);
+  // A lockout never outlasts the code that set it (MAX_LOCKOUT_MS is no
+  // longer than CODE_MEMORY_MS), so a record with no codes left has
+  // nothing more to say.
+  private record(block: string, now: number): ExchangeRecord | undefined {
+    const record = this.byBlock.get(block);
     if (!record) return undefined;
     for (const [code, firstAskedAt] of record.codes) {
       if (firstAskedAt <= now - CODE_MEMORY_MS) record.codes.delete(code);
     }
     if (record.codes.size > 0) return record;
-    this.byAddress.delete(address);
+    this.byBlock.delete(block);
     return undefined;
   }
 
-  private forget(now: number): void {
-    for (const address of this.byAddress.keys()) this.record(address, now);
+  private sweep(now: number): void {
+    if (now - this.lastSweepAt < SWEEP_EVERY_MS) return;
+    this.lastSweepAt = now;
+    for (const block of this.byBlock.keys()) this.record(block, now);
   }
+}
+
+// What ExchangeLimiter counts an address as: an IPv4 address as itself, an
+// IPv6 one as its /64. An IPv4 address in IPv6 form (::ffff:203.0.113.9, as
+// a dual-stack socket reports one, or the same in hex) is the IPv4 address,
+// so IPv4 clients never share the one /64 those forms all start with.
+export function addressBlock(address: string): string {
+  const ip = address.replace(/%.*$/, "");
+  if (!isIPv6(ip)) return ip;
+  const groups = ipv6Groups(ip);
+  if (groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff) {
+    return [groups[6]! >> 8, groups[6]! & 255, groups[7]! >> 8, groups[7]! & 255].join(".");
+  }
+  return `${groups
+    .slice(0, 4)
+    .map((group) => group.toString(16))
+    .join(":")}::/64`;
+}
+
+// A valid IPv6 address's eight 16-bit groups, with :: filled in and a dotted
+// IPv4 tail read as the last two.
+function ipv6Groups(ip: string): number[] {
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip);
+  const hex = dotted
+    ? `${ip.slice(0, dotted.index)}${((+dotted[1]! << 8) | +dotted[2]!).toString(16)}:${((+dotted[3]! << 8) | +dotted[4]!).toString(16)}`
+    : ip;
+  const parse = (part: string) => (part ? part.split(":").map((group) => Number.parseInt(group, 16)) : []);
+  const [head = "", tail] = hex.split("::");
+  if (tail === undefined) return parse(head);
+  return [...parse(head), ...Array<number>(8 - parse(head).length - parse(tail).length).fill(0), ...parse(tail)];
 }
 
 // Behind Fly's proxy every request's socket peer is the proxy itself, so
 // request.ip alone would put every client in one bucket. Fly sets
-// Fly-Client-IP to the real peer on every request it forwards. Off Fly
-// (loopback dev, tests) the header is absent and the socket peer is right.
-export function clientAddress(headers: Record<string, string | string[] | undefined>, socketIp: string): string {
+// Fly-Client-IP to the real peer on every request it forwards. Anywhere
+// else nothing does, and the header is whatever the client chose to send,
+// so off Fly (loopback dev, tests, a self-hosted relay) it's ignored and
+// the socket peer is the address.
+export function clientAddress(headers: Record<string, string | string[] | undefined>, socketIp: string, onFly: boolean = ON_FLY): string {
+  if (!onFly) return socketIp;
   const fly = headers["fly-client-ip"];
   return (Array.isArray(fly) ? fly[0] : fly) || socketIp;
 }

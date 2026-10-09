@@ -85,9 +85,10 @@ function setup(options: { signing?: boolean; github?: boolean } = {}) {
     });
   const status = async (cookie: string, code: string) =>
     ((await app.inject({ method: "GET", url: `/pair/claim?code=${code}`, headers: { cookie } })).json() as { status: string }).status;
-  // From the address Fly would report, or the inject's own loopback one.
-  const exchange = (body: Record<string, unknown>, address?: string) =>
-    app.inject({ method: "POST", url: "/pair/exchange", payload: body, headers: address ? { "fly-client-ip": address } : {} });
+  // From this socket address, or the inject's own loopback one. Off Fly,
+  // as here, a Fly-Client-IP header counts for nothing (rate-limit.ts).
+  const exchange = (body: Record<string, unknown>, address?: string, headers: Record<string, string> = {}) =>
+    app.inject({ method: "POST", url: "/pair/exchange", payload: body, headers, ...(address ? { remoteAddress: address } : {}) });
   const exchangeAs = (server: ServerKey, code: string, address?: string) =>
     exchange(claimProof(server, { issuer: ISSUER, code, nowSeconds: now() }), address);
   const report = (body: Record<string, unknown>) => app.inject({ method: "POST", url: "/linked-servers", payload: body });
@@ -400,6 +401,38 @@ describe("guessing codes at POST /pair/exchange", () => {
     const { cookie } = h.signIn();
     await h.claim(cookie, "K7QM-4XRD");
     expect((await h.exchangeAs(SERVER, "K7QM-4XRD", "198.51.100.4")).statusCode).toBe(200);
+  });
+
+  it("counts a code claimed for another server as one nobody claimed", async () => {
+    const h = setup();
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD");
+    const guesser = homeServer();
+    expect((await h.exchangeAs(guesser, "K7QM-4XRD", GUESSER)).statusCode).toBe(404);
+    for (let i = 1; i <= FREE_CODES; i++) expect((await h.exchangeAs(guesser, guess(i), GUESSER)).statusCode).toBe(404);
+    expect((await h.exchangeAs(guesser, guess(FREE_CODES + 1), GUESSER)).statusCode).toBe(429);
+  });
+
+  it("refuses a locked-out address before it checks the signature", async () => {
+    const h = setup();
+    const guesser = homeServer();
+    for (let i = 0; i <= FREE_CODES; i++) await h.exchangeAs(guesser, guess(i), GUESSER);
+    const forged = { ...claimProof(guesser, { issuer: ISSUER, code: guess(FREE_CODES + 1), nowSeconds: now() }), signature: "x" };
+    expect((await h.exchange(forged, GUESSER)).statusCode).toBe(429);
+    // From an address that isn't locked out, the same proof is checked.
+    expect((await h.exchange(forged, "198.51.100.4")).json()).toMatchObject({ reason: "bad_signature" });
+  });
+
+  it("takes no notice of a Fly-Client-IP header off Fly", async () => {
+    const h = setup();
+    const guesser = homeServer();
+    for (let i = 0; i <= FREE_CODES; i++) {
+      await h.exchange(claimProof(guesser, { issuer: ISSUER, code: guess(i), nowSeconds: now() }), GUESSER, {
+        "fly-client-ip": `198.51.100.${i}`,
+      });
+    }
+    const next = claimProof(guesser, { issuer: ISSUER, code: guess(FREE_CODES + 1), nowSeconds: now() });
+    expect((await h.exchange(next, GUESSER, { "fly-client-ip": "198.51.100.200" })).statusCode).toBe(429);
   });
 
   it("never locks out a server asking about its own code until it's claimed", async () => {

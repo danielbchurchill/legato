@@ -113,8 +113,8 @@ describe("native sign-in (issue #215)", () => {
     return location.searchParams.get("code")!;
   }
 
-  const redeem = (body: Record<string, unknown>, headers: Record<string, string> = {}) =>
-    app.inject({ method: "POST", url: "/auth/token", payload: body, headers });
+  const redeem = (body: Record<string, unknown>, remoteAddress?: string) =>
+    app.inject({ method: "POST", url: "/auth/token", payload: body, ...(remoteAddress ? { remoteAddress } : {}) });
 
   it("redirects the browser to the loopback with a code, sets no browser session, and the code redeems for a bearer token", async () => {
     const callback = await signInThroughBrowser();
@@ -241,7 +241,7 @@ describe("native sign-in (issue #215)", () => {
   });
 
   it("rate-limits failed redemptions per address, with Retry-After", async () => {
-    const bad = () => redeem({ code: "guess", code_verifier: VERIFIER, redirect_uri: REDIRECT }, { "fly-client-ip": "203.0.113.9" });
+    const bad = () => redeem({ code: "guess", code_verifier: VERIFIER, redirect_uri: REDIRECT }, "203.0.113.9");
     for (let i = 0; i < 5; i++) expect((await bad()).statusCode).toBe(400);
     const limited = await bad();
     expect(limited.statusCode).toBe(429);
@@ -249,7 +249,7 @@ describe("native sign-in (issue #215)", () => {
 
     // Another address isn't punished for that one's guesses.
     const code = await codeFromCallback();
-    const ok = await redeem({ code, code_verifier: VERIFIER, redirect_uri: REDIRECT }, { "fly-client-ip": "198.51.100.4" });
+    const ok = await redeem({ code, code_verifier: VERIFIER, redirect_uri: REDIRECT }, "198.51.100.4");
     expect(ok.statusCode).toBe(200);
   });
 

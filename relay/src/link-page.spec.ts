@@ -79,14 +79,15 @@ function setup(options: { signing?: boolean } = {}) {
   const page = (url: string, cookie?: string) => app.inject({ method: "GET", url, headers: cookie ? { cookie } : {} });
   const press = (cookie: string, body: Record<string, unknown>, origin: string = ISSUER) =>
     app.inject({ method: "POST", url: "/link", headers: { cookie, origin }, payload: body });
-  // null sends no Origin header at all. address stands in for Fly's
-  // Fly-Client-IP (rate-limit.ts's clientAddress).
+  // null sends no Origin header at all. address is the socket's peer: off
+  // Fly, as here, the only address rate-limit.ts's clientAddress reads.
   const redeem = (code: string, verifier: string, origin: string | null = HOME, address?: string) =>
     app.inject({
       method: "POST",
       url: "/link/redeem",
-      headers: { ...(origin ? { origin } : {}), ...(address ? { "fly-client-ip": address } : {}) },
+      headers: origin ? { origin } : {},
       payload: { code, code_verifier: verifier },
+      ...(address ? { remoteAddress: address } : {}),
     });
   const report = (body: Record<string, unknown>) => app.inject({ method: "POST", url: "/linked-servers", payload: body });
   const credentials = () => db.prepare("SELECT relay_user_id, server_id FROM tunnel_credentials").all();
