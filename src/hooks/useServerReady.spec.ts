@@ -363,7 +363,7 @@ describe('useServerReady when the server goes away', () => {
     expect(result.current?.outage?.triedAt).toBe(Date.now())
   })
 
-  it('notes a network that dropped, and checks again when it does', async () => {
+  it('notes a device that went offline, and checks again when it does', async () => {
     const result = await mount()
     mode = 'refused'
     await advance(3000 + 3000)
@@ -377,7 +377,64 @@ describe('useServerReady when the server goes away', () => {
 
     expect(vi.mocked(fetch).mock.calls.length).toBe(calls + 1)
     expect(result.current?.outage?.deviceOnline).toBe(false)
+    // Going offline isn't a change of network; coming back is.
+    expect(result.current?.outage?.networkChangedAt).toBeNull()
+
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+    await act(async () => {
+      window.dispatchEvent(new Event('online'))
+    })
+    await advance(0)
+    expect(result.current?.outage?.deviceOnline).toBe(true)
     expect(result.current?.outage?.networkChangedAt).toBe(Date.now())
+  })
+
+  // The coordinator's review of #346: Chromium fires `change` for its rtt
+  // and downlink estimates all the time.
+  describe('with Chromium\'s navigator.connection', () => {
+    const connection = Object.assign(new EventTarget(), { type: 'wifi', rtt: 50 })
+
+    beforeEach(() => {
+      connection.type = 'wifi'
+      Object.defineProperty(navigator, 'connection', { value: connection, configurable: true })
+    })
+
+    afterEach(() => {
+      Reflect.deleteProperty(navigator, 'connection')
+    })
+
+    it("takes a new estimate for no change, and doesn't check on it", async () => {
+      const result = await mount()
+      mode = 'silent'
+      await advance(3000 + 2 * HEALTH_TIMEOUT_MS + 300)
+      expect(result.current?.outage?.failure).toEqual({ kind: 'no-answer' })
+      const calls = vi.mocked(fetch).mock.calls.length
+
+      await act(async () => {
+        connection.rtt = 900
+        connection.dispatchEvent(new Event('change'))
+      })
+      await advance(0)
+
+      expect(vi.mocked(fetch).mock.calls.length).toBe(calls)
+      expect(result.current?.outage?.networkChangedAt).toBeNull()
+    })
+
+    it('takes a different kind of network for a change, and checks at once', async () => {
+      const result = await mount()
+      mode = 'refused'
+      await advance(3000 + 3000)
+      const calls = vi.mocked(fetch).mock.calls.length
+
+      await act(async () => {
+        connection.type = 'cellular'
+        connection.dispatchEvent(new Event('change'))
+      })
+      await advance(0)
+
+      expect(vi.mocked(fetch).mock.calls.length).toBe(calls + 1)
+      expect(result.current?.outage?.networkChangedAt).toBe(Date.now())
+    })
   })
 
   it('remembers the last answer, so a launch that finds the server gone can say since when', async () => {

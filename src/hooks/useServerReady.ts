@@ -56,7 +56,8 @@ export type Outage = {
   /** When the server last answered, in ms: this session's last heartbeat,
    * or what this device remembered from before. Null if it never has. */
   lastSeenAt: number | null
-  /** When this device's network last dropped or changed, in ms. */
+  /** When this device's network last changed, in ms: back online after
+   * being offline, or a different kind of network. */
   networkChangedAt: number | null
   deviceOnline: boolean
   /** When a "Try again" last ran and still found it unreachable. */
@@ -284,21 +285,40 @@ export function useServerReady(): ServerStatus {
     }
     checkNow.current = run
 
-    // A network that drops or changes is half of "why", and coming back
-    // is the moment to look again rather than waiting out the poll.
-    const onNetworkChange = () => {
+    // A network that drops or changes is half of "why", and coming back is
+    // the moment to look again rather than waiting out the poll. Only a real
+    // change counts: back online after being offline, or a different kind of
+    // network.
+    let offline = !navigator.onLine
+    const onOffline = () => {
+      offline = true
+      void run()
+    }
+    const onOnline = () => {
+      if (!offline) return
+      offline = false
+      networkChangedAt = Date.now()
+      void run()
+    }
+    // Chromium's NetworkInformation, for a switch between two networks that
+    // never goes offline in between (Wi-Fi to cellular). It also fires
+    // whenever its round-trip and bandwidth estimates move, which is all the
+    // time and no change at all, so only a new type counts. Desktop Chromium
+    // reports no type, so there it's online after offline or nothing.
+    const connection = (navigator as Navigator & { connection?: EventTarget & { type?: string } }).connection
+    let connectionType = connection?.type
+    const onConnectionChange = () => {
+      if (connection?.type === connectionType) return
+      connectionType = connection?.type
       networkChangedAt = Date.now()
       void run()
     }
     const onVisible = () => {
       if (document.visibilityState === 'visible' && failingSince !== null) void run()
     }
-    // Chromium's NetworkInformation, which also fires on a switch between
-    // two networks that never goes offline in between.
-    const connection = (navigator as Navigator & { connection?: EventTarget }).connection
-    window.addEventListener('online', onNetworkChange)
-    window.addEventListener('offline', onNetworkChange)
-    connection?.addEventListener('change', onNetworkChange)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+    connection?.addEventListener('change', onConnectionChange)
     document.addEventListener('visibilitychange', onVisible)
 
     void run()
@@ -306,9 +326,9 @@ export function useServerReady(): ServerStatus {
       cancelled = true
       clearTimeout(timer)
       checkNow.current = null
-      window.removeEventListener('online', onNetworkChange)
-      window.removeEventListener('offline', onNetworkChange)
-      connection?.removeEventListener('change', onNetworkChange)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
+      connection?.removeEventListener('change', onConnectionChange)
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [])

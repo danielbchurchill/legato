@@ -72,7 +72,8 @@ export type OutageFacts = {
   failure: CheckFailure
   /** When the server last answered this device, in ms. Null if it never has. */
   lastSeenAt: number | null
-  /** When this device's network last dropped or changed, in ms. */
+  /** When this device's network last changed, in ms: back online after
+   * being offline, or a different kind of network. */
   networkChangedAt: number | null
   deviceOnline: boolean
 }
