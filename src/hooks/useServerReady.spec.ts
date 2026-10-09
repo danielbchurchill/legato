@@ -8,8 +8,9 @@
 // an outage.
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MIN_SERVER_SCHEMA_VERSION } from '../config/serverVersion'
+import { HEALTH_TIMEOUT_MS, SERVER_BACK_EVENT } from '../connect/unreachable'
 import { readServerVersion, useServerReady, type ServerStatus } from './useServerReady'
 
 describe('readServerVersion', () => {
@@ -155,5 +156,174 @@ describe('useServerReady', () => {
     expect(result.current?.ready).toBe(true)
     expect(result.current?.everConnected).toBe(true)
     expect(result.current?.server?.outOfDate).toBe(true)
+  })
+})
+
+// Issue #119: what the hook keeps about a server that stops answering, for
+// the unreachable state to work out why.
+describe('useServerReady when the server goes away', () => {
+  let root: Root | null = null
+  // What the fake server does with the next health check.
+  let mode: 'ok' | 'refused' | 'silent' | 502 = 'ok'
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.parse('2026-10-09T14:00:00Z'))
+    localStorage.clear()
+    mode = 'ok'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init?: RequestInit) => {
+        if (mode === 'ok') {
+          const body = { status: 'ok', name: 'musicbox', schemaVersion: MIN_SERVER_SCHEMA_VERSION }
+          return Promise.resolve({ ok: true, status: 200, json: async () => body } as Response)
+        }
+        if (mode === 'refused') return Promise.reject(new TypeError('Failed to fetch'))
+        if (mode === 502) return Promise.resolve({ ok: false, status: 502, json: async () => null } as Response)
+        // No answer at all: only the hook's own timeout ends it.
+        return new Promise<Response>((_, reject) =>
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError'))),
+        )
+      }),
+    )
+  })
+
+  afterEach(() => {
+    act(() => root?.unmount())
+    root = null
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms)
+    })
+  }
+
+  async function mount() {
+    const result: { current: ServerStatus | null } = { current: null }
+    function Harness() {
+      result.current = useServerReady()
+      return null
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    await act(async () => {
+      root = createRoot(container)
+      root.render(createElement(Harness))
+    })
+    await advance(0)
+    return result
+  }
+
+  it('turns unreachable after three refused checks, and keeps when the server last answered', async () => {
+    const result = await mount()
+    expect(result.current?.ready).toBe(true)
+    expect(result.current?.name).toBe('musicbox')
+    const lastAnswer = Date.now()
+
+    mode = 'refused'
+    await advance(3000) // the heartbeat that finds it gone
+    await advance(300)
+    expect(result.current?.outage).toBeNull() // two misses are still noise
+    await advance(300)
+
+    expect(result.current?.ready).toBe(false)
+    expect(result.current?.everConnected).toBe(true)
+    expect(result.current?.outage).toEqual({
+      failure: { kind: 'refused' },
+      lastSeenAt: lastAnswer,
+      networkChangedAt: null,
+      deviceOnline: true,
+      triedAt: null,
+    })
+  })
+
+  it('turns unreachable after two checks with no answer at all', async () => {
+    const result = await mount()
+    mode = 'silent'
+    await advance(3000 + HEALTH_TIMEOUT_MS)
+    expect(result.current?.outage).toBeNull()
+    await advance(300 + HEALTH_TIMEOUT_MS)
+
+    expect(result.current?.outage?.failure).toEqual({ kind: 'no-answer' })
+  })
+
+  it("records an answer that isn't Legato's health as a bad status", async () => {
+    const result = await mount()
+    mode = 502
+    await advance(3000 + 300 + 300)
+
+    expect(result.current?.outage?.failure).toEqual({ kind: 'bad-status', status: 502 })
+  })
+
+  it('clears the outage when the server answers again, and says so once', async () => {
+    const back = vi.fn()
+    window.addEventListener(SERVER_BACK_EVENT, back)
+    const result = await mount()
+    mode = 'refused'
+    await advance(3000 + 300 + 300)
+    expect(result.current?.outage).not.toBeNull()
+
+    mode = 'ok'
+    await advance(1000)
+
+    expect(result.current?.ready).toBe(true)
+    expect(result.current?.outage).toBeNull()
+    expect(back).toHaveBeenCalledTimes(1)
+    window.removeEventListener(SERVER_BACK_EVENT, back)
+  })
+
+  it('checks straight away on "Try again", and records that it ran', async () => {
+    const result = await mount()
+    mode = 'refused'
+    await advance(3000 + 300 + 300)
+    const calls = vi.mocked(fetch).mock.calls.length
+
+    // A host that doesn't answer keeps the try running until the timeout.
+    mode = 'silent'
+    await act(async () => result.current?.retry())
+    expect(vi.mocked(fetch).mock.calls.length).toBe(calls + 1)
+    expect(result.current?.retrying).toBe(true)
+    await advance(HEALTH_TIMEOUT_MS)
+
+    expect(result.current?.retrying).toBe(false)
+    expect(result.current?.outage?.failure).toEqual({ kind: 'no-answer' })
+    expect(result.current?.outage?.triedAt).toBe(Date.now())
+  })
+
+  it('notes a network that dropped, and checks again when it does', async () => {
+    const result = await mount()
+    mode = 'refused'
+    await advance(3000 + 300 + 300)
+
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    const calls = vi.mocked(fetch).mock.calls.length
+    await act(async () => {
+      window.dispatchEvent(new Event('offline'))
+    })
+    await advance(0)
+
+    expect(vi.mocked(fetch).mock.calls.length).toBe(calls + 1)
+    expect(result.current?.outage?.deviceOnline).toBe(false)
+    expect(result.current?.outage?.networkChangedAt).toBe(Date.now())
+  })
+
+  it('remembers the last answer, so a launch that finds the server gone can say since when', async () => {
+    await mount()
+    act(() => root?.unmount())
+    root = null
+    const seenAt = Date.parse('2026-10-09T14:00:00Z')
+
+    vi.setSystemTime(Date.parse('2026-10-10T09:00:00Z'))
+    mode = 'refused'
+    const result = await mount()
+    await advance(300 + 300)
+
+    expect(result.current?.everConnected).toBe(false)
+    expect(result.current?.name).toBe('musicbox')
+    expect(result.current?.outage?.lastSeenAt).toBe(seenAt)
   })
 })
