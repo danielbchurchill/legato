@@ -165,13 +165,15 @@ describe('useServerReady', () => {
 describe('useServerReady when the server goes away', () => {
   let root: Root | null = null
   // What the fake server does with the next health check.
-  let mode: 'ok' | 'refused' | 'silent' | 'cut-body' | 'not-json' | 502 = 'ok'
+  let mode: 'ok' | 'refused' | 'silent' | 'cut-body' | 'not-json' | 'held' | 502 = 'ok'
   // A server that's stopped (SIGSTOP), or whose loop is blocked: requests
   // wait, and are answered once it runs again.
   let frozenUntil = 0
   // Which process answers (/health's bootId), and its latest scan job.
   let bootId = 'boot-1'
   const latestScan = { id: 7, status: 'done' }
+  // A check held in flight ('held'), to fail by hand.
+  let failHeld: () => void = () => undefined
 
   beforeEach(() => {
     vi.useFakeTimers()
@@ -184,6 +186,7 @@ describe('useServerReady when the server goes away', () => {
       'fetch',
       vi.fn((url: string, init?: RequestInit) => {
         if (url.endsWith('/scan-jobs')) return Promise.resolve({ ok: true, status: 200, json: async () => [latestScan] } as Response)
+        if (mode === 'held') return new Promise<Response>((_, reject) => (failHeld = () => reject(new TypeError('Failed to fetch'))))
         if (mode === 'ok') {
           const body = { status: 'ok', name: 'musicbox', bootId, schemaVersion: MIN_SERVER_SCHEMA_VERSION }
           const answer = { ok: true, status: 200, json: async () => body } as Response
@@ -467,6 +470,57 @@ describe('useServerReady when the server goes away', () => {
     expect(back).toHaveBeenCalledTimes(1)
     expect(reconnectEpoch()).toBe(epoch)
     window.removeEventListener(SERVER_BACK_EVENT, back)
+  })
+
+  // Finding 6: a check in flight when the page froze (a phone's tab in the
+  // background, a laptop asleep) fails once it runs again, ten minutes on.
+  it("doesn't call it an outage when the one check that failed spanned a ten-minute freeze", async () => {
+    const back = vi.fn()
+    window.addEventListener(SERVER_BACK_EVENT, back)
+    const result = await mount()
+    mode = 'held'
+    await advance(3000) // the heartbeat goes out, and the page freezes
+    vi.setSystemTime(Date.now() + 10 * 60_000)
+    mode = 'ok'
+    await act(async () => failHeld())
+    await advance(0)
+
+    expect(result.current?.outage).toBeNull()
+    expect(result.current?.ready).toBe(true)
+    // It looks again soon, and finds the server there.
+    await advance(300)
+    expect(result.current?.outage).toBeNull()
+    expect(back).not.toHaveBeenCalled()
+    window.removeEventListener(SERVER_BACK_EVENT, back)
+  })
+
+  it('still names a server that is really gone after the freeze, once the grace has run from the wake', async () => {
+    const result = await mount()
+    mode = 'held'
+    await advance(3000)
+    vi.setSystemTime(Date.now() + 10 * 60_000)
+    mode = 'refused'
+    await act(async () => failHeld())
+    await advance(300) // the check after the wake fails, and starts the clock
+    await advance(2400)
+    expect(result.current?.outage).toBeNull()
+    await advance(600)
+
+    expect(result.current?.outage?.failure).toEqual({ kind: 'refused' })
+  })
+
+  it("doesn't count failures from before a freeze towards an outage", async () => {
+    const result = await mount()
+    mode = 'refused'
+    await advance(3000 + 1500) // failing for 1.5 s
+    // Frozen between two polls: the next comes ten minutes late.
+    vi.setSystemTime(Date.now() + 10 * 60_000)
+    await advance(300)
+    expect(result.current?.outage).toBeNull()
+    await advance(2700)
+    expect(result.current?.outage).toBeNull()
+    await advance(600)
+    expect(result.current?.outage).not.toBeNull()
   })
 
   it('checks straight away on "Try again", and records that it ran', async () => {

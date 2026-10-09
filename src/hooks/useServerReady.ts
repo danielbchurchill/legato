@@ -50,6 +50,15 @@ const LONG_STARTUP_AFTER_MS = 5 * 60_000
 // How often a heartbeat writes down "last seen" for the next launch.
 const REMEMBER_SEEN_EVERY_MS = 30_000
 
+// A page that's frozen (a phone's tab in the background, a laptop asleep)
+// runs no timers, so a check in flight then can't time out, and fails or
+// answers only once the page runs again, minutes or hours after it began.
+// That says nothing about the server. A check that took this much longer
+// than its own timeout spanned a freeze, as did a poll that came this late,
+// and the time without an answer is measured again from there.
+const FROZEN_CHECK_MS = HEALTH_TIMEOUT_MS + 5000
+const FROZEN_POLL_LATE_MS = 5000
+
 /** What's known about a server that has stopped answering (#119), for
  * src/connect/unreachable.ts to work the likely reason out from. */
 export type Outage = {
@@ -205,10 +214,12 @@ export function useServerReady(): ServerStatus {
     let inFlight: Promise<void> | null = null
     const mountedAt = Date.now()
     let everAnswered = false
-    // When the first check in the current run of failures started, and how
-    // the server has failed over that run (outageFailure). Null while it
-    // answers.
+    // When the current run of failures began, and how the server has failed
+    // over that run (outageFailure). Null while it answers. The run begins
+    // with the first failed check that started after the last answer and
+    // after the page last woke from a freeze (resumedAt).
     let failingSince: number | null = null
+    let resumedAt = 0
     // The bootId of the server's last answer.
     let bootId: string | null = null
     let failedHow: CheckFailure | null = null
@@ -295,8 +306,12 @@ export function useServerReady(): ServerStatus {
         return
       }
 
+      if (now - started > FROZEN_CHECK_MS) {
+        pageResumed(now)
+        return
+      }
       noteCheckFailed(now)
-      failingSince ??= started
+      failingSince ??= Math.max(started, resumedAt)
       failedHow = outageFailure(failedHow, failure)
       const limit = failedHow.kind === 'no-answer' ? DOWN_AFTER_SILENCE_MS : DOWN_AFTER_REFUSED_MS
       if (!down && now - failingSince >= limit) {
@@ -313,8 +328,24 @@ export function useServerReady(): ServerStatus {
       setOutage(next)
     }
 
+    // The page ran again after a freeze. Failures from before it don't count
+    // towards an outage, and it looks again soon.
+    let recheckSoon = false
+    const pageResumed = (now: number) => {
+      resumedAt = now
+      recheckSoon = true
+      if (!down) {
+        failingSince = null
+        failedHow = null
+      }
+    }
+
     const nextDelay = () => {
       const now = Date.now()
+      if (recheckSoon) {
+        recheckSoon = false
+        return SUSPECT_POLL_INTERVAL_MS
+      }
       if (!everAnswered) {
         const waited = now - mountedAt
         if (waited < STARTUP_WINDOW_MS) return STARTUP_POLL_INTERVAL_MS
@@ -332,7 +363,13 @@ export function useServerReady(): ServerStatus {
       clearTimeout(timer)
       inFlight = check(manual).finally(() => {
         inFlight = null
-        if (!cancelled) timer = setTimeout(() => void run(), nextDelay())
+        if (cancelled) return
+        const delay = nextDelay()
+        const due = Date.now() + delay
+        timer = setTimeout(() => {
+          if (Date.now() - due > FROZEN_POLL_LATE_MS) pageResumed(Date.now())
+          void run()
+        }, delay)
       })
       return inFlight
     }
