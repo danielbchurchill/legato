@@ -1,4 +1,5 @@
 import type { WebSocket } from "ws";
+import { HOP_BY_HOP } from "./headers.js";
 import type { RequestFrame, TunnelFrame } from "./protocol.js";
 
 export interface PendingHandlers {
@@ -10,9 +11,16 @@ export interface PendingHandlers {
 
 interface PendingEntry extends PendingHandlers {
   socket: WebSocket;
+  method: string;
   // Whether response-start has come: a chunk before it, or a second one,
   // isn't something a Legato server sends.
   started: boolean;
+  // How many body bytes the device's response has room for: the
+  // Content-Length response-start declared, none for an answer HTTP gives
+  // no body (a HEAD, a 204, a 304), and null when it declared none and the
+  // body goes chunked. `sent` is how many have gone.
+  room: number | null;
+  sent: number;
 }
 
 export interface Tunnel {
@@ -91,8 +99,8 @@ export class TunnelRegistry {
     }
   }
 
-  registerPending(requestId: string, socket: WebSocket, handlers: PendingHandlers): void {
-    this.#pending.set(requestId, { socket, started: false, ...handlers });
+  registerPending(requestId: string, socket: WebSocket, method: string, handlers: PendingHandlers): void {
+    this.#pending.set(requestId, { socket, method, started: false, room: null, sent: 0, ...handlers });
   }
 
   // The device hung up before its answer was over. Drops the slot, and
@@ -127,7 +135,13 @@ export class TunnelRegistry {
   //     answer) fails its request with a 502;
   //   * a frame no Legato server sends, a field of the wrong type, a chunk
   //     before the status or a second status, fails its request and comes
-  //     back "hostile", and the caller closes the tunnel.
+  //     back "hostile", and the caller closes the tunnel;
+  //   * so does a body that runs past the Content-Length it declared, or
+  //     ends short of it. The relay frames each response itself, on a
+  //     connection Fly's proxy goes on to use for other people's requests:
+  //     bytes past the length would reach the next one as a response of
+  //     their own, and a short body would swallow the start of it. Once
+  //     the status has gone, failing breaks the connection off.
   // Anything that still throws is caught here and counts as hostile.
   handleFrame(socket: WebSocket, frame: TunnelFrame): FrameVerdict {
     if (!("requestId" in frame)) return "ok";
@@ -149,15 +163,22 @@ export class TunnelRegistry {
           this.#fail(requestId, entry, `the home server answered with a status legato.fm can't pass on (${frame.status})`);
           return "ok";
         }
+        const { headers, length } = passableHeaders(frame.headers);
         entry.started = true;
-        entry.onStart(frame.status, passableHeaders(frame.headers));
+        entry.room = entry.method === "HEAD" || frame.status === 204 || frame.status === 304 ? 0 : length;
+        entry.onStart(frame.status, headers);
         return "ok";
       }
-      case "response-chunk":
+      case "response-chunk": {
         if (!entry.started || typeof frame.data !== "string") return this.#hostile(requestId, entry);
-        entry.onChunk(Buffer.from(frame.data, "base64"));
+        const data = Buffer.from(frame.data, "base64");
+        if (entry.room !== null && entry.sent + data.length > entry.room) return this.#hostile(requestId, entry);
+        entry.sent += data.length;
+        entry.onChunk(data);
         return "ok";
+      }
       case "response-end":
+        if (entry.room !== null && entry.sent < entry.room) return this.#hostile(requestId, entry);
         this.#pending.delete(requestId);
         entry.onEnd();
         return "ok";
@@ -190,10 +211,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function passableHeaders(headers: Record<string, unknown>): Record<string, string> {
-  const result: Record<string, string> = {};
+// The headers a response may carry to a device, by lower-case name, and the
+// body length it declared. None that frame the message on the wire
+// (headers.ts's HOP_BY_HOP): the relay frames each response itself. A
+// Content-Length is kept only when it's a plain number, which the registry
+// then holds the body to; anything else in it would break the device's
+// parser. A name sent twice in two cases counts as one header with both
+// values, as HTTP would read it, so two lengths are no length.
+const PLAIN_LENGTH = /^\d{1,15}$/;
+
+function passableHeaders(headers: Record<string, unknown>): { headers: Record<string, string>; length: number | null } {
+  const passable = new Map<string, string>();
   for (const [name, value] of Object.entries(headers)) {
-    if (HEADER_NAME.test(name) && typeof value === "string" && HEADER_VALUE.test(value)) result[name] = value;
+    if (!HEADER_NAME.test(name) || typeof value !== "string" || !HEADER_VALUE.test(value)) continue;
+    const key = name.toLowerCase();
+    const earlier = passable.get(key);
+    passable.set(key, earlier === undefined ? value : `${earlier}, ${value}`);
   }
-  return result;
+  const declared = passable.get("content-length");
+  const length = declared !== undefined && PLAIN_LENGTH.test(declared) ? Number(declared) : null;
+  for (const name of HOP_BY_HOP) passable.delete(name);
+  if (length !== null) passable.set("content-length", String(length));
+  return { headers: Object.fromEntries(passable), length };
 }

@@ -4,8 +4,10 @@
 // tunnel -> relay -> mobile client). Forwarding them verbatim would either
 // be meaningless on the next hop (`host`, `connection`) or actively wrong
 // once the byte layout changes underneath them (`content-length`,
-// `transfer-encoding` — this relay always re-frames as chunked).
-const HOP_BY_HOP = new Set(["host", "connection", "content-length", "transfer-encoding", "keep-alive", "upgrade"]);
+// `transfer-encoding` — this relay frames every body itself; a response's
+// plain Content-Length is the one exception, kept and held to by
+// tunnel-registry.ts).
+export const HOP_BY_HOP = new Set(["host", "connection", "content-length", "transfer-encoding", "keep-alive", "upgrade"]);
 
 export function sanitizeHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string> {
   const result: Record<string, string> = {};

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { connect } from "node:net";
 import type { Database } from "./sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app.js";
+import type { RequestFrame } from "./protocol.js";
 import { REQUEST_BODY_LIMIT } from "./routes/relay.js";
 import { openDb } from "./db.js";
 import { connectHomeServer, linkServer, listenApp, signIn } from "./testing/tunnel-harness.js";
@@ -388,6 +390,8 @@ describe("relay HTTP forwarding", () => {
 // tunnel's frames are untrusted input: before this, a response-start with
 // a status of 99999 threw inside the relay's message listener and took the
 // whole relay down.
+type Answer = (requestId: string, request: RequestFrame) => object[];
+
 describe("frames a home server sends back", () => {
   let db: Database;
   let app: FastifyInstance | undefined;
@@ -406,7 +410,7 @@ describe("frames a home server sends back", () => {
 
   // A tunnel that answers every request with whatever frames `answer` makes
   // for it, the way a modified home server could.
-  async function rawHomeServer(tunnelUrl: string, credential: string, answer: (requestId: string) => object[]) {
+  async function rawHomeServer(tunnelUrl: string, credential: string, answer: Answer) {
     const socket = new WebSocket(tunnelUrl);
     sockets.push(socket);
     const state = { closed: false, cancelled: [] as string[] };
@@ -414,17 +418,19 @@ describe("frames a home server sends back", () => {
     await new Promise<void>((resolve) => {
       socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "auth", secret: credential })));
       socket.addEventListener("message", (event) => {
-        const frame = JSON.parse(String(event.data)) as { type: string; requestId: string };
+        const frame = JSON.parse(String(event.data)) as RequestFrame | { type: string; requestId: string };
         if (frame.type === "auth-ok") resolve();
         if (frame.type === "cancel") state.cancelled.push(frame.requestId);
         if (frame.type !== "request") return;
-        for (const out of answer(frame.requestId)) socket.send(JSON.stringify({ requestId: frame.requestId, ...out }));
+        for (const out of answer(frame.requestId, frame as RequestFrame)) {
+          socket.send(JSON.stringify({ requestId: frame.requestId, ...out }));
+        }
       });
     });
     return state;
   }
 
-  async function setUp(answer: (requestId: string) => object[]) {
+  async function setUp(answer: Answer) {
     app = buildApp({ db });
     const { httpUrl, tunnelUrl } = await listenApp(app);
     const account = signIn(db);
@@ -433,12 +439,143 @@ describe("frames a home server sends back", () => {
     const headers = { cookie: account.cookieHeader };
     const url = (path: string) => `${httpUrl}/relay/${serverId}${path}`;
     const get = Object.assign((path = "/x") => fetch(url(path), { headers }), { url, headers });
-    return { tunnel, get, httpUrl };
+    return { tunnel, get, httpUrl, serverId, cookie: account.cookieHeader };
+  }
+
+  // One request on a socket of its own, written by hand, and every byte
+  // the relay writes back until it closes the connection or goes quiet.
+  // What a pooled keep-alive connection (Fly's proxy to the relay) would
+  // go on to read as the next response is whatever comes after the first.
+  async function rawExchange(httpUrl: string, path: string, cookie: string, quietMs = 300): Promise<{ text: string; closed: boolean }> {
+    const { hostname, port } = new URL(httpUrl);
+    const socket = connect(Number(port), hostname);
+    let text = "";
+    let closed = false;
+    socket.on("data", (data: Buffer) => (text += data.toString("latin1")));
+    socket.on("close", () => (closed = true));
+    socket.on("error", () => {});
+    await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
+    socket.write(`GET ${path} HTTP/1.1\r\nHost: ${hostname}\r\nCookie: ${cookie}\r\nConnection: keep-alive\r\n\r\n`);
+    let last = text.length;
+    for (;;) {
+      await sleep(quietMs);
+      if (closed || text.length === last) break;
+      last = text.length;
+    }
+    socket.destroy();
+    return { text, closed };
+  }
+
+  async function waitForClose(tunnel: { closed: boolean }) {
+    const until = Date.now() + 2_000;
+    while (!tunnel.closed && Date.now() < until) await sleep(10);
   }
 
   const start = (status: unknown, headers: unknown = {}) => ({ type: "response-start", status, headers });
   const chunk = (data: unknown) => ({ type: "response-chunk", data });
+  const text = (data: string) => chunk(Buffer.from(data).toString("base64"));
   const end = { type: "response-end" };
+
+  it("never lets a server's Content-Length put a second response on the device's connection", async () => {
+    // Fly's proxy keeps HTTP/1.1 connections to the relay open and reuses
+    // them for other people's requests, so bytes past the declared length
+    // would be read as the answer to someone else's next request, and
+    // without the sandbox.
+    const smuggled = "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: 7\r\n\r\nsmuggle";
+    const { tunnel, httpUrl, serverId, cookie } = await setUp(() => [start(200, { "content-length": "5" }), text(`hello${smuggled}`), end]);
+
+    const { text: wire, closed } = await rawExchange(httpUrl, `/relay/${serverId}/x`, cookie);
+    expect(wire).toStartWith("HTTP/1.1 200");
+    expect(wire).not.toContain("smuggle");
+    expect(closed).toBe(true);
+    await waitForClose(tunnel);
+    expect(tunnel.closed).toBe(true);
+  });
+
+  it("breaks the connection off when a body runs past its Content-Length", async () => {
+    // Over two chunks: none of the second goes out.
+    const long = await setUp(() => [start(200, { "content-length": "6" }), text("abcd"), text("efgh"), end]);
+    const tooLong = await rawExchange(long.httpUrl, `/relay/${long.serverId}/x`, long.cookie);
+    expect("abcd").toStartWith(tooLong.text.split("\r\n\r\n")[1]!);
+    expect(tooLong.closed).toBe(true);
+    await waitForClose(long.tunnel);
+    expect(long.tunnel.closed).toBe(true);
+  });
+
+  it("breaks the connection off when a body ends short of its Content-Length", async () => {
+    // A clean end would leave the device waiting for bytes that never
+    // come, and reading the next response as the rest of this one.
+    const short = await setUp(() => [start(200, { "content-length": "10" }), text("abc"), end]);
+    const tooShort = await rawExchange(short.httpUrl, `/relay/${short.serverId}/x`, short.cookie);
+    expect("abc").toStartWith(tooShort.text.split("\r\n\r\n")[1]!);
+    expect(tooShort.closed).toBe(true);
+    await waitForClose(short.tunnel);
+    expect(short.tunnel.closed).toBe(true);
+  });
+
+  it("leaves off a Content-Length that isn't a plain number, and every hop-by-hop header", async () => {
+    let headers: Record<string, string> = {};
+    const { tunnel, get } = await setUp(() => [start(200, { "content-type": "text/plain", ...headers }), text("hello"), end]);
+
+    for (const length of ["5x", "-5", "1e1", "0x5", "", "5, 5"]) {
+      headers = { "content-length": length };
+      const response = await get();
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("hello");
+    }
+    // The same name twice, in two cases.
+    headers = { "Content-Length": "5", "content-length": "500" };
+    expect(await (await get()).text()).toBe("hello");
+
+    headers = { "transfer-encoding": "gzip", connection: "close, x-fine", "keep-alive": "timeout=1", upgrade: "h2c", "x-fine": "kept" };
+    const response = await get();
+    expect(await response.text()).toBe("hello");
+    expect(response.headers.get("x-fine")).toBe("kept");
+    // The relay's own connection headers, never the server's.
+    expect(response.headers.get("upgrade")).toBeNull();
+    expect(response.headers.get("keep-alive")).not.toBe("timeout=1");
+    expect(response.headers.get("connection")).not.toContain("close");
+    expect(tunnel.closed).toBe(false);
+  });
+
+  it("carries a 206 with its Content-Length, so a player can seek", async () => {
+    const audio = "0123456789";
+    const { tunnel, get } = await setUp((_id, request) => {
+      const [first, last] = (request.headers.range ?? "bytes=0-9").slice(6).split("-").map(Number);
+      return [
+        start(206, {
+          "content-type": "audio/flac",
+          "accept-ranges": "bytes",
+          "content-range": `bytes ${first}-${last}/${audio.length}`,
+          "content-length": String(last! - first! + 1),
+        }),
+        text(audio.slice(first, last! + 1)),
+        end,
+      ];
+    });
+
+    for (const [range, body] of [["bytes=2-5", "2345"], ["bytes=6-9", "6789"], ["bytes=0-0", "0"]] as const) {
+      const response = await fetch(get.url("/stream"), { headers: { ...get.headers, range } });
+      expect(response.status).toBe(206);
+      expect(response.headers.get("content-length")).toBe(String(body.length));
+      expect(response.headers.get("content-range")).toBe(`bytes ${range.slice(6)}/10`);
+      expect(response.headers.get("accept-ranges")).toBe("bytes");
+      expect(await response.text()).toBe(body);
+    }
+    expect(tunnel.closed).toBe(false);
+  });
+
+  it("passes a HEAD's Content-Length with no body after it", async () => {
+    const { tunnel, get } = await setUp((_id, request) =>
+      request.method === "HEAD" ? [start(200, { "content-length": "10" }), end] : [start(200), text("after"), end],
+    );
+
+    const head = await fetch(get.url("/stream"), { method: "HEAD", headers: get.headers });
+    expect(head.status).toBe(200);
+    expect(head.headers.get("content-length")).toBe("10");
+    expect(await (await get()).text()).toBe("after");
+    expect(tunnel.closed).toBe(false);
+  });
 
   it("answers a status HTTP can't carry with a 502, and keeps the tunnel", async () => {
     let status: unknown = 99999;

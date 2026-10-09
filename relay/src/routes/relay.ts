@@ -129,7 +129,7 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
       reply.hijack();
 
       await new Promise<void>((resolve) => {
-        registry.registerPending(requestId, tunnel.socket, {
+        registry.registerPending(requestId, tunnel.socket, request.method, {
           // Flushed at once, so the device has the status while the body
           // is still on its way, and so a failure after it can only break
           // the connection off (onError).
