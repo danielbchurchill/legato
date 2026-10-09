@@ -70,6 +70,7 @@ describe('useLibraryPage cold start (#172)', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
+        ok: true,
         json: async () => ({ items: [{ id: 1 }, { id: 2 }], total: 2 }),
       })),
     )

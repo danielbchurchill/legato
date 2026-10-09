@@ -17,7 +17,7 @@ const STATS = { albums: 30_000, artists: 3_000, tracks: 300_000, totalBytes: 0, 
 
 // What the fake server answers with, which a test changes to stand for a
 // rescan or a merge, and how often it was asked.
-let server: { stats: typeof STATS; statsStatus: number }
+let server: { stats: typeof STATS; statsStatus: number; artistsStatus: number }
 let requests: Record<string, number>
 
 // The first 5,000 nodes by id of the synthetic library, as GET /nodes sent
@@ -50,7 +50,7 @@ function send(event: string) {
 let root: Root | null = null
 
 beforeEach(() => {
-  server = { stats: STATS, statsStatus: 200 }
+  server = { stats: STATS, statsStatus: 200, artistsStatus: 200 }
   requests = {}
   sockets = []
   vi.stubGlobal(
@@ -60,7 +60,9 @@ beforeEach(() => {
       const route = url.pathname.replace(/^.*\/api\/v1/, '')
       requests[route] = (requests[route] ?? 0) + 1
       if (route === '/stats') return Response.json(server.stats, { status: server.statsStatus })
-      if (route === '/library/artists') return Response.json(artistsPage(url))
+      if (route === '/library/artists') {
+        return server.artistsStatus === 200 ? Response.json(artistsPage(url)) : Response.json({ error: 'nope' }, { status: server.artistsStatus })
+      }
       if (route === '/scan-jobs') return Response.json([])
       return Response.json({ items: [], total: 0 })
     }),
@@ -213,15 +215,17 @@ describe('Library header and Artists tab after the library changes (#302)', () =
   })
 
   for (const status of [500, 401]) {
-    it(`keeps the counts it has when a refetch answers ${status}`, async () => {
+    it(`keeps what both show when a refetch answers ${status}`, async () => {
       const container = await render(cappedGraph())
       vi.useFakeTimers()
 
       server.statsStatus = status
+      server.artistsStatus = status
       await after(['scan:done'])
 
-      expect(requests['/stats']).toBe(2)
+      expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
       expect(countsLine(container)).toBe('30,000 albums · 3,000 artists · 300,000 tracks')
+      expect(tabCount(container)).toBe('3,000')
     })
   }
 })

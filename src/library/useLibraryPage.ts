@@ -106,7 +106,11 @@ export function useLibraryPage<Row>(
       if (query) params.set('q', query)
 
       fetch(`${API}/${entity}?${params}`)
-        .then((r) => r.json())
+        .then((r) => {
+          // An error's body has no items or total to splice in.
+          if (!r.ok) throw new Error(`${entity} answered ${r.status}`)
+          return r.json()
+        })
         .then((data: { items: Row[]; total: number }) => {
           if (gen !== generation.current) return
           setTotal(data.total)
