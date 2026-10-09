@@ -588,16 +588,35 @@ const SERVER_PATH = pathFor(SERVER_ORIGIN, IS_TAURI && SERVER_ORIGIN === DEFAULT
 
 const connectElsewhere = () => openConnectScreen('unreachable')
 
-// What the unreachable state says, worked out from what useServerReady saw.
-// Built again only when that changes, not on every failed check: the shell
-// reads it through context, and a new object a second would re-render the
-// whole workspace under the state.
+// The time, to the minute, while `active`: the unreachable state's words
+// depend on it ("at 11:49 PM" gains a date after midnight, and "asleep"
+// becomes "offline" after an hour).
+function useMinuteClock(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    // oxlint-disable-next-line react/set-state-in-effect
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [active])
+  return now
+}
+
+// What the unreachable state says, worked out from what useServerReady saw
+// and the time now. Built again only when the words change, not on every
+// failed check or every tick of the clock: the shell reads it through
+// context, and a new object each time would re-render the whole workspace
+// under the state.
 function useUnreachableView({ outage, name, everConnected, retrying, retry }: ServerStatus): UnreachableView | null {
-  return useMemo(() => {
+  const clock = useMinuteClock(outage != null)
+  const copy = useMemo(() => {
     if (!outage) return null
-    const now = outage.since
+    // The clock last ticked before the outage began, on the first render
+    // with it.
+    const now = Math.max(clock, outage.since)
     const reason = inferReason({ ...outage, path: SERVER_PATH }, now)
-    const copy = describeOutage(reason, {
+    return describeOutage(reason, {
       path: SERVER_PATH,
       name,
       host: new URL(SERVER_ORIGIN).host,
@@ -605,14 +624,20 @@ function useUnreachableView({ outage, name, everConnected, retrying, retry }: Se
       everConnected,
       now,
     })
+  }, [outage, name, everConnected, clock])
+  const { title, why, hint } = copy ?? { title: null, why: null, hint: null }
+  return useMemo(() => {
+    if (!outage || title == null || why == null) return null
     return {
-      ...copy,
+      title,
+      why,
+      hint,
       footer: outageFooter({ everConnected, triedAt: outage.triedAt }),
       retrying,
       onRetry: retry,
       onConnectElsewhere: connectElsewhere,
     }
-  }, [outage, name, everConnected, retrying, retry])
+  }, [outage, title, why, hint, everConnected, retrying, retry])
 }
 
 function useUnreachableSurface(view: UnreachableView | null): { surface: UnreachableSurface; claimed: boolean } {

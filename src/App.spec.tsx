@@ -107,6 +107,7 @@ vi.mock('./playback/usePlayback', () => {
 
 import App from './App'
 import { OPEN_CONNECT_EVENT } from './connect/openConnect'
+import { formatSince } from './connect/lastSeen'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -389,5 +390,33 @@ describe('App across an outage', () => {
     // And back, should a check read it as out of date again.
     await setStatus({ server: outOfDate })
     expect(harness.railMounts).toBe(1)
+  })
+
+  // The coordinator's second review of #346: the words were worked out as
+  // of when the outage began, so one that began at 11:49 PM still said "at
+  // 11:49 PM" the next morning, with no date. (The test's server is on this
+  // computer, so the words are "stopped responding"; inferReason's own
+  // specs cover "asleep" turning into "offline" as the real time moves on.)
+  it('reads right after midnight, with the date of a time that is now yesterday', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    try {
+      const lastSeen = new Date(2026, 9, 9, 23, 49).getTime()
+      vi.setSystemTime(lastSeen + 20_000)
+      await mount()
+      await setStatus({ ready: false, outage: asleep({ since: Date.now(), lastSeenAt: lastSeen }) })
+      const evening = formatSince(lastSeen, Date.now())
+      expect(container.textContent).toContain(`stopped responding at ${evening}.`)
+
+      // Twenty past midnight: the same time needs its date now.
+      vi.setSystemTime(new Date(2026, 9, 10, 0, 20).getTime())
+      await act(async () => {
+        vi.advanceTimersByTime(60_000)
+      })
+      const dated = formatSince(lastSeen, Date.now())
+      expect(dated).not.toBe(evening)
+      expect(container.textContent).toContain(`stopped responding at ${dated}.`)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
