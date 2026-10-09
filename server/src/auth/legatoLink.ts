@@ -2,7 +2,8 @@ import type { Database } from "../sqlite.js";
 import { legatoIdentity } from "./legatoIdentity.js";
 import { VERIFY_FAILURE_MESSAGES } from "./legatoToken.js";
 import { accountLinkedToOtherUser, linkAccount, linkedAccountId } from "./legatoUsers.js";
-import { storeTunnelCredential } from "./tunnelCredential.js";
+import { forgetTunnelCredential, storeTunnelCredential } from "./tunnelCredential.js";
+import { syncRelayTunnel } from "../tunnel/relayTunnel.js";
 
 // Linking a user here to a legato.fm account with a `link` token (issues
 // #114 and #231). Two callers: POST /auth/legato/link, where the owner
@@ -14,7 +15,8 @@ import { storeTunnelCredential } from "./tunnelCredential.js";
 // reports the link to legato.fm, signed with this server's identity key
 // (auth/serverKey.ts). Nothing changes here unless legato.fm recorded it,
 // so the two can't disagree about a link that just failed. A claim's report
-// also brings back the tunnel credential, stored with the link.
+// also brings back the tunnel credential, stored with the link, and the
+// tunnel opens with it (issue #310, tunnel/relayTunnel.ts).
 
 export type LinkOutcome =
   | { ok: true; linked: { accountId: string; email: string | null; name: string | null } }
@@ -80,8 +82,14 @@ export async function linkLegatoAccount(db: Database, userId: number, token: str
   if (!linkAccount(db, userId, accountId).ok) return ACCOUNT_TAKEN;
   if (reported.tunnel && identity.origin) storeTunnelCredential(db, { origin: identity.origin, accountId, ...reported.tunnel });
   // Linking a different account replaces the old one here, so legato.fm
-  // stops vouching for the old one too. Best effort, like an unlink.
-  if (previous && previous !== accountId) await identity.recordUnlink(previous);
+  // stops vouching for the old one too. Best effort, like an unlink. The
+  // old account's tunnel credential goes with it, unless this link's
+  // already replaced it.
+  if (previous && previous !== accountId) {
+    forgetTunnelCredential(db, previous);
+    await identity.recordUnlink(previous);
+  }
   identity.syncSchedule();
+  syncRelayTunnel(db);
   return { ok: true, linked: { accountId, email: result.claims.email, name: result.claims.name } };
 }

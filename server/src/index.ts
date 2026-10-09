@@ -12,6 +12,7 @@ import { setupCodes } from "./auth/setupCode.js";
 import { ownerExists } from "./auth/owner.js";
 import { installLegatoIdentity, legatoIdentity, LegatoIdentity } from "./auth/legatoIdentity.js";
 import { advertise } from "./discovery/advertise.js";
+import { installRelayTunnel, RelayTunnel } from "./tunnel/relayTunnel.js";
 import { webClientRoutes } from "./routes/web-client.js";
 import { watchLibraryRoot } from "./scan/watcher.js";
 import { reconcileInterruptedScans } from "./scan/scanner.js";
@@ -254,6 +255,18 @@ app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
     process.exit(1);
   }
   app.log.info(`legato-server listening at ${address}`);
+
+  // Issue #310: the tunnel through legato.fm, only on a server linked to a
+  // legato.fm account (tunnel/relayTunnel.ts). After listen, because it
+  // replays what comes down it against this server's own port.
+  {
+    const tunnel = new RelayTunnel(db, {
+      port: PORT,
+      log: (level, message) => (level === "warn" ? app.log.warn(message) : app.log.info(message)),
+    });
+    installRelayTunnel(db, tunnel);
+    tunnel.sync();
+  }
 
   // Issue #117: `_legato._tcp` on the LAN, for the desktop app's "servers on
   // this network" (discovery/advertise.ts). After listen, so it never names

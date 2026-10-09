@@ -20,6 +20,8 @@ import { SignInLimiter } from "../auth/rateLimit.js";
 import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type SetupCodes } from "../auth/setupCode.js";
 import { createSession, deleteSession, spendAccessToken, type SessionUser } from "../auth/sessions.js";
 import { IDENTITY_NONCE_PATTERN, identityProof, loadServerKey } from "../auth/serverKey.js";
+import { forgetTunnelCredential } from "../auth/tunnelCredential.js";
+import { syncRelayTunnel } from "../tunnel/relayTunnel.js";
 
 // Sign-in for this server (issue #112): the local owner's password, plus
 // the Google/GitHub accounts provisioned before the owner existed. The
@@ -536,7 +538,9 @@ export function authRoutes(
 
     // Unlinking the last account also stops the daily key refresh, so the
     // server goes back to never contacting legato.fm. The cached keys stay;
-    // they're public and harmless, and a relink can use them.
+    // they're public and harmless, and a relink can use them. The tunnel
+    // credential doesn't (issue #310): it's forgotten, and the tunnel it
+    // kept open closes.
     //
     // legato.fm is told (issue #231), but the unlink here happens first and
     // doesn't depend on it: the owner wants out, and may be offline. If
@@ -553,7 +557,9 @@ export function authRoutes(
       const identity = legatoIdentity(db);
       const accountId = linkedAccountId(db, request.authUser.id);
       unlinkAccount(db, request.authUser.id);
+      if (accountId) forgetTunnelCredential(db, accountId);
       identity.syncSchedule();
+      syncRelayTunnel(db);
       const legatoNotified = accountId && identity.enabled ? (await identity.recordUnlink(accountId)).ok : null;
       return { ok: true, legatoNotified };
     });
