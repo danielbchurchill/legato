@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "Legato",
+        "create": false,
         "width": 1440,
         "height": 960,
         "minWidth": 1100,
