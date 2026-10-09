@@ -4,9 +4,9 @@ use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager};
 
-pub struct ServerProcess(pub Mutex<Option<Child>>);
+use crate::instance::Instance;
 
-const SERVER_PORT: u16 = 8899;
+pub struct ServerProcess(pub Mutex<Option<Child>>);
 
 // Matches the directory layout scripts/fetch-media-binaries.mjs writes
 // (src-tauri/binaries/<target-triple>/) and the Rust target triples Tauri
@@ -78,26 +78,20 @@ fn resolve_media_binary(_app: &AppHandle, _name: &str) -> Option<PathBuf> {
   None
 }
 
-fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-  app
-    .path()
-    .app_data_dir()
-    .map_err(|e| format!("failed to resolve app data dir: {e}"))
-}
-
 /// Where the server records the last time it streamed audio (issue #130,
 /// server/src/stream/activity.ts), for keep_awake.rs to read.
 pub fn stream_activity_file(app: &AppHandle) -> Result<PathBuf, String> {
-  Ok(data_dir(app)?.join("stream-activity"))
+  Ok(app.state::<Instance>().data_dir(app)?.join("stream-activity"))
 }
 
 pub fn spawn(app: &AppHandle) -> Result<Child, String> {
-  let data_dir = data_dir(app)?;
+  let instance = app.state::<Instance>();
+  let data_dir = instance.data_dir(app)?;
 
   std::fs::create_dir_all(&data_dir)
     .map_err(|e| format!("failed to create app data dir {data_dir:?}: {e}"))?;
 
-  log::info!("[server] spawning legato-server, data dir = {data_dir:?}");
+  log::info!("[server] spawning legato-server, port = {}, data dir = {data_dir:?}", instance.server_port);
 
   let mut cmd = if tauri::is_dev() {
     let mut c = Command::new("npm");
@@ -117,7 +111,7 @@ pub fn spawn(app: &AppHandle) -> Result<Child, String> {
 
   cmd
     .env("LEGATO_DATA_DIR", &data_dir)
-    .env("LEGATO_PORT", SERVER_PORT.to_string())
+    .env("LEGATO_PORT", instance.server_port.to_string())
     .env("LEGATO_STREAM_ACTIVITY_FILE", &activity_file)
     // Issue #110: the desktop app updates through the Tauri updater (#129),
     // so the server it spawns skips the release check and shows no notice.

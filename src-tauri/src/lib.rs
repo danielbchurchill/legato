@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use tauri::Manager;
 
 mod discovery;
+mod instance;
 mod keep_awake;
 mod playback;
 mod probe;
@@ -12,6 +13,7 @@ mod server_process;
 mod serving;
 mod tray;
 use discovery::Discovery;
+use instance::Instance;
 use keep_awake::KeepAwake;
 use playback::PlaybackState;
 use relay_sign_in::SignInState;
@@ -25,8 +27,31 @@ use serving::{ProcessRunner, Serving, ServingState};
 // way in.
 const BACKGROUND_ARG: &str = "--background";
 
+/// The main window, built here rather than from tauri.conf.json ("create":
+/// false) so a dev instance's title and webview storage are in place before
+/// it opens (issue #336). On the defaults it's exactly the configured window.
+fn build_main_window(app: &tauri::App) -> tauri::Result<()> {
+  let instance = app.state::<Instance>();
+  let config = &app.config().app.windows[0];
+  let mut window =
+    tauri::WebviewWindowBuilder::from_config(app.handle(), config)?.title(instance.window_title(&config.title));
+  if let Some(dir) = instance.webview_data_dir() {
+    window = window.data_directory(dir);
+  }
+  if let Some(id) = instance.webview_store_id() {
+    window = window.data_store_identifier(id);
+  }
+  window.build()?;
+  Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  // Settled before anything starts, since the server, the settings file and
+  // the window all depend on it. A bad value stops a dev run here, before it
+  // can fall back to the default instance's database.
+  let instance = Instance::from_env(tauri::is_dev(), |name| std::env::var(name).ok()).unwrap_or_else(|e| panic!("{e}"));
+
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
     // Rust-only: relay_sign_in.rs opens the system browser through it.
@@ -38,6 +63,7 @@ pub fn run() {
       tauri_plugin_autostart::MacosLauncher::LaunchAgent,
       Some(vec![BACKGROUND_ARG]),
     ))
+    .manage(instance)
     .manage(ServerProcess(Mutex::new(None)))
     .manage(PlaybackState::new())
     .manage(SignInState::default())
@@ -50,6 +76,8 @@ pub fn run() {
             .build(),
         )?;
       }
+
+      build_main_window(app)?;
 
       // Embed the server by default — it must start invisibly with the app,
       // not require a manually-launched second process. A look at Feishin,

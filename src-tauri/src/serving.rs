@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::instance::Instance;
 use crate::keep_awake;
 use crate::server_process::{self, ServerProcess};
 use crate::tray;
@@ -147,11 +148,7 @@ impl ShellSettings {
 }
 
 pub fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
-  app
-    .path()
-    .app_config_dir()
-    .map(|dir| dir.join("shell-settings.json"))
-    .map_err(|e| format!("failed to resolve app config dir: {e}"))
+  Ok(app.state::<Instance>().config_dir(app)?.join("shell-settings.json"))
 }
 
 /// Pause or resume from the tray. Runs off the main thread: a pause waits
