@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   chooseQuality,
+  EARLY_END_MS,
   noteDrop,
   prefersAac,
   readQualityPreference,
@@ -9,6 +10,7 @@ import {
   streamUrl,
   watchForDrops,
 } from './quality'
+import { SERVER_BACK_EVENT } from '../connect/unreachable'
 
 function memoryStorage(): Storage {
   const data = new Map<string, string>()
@@ -189,6 +191,117 @@ describe('watchForDrops', () => {
     })
     online.dispatchEvent(new Event('online'))
     expect(reloads).toHaveLength(1)
+  })
+
+  // #119: the server answering again is the other "back online".
+  it('reloads a dropped track at the spot it stopped once the server is back, though failed reloads reset the clock', () => {
+    const audio = new FakeAudio()
+    const online = new EventTarget()
+    const src = audio.src
+    const assigned: string[] = []
+    Object.defineProperty(audio, 'src', {
+      get: () => assigned.at(-1) ?? src,
+      set: (value: string) => {
+        assigned.push(value)
+        // A real element starts a new load from 0.
+        audio.currentTime = 0
+      },
+    })
+    const onDrop = vi.fn()
+    watchForDrops(audio, onDrop, { online })
+
+    audio.currentTime = 83
+    audio.error = { code: 2 }
+    audio.fire('error')
+    // The reload fails too, the server still gone, and its clock is 0 now.
+    audio.currentTime = 0
+    audio.fire('error')
+
+    online.dispatchEvent(new Event(SERVER_BACK_EVENT))
+
+    expect(onDrop).toHaveBeenCalledTimes(1)
+    expect(assigned).toEqual([src, src])
+    expect(audio.currentTime).toBe(83)
+  })
+
+  it('once the server is back, loads a track that failed to start while it was gone', () => {
+    const audio = new FakeAudio()
+    const online = new EventTarget()
+    const reloads: string[] = []
+    watchForDrops(audio, () => undefined, { online })
+    Object.defineProperty(audio, 'src', {
+      get: () => 'http://server/api/v1/files/2/stream?quality=original',
+      set: (value: string) => reloads.push(value),
+    })
+
+    // A load that fails before any of it arrives reports "not supported".
+    audio.error = { code: 4 }
+    audio.fire('error')
+    online.dispatchEvent(new Event(SERVER_BACK_EVENT))
+
+    expect(reloads).toEqual(['http://server/api/v1/files/2/stream?quality=original'])
+    expect(audio.currentTime).toBe(0)
+  })
+
+  it('treats a track that ends well short of its length as a drop, and passes a real end on', () => {
+    const audio = new FakeAudio()
+    const onDrop = vi.fn()
+    const onEnded = vi.fn()
+    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 180_000 })
+
+    audio.currentTime = 57.6
+    audio.fire('ended')
+    expect(onDrop).toHaveBeenCalledTimes(1)
+    expect(onEnded).not.toHaveBeenCalled()
+    expect(audio.currentTime).toBe(57.6)
+    expect(nextQuality()).toBe('opus256')
+
+    audio.currentTime = 180 - EARLY_END_MS / 1000 + 0.5
+    audio.fire('ended')
+    expect(onEnded).toHaveBeenCalledTimes(1)
+    expect(onDrop).toHaveBeenCalledTimes(1)
+  })
+
+  it('takes a second early end at the same spot as the real end, so a wrong length in the database never sticks', () => {
+    const audio = new FakeAudio()
+    const onDrop = vi.fn()
+    const onEnded = vi.fn()
+    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 240_000 })
+
+    audio.currentTime = 170
+    audio.fire('ended')
+    audio.currentTime = 170.4
+    audio.fire('ended')
+
+    expect(onDrop).toHaveBeenCalledTimes(1)
+    expect(onEnded).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes every end on when the length is unknown', () => {
+    const audio = new FakeAudio()
+    const onEnded = vi.fn()
+    watchForDrops(audio, () => undefined, { online: null, onEnded })
+
+    audio.currentTime = 12
+    audio.fire('ended')
+    expect(onEnded).toHaveBeenCalledTimes(1)
+  })
+
+  it("leaves a decode error alone when the server comes back, and does nothing when nothing failed", () => {
+    const audio = new FakeAudio()
+    const online = new EventTarget()
+    const reloads: string[] = []
+    watchForDrops(audio, () => undefined, { online })
+    Object.defineProperty(audio, 'src', {
+      get: () => 'http://server/api/v1/files/1/stream?quality=original',
+      set: (value: string) => reloads.push(value),
+    })
+
+    online.dispatchEvent(new Event(SERVER_BACK_EVENT))
+    audio.error = { code: 3 } // MEDIA_ERR_DECODE
+    online.dispatchEvent(new Event(SERVER_BACK_EVENT))
+
+    expect(reloads).toEqual([])
   })
 
   it('ignores errors that are not network errors, and a track that never started', () => {

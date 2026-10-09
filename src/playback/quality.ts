@@ -1,5 +1,6 @@
 import { API_BASE as API } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
+import { SERVER_BACK_EVENT } from '../connect/unreachable'
 
 /* Issue #120: which rung of the server's quality ladder a browser
  * client asks GET /files/:id/stream for. Only the web <audio> path uses
@@ -137,14 +138,22 @@ export function streamUrl(fileId: number): string {
   return withMediaTicket(`${API}/files/${fileId}/stream?quality=${quality}`)
 }
 
-// HTMLMediaElement's MEDIA_ERR_NETWORK. A literal, because MediaError
-// isn't defined outside a browser and the specs run in Node.
+// HTMLMediaElement's MEDIA_ERR_NETWORK and MEDIA_ERR_SRC_NOT_SUPPORTED.
+// Literals, because MediaError isn't defined outside a browser and the
+// specs run in Node. A source that fails before any of it loads (the
+// server already gone) reports the second.
 const MEDIA_ERR_NETWORK = 2
+const MEDIA_ERR_SRC_NOT_SUPPORTED = 4
 
 // How long playback can sit buffering, mid-track and not seeking, before
 // it counts as a drop. Long enough that a slow seek into an encode still
 // under way on the server doesn't trip it.
 export const STALL_LIMIT_MS = 20_000
+
+// How far short of a track's known length an `ended` has to come before it
+// counts as the stream being cut (#119) rather than the track finishing. A
+// transcode's length differs from the file's by well under a second.
+export const EARLY_END_MS = 5000
 
 type MediaLike = Pick<HTMLMediaElement, 'addEventListener' | 'removeEventListener' | 'pause'> & {
   readonly error: { code: number } | null
@@ -161,16 +170,29 @@ type MediaLike = Pick<HTMLMediaElement, 'addEventListener' | 'removeEventListene
  * A network error leaves the element dead, so play() on it would fail. The
  * same source is reloaded paused at the same position, so pressing play
  * picks up where it stopped. A reload that fails too (still offline) isn't
- * a second drop. It's retried when the browser reports it's back online.
+ * a second drop. It's retried when the browser reports it's back online,
+ * or when the server answers again after an outage (#119's
+ * SERVER_BACK_EVENT, from useServerReady). That retry also revives a track
+ * that couldn't start at all while the server was gone.
+ *
+ * A server that goes away mid-track can also end the stream rather than
+ * fail it: the browser plays what arrived and fires `ended`, as though the
+ * file stopped there. Short of `durationMs` by more than EARLY_END_MS,
+ * that's a drop too. Only a real end reaches `onEnded`.
  *
  * Returns a cleanup function. */
 export function watchForDrops(
   audio: MediaLike,
   onDrop: () => void,
-  { online = typeof window === 'undefined' ? null : window }: { online?: EventTarget | null } = {},
+  {
+    online = typeof window === 'undefined' ? null : window,
+    onEnded = () => {},
+    durationMs = () => null,
+  }: { online?: EventTarget | null; onEnded?: () => void; durationMs?: () => number | null } = {},
 ): () => void {
   let stallTimer: ReturnType<typeof setTimeout> | null = null
-  let reloadingSrc: string | null = null
+  let reloading: { src: string; at: number } | null = null
+  let earlyEnd: { src: string; at: number } | null = null
 
   const clearStall = () => {
     if (stallTimer !== null) clearTimeout(stallTimer)
@@ -185,9 +207,11 @@ export function watchForDrops(
   }
 
   const reload = () => {
-    const at = audio.currentTime
-    reloadingSrc = audio.src
-    audio.src = reloadingSrc
+    // A source already reloaded once keeps the position it was reloaded
+    // at: a load that failed may have taken currentTime back to 0.
+    const at = reloading?.src === audio.src ? reloading.at : audio.currentTime
+    reloading = { src: audio.src, at }
+    audio.src = reloading.src
     // Set before metadata loads, this becomes the element's default start
     // position, which is where the reloaded track begins.
     audio.currentTime = at
@@ -195,7 +219,7 @@ export function watchForDrops(
 
   const onError = () => {
     if (audio.error?.code !== MEDIA_ERR_NETWORK) return
-    if (reloadingSrc !== null && audio.src === reloadingSrc) return
+    if (reloading !== null && audio.src === reloading.src) return
     // A track that never started didn't drop mid-track. usePlayback's own
     // play() rejection already shows it as not playing.
     if (audio.currentTime <= 0) return
@@ -210,26 +234,51 @@ export function watchForDrops(
   }
 
   const onLoaded = () => {
-    reloadingSrc = null
+    reloading = null
   }
 
-  const onOnline = () => {
-    if (reloadingSrc !== null && audio.src === reloadingSrc && audio.error) reload()
+  // A second early end at the same spot is the track's real end: the
+  // database's length was wrong, and holding it there would stick.
+  const onEnd = () => {
+    const expected = durationMs()
+    const at = audio.currentTime
+    const again = earlyEnd?.src === audio.src && Math.abs(earlyEnd.at - at) < 2
+    if (expected != null && at * 1000 < expected - EARLY_END_MS && !again) {
+      earlyEnd = { src: audio.src, at }
+      drop()
+      reload()
+      return
+    }
+    earlyEnd = null
+    onEnded()
+  }
+
+  // Whatever the outage killed loads again where it stopped, paused: a
+  // dropped track whose reload failed too, or one that failed before it
+  // could start. A decode error isn't the network's, so it stays as it is.
+  const onBack = () => {
+    const code = audio.error?.code
+    if (!audio.src || (code !== MEDIA_ERR_NETWORK && code !== MEDIA_ERR_SRC_NOT_SUPPORTED)) return
+    reload()
   }
 
   const settled = ['playing', 'pause', 'seeking', 'emptied', 'ended'] as const
   audio.addEventListener('error', onError)
   audio.addEventListener('waiting', onWaiting)
   audio.addEventListener('loadeddata', onLoaded)
+  audio.addEventListener('ended', onEnd)
   for (const event of settled) audio.addEventListener(event, clearStall)
-  online?.addEventListener('online', onOnline)
+  online?.addEventListener('online', onBack)
+  online?.addEventListener(SERVER_BACK_EVENT, onBack)
 
   return () => {
     clearStall()
     audio.removeEventListener('error', onError)
     audio.removeEventListener('waiting', onWaiting)
     audio.removeEventListener('loadeddata', onLoaded)
+    audio.removeEventListener('ended', onEnd)
     for (const event of settled) audio.removeEventListener(event, clearStall)
-    online?.removeEventListener('online', onOnline)
+    online?.removeEventListener('online', onBack)
+    online?.removeEventListener(SERVER_BACK_EVENT, onBack)
   }
 }

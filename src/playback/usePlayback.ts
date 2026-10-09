@@ -304,6 +304,20 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   const audioRef = useRef<HTMLAudioElement | null>(null)
   if (!IS_TAURI && audioRef.current === null) audioRef.current = new Audio()
 
+  // #119: one player owns the sound. The shell stays mounted through an
+  // outage, but whatever does unmount it (signing out, say) takes its audio
+  // with it, rather than leaving an element still playing that nothing on
+  // screen can pause.
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    return () => {
+      audio.pause()
+      audio.removeAttribute('src')
+      audio.load()
+    }
+  }, [])
+
   const finalizeCurrentPlay = useCallback(() => {
     if (currentPlay.current) reportPlay(currentPlay.current)
     currentPlay.current = null
@@ -418,19 +432,25 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       setStatus((s) => ({ ...s, positionMs }))
       if (currentPlay.current) currentPlay.current.lastPositionMs = positionMs
     }
-    const onEnded = () => advanceWebTrack(currentIndex.current)
+    const currentDurationMs = () => {
+      const entry = playSequence.current[currentIndex.current]
+      return entry ? (trackInfo.current.get(entry.recordingNodeId)?.durationMs ?? null) : null
+    }
 
     audio.addEventListener('timeupdate', onTimeUpdate)
-    audio.addEventListener('ended', onEnded)
     // #128: the install offer waits for sound actually coming out, which a
     // click on play alone doesn't prove (play() can still reject).
     audio.addEventListener('playing', notePlaybackStarted)
     // #120: a mid-track drop pauses this track and moves the next one down
-    // the quality ladder (playback/quality.ts).
-    const stopWatchingDrops = watchForDrops(audio, () => setStatus((s) => ({ ...s, playing: false })))
+    // the quality ladder (playback/quality.ts). #119: the end of a track
+    // comes through there too, since a stream the server cut can end early,
+    // and that's a drop, not the next track.
+    const stopWatchingDrops = watchForDrops(audio, () => setStatus((s) => ({ ...s, playing: false })), {
+      onEnded: () => advanceWebTrack(currentIndex.current),
+      durationMs: currentDurationMs,
+    })
     return () => {
       audio.removeEventListener('timeupdate', onTimeUpdate)
-      audio.removeEventListener('ended', onEnded)
       audio.removeEventListener('playing', notePlaybackStarted)
       stopWatchingDrops()
     }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
 import { API_BASE as API } from '../config/serverHost'
+import { SERVER_BACK_EVENT } from '../connect/unreachable'
 
 export { API }
 
@@ -105,6 +106,16 @@ export function useNodeDetail(nodeId: number | null): NodeDetailState {
       return
     }
     load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeId])
+
+  // #119: a load the outage broke (the track moved on while the server was
+  // gone) runs again once it's back, rather than leaving the panel's
+  // placeholders up for good.
+  useEffect(() => {
+    if (nodeId == null) return
+    window.addEventListener(SERVER_BACK_EVENT, load)
+    return () => window.removeEventListener(SERVER_BACK_EVENT, load)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId])
 
