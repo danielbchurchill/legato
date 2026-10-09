@@ -43,6 +43,7 @@ import m0038_member_of_indexes from "./0038_member_of_indexes.sql" with { type: 
 import m0039_tunnel_credential from "./0039_tunnel_credential.sql" with { type: "text" };
 import m0040_legato_sessions from "./0040_legato_sessions.sql" with { type: "text" };
 import m0041_clear_same_era_ties from "./0041_clear_same_era_ties.sql" with { type: "text" };
+import m0042_album_artist_map_rule from "./0042_album_artist_map_rule.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -91,4 +92,5 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 39, file: "0039_tunnel_credential.sql", sql: m0039_tunnel_credential },
   { version: 40, file: "0040_legato_sessions.sql", sql: m0040_legato_sessions },
   { version: 41, file: "0041_clear_same_era_ties.sql", sql: m0041_clear_same_era_ties },
+  { version: 42, file: "0042_album_artist_map_rule.sql", sql: m0042_album_artist_map_rule },
 ];

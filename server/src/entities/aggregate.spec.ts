@@ -1,6 +1,11 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { Database } from "../sqlite.js";
+import { openSqlite } from "../sqlite.js";
 import { openDb } from "../db.js";
+import { MIGRATIONS } from "../migrations/manifest.generated.js";
 import {
   computeAlbumAggregates,
   computeArtistAggregates,
@@ -443,5 +448,119 @@ describe("listArtistReleases", () => {
     recomputeEntities(db);
 
     expect(listArtistReleases(db, artist)).toEqual([]);
+  });
+});
+
+// Nothing recomputes on upgrade, so the albums rows an older server wrote
+// would keep its answers until the next rescan, and the Library's Artists
+// tab and header would disagree with the map until then.
+describe("migration 0042 (#302)", () => {
+  let dataDir: string | null = null;
+
+  afterEach(() => {
+    if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+    dataDir = null;
+  });
+
+  it("brings the albums an older server filed up to the map's rule", () => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "legato-0042-"));
+    const dbPath = path.join(dataDir, "legato.db");
+    const old = openSqlite(dbPath);
+    old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))");
+    for (const { version, sql } of MIGRATIONS) {
+      if (version >= 42) break;
+      old.exec(sql);
+      old.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
+    }
+    const root = (old.prepare("INSERT INTO library_roots (path) VALUES ('/fake') RETURNING id").get() as { id: number }).id;
+    const node = (type: string, title: string) =>
+      (old.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as { id: number }).id;
+    const edge = (from: number, to: number, type: string) =>
+      old.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, ?, 'local')").run(from, to, type);
+    // A track on `record`, credited to `performers` in edge id order.
+    const track = (record: number, performers: number[], file: "present" | "missing" | "none" = "present") => {
+      const id = node("recording", "Track");
+      old.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(id);
+      if (file !== "none") {
+        old.prepare(
+          `INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size, missing_since)
+           VALUES (?, ?, ?, datetime('now'), 0, ?)`,
+        ).run(id, root, `/fake/${id}.flac`, file === "missing" ? "2026-01-01 00:00:00" : null);
+      }
+      edge(id, record, "appears_on");
+      for (const performer of performers) edge(id, performer, "performed_by");
+    };
+    // The row the older recompute left: its answer, and a time to show
+    // whether the migration touched it.
+    const filed = (record: number, artist: number | null) =>
+      old.prepare(
+        `INSERT INTO albums (node_id, primary_artist_node_id, track_count, updated_at)
+         VALUES (?, ?, 7, '2020-01-01 00:00:00')`,
+      ).run(record, artist);
+
+    // A credit node credited ahead of the artist: the old rule took it.
+    const producer = node("credit", "A Producer");
+    const artist = node("artist", "The Artist");
+    const creditFirst = node("release", "Credit First");
+    track(creditFirst, [producer, artist]);
+    track(creditFirst, [producer, artist]);
+    filed(creditFirst, producer);
+
+    // Recordings a collapse left without a file outvoted the one that has.
+    const kept = node("artist", "Kept");
+    const orphaned = node("artist", "Orphaned");
+    const outvoted = node("release", "Outvoted");
+    track(outvoted, [kept]);
+    track(outvoted, [orphaned], "none");
+    track(outvoted, [orphaned], "none");
+    filed(outvoted, orphaned);
+
+    // Every recording left without a file: no artist at all.
+    const allOrphaned = node("release", "All Orphaned");
+    track(allOrphaned, [orphaned], "none");
+    filed(allOrphaned, orphaned);
+
+    // A hand-drawn appears_on to a node that isn't a release.
+    const label = node("label", "Not A Record");
+    track(label, [artist]);
+    filed(label, artist);
+
+    // A file gone missing still counts, as the map still draws it.
+    const missing = node("artist", "Missing");
+    const stillDrawn = node("release", "Still Drawn");
+    track(stillDrawn, [kept]);
+    track(stillDrawn, [missing], "missing");
+    track(stillDrawn, [missing], "missing");
+    filed(stillDrawn, kept);
+
+    // A tie goes to the lower id.
+    const tie = node("release", "Tie");
+    track(tie, [missing]);
+    track(tie, [kept]);
+    filed(tie, missing);
+
+    // Already right.
+    const unchanged = node("release", "Unchanged");
+    track(unchanged, [artist]);
+    filed(unchanged, artist);
+    old.close();
+
+    const upgraded = openDb(dbPath, { log: () => {} });
+    const rows = upgraded
+      .prepare("SELECT node_id AS id, primary_artist_node_id AS artist, track_count AS tracks, updated_at AS at FROM albums")
+      .all() as { id: number; artist: number | null; tracks: number; at: string }[];
+    upgraded.close();
+    const after = new Map(rows.map((r) => [r.id, r]));
+
+    expect(after.get(creditFirst)?.artist).toBe(artist);
+    expect(after.get(outvoted)?.artist).toBe(kept);
+    expect(after.get(allOrphaned)?.artist).toBeNull();
+    expect(after.get(label)?.artist).toBeNull();
+    expect(after.get(stillDrawn)?.artist).toBe(missing);
+    expect(after.get(tie)?.artist).toBe(kept);
+    expect(after.get(unchanged)).toEqual({ id: unchanged, artist, tracks: 7, at: "2020-01-01 00:00:00" });
+    // Only the artist changes: a row keeps its counts.
+    expect(rows.every((r) => r.tracks === 7)).toBe(true);
+    expect(after.get(creditFirst)?.at).not.toBe("2020-01-01 00:00:00");
   });
 });

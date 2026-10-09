@@ -629,6 +629,7 @@ describe("migration 0041", () => {
     let artists: number[] = [];
     const db = upgradeFrom0040((old) => {
       artists = SHUFFLED_YEARS.map((_, i) => node(old, "artist", `Artist ${i}`));
+      const root = (old.prepare("INSERT INTO library_roots (path) VALUES ('/fake') RETURNING id").get() as { id: number }).id;
       artists.forEach((artist, i) => {
         const release = node(old, "release", `Album ${i}`);
         old.prepare("INSERT INTO albums (node_id, primary_artist_node_id, track_count, year_min) VALUES (?, ?, 1, ?)").run(
@@ -636,6 +637,17 @@ describe("migration 0041", () => {
           artist,
           SHUFFLED_YEARS[i]!,
         );
+        // The track a recompute would have filed the album under it by.
+        // Migration 0042 (#302) gives an album the artist its tracks are by,
+        // and none to one with no track behind it.
+        const track = node(old, "recording", `Track ${i}`);
+        old.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(track);
+        old.prepare(
+          "INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size) VALUES (?, ?, ?, datetime('now'), 0)",
+        ).run(track, root, `/fake/${track}.flac`);
+        const edge = old.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, ?, 'local')");
+        edge.run(track, release, "appears_on");
+        edge.run(track, artist, "performed_by");
       });
       const insert = old.prepare(
         "INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, 'collaborated_with', 'local', 'same_era')",
