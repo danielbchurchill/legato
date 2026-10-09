@@ -15,6 +15,14 @@ interface PendingEntry extends PendingHandlers {
 export interface Tunnel {
   socket: WebSocket;
   serverId: string;
+  // What it authenticated with. The heartbeat (routes/tunnel.ts) checks it
+  // again, so a credential that's revoked or runs out while the tunnel is
+  // up stops working within one beat rather than at the next reconnect.
+  credential: string;
+  connectedAt: Date;
+  // Cleared when the heartbeat pings, set again by the pong. Still clear
+  // at the next beat means the connection is dead.
+  alive: boolean;
 }
 
 // Owns every authenticated home-server tunnel this relay currently has,
@@ -37,6 +45,10 @@ export class TunnelRegistry {
 
   get(serverId: string): Tunnel | undefined {
     return this.#tunnels.get(serverId);
+  }
+
+  all(): Tunnel[] {
+    return [...this.#tunnels.values()];
   }
 
   // A second connection for the same server replaces the first rather than

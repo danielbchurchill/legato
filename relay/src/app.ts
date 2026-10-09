@@ -13,6 +13,8 @@ export interface BuildAppOptions {
   // Stubbed provider exchange and config for tests and the local
   // end-to-end harness; production leaves it unset and reads the env.
   auth?: AuthRoutesOptions;
+  // How often the tunnel heartbeat runs (routes/tunnel.ts). Tests shorten it.
+  tunnelHeartbeatMs?: number;
 }
 
 export function buildApp(options: BuildAppOptions): FastifyInstance {
@@ -26,11 +28,11 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   app.get("/health", async () => ({ status: "ok" }));
 
   app.register(websocketPlugin);
-  app.register(tunnelRoutes(registry, options.db));
+  app.register(tunnelRoutes(registry, options.db, { heartbeatMs: options.tunnelHeartbeatMs }));
   app.register(relayRoutes(registry, options.db));
   // Also registers the pairing, claim and linked-server routes, which need
-  // the signing keys it resolves.
-  app.register(authRoutes(options.db, options.auth));
+  // the signing keys it resolves, and the tunnels for GET /linked-servers.
+  app.register(authRoutes(options.db, { ...options.auth, tunnels: registry }));
 
   return app;
 }
