@@ -111,22 +111,25 @@ export type ArtistRow = {
 
 // The artists the library lists (#276): an artist with records of its own,
 // meaning the primary artist of at least one album. That's
-// entities/aggregate.ts's rule for an album's artist: each track goes to its
-// first performed_by credit, and a record to whoever most of its tracks went
-// to, ties to the lower id. The map clusters records by the same rule
-// (src/canvas/clusters.ts), so every artist listed here has records beside
-// it on the map. An artist who is only ever featured, or credited after
+// entities/aggregate.ts's rule for an album's artist, which is the rule the
+// map clusters records by (src/canvas/clusters.ts): each track with a file
+// goes to its first performed_by credit that is an artist, and a record to
+// whoever most of its tracks went to, ties to the lower id. So every artist
+// listed here has records beside it on the map. An artist who is only ever featured, or credited after
 // someone else, has no record of its own and is left out: they'd fill the
 // grid with names that lead nowhere.
 //
 // One definition, read twice: the Artists tab pages through it below, and
 // GET /stats counts it for the Library header, so the two can't disagree.
 // Both used to read the map's graph, which stops at 5,000 nodes (#302).
+//
+// A record is a release node, as the map only clusters those.
 const LIBRARY_ARTISTS = `
   SELECT al.primary_artist_node_id AS id, COUNT(*) AS releases
   FROM albums al
+  JOIN nodes r ON r.id = al.node_id
   JOIN nodes a ON a.id = al.primary_artist_node_id
-  WHERE a.type = 'artist'
+  WHERE r.type = 'release' AND a.type = 'artist'
   GROUP BY al.primary_artist_node_id`;
 
 export function countLibraryArtists(db: Database): number {

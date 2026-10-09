@@ -37,6 +37,15 @@ describe('computeClusters', () => {
     expect(releasesOf.get(1)).toBeUndefined()
   })
 
+  it('counts only tracks toward a record, not an artist drawn onto it by hand', () => {
+    const { clusterOf } = computeClusters(nodes, [
+      { id: 1, from_node: 100, to_node: 2, type: 'performed_by' },
+      { id: 2, from_node: 100, to_node: 10, type: 'appears_on' },
+      { id: 3, from_node: 1, to_node: 10, type: 'appears_on' },
+    ])
+    expect(clusterOf.get(10)).toBe(2)
+  })
+
   it('breaks a tied vote toward the lower artist id', () => {
     const { clusterOf } = computeClusters(nodes, [
       { id: 1, from_node: 100, to_node: 2, type: 'performed_by' },

@@ -9,6 +9,19 @@ import {
   type EdgeRef,
 } from "./aggregate.js";
 
+// A recording only has a say in its album's artist while it has a file, as
+// only those are on the map (recomputeEntities), so a fixture recording that
+// is meant to count gets one.
+function giveFile(db: Database, recordingNode: number): void {
+  const root = db.prepare("INSERT INTO library_roots (path) VALUES (?) RETURNING id").get(`/fake/${recordingNode}`) as {
+    id: number;
+  };
+  db.prepare(
+    `INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size)
+     VALUES (?, ?, ?, datetime('now'), 0)`,
+  ).run(recordingNode, root.id, `/fake/${recordingNode}.flac`);
+}
+
 describe("computeAlbumAggregates", () => {
   it("sums duration and spans years across a release's tracks", () => {
     const appearsOn: EdgeRef[] = [
@@ -126,6 +139,7 @@ describe("recomputeEntities", () => {
     const year = makeNode("year", "1969");
     const recording = makeNode("recording", "Come Together");
     db.prepare("INSERT INTO recordings (node_id, canonical_duration_ms) VALUES (?, ?)").run(recording, 259000);
+    giveFile(db, recording);
 
     db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
       recording,
@@ -243,6 +257,49 @@ describe("recomputeEntities", () => {
     expect(count.n).toBe(1);
   });
 
+  // The map's rule (src/canvas/clusters.ts), which the Library's Artists tab
+  // lists by (#302): the first credit that is an artist, from tracks with a
+  // file.
+  it("files an album under the first artist its tracks credit, past a credit node ahead of them", () => {
+    db = openDb(":memory:");
+    const producer = makeNode("credit", "A Producer");
+    const artist = makeNode("artist", "The Artist");
+    const release = makeNode("release", "Record");
+    const recording = makeNode("recording", "Track");
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+    giveFile(db, recording);
+    for (const [to, type] of [
+      [release, "appears_on"],
+      [producer, "performed_by"],
+      [artist, "performed_by"],
+    ] as const) {
+      db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, ?, 'local')").run(recording, to, type);
+    }
+
+    recomputeEntities(db);
+
+    expect(db.prepare("SELECT primary_artist_node_id AS id FROM albums WHERE node_id = ?").get(release)).toEqual({ id: artist });
+  });
+
+  it("gives an album no artist from recordings without a file, and none at all when that's every one", () => {
+    db = openDb(":memory:");
+    const artist = makeNode("artist", "Gone");
+    const release = makeNode("release", "Orphaned");
+    const recording = makeNode("recording", "Left Behind");
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(recording, release);
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(recording, artist);
+
+    recomputeEntities(db);
+
+    // Still a record, and its artist still an artist: only the vote is gone.
+    expect(db.prepare("SELECT primary_artist_node_id AS id, track_count AS tracks FROM albums WHERE node_id = ?").get(release)).toEqual({
+      id: null,
+      tracks: 1,
+    });
+    expect(db.prepare("SELECT node_id FROM artists WHERE node_id = ?").get(artist)).toBeTruthy();
+  });
+
   it("gives a featured-only artist a real artists table row", () => {
     db = openDb(":memory:");
     const primary = makeNode("artist", "The Beatles");
@@ -305,6 +362,7 @@ describe("listArtistReleases", () => {
     const laterRelease = makeNode("release", "Blood on the Tracks");
     const laterRecording = makeNode("recording", "Tangled Up in Blue");
     db.prepare("INSERT INTO recordings (node_id, canonical_duration_ms) VALUES (?, ?)").run(laterRecording, 320000);
+    giveFile(db, laterRecording);
     appearsOn(laterRecording, laterRelease);
     credit(laterRecording, artist);
     const laterYear = makeNode("year", "1975");
@@ -319,6 +377,7 @@ describe("listArtistReleases", () => {
       earlierRecording,
       370000,
     );
+    giveFile(db, earlierRecording);
     appearsOn(earlierRecording, earlierRelease);
     credit(earlierRecording, artist);
     const earlierYear = makeNode("year", "1965");
@@ -348,6 +407,7 @@ describe("listArtistReleases", () => {
     const release = makeNode("release", "Let It Be");
     const recording = makeNode("recording", "Get Back");
     db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+    giveFile(db, recording);
     appearsOn(recording, release);
     credit(recording, primary);
     credit(recording, featured, "featured_artist");

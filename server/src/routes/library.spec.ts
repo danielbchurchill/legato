@@ -337,6 +337,54 @@ describe("GET /library/artists", () => {
     expect(page3.items.map((a: { name: string }) => a.name)).toEqual(["Artist 4"]);
   });
 
+  // The map's rule, src/canvas/clusters.ts, from here to the next case: a
+  // track goes to its first credit that is an artist, and only the tracks
+  // the map draws, the ones with a file, have a say in a record.
+  it("files a record under the first artist its tracks credit, past a credit node credited ahead of them", async () => {
+    const producer = makeNode("credit", "A Producer");
+    const artist = makeNode("artist", "The Artist");
+    const record = makeNode("release", "Record");
+    track(record, [producer, artist]);
+    track(record, [producer, artist]);
+    recomputeEntities(db);
+
+    expect(await getArtists()).toEqual({ items: [{ id: artist, name: "The Artist", releases: 1 }], total: 1 });
+    const stats = (await app.inject({ method: "GET", url: "/api/v1/stats" })).json();
+    expect(stats.artists).toBe(1);
+  });
+
+  it("gives a record's vote only to tracks with a file, as the map draws only those", async () => {
+    const kept = makeNode("artist", "Kept");
+    const orphaned = makeNode("artist", "Orphaned");
+    const record = makeNode("release", "Record");
+    track(record, [kept]);
+    // Two recordings a collapse left behind: their files moved to other
+    // nodes, and their edges stayed.
+    for (let i = 0; i < 2; i++) {
+      const left = makeNode("recording", "Left Behind");
+      db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(left);
+      edge(left, orphaned, "performed_by");
+      edge(left, record, "appears_on");
+    }
+    recomputeEntities(db);
+
+    expect(await names()).toEqual(["Kept"]);
+  });
+
+  it("still counts a track whose file has gone missing, which the map still draws", async () => {
+    const present = makeNode("artist", "Present");
+    const missing = makeNode("artist", "Missing");
+    const record = makeNode("release", "Record");
+    track(record, [present]);
+    for (let i = 0; i < 2; i++) {
+      const id = track(record, [missing]);
+      db.prepare("UPDATE files SET missing_since = datetime('now') WHERE recording_node_id = ?").run(id);
+    }
+    recomputeEntities(db);
+
+    expect(await names()).toEqual(["Missing"]);
+  });
+
   it("leaves out a record's artist that isn't an artist node, and a record with no artist", async () => {
     makeAlbum("Untagged");
     makeAlbum("Odd", { artistId: makeNode("credit", "A Producer") });
