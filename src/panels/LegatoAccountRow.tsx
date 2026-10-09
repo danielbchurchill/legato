@@ -214,6 +214,16 @@ function ServerLink({ relaySignedIn }: { relaySignedIn: boolean }) {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
+  // Back from legato.fm with the browser's back button, the page can come
+  // back from the back-forward cache exactly as it left: still linking.
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setBusy(false)
+    }
+    window.addEventListener('pageshow', onPageShow)
+    return () => window.removeEventListener('pageshow', onPageShow)
+  }, [])
+
   if (status === null) return <Skeleton className="h-[12px] w-[200px] rounded-full" />
   // A server from before #114 has no legato.fm identity to link.
   if (status === 'unavailable') return null
