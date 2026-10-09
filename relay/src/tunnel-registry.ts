@@ -95,10 +95,18 @@ export class TunnelRegistry {
     this.#pending.set(requestId, { socket, started: false, ...handlers });
   }
 
-  // Lets an HTTP-side abort (mobile client hung up) drop its slot without
-  // waiting for a response that will now never be used.
+  // The device hung up before its answer was over. Drops the slot, and
+  // tells the home server to stop: otherwise a whole FLAC goes on coming
+  // up the tunnel for nobody, and a transcode keeps its media-queue slot.
   cancelPending(requestId: string): void {
+    const entry = this.#pending.get(requestId);
+    if (!entry) return;
     this.#pending.delete(requestId);
+    this.#sendCancel(entry.socket, requestId);
+  }
+
+  #sendCancel(socket: WebSocket, requestId: string): void {
+    if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: "cancel", requestId }));
   }
 
   sendRequest(socket: WebSocket, frame: RequestFrame): void {
@@ -164,8 +172,11 @@ export class TunnelRegistry {
     }
   }
 
+  // Gives up on an answer: the device gets its error, and the home server
+  // is told to stop sending the rest.
   #fail(requestId: string, entry: PendingEntry, message: string): void {
     this.#pending.delete(requestId);
+    this.#sendCancel(entry.socket, requestId);
     entry.onError(message);
   }
 

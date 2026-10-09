@@ -400,6 +400,41 @@ describe("TunnelClient", () => {
     expect(Date.now() - stoppedAt).toBeLessThan(3_000);
   });
 
+  it("aborts its own request when legato.fm cancels it, and sends nothing more for it", async () => {
+    const app = Fastify();
+    let hungUp!: () => void;
+    const closed = new Promise<void>((resolve) => (hungUp = resolve));
+    app.get("/endless", (request, reply) => {
+      reply.raw.writeHead(200, { "content-type": "audio/flac" });
+      const beat = setInterval(() => reply.raw.write("x"), 10);
+      request.raw.socket.on("close", () => {
+        clearInterval(beat);
+        hungUp();
+      });
+    });
+    const origin = await listen(app);
+    const fake = relay();
+    const tunnel = client(fake.url, origin);
+    await waitFor(tunnel, "connected");
+
+    let settled = false;
+    void fake.request({ method: "GET", path: "/endless", headers: {} }).then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await sleep(50);
+    fake.send({ type: "cancel", requestId: fake.lastRequestId });
+    await closed;
+    await sleep(50);
+    expect(settled).toBe(false);
+    expect(tunnel.state).toBe("connected");
+    // A cancel for nothing, or for a request already over, is ignored.
+    fake.send({ type: "cancel", requestId: fake.lastRequestId });
+    fake.send({ type: "cancel", requestId: "never-sent" });
+    fake.send({ type: "cancel" });
+    expect((await fake.request({ method: "GET", path: "/endless-not", headers: {} })).status).toBe(404);
+  });
+
   it("stops when told to, and stays stopped", async () => {
     const fake = relay();
     const tunnel = client(fake.url, "http://127.0.0.1:9");

@@ -427,7 +427,9 @@ describe("frames a home server sends back", () => {
     const account = signIn(db);
     const { serverId, credential } = linkServer(db, account.userId);
     const tunnel = await rawHomeServer(tunnelUrl, credential, answer);
-    const get = (path = "/x") => fetch(`${httpUrl}/relay/${serverId}${path}`, { headers: { cookie: account.cookieHeader } });
+    const headers = { cookie: account.cookieHeader };
+    const url = (path: string) => `${httpUrl}/relay/${serverId}${path}`;
+    const get = Object.assign((path = "/x") => fetch(url(path), { headers }), { url, headers });
     return { tunnel, get, httpUrl };
   }
 
@@ -448,6 +450,22 @@ describe("frames a home server sends back", () => {
     const fine = await get();
     expect(fine.status).toBe(201);
     expect(await fine.text()).toBe("x");
+    expect(tunnel.closed).toBe(false);
+    // Each one it gave up on, the server was told to stop sending.
+    expect(tunnel.cancelled).toHaveLength(5);
+  });
+
+  it("tells the home server to stop when the device hangs up mid-answer", async () => {
+    const { tunnel, get } = await setUp(() => [start(200, { "content-type": "audio/flac" }), chunk(Buffer.from("first").toString("base64"))]);
+    const hangUp = new AbortController();
+    const response = await fetch(get.url("/stream"), { headers: get.headers, signal: hangUp.signal });
+    const reader = response.body!.getReader();
+    expect(Buffer.from((await reader.read()).value!).toString()).toBe("first");
+    hangUp.abort();
+
+    const until = Date.now() + 2_000;
+    while (tunnel.cancelled.length === 0 && Date.now() < until) await sleep(10);
+    expect(tunnel.cancelled).toHaveLength(1);
     expect(tunnel.closed).toBe(false);
   });
 

@@ -46,6 +46,17 @@ export interface RequestFrame {
   clientAddress?: string;
 }
 
+// Sent by the relay when the device a request came from hangs up before
+// its answer is over, or when the relay gives up on an answer it can't pass
+// on. The home server stops working on it: it aborts its own request, which
+// ends a file read, and a transcode with no one left to read it stops
+// (server/src/stream/cache.ts). Nothing answers it, and a home server from
+// before it ignores it.
+export interface CancelFrame {
+  type: "cancel";
+  requestId: string;
+}
+
 export interface ResponseStartFrame {
   type: "response-start";
   requestId: string;
@@ -78,6 +89,7 @@ export type TunnelFrame =
   | AuthOkFrame
   | AuthErrorFrame
   | RequestFrame
+  | CancelFrame
   | ResponseStartFrame
   | ResponseChunkFrame
   | ResponseEndFrame

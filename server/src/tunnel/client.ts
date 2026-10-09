@@ -112,7 +112,8 @@ export class TunnelClient {
   private frameWarned = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private beatTimer: ReturnType<typeof setInterval> | null = null;
-  private readonly requests = new Map<string, ClientRequest>();
+  // Each request under way, by the relay's id, with what stops it.
+  private readonly requests = new Map<string, { cancel: () => void }>();
   private readonly listeners = new Set<(state: TunnelState) => void>();
 
   constructor(options: TunnelClientOptions) {
@@ -202,6 +203,8 @@ export class TunnelClient {
           this.refused(String(frame.message));
         } else if (frame?.type === "request" && this.current === "connected") {
           this.forward(socket, frame);
+        } else if (frame?.type === "cancel" && typeof frame.requestId === "string") {
+          this.requests.get(frame.requestId)?.cancel();
         }
       } catch (err) {
         if (this.frameWarned) return;
@@ -254,11 +257,13 @@ export class TunnelClient {
     if (this.beatTimer) clearInterval(this.beatTimer);
     this.retryTimer = null;
     this.beatTimer = null;
-    const graceful = this.requests.size === 0;
-    for (const request of this.requests.values()) request.destroy();
-    this.requests.clear();
+    // Forgotten first, so a request cancelled below doesn't come back here
+    // through requestOver().
     const socket = this.socket;
     this.socket = null;
+    const graceful = this.requests.size === 0;
+    for (const request of [...this.requests.values()]) request.cancel();
+    this.requests.clear();
     try {
       // A close frame goes after whatever is still queued, so the last
       // answers aren't cut off. A socket with requests still riding on it,
@@ -349,7 +354,18 @@ export class TunnelClient {
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
     }
-    this.requests.set(requestId, request);
+    // The device hung up, or the tunnel is going: the local request is
+    // aborted, which is how the route serving it learns nobody's reading
+    // (a file read ends; a transcode is left, server/src/stream/cache.ts).
+    // Nothing goes back: the relay has stopped waiting for it.
+    this.requests.set(requestId, {
+      cancel: () => {
+        if (settled) return;
+        settled = true;
+        this.requestOver(requestId);
+        request.destroy();
+      },
+    });
 
     request.on("response", (response) => {
       send({ type: "response-start", requestId, status: response.statusCode ?? 502, headers: forwardable(response.headers) });
