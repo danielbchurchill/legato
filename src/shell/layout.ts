@@ -80,6 +80,32 @@ const LEFT_OCCUPANCY_OPEN = LEFT_OCCUPANCY_CLOSED + PANEL_GAP + LEFT_PANEL_WIDTH
 /* Right occupancy: the panel and its inset plus a gap, or nothing. */
 const RIGHT_OCCUPANCY_OPEN = RIGHT_PANEL_WIDTH + INSET + PANEL_GAP // 380
 
+/* A row of parts with a gap between each. A width of 0 is a part that isn't
+ * shown, so it takes no gap either. */
+function sumWithGaps(widths: number[], gap: number): number {
+  const shown = widths.filter((w) => w > 0)
+  return shown.reduce((sum, w) => sum + w, 0) + gap * Math.max(0, shown.length - 1)
+}
+
+/* Each set of parts a piece of the shell can show, beside the width it
+ * needs. The sizes never change, so these are worked out once, when the
+ * module loads, rather than on every resize. */
+type Stage<Parts> = { parts: Parts; width: number }
+
+function stagesOf<Parts>(sets: Parts[], contentWidth: (parts: Parts) => number): Stage<Parts>[] {
+  return sets.map((parts) => ({ parts, width: contentWidth(parts) }))
+}
+
+/* The widest set that fits, or else the last, the narrowest the piece gets. */
+function pickStage<Parts>(stages: Stage<Parts>[], width: number): Parts {
+  return (stages.find((stage) => stage.width <= width) ?? stages[stages.length - 1]).parts
+}
+
+/* cx, unless a box that wide centred there would cross the window's inset. */
+function clampCentre(cx: number, boxWidth: number, width: number): number {
+  return Math.min(Math.max(cx, INSET + boxWidth / 2), width - INSET - boxWidth / 2)
+}
+
 /* What the player shows. A dropped title stays for screen readers; the rest
  * isn't drawn at all. */
 export type PlayerParts = {
@@ -107,44 +133,42 @@ export type PlayerParts = {
  * handoff puts the compact switch at 600, but 56 bars at their 1px minimum
  * with 2px gaps only fit from 614; between the two, the waveform ran 6px
  * into the duration. */
-const PLAYER_STAGES: PlayerParts[] = [
-  { cover: true, titleWidth: 180, shuffleAndRepeat: true, waveformBars: 56, queueAndVolume: true },
-  { cover: true, titleWidth: 112, shuffleAndRepeat: true, waveformBars: 24, queueAndVolume: true },
-  { cover: true, titleWidth: 0, shuffleAndRepeat: true, waveformBars: 24, queueAndVolume: true },
-  { cover: true, titleWidth: 0, shuffleAndRepeat: true, waveformBars: 24, queueAndVolume: false },
-  { cover: false, titleWidth: 0, shuffleAndRepeat: true, waveformBars: 24, queueAndVolume: false },
-  { cover: false, titleWidth: 0, shuffleAndRepeat: false, waveformBars: 0, queueAndVolume: false },
-]
+const PLAYER_STAGES = stagesOf<PlayerParts>(
+  [
+    { cover: true, titleWidth: 180, shuffleAndRepeat: true, waveformBars: 56, queueAndVolume: true },
+    { cover: true, titleWidth: 112, shuffleAndRepeat: true, waveformBars: 24, queueAndVolume: true },
+    { cover: true, titleWidth: 0, shuffleAndRepeat: true, waveformBars: 24, queueAndVolume: true },
+    { cover: true, titleWidth: 0, shuffleAndRepeat: true, waveformBars: 24, queueAndVolume: false },
+    { cover: false, titleWidth: 0, shuffleAndRepeat: true, waveformBars: 24, queueAndVolume: false },
+    { cover: false, titleWidth: 0, shuffleAndRepeat: false, waveformBars: 0, queueAndVolume: false },
+  ],
+  playerContentWidth,
+)
 
 /* The width a set of parts needs, from the sizes Player.tsx draws them at
  * (playerGeometry.ts). The transport sits over the scrubber, so the middle
  * column is the wider of the two. */
 export function playerContentWidth(parts: PlayerParts): number {
-  const skipAndPlay = PLAYER_SKIP_SIZE + PLAYER_TRANSPORT_GAP + PLAYER_PLAY_SIZE + PLAYER_TRANSPORT_GAP + PLAYER_SKIP_SIZE
-  const transport = parts.shuffleAndRepeat
-    ? PLAYER_SHUFFLE_SIZE + PLAYER_TRANSPORT_GAP + skipAndPlay + PLAYER_TRANSPORT_GAP + PLAYER_REPEAT_SIZE
-    : skipAndPlay
+  const shuffle = parts.shuffleAndRepeat ? PLAYER_SHUFFLE_SIZE : 0
+  const repeat = parts.shuffleAndRepeat ? PLAYER_REPEAT_SIZE : 0
+  const transport = sumWithGaps([shuffle, PLAYER_SKIP_SIZE, PLAYER_PLAY_SIZE, PLAYER_SKIP_SIZE, repeat], PLAYER_TRANSPORT_GAP)
   const bars = parts.waveformBars
   const waveform = bars * PLAYER_BAR_MIN_WIDTH + (bars - 1) * PLAYER_BAR_GAP
-  const scrubber = bars > 0 ? PLAYER_TIME_WIDTH + PLAYER_SCRUBBER_GAP + waveform + PLAYER_SCRUBBER_GAP + PLAYER_TIME_WIDTH : 0
-  const queueAndVolume = PLAYER_QUEUE_SIZE + PLAYER_QUEUE_VOLUME_GAP + PLAYER_VOLUME_SIZE
-  const columns = [
-    parts.cover ? PLAYER_COVER_SIZE : 0,
-    parts.titleWidth,
-    Math.max(transport, scrubber),
-    parts.queueAndVolume ? queueAndVolume : 0,
-  ]
-  const shown = columns.filter((w) => w > 0)
-  const content = shown.reduce((sum, w) => sum + w, 0) + PLAYER_COLUMN_GAP * (shown.length - 1)
+  const scrubber = bars > 0 ? sumWithGaps([PLAYER_TIME_WIDTH, waveform, PLAYER_TIME_WIDTH], PLAYER_SCRUBBER_GAP) : 0
+  const queueAndVolume = parts.queueAndVolume ? sumWithGaps([PLAYER_QUEUE_SIZE, PLAYER_VOLUME_SIZE], PLAYER_QUEUE_VOLUME_GAP) : 0
+  const content = sumWithGaps(
+    [parts.cover ? PLAYER_COVER_SIZE : 0, parts.titleWidth, Math.max(transport, scrubber), queueAndVolume],
+    PLAYER_COLUMN_GAP,
+  )
   return PLAYER_BORDER + PLAYER_PADDING_LEFT + content + PLAYER_PADDING_RIGHT + PLAYER_BORDER
 }
 
 export function playerParts(playerWidth: number): PlayerParts {
-  return PLAYER_STAGES.find((parts) => playerContentWidth(parts) <= playerWidth) ?? PLAYER_STAGES[PLAYER_STAGES.length - 1]
+  return pickStage(PLAYER_STAGES, playerWidth)
 }
 
 /* The transport alone: the narrowest the player gets. */
-export const PLAYER_MIN_WIDTH = playerContentWidth(PLAYER_STAGES[PLAYER_STAGES.length - 1])
+export const PLAYER_MIN_WIDTH = PLAYER_STAGES[PLAYER_STAGES.length - 1].width
 
 /* What the idle pill shows, with nothing loaded. The button is always
  * there; without its label it's named for screen readers and in a tooltip. */
@@ -166,29 +190,34 @@ export type IdleParts = {
  *    52  the button's icon alone, in a round pill
  *
  * The last is under the bar's 134px floor, so the pill always fits. */
-const IDLE_STAGES: IdleParts[] = [
-  { sentence: true, buttonLabel: true, shortcut: true },
-  { sentence: true, buttonLabel: true, shortcut: false },
-  { sentence: false, buttonLabel: true, shortcut: false },
-  { sentence: false, buttonLabel: false, shortcut: false },
-]
+const IDLE_STAGES = stagesOf<IdleParts>(
+  [
+    { sentence: true, buttonLabel: true, shortcut: true },
+    { sentence: true, buttonLabel: true, shortcut: false },
+    { sentence: false, buttonLabel: true, shortcut: false },
+    { sentence: false, buttonLabel: false, shortcut: false },
+  ],
+  idleContentWidth,
+)
 
 /* The width a set of idle parts needs: the most the pill draws, since it
  * hugs its content and the text widths are rounded up. Alone, the button's
  * icon sits in a circle as wide as the pill is tall. */
 export function idleContentWidth(parts: IdleParts): number {
-  const items = [
-    parts.sentence ? IDLE_SENTENCE_WIDTH : 0,
-    parts.buttonLabel ? IDLE_BUTTON_WIDTH : IDLE_BUTTON_ICON_SIZE,
-    parts.shortcut ? IDLE_SHORTCUT_WIDTH : 0,
-  ].filter((w) => w > 0)
-  const content = items.reduce((sum, w) => sum + w, 0) + IDLE_GAP * (items.length - 1)
+  const content = sumWithGaps(
+    [
+      parts.sentence ? IDLE_SENTENCE_WIDTH : 0,
+      parts.buttonLabel ? IDLE_BUTTON_WIDTH : IDLE_BUTTON_ICON_SIZE,
+      parts.shortcut ? IDLE_SHORTCUT_WIDTH : 0,
+    ],
+    IDLE_GAP,
+  )
   const paddingLeft = parts.sentence ? IDLE_PADDING_TEXT : IDLE_PADDING
   return Math.max(IDLE_HEIGHT, PLAYER_BORDER + paddingLeft + content + IDLE_PADDING + PLAYER_BORDER)
 }
 
 export function idleParts(playerWidth: number): IdleParts {
-  return IDLE_STAGES.find((parts) => idleContentWidth(parts) <= playerWidth) ?? IDLE_STAGES[IDLE_STAGES.length - 1]
+  return pickStage(IDLE_STAGES, playerWidth)
 }
 
 /* What the capsule shows. A dropped label stays for screen readers, and
@@ -215,30 +244,33 @@ export type CapsuleParts = {
  * It doesn't get narrower than the last. The words go before the switch's
  * labels because a magnifier needs no caption and the map and library icons
  * are Legato's own. */
-const CAPSULE_STAGES: CapsuleParts[] = [
-  { switchLabels: true, searchLabel: 'full', searchShortcut: true },
-  { switchLabels: true, searchLabel: 'short', searchShortcut: true },
-  { switchLabels: true, searchLabel: 'short', searchShortcut: false },
-  { switchLabels: true, searchLabel: null, searchShortcut: false },
-  { switchLabels: false, searchLabel: null, searchShortcut: false },
-]
+const CAPSULE_STAGES = stagesOf<CapsuleParts>(
+  [
+    { switchLabels: true, searchLabel: 'full', searchShortcut: true },
+    { switchLabels: true, searchLabel: 'short', searchShortcut: true },
+    { switchLabels: true, searchLabel: 'short', searchShortcut: false },
+    { switchLabels: true, searchLabel: null, searchShortcut: false },
+    { switchLabels: false, searchLabel: null, searchShortcut: false },
+  ],
+  capsuleContentWidth,
+)
 
 /* The width a set of capsule parts needs, from capsuleGeometry.ts. */
 export function capsuleContentWidth(parts: CapsuleParts): number {
   const label = parts.searchLabel === 'full' ? CAPSULE_PLACEHOLDER_WIDTH : parts.searchLabel === 'short' ? CAPSULE_SEARCH_WORD_WIDTH : 0
-  const searchItems = [CAPSULE_SEARCH_ICON_SIZE, label, parts.searchShortcut ? CAPSULE_SHORTCUT_WIDTH : 0].filter((w) => w > 0)
-  const search = searchItems.reduce((sum, w) => sum + w, 0) + CAPSULE_SEARCH_GAP * (searchItems.length - 1) + CAPSULE_SEARCH_PADDING_RIGHT
+  const shortcut = parts.searchShortcut ? CAPSULE_SHORTCUT_WIDTH : 0
+  const search = sumWithGaps([CAPSULE_SEARCH_ICON_SIZE, label, shortcut], CAPSULE_SEARCH_GAP) + CAPSULE_SEARCH_PADDING_RIGHT
   const switchWidth = parts.switchLabels ? CAPSULE_SWITCH_WIDTH : CAPSULE_SWITCH_ICONS_WIDTH
-  const content = switchWidth + CAPSULE_GAP + CAPSULE_DIVIDER_WIDTH + CAPSULE_GAP + search
+  const content = sumWithGaps([switchWidth, CAPSULE_DIVIDER_WIDTH, search], CAPSULE_GAP)
   return CAPSULE_BORDER + CAPSULE_PADDING_LEFT + content + CAPSULE_PADDING_RIGHT + CAPSULE_BORDER
 }
 
 export function capsuleParts(capsuleWidth: number): CapsuleParts {
-  return CAPSULE_STAGES.find((parts) => capsuleContentWidth(parts) <= capsuleWidth) ?? CAPSULE_STAGES[CAPSULE_STAGES.length - 1]
+  return pickStage(CAPSULE_STAGES, capsuleWidth)
 }
 
 /* The switch's icons and the magnifier: the narrowest the capsule gets. */
-export const CAPSULE_MIN_WIDTH = capsuleContentWidth(CAPSULE_STAGES[CAPSULE_STAGES.length - 1])
+export const CAPSULE_MIN_WIDTH = CAPSULE_STAGES[CAPSULE_STAGES.length - 1].width
 
 export type ShellLayout = {
   width: number
@@ -282,10 +314,10 @@ export function computeShellLayout(
     free,
     cx,
     capsuleWidth,
-    capsuleCx: Math.min(Math.max(cx, INSET + capsuleWidth / 2), width - INSET - capsuleWidth / 2),
+    capsuleCx: clampCentre(cx, capsuleWidth, width),
     capsuleParts: capsuleParts(capsuleWidth),
     playerWidth,
-    playerCx: Math.min(Math.max(cx, INSET + playerWidth / 2), width - INSET - playerWidth / 2),
+    playerCx: clampCentre(cx, playerWidth, width),
     playerParts: playerParts(playerWidth),
     idleParts: idleParts(playerWidth),
     floatingBottom: INSET + PLAYER_HEIGHT + INSET,
