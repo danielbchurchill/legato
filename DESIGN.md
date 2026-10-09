@@ -87,7 +87,7 @@ The capsule is as wide as the free space less 48px, up to 520. Its parts give wa
 | 507px | The placeholder shortens to "Search" | 1331px |
 | 360px | The keycap. ⌘K/Ctrl-K and `/` still open search | 1184px |
 | 299px | "Search". The magnifier stays | 1123px |
-| 243px | The switch's "map" and "library". Their icons stay, and the labels stay for screen readers | 1067px |
+| 243px | The switch's "map" and "library". Their icons stay, and each label moves into its tab's tooltip and stays for screen readers | 1067px |
 
 The switch and the search button never go. With the switch's icons and the magnifier the capsule needs 135px, and it stops narrowing there. Under 959px with both panels open its margins close up, and under 911px it floats over the panels' inner edges, inside the window, as the bar does. At 1100 with both panels open it's 276px, the labelled switch and the magnifier.
 

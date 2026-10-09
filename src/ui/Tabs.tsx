@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Icon, type IconName } from './Icon'
+import { Tooltip } from './Tooltip'
 import { usePrefersReducedMotion } from './usePrefersReducedMotion'
 
 /* A hand port of gpui-kit's TabBar (crates/component/src/tab/), drawn in
@@ -66,7 +67,9 @@ type TabsProps<T extends string> = {
    * tabs ignore it. */
   size?: TabsSize
   /** `segmented` only: each option's icon alone, its label kept for screen
-   * readers. The capsule's switch when it's narrow (#308). */
+   * readers and shown in a tooltip. An option without an icon keeps its
+   * label, so no tab is ever blank. The capsule's switch when it's narrow
+   * (#308). */
   iconOnly?: boolean
   className?: string
 }
@@ -88,6 +91,14 @@ export function Tabs<T extends string>({
   // The first measurement places the indicator without sliding it in from
   // zero; only a change of tab after that animates.
   const [settled, setSettled] = useState(false)
+  // So does a change of shape: iconOnly resizes every tab at once, and a
+  // slide from the old box would draw the indicator outside the narrower
+  // switch, over whatever's beside it, for the whole slide.
+  const [shape, setShape] = useState(iconOnly)
+  if (shape !== iconOnly) {
+    setShape(iconOnly)
+    setSettled(false)
+  }
   const reduced = usePrefersReducedMotion()
   // -1 when the value matches no option — the map's layout control after
   // the sliders have moved off every preset. Nothing is drawn as active, and
@@ -102,13 +113,16 @@ export function Tabs<T extends string>({
       setIndicator(null)
       return
     }
-    const measure = () => setIndicator({ left: tab.offsetLeft, width: tab.offsetWidth })
+    // A tab with a tooltip sits in the tooltip's wrapper, which is what the
+    // list lays out, and what its offset is measured from.
+    const box = tab.parentElement === list ? tab : tab.parentElement!
+    const measure = () => setIndicator({ left: box.offsetLeft, width: box.offsetWidth })
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(list)
-    observer.observe(tab)
+    observer.observe(box)
     return () => observer.disconnect()
-  }, [activeIndex, options])
+  }, [activeIndex, options, iconOnly])
 
   useLayoutEffect(() => {
     if (indicator && !settled) {
@@ -161,7 +175,8 @@ export function Tabs<T extends string>({
       )}
       {options.map((option, index) => {
         const active = index === activeIndex
-        return (
+        const iconAlone = iconOnly && segmented && option.icon != null
+        const tab = (
           <button
             key={option.value}
             ref={(el) => {
@@ -174,12 +189,22 @@ export function Tabs<T extends string>({
             onClick={() => onChange(option.value)}
             onKeyDown={handleKeyDown}
             className={`relative z-[1] flex items-center gap-[6px] text-[length:var(--text-secondary)] leading-none font-medium whitespace-nowrap transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
-              segmented ? `rounded-full ${iconOnly ? SEGMENT_SQUARE[size] : SEGMENT_HEIGHT[size]}` : 'pb-[9px]'
+              segmented ? `rounded-full ${iconAlone ? SEGMENT_SQUARE[size] : SEGMENT_HEIGHT[size]}` : 'pb-[9px]'
             } ${active ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-ink-2)] hover:text-[var(--color-ink)]'}`}
           >
             {option.icon && <Icon name={option.icon} size={iconSize} />}
-            {iconOnly ? <span className="sr-only">{option.label}</span> : option.label}
+            {iconAlone ? <span className="sr-only">{option.label}</span> : option.label}
           </button>
+        )
+        // A segment that can lose its label always sits in a tooltip, shown
+        // only while the label's gone, so the tab stays the same element and
+        // keeps its focus when the switch changes shape.
+        return segmented && option.icon ? (
+          <Tooltip key={option.value} label={option.label} disabled={!iconAlone}>
+            {tab}
+          </Tooltip>
+        ) : (
+          tab
         )
       })}
     </div>

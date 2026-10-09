@@ -31,7 +31,8 @@ import {
  *
  * As the free space narrows, the placeholder shortens to "Search", then the
  * keycap, the word and the switch's labels go, in the order layout.ts sets
- * out (#308). The switch and the search button never go. */
+ * out (#308). The switch and the search button never go, and a tab without
+ * its label shows it in a tooltip. */
 
 export type ViewMode = 'map' | 'library'
 

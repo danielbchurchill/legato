@@ -210,7 +210,7 @@ export type CapsuleParts = {
  *   360  the placeholder shortens to "Search"
  *   299  no keycap; ⌘K and / still open search
  *   243  no "Search": the magnifier alone
- *   135  the switch's icons alone, its labels kept for screen readers
+ *   135  the switch's icons alone, its labels in tooltips and for screen readers
  *
  * It doesn't get narrower than the last. The words go before the switch's
  * labels because a magnifier needs no caption and the map and library icons
