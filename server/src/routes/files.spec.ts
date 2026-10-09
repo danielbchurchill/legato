@@ -1,14 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import Fastify from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { mediaSlotsInUse } from "../media/queue.js";
-import { cachePath } from "../stream/cache.js";
+import { cachePath, ensureVariant } from "../stream/cache.js";
 import { filesRoutes, parseRange } from "./files.js";
 
 const SIZE = 1000;
@@ -220,6 +221,41 @@ describe("GET /api/v1/files/:id/stream", () => {
       const cached = readFileSync(cachePath(HASH, "opus96", path.join(dir, "streams")));
       expect(Buffer.from(await sought.arrayBuffer()).equals(cached.subarray(1000, 2000))).toBe(true);
     } finally {
+      await app.close();
+    }
+  });
+
+  it("counts a player that hangs up while its encode is being set up as gone", async () => {
+    execFileSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1200", sourcePath], { stdio: "ignore" });
+    const cacheDir = path.join(dir, "streams");
+    const app = Fastify();
+    let hungUp!: () => void;
+    const closed = new Promise<void>((resolve) => (hungUp = resolve));
+    app.addHook("onRequest", async (_request, reply) => {
+      reply.raw.once("close", () => hungUp());
+    });
+    await app.register(filesRoutes(db, { cacheDir }), { prefix: "/api/v1" });
+    const origin = await app.listen({ port: 0, host: "127.0.0.1" });
+    // The route's first wait is whether the variant is cached already. The
+    // player hangs up during it: a tunnel's cancel does just this.
+    const access = fsPromises.access;
+    const checking = spyOn(fsPromises, "access").mockImplementation(async (...args: Parameters<typeof access>) => {
+      await closed;
+      return access(...args);
+    });
+    try {
+      const hangUp = new AbortController();
+      void fetch(`${origin}/api/v1/files/${fileId}/stream?quality=opus160`, { signal: hangUp.signal }).catch(() => {});
+      while (checking.mock.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+      hangUp.abort();
+      await closed;
+      const variant = await ensureVariant(HASH, sourcePath, "opus160", cacheDir);
+      if (variant.kind !== "growing") throw new Error("expected the encode under way");
+      await variant.job.started;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(variant.job.listening).toBe(0);
+    } finally {
+      checking.mockRestore();
       await app.close();
     }
   });

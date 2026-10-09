@@ -111,6 +111,11 @@ export class TranscodeJob {
     this.finished.catch(() => {});
   }
 
+  /** How many requests are listening now. */
+  get listening(): number {
+    return this.listeners;
+  }
+
   /** One more request listening. Call what it returns when that request is over. */
   join(): () => void {
     this.listeners += 1;
