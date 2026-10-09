@@ -34,21 +34,31 @@ const SIZE_CLASSES: Record<ButtonSize, string> = {
   lg: 'h-[36px]',
 }
 
+/* A button always has a name: a label, or else an icon and an aria-label.
+ * So neither an empty pill nor an unnamed icon compiles, the way IconButton
+ * requires its `label`. */
 type ButtonProps = {
   variant?: ButtonVariant
   size?: ButtonSize
-  /** Leading glyph, drawn filled at 16px. */
-  icon?: IconName
   type?: 'button' | 'submit'
   onClick?: () => void
   disabled?: boolean
   className?: string
-  /** Left out for an icon alone, which then needs an aria-label. */
-  children?: ReactNode
-  'aria-label'?: string
   /** AlertDialog points its initial focus at its cancel button. */
   ref?: Ref<HTMLButtonElement>
-}
+} & (
+  | {
+      children: ReactNode
+      /** Leading glyph, drawn filled at 16px. */
+      icon?: IconName
+      'aria-label'?: string
+    }
+  | {
+      children?: never
+      icon: IconName
+      'aria-label': string
+    }
+)
 
 export function Button({
   variant = 'link',
