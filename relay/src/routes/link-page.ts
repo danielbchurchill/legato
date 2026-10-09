@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { getUserBySessionToken, sessionToken, type RelayUserRow } from "../accounts.js";
+import { getUserById, getUserBySessionToken, sessionToken, type RelayUserRow } from "../accounts.js";
 import {
   cancelUrl,
   LINK_REDEEM_FAILURE_MESSAGES,
@@ -376,7 +376,12 @@ export function linkPageRoutes(
         return { error: LINK_REDEEM_FAILURE_MESSAGES[result.reason], reason: result.reason };
       }
       limiter.recordSuccess(address);
-      const user = db.prepare("SELECT * FROM relay_users WHERE id = ?").get(result.relayUserId) as RelayUserRow;
+      // The account was deleted after the code was minted.
+      const user = getUserById(db, result.relayUserId);
+      if (!user) {
+        reply.code(400);
+        return { error: LINK_REDEEM_FAILURE_MESSAGES.not_found, reason: "not_found" };
+      }
       const issued = signServerToken(signingKeys, { issuer, user, serverId: result.serverId, scope: "link", tunnel: true });
       return { token: issued.token, expiresAt: issued.expiresAt.toISOString(), scope: issued.scope };
     });

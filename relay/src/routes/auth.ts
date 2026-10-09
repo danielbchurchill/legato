@@ -12,6 +12,7 @@ import {
   createSession,
   deleteSession,
   generateState,
+  getUserById,
   getUserBySessionToken,
   isValidState,
   SESSION_COOKIE,
@@ -491,8 +492,13 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
         }
         limiter.recordSuccess(address);
 
-        const { token, expiresAt } = createSession(db, result.relayUserId);
-        const user = db.prepare("SELECT * FROM relay_users WHERE id = ?").get(result.relayUserId) as RelayUserRow;
+        // The code's account was deleted after it was minted.
+        const user = getUserById(db, result.relayUserId);
+        if (!user) {
+          reply.code(400);
+          return { error: "invalid_grant", reason: "not_found", message: REDEEM_FAILURE_MESSAGES.not_found };
+        }
+        const { token, expiresAt } = createSession(db, user.id);
         return { token, expiresAt: expiresAt.toISOString(), user: publicUser(user) };
       },
     );

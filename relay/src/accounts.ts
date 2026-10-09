@@ -78,6 +78,13 @@ export function createSession(db: Database, userId: number): { token: string; ex
   return { token, expiresAt: parseSqliteDatetime(row.expires_at) };
 }
 
+// Null when the account is gone, so a caller holding an id from a code or
+// a credential answers that rather than reading a missing row as a user.
+export function getUserById(db: Database, id: number): RelayUserRow | null {
+  const row = db.prepare("SELECT * FROM relay_users WHERE id = ?").get(id) as RelayUserRow | undefined;
+  return row ?? null;
+}
+
 export function getUserBySessionToken(db: Database, token: string): RelayUserRow | null {
   const row = db
     .prepare(
