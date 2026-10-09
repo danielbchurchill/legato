@@ -32,6 +32,8 @@ describe("tunnel lifecycle", () => {
   let homeServers: TunnelClient[] = [];
   let fixture: FixtureServerHandle;
   let warnings: string[] = [];
+  // Sockets a spec opens by hand, closed however the spec ends.
+  let rawSockets: WebSocket[] = [];
 
   beforeEach(async () => {
     db = openDb(":memory:");
@@ -40,6 +42,8 @@ describe("tunnel lifecycle", () => {
   });
 
   afterEach(async () => {
+    for (const socket of rawSockets) socket.terminate();
+    rawSockets = [];
     for (const homeServer of homeServers) homeServer.stop();
     for (const app of apps) await app.close();
     await fixture.close();
@@ -55,6 +59,12 @@ describe("tunnel lifecycle", () => {
     });
     apps.push(app);
     return { app, opened, ...(await listenApp(app, port)) };
+  }
+
+  function rawSocket(url: string): WebSocket {
+    const socket = new WebSocket(url);
+    rawSockets.push(socket);
+    return socket;
   }
 
   const log = (level: "info" | "warn", message: string) => {
@@ -147,7 +157,7 @@ describe("tunnel lifecycle", () => {
     const account = signIn(db);
     const { credential } = linkServer(db, account.userId);
 
-    const socket = new WebSocket(tunnelUrl);
+    const socket = rawSocket(tunnelUrl);
     await new Promise<void>((resolve) => {
       socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "auth", secret: credential })));
       socket.addEventListener("message", () => resolve());
@@ -159,7 +169,6 @@ describe("tunnel lifecycle", () => {
     socket.pause();
     await until(async () => !(await yourServers(httpUrl, account.token))[0]!.tunnel.connected);
     expect((await yourServers(httpUrl, account.token))[0]!.tunnel.lastSeenAt).not.toBeNull();
-    socket.terminate();
   });
 
   it("records when it last heard from a server that went quiet, not when it gave up on it", async () => {
@@ -171,7 +180,7 @@ describe("tunnel lifecycle", () => {
     // SQLite's own datetime('now') doesn't follow it, so what's written
     // when the tunnel closes shows which time the relay recorded.
     setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const socket = new WebSocket(tunnelUrl);
+    const socket = rawSocket(tunnelUrl);
     try {
       await new Promise<void>((resolve) => {
         socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "auth", secret: credential })));
@@ -184,7 +193,6 @@ describe("tunnel lifecycle", () => {
 
     await until(async () => !(await yourServers(httpUrl, account.token))[0]!.tunnel.connected);
     expect((await yourServers(httpUrl, account.token))[0]!.tunnel.lastSeenAt).toBe("2026-01-01T00:00:00.000Z");
-    socket.terminate();
   });
 
   it("lets a newer connection for the same server replace the old one, and fails what was pending on the old one", async () => {
@@ -193,7 +201,7 @@ describe("tunnel lifecycle", () => {
     const { serverId, credential } = linkServer(db, account.userId);
 
     // A connection that takes the request and never answers it.
-    const stale = new WebSocket(tunnelUrl);
+    const stale = rawSocket(tunnelUrl);
     let requested!: () => void;
     const gotRequest = new Promise<void>((resolve) => (requested = resolve));
     await new Promise<void>((resolve) => {

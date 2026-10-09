@@ -5,12 +5,12 @@ import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { buildTestApp } from "../auth/test-app.js";
 import { openDb } from "../db.js";
 import { mediaSlotsInUse } from "../media/queue.js";
 import { filesRoutes } from "../routes/files.js";
-import { backoffDelay, TunnelClient, type TunnelState } from "./client.js";
+import { backoffDelay, DrainPoll, TunnelClient, type TunnelState } from "./client.js";
 import { startFakeRelay, type FakeRelay } from "./fake-relay.js";
 
 // Issue #310: this server's end of legato.fm's tunnel, against a stand-in
@@ -26,7 +26,10 @@ afterEach(async () => {
 function waitFor(client: TunnelClient, state: TunnelState, timeoutMs = 3_000): Promise<void> {
   if (client.state === state) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`stayed ${client.state}, never ${state}`)), timeoutMs);
+    const timer = setTimeout(() => {
+      off();
+      reject(new Error(`stayed ${client.state}, never ${state}`));
+    }, timeoutMs);
     const off = client.onState((next) => {
       if (next !== state) return;
       clearTimeout(timer);
@@ -64,6 +67,38 @@ describe("backoffDelay", () => {
     ]);
     expect(backoffDelay(3, backoff, () => 0)).toBe(4_000);
     expect(backoffDelay(3, backoff, () => 0.5)).toBe(6_000);
+  });
+});
+
+describe("DrainPoll", () => {
+  it("resumes every response waiting on a socket from one poll, once it's back under the low-water mark", async () => {
+    const socket = { readyState: WebSocket.OPEN as number, bufferedAmount: 2 * 1024 * 1024 };
+    const drain = new DrainPoll(socket, 10);
+    const timers = spyOn(globalThis, "setTimeout");
+    const resumed: number[] = [];
+    try {
+      for (let i = 0; i < 20; i++) drain.wait(() => resumed.push(i));
+      await sleep(55);
+      expect(resumed).toEqual([]);
+      // A poll every 10 ms for the socket, not one per waiting response.
+      expect(timers.mock.calls.length).toBeLessThanOrEqual(8);
+
+      socket.bufferedAmount = 100;
+      await sleep(25);
+      expect(resumed).toHaveLength(20);
+    } finally {
+      timers.mockRestore();
+    }
+  });
+
+  it("resumes what's waiting once the socket has closed, rather than waiting on it for ever", async () => {
+    const socket = { readyState: WebSocket.OPEN as number, bufferedAmount: 2 * 1024 * 1024 };
+    const drain = new DrainPoll(socket, 10);
+    let resumed = false;
+    drain.wait(() => (resumed = true));
+    socket.readyState = WebSocket.CLOSED;
+    await sleep(25);
+    expect(resumed).toBe(true);
   });
 });
 

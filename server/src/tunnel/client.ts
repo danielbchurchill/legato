@@ -180,6 +180,7 @@ export class TunnelClient {
       return;
     }
     this.socket = socket;
+    const drain = new DrainPoll(socket);
     const authTimer = setTimeout(() => this.lost(socket, "legato.fm didn't answer"), AUTH_TIMEOUT_MS);
 
     socket.addEventListener("open", () => {
@@ -202,7 +203,7 @@ export class TunnelClient {
           clearTimeout(authTimer);
           this.refused(String(frame.message));
         } else if (frame?.type === "request" && this.current === "connected") {
-          this.forward(socket, frame);
+          this.forward(socket, drain, frame);
         } else if (frame?.type === "cancel" && typeof frame.requestId === "string") {
           this.requests.get(frame.requestId)?.cancel();
         }
@@ -330,7 +331,7 @@ export class TunnelClient {
   // One request from the relay, replayed against this server. Never
   // throws: whatever goes wrong becomes a response-error frame, which the
   // relay turns into a 502 (or a cut-short body, once the status is sent).
-  private forward(socket: WebSocket, frame: RequestFrame): void {
+  private forward(socket: WebSocket, drain: DrainPoll, frame: RequestFrame): void {
     const { requestId } = frame;
     // Nothing to answer to, or already being answered.
     if (typeof requestId !== "string" || this.requests.has(requestId)) return;
@@ -373,7 +374,7 @@ export class TunnelClient {
         send({ type: "response-chunk", requestId, data: chunk.toString("base64") });
         if (socket.bufferedAmount > HIGH_WATER) {
           response.pause();
-          void drained(socket).then(() => response.resume());
+          drain.wait(() => response.resume());
         }
       });
       response.on("end", () => {
@@ -447,13 +448,34 @@ function forwardable(headers: IncomingHttpHeaders): Record<string, string> {
   return result;
 }
 
-// Resolves once the socket has sent enough of what's queued, or has closed.
-function drained(socket: WebSocket): Promise<void> {
-  return new Promise((resolve) => {
-    const check = () => {
-      if (socket.readyState !== WebSocket.OPEN || socket.bufferedAmount <= LOW_WATER) resolve();
-      else setTimeout(check, DRAIN_POLL_MS);
-    };
-    check();
-  });
+// Resumes paused responses once the socket has sent enough of what's
+// queued, or has closed. One poll for the socket, however many responses
+// are waiting on it, rather than a timer for each.
+export class DrainPoll {
+  private readonly socket: Pick<WebSocket, "readyState" | "bufferedAmount">;
+  private readonly pollMs: number;
+  private waiting: (() => void)[] = [];
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(socket: Pick<WebSocket, "readyState" | "bufferedAmount">, pollMs = DRAIN_POLL_MS) {
+    this.socket = socket;
+    this.pollMs = pollMs;
+  }
+
+  /** Calls `resume` once the socket is back under LOW_WATER, or closed. */
+  wait(resume: () => void): void {
+    this.waiting.push(resume);
+    if (!this.timer) this.check();
+  }
+
+  private check(): void {
+    this.timer = null;
+    if (this.socket.readyState === WebSocket.OPEN && this.socket.bufferedAmount > LOW_WATER) {
+      this.timer = setTimeout(() => this.check(), this.pollMs);
+      return;
+    }
+    const resumed = this.waiting;
+    this.waiting = [];
+    for (const resume of resumed) resume();
+  }
 }
