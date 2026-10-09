@@ -59,7 +59,7 @@ import {
 /* The shell's geometry, as arithmetic rather than CSS, because three things
  * outside CSS need the same answers: the map's camera (which has to keep
  * nodes out from under the glass), the map's card (clamped to the free
- * space), and the search palette (centred on it).
+ * space), and the search palette (opened over the capsule).
  *
  * Everything floats 12px (INSET) in from the window. The rail is always
  * there; the left and right panels come and go, and each one that's open
@@ -326,6 +326,10 @@ export type ShellLayout = {
   playerParts: PlayerParts
   /** What the idle pill shows. It centres on playerCx. */
   idleParts: IdleParts
+  /** The search palette's width, and its centre: the capsule's, so it opens
+   * over it, unless that would push the wider palette off the window. */
+  paletteWidth: number
+  paletteCx: number
   /** Where the map's toolbar and legend sit: above the player's row. */
   floatingBottom: number
 }
@@ -340,7 +344,9 @@ export function computeShellLayout(
   const free = Math.max(0, width - leftOccupancy - rightOccupancy)
   const cx = (leftOccupancy + (width - rightOccupancy)) / 2
   const capsuleWidth = Math.max(CAPSULE_MIN_WIDTH, Math.min(520, free - 48))
+  const capsuleCx = clampCentre(cx, capsuleWidth, width)
   const playerWidth = Math.max(PLAYER_MIN_WIDTH, Math.min(720, free - 48))
+  const paletteWidth = Math.min(720, width - 2 * INSET)
   return {
     width,
     height,
@@ -349,12 +355,14 @@ export function computeShellLayout(
     free,
     cx,
     capsuleWidth,
-    capsuleCx: clampCentre(cx, capsuleWidth, width),
+    capsuleCx,
     capsuleParts: capsuleParts(capsuleWidth),
     playerWidth,
     playerCx: clampCentre(cx, playerWidth, width),
     playerParts: playerParts(playerWidth),
     idleParts: idleParts(playerWidth),
+    paletteWidth,
+    paletteCx: clampCentre(capsuleCx, paletteWidth, width),
     floatingBottom: INSET + PLAYER_HEIGHT + INSET,
   }
 }

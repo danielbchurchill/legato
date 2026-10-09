@@ -277,7 +277,7 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
         aria-modal="true"
         aria-label="Search"
         className="absolute top-[var(--inset)] flex max-h-[calc(100%-24px)] -translate-x-1/2 flex-col overflow-hidden rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-solid)] shadow-[var(--shadow-panel)]"
-        style={{ left: layout.cx, width: Math.min(720, layout.width - 24) }}
+        style={{ left: layout.paletteCx, width: layout.paletteWidth }}
       >
         <div className="flex h-[58px] shrink-0 items-center gap-[12px] border-b border-[var(--color-line)] px-[18px]">
           <Icon name="search" size={20} className="text-[var(--color-ink)]" />

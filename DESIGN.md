@@ -91,7 +91,7 @@ The capsule is as wide as the free space less 48px, up to 520. Its parts give wa
 | 303px | "Search". The magnifier stays | 1127px |
 | 247px | The switch's "map" and "library". Their icons stay, and each label moves into its tab's tooltip and stays for screen readers | 1071px |
 
-The switch and the search button never go. With the switch's icons and the magnifier the capsule needs 135px, and it stops narrowing there. Under 959px with both panels open its margins close up, and under 911px it floats over the panels' inner edges, inside the window, as the bar does. At 1100 with both panels open it's 276px, the labelled switch and the magnifier.
+The switch and the search button never go. With the switch's icons and the magnifier the capsule needs 135px, and it stops narrowing there. Under 959px with both panels open its margins close up, and under 911px it floats over the panels' inner edges, inside the window, as the bar does. At 1100 with both panels open it's 276px, the labelled switch and the magnifier. The search palette opens over the capsule wherever it sits, and moves off it only as far as the window makes it.
 
 The words go before the switch's labels because a magnifier needs no caption, and the map and library icons are Legato's own. The keycap is counted at its "Ctrl K" width, the wider of the two, so the thresholds are the same on every platform and a Mac's "⌘K" has some slack.
 

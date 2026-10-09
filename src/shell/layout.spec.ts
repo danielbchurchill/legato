@@ -293,3 +293,32 @@ describe('the idle player as the bar narrows', () => {
   })
 })
 
+// #308: the capsule's centre can leave cx to keep it in the window, and the
+// palette opens over the capsule, wherever that puts it.
+describe('the search palette', () => {
+  it('opens over the capsule, inside the window, in every panel state', () => {
+    for (const panels of PANELS) {
+      for (let width = 320; width <= 3840; width += 2) {
+        const layout = computeShellLayout(width, 900, panels)
+        const label = `width ${width}, ${JSON.stringify(panels)}`
+        const half = layout.paletteWidth / 2
+        expect(layout.paletteCx - half, label).toBeGreaterThanOrEqual(INSET)
+        expect(layout.paletteCx + half, label).toBeLessThanOrEqual(width - INSET)
+        // It covers the capsule, and centres on it whenever the window has the room.
+        expect(layout.paletteCx - half, label).toBeLessThanOrEqual(layout.capsuleCx - layout.capsuleWidth / 2)
+        expect(layout.paletteCx + half, label).toBeGreaterThanOrEqual(layout.capsuleCx + layout.capsuleWidth / 2)
+        if (layout.capsuleCx - half >= INSET && layout.capsuleCx + half <= width - INSET) {
+          expect(layout.paletteCx, label).toBe(layout.capsuleCx)
+        }
+      }
+    }
+  })
+
+  it("follows the capsule where the capsule leaves the free space's centre", () => {
+    // Only the left panel open: under 555px the capsule's floor would leave the window on cx.
+    const layout = computeShellLayout(500, 900, { leftOpen: true, rightOpen: false })
+    expect(layout.capsuleCx).toBeLessThan(layout.cx)
+    expect(layout.paletteWidth).toBe(500 - 2 * INSET)
+    expect(layout.paletteCx).toBe(250)
+  })
+})
