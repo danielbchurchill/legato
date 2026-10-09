@@ -61,6 +61,10 @@ const NEXT_REPEAT_MODE: Record<RepeatMode, RepeatMode> = {
  * hours of music and resolves at once. */
 const SHUFFLE_LIBRARY_SIZE = 500
 
+// How long "loading library…" waits to ask for the library's folders again
+// when the answer didn't come, or wasn't a list.
+const LIBRARY_ROOTS_RETRY_MS = 3000
+
 const PANEL_LABEL: Record<RailItem, string> = {
   collections: 'Collections',
   health: 'Library health',
@@ -97,18 +101,38 @@ function MainApp() {
   // (the logo) or have to repaint WebGL (the map).
   const theme = useTheme()
   const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
+  const known = useRef(false)
 
   useEffect(() => {
-    const load = () =>
-      fetch(`${API_BASE}/library-roots`)
-        .then((r) => r.json())
-        .then((roots: unknown[]) => setHasLibrary(roots.length > 0))
-        .catch(() => undefined)
-    void load()
-    // #119: a load the outage broke runs again once the server's back,
-    // rather than leaving "loading library…" up for good.
+    let cancelled = false
+    let retry: ReturnType<typeof setTimeout> | undefined
+    const load = () => {
+      void fetch(`${API_BASE}/library-roots`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+        .then((roots: unknown) => {
+          if (cancelled) return
+          // Only a list says whether there's a library. A 401 or a 500
+          // answers with an error object, and taking that for "no folders"
+          // would put "Add your music" over a real library.
+          if (Array.isArray(roots)) {
+            known.current = true
+            setHasLibrary(roots.length > 0)
+          } else if (!known.current) {
+            // Nothing to show until it's known: ask again, rather than leave
+            // "loading library…" up for good.
+            retry = setTimeout(load, LIBRARY_ROOTS_RETRY_MS)
+          }
+        })
+    }
+    load()
+    // #119: a load the outage broke runs again once the server's back.
     window.addEventListener(SERVER_BACK_EVENT, load)
-    return () => window.removeEventListener(SERVER_BACK_EVENT, load)
+    return () => {
+      cancelled = true
+      clearTimeout(retry)
+      window.removeEventListener(SERVER_BACK_EVENT, load)
+    }
   }, [])
 
   if (hasLibrary === null) return <Centered>loading library…</Centered>

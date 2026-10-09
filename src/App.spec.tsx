@@ -200,4 +200,36 @@ describe('App across an outage', () => {
     await setStatus({})
     expect(harness.railRenders).toBe(renders)
   })
+
+  // The coordinator's review of #346: a 401 or 500 from library-roots is a
+  // JSON object, and it read as a library with no folders.
+  it("doesn't take an error from library-roots for an empty library, and asks again", async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      libraryRoots = { status: 500, body: { error: 'database is locked' } }
+      await act(async () => {
+        root = createRoot(container)
+        root.render(createElement(App))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(container.textContent).toContain('loading library…')
+      expect(container.textContent).not.toContain('Add your music')
+
+      libraryRoots = { status: 200, body: { roots: 'not a list' } }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000)
+      })
+      expect(container.textContent).toContain('loading library…')
+
+      libraryRoots = { status: 200, body: [] }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000)
+      })
+      expect(container.textContent).toContain('Add your music')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
