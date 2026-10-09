@@ -138,7 +138,7 @@ describe('OwnerGate on /setup, before a claim', () => {
     const { container } = await render()
     expect(container.querySelector('svg[aria-label^="QR code"]')).not.toBeNull()
     expect(container.textContent).toContain(
-      'legato.fm is busy, so a claim may take a few minutes to show up here. This server keeps trying.',
+      'legato.fm is busy, so a claim may take a minute to show up here. This server keeps trying.',
     )
     expect(container.textContent).not.toContain('refused')
   })

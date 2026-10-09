@@ -50,7 +50,7 @@ function claimCaption(claim: ClaimView | null): string | null {
       if (claim.unreachable)
         return "To claim this server for a legato.fm account, scan this with your phone. This server can't reach legato.fm right now, so a claim won't show up here until it can."
       if (claim.busy)
-        return 'To claim this server for a legato.fm account, scan this with your phone. legato.fm is busy, so a claim may take a few minutes to show up here. This server keeps trying.'
+        return 'To claim this server for a legato.fm account, scan this with your phone. legato.fm is busy, so a claim may take a minute to show up here. This server keeps trying.'
       return 'Optional: scan this with your phone to claim this server for your legato.fm account, so you can reach it from anywhere. You choose whether to link that account when you create the owner.'
     case 'lapsed':
       return `The claim for ${accountLabel(claim.account)} lapsed before the owner was created, so nothing was linked. To claim again, scan the new code.`

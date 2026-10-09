@@ -42,8 +42,10 @@ function fakeRelay(nowSeconds: () => number) {
   let refuseLinks = false;
   let loseNextAnswer = false;
   // Retry-After for a 429 from /pair/exchange: a number, "none" for a 429
-  // without one, or null for no 429 at all.
+  // without one, or null for no 429 at all. Only for the codes in limitedCodes,
+  // if that's set. Like legato.fm, it answers a claimed code all the same.
   let limited: number | "none" | null = null;
+  let limitedCodes: string[] | null = null;
 
   const impl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -52,14 +54,15 @@ function fakeRelay(nowSeconds: () => number) {
     if (down) throw new Error("offline");
     if (url.endsWith("/.well-known/jwks.json")) return Response.json({ keys: [key.jwk] });
     if (url.endsWith("/pair/exchange")) {
-      if (limited !== null) {
+      const code = body!.code as string;
+      const claimedHere = claimed.has(code) || answered.has(code) || used.has(code) || expired.has(code);
+      if (limited !== null && !claimedHere && (limitedCodes === null || limitedCodes.includes(code))) {
         const headers: Record<string, string> = limited === "none" ? {} : { "Retry-After": String(limited) };
         return Response.json(
           { error: "Too many unknown setup codes from this address.", reason: "rate_limited" },
           { status: 429, headers },
         );
       }
-      const code = body!.code as string;
       if (used.has(code)) return Response.json({ error: "pairing code used", reason: "used" }, { status: 410 });
       if (expired.has(code)) return Response.json({ error: "pairing code expired", reason: "expired" }, { status: 410 });
       const again = answered.get(code);
@@ -109,8 +112,9 @@ function fakeRelay(nowSeconds: () => number) {
     loseNextAnswer: () => {
       loseNextAnswer = true;
     },
-    limit: (retryAfter: number | "none" | null) => {
+    limit: (retryAfter: number | "none" | null, codes: string[] | null = null) => {
       limited = retryAfter;
+      limitedCodes = codes;
     },
   };
 }
@@ -122,8 +126,12 @@ afterEach(async () => {
 
 async function setup(options: { db?: Database; origin?: string | null; relay?: ReturnType<typeof fakeRelay>; codes?: string[] } = {}) {
   const db = options.db ?? openDb(":memory:");
+  // The wall clock, and the monotonic one that says when to ask. They move
+  // together unless a spec steps the wall clock on its own.
   let nowMs = START_MS;
+  let clockMs = 0;
   const now = () => nowMs;
+  const clock = () => clockMs;
   const relay = options.relay ?? fakeRelay(() => Math.floor(nowMs / 1000));
   const logs: string[] = [];
   const log = (_level: "info" | "warn", message: string) => void logs.push(message);
@@ -136,7 +144,7 @@ async function setup(options: { db?: Database; origin?: string | null; relay?: R
   installLegatoIdentity(db, identity);
   const codes = options.codes ?? ["AAAA-AAAA", "BBBB-BBBB", "CCCC-CCCC", "DDDD-DDDD"];
   const setupCodes = new SetupCodes({ now, generate: () => codes.shift()! });
-  const claims = new ServerClaims({ setupCodes, identity: () => identity, now, log });
+  const claims = new ServerClaims({ setupCodes, identity: () => identity, now, clock, log });
 
   const app = Fastify();
   await app.register(cookie);
@@ -177,6 +185,10 @@ async function setup(options: { db?: Database; origin?: string | null; relay?: R
     createOwner,
     linkedAccount,
     advance: (ms: number) => {
+      nowMs += ms;
+      clockMs += ms;
+    },
+    stepWallClock: (ms: number) => {
       nowMs += ms;
     },
   };
@@ -314,24 +326,80 @@ describe("when legato.fm says to wait", () => {
     expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: false });
   });
 
-  it("waits a minute when it isn't told how long, and never more than fifteen", async () => {
+  it("waits a minute when it isn't told how long, and never more than that", async () => {
     const h = await setup();
     h.relay.limit("none");
     await h.checkIn();
-    h.advance(59_000);
+    h.advance(55_000);
     await h.checkIn();
     expect(h.relay.exchanges()).toHaveLength(1);
-    h.advance(1_000);
+    h.advance(5_000);
     await h.checkIn();
     expect(h.relay.exchanges()).toHaveLength(2);
 
-    h.relay.limit(24 * 60 * 60);
+    h.relay.limit(15 * 60);
     h.advance(60_000);
     await h.checkIn();
     expect(h.relay.exchanges()).toHaveLength(3);
-    h.advance(15 * 60_000);
+    h.advance(60_000);
     await h.checkIn();
     expect(h.relay.exchanges()).toHaveLength(4);
+  });
+
+  // Issue #324, review: legato.fm answers a code claimed for this server
+  // whatever its limiter says, so a minute is all a claim made meanwhile
+  // waits. Waiting out a fifteen-minute lockout would outlast the claim.
+  it("picks up a claim made while it waits, within a minute", async () => {
+    const h = await setup();
+    h.relay.limit(15 * 60);
+    expect(await h.view()).toMatchObject({ busy: true });
+    h.advance(10_000);
+    h.relay.claim("AAAA-AAAA");
+    h.advance(45_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(1);
+    h.advance(5_000);
+    expect(await h.view()).toMatchObject({ state: "claimed", account: { name: "Rowan" } });
+  });
+
+  // Issue #324, review: a 429 on the new code used to stop the poll before
+  // it asked about the old one, and the claim of it was lost.
+  it("keeps asking about the code it just replaced while it waits on the new one", async () => {
+    const h = await setup();
+    await h.checkIn();
+    h.advance(10 * 60_000);
+    // The new code is new to legato.fm, which holds it back for 15 minutes.
+    h.relay.limit(15 * 60, ["BBBB-BBBB"]);
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: true });
+    expect(h.relay.exchanges().map((call) => call.body!.code)).toEqual(["AAAA-AAAA", "BBBB-BBBB", "AAAA-AAAA"]);
+
+    // A phone that scanned the old code claims it 30 seconds later.
+    h.advance(30_000);
+    h.relay.claim("AAAA-AAAA");
+    h.advance(5_000);
+    expect(await h.view()).toMatchObject({ state: "claimed", account: { name: "Rowan" } });
+    // The new code was held back all along.
+    expect(h.relay.exchanges().filter((call) => call.body!.code === "BBBB-BBBB")).toHaveLength(1);
+  });
+
+  // Issue #324, review: a Pi has no clock until NTP sets it, and a step back
+  // used to stop it asking for as long as the step.
+  it("keeps time by a clock the wall clock can't move", async () => {
+    const h = await setup();
+    h.relay.limit(30);
+    await h.checkIn();
+    h.stepWallClock(-60 * 60_000);
+    h.advance(30_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(2);
+    h.stepWallClock(-60 * 60_000);
+    h.advance(5_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(2);
+    h.relay.limit(null);
+    h.advance(25_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(3);
   });
 });
 
