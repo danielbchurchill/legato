@@ -33,6 +33,10 @@ export function useLegatoLinkReturn(signedIn: boolean) {
           toast.show({ title: 'nothing linked', description: describeLinkFailure(result.failure) })
           return
         }
+        if (result.failure.step === 'lost') {
+          toast.show({ title: "link didn't finish", description: describeLinkFailure(result.failure), duration: null })
+          return
+        }
         toast.show({
           title: "couldn't link to legato.fm",
           description: describeLinkFailure(result.failure),

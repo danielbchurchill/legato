@@ -27,6 +27,7 @@ export const LINK_CHANGED_EVENT = 'legato:link-changed'
 export type LinkFailure =
   | { step: 'signed-out' }
   | { step: 'cancelled' }
+  | { step: 'lost' }
   | { step: 'relay'; message: string }
   | { step: 'server'; status: number; reason: string | null; message: string }
 
@@ -97,6 +98,8 @@ export function describeLinkFailure(failure: LinkFailure): string {
       return 'Your legato.fm session ended. Sign in to legato.fm again, then link this server.'
     case 'cancelled':
       return 'You cancelled on legato.fm, so nothing was linked.'
+    case 'lost':
+      return "The link to legato.fm didn't finish in this window, so nothing was linked. To link this server, start again from Settings here."
     case 'relay':
     case 'server':
       return failure.message

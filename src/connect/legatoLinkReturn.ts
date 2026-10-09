@@ -25,6 +25,11 @@ import { sendLinkToken, type LinkDeps, type LinkResult } from './legatoLink'
  * failure leaves them, so the owner can try again from here. */
 
 const PENDING_KEY = 'legato:link-pending'
+// Set when legato.fm sends back a code or a cancellation this tab has no
+// verifier for, so the app can say the link didn't finish rather than
+// nothing at all: an installed web app on iOS that opened legato.fm in
+// Safari comes back in Safari, say, or a tab is restored without its storage.
+const LOST_KEY = 'legato:link-lost'
 // What legato.fm puts in the fragment: the code, or `cancelled` when the
 // owner cancelled there. Matches relay/src/link-codes.ts.
 const CODE_PARAM = 'legato_link'
@@ -54,6 +59,7 @@ export function startBrowserLink(
   const storage = deps.storage ?? sessionStorage
   const location = deps.location ?? window.location
   const { verifier, challenge } = createPkcePair()
+  storage.removeItem(LOST_KEY)
   storage.setItem(PENDING_KEY, JSON.stringify({ issuer, verifier }))
   const query = new URLSearchParams({ server: serverId, return_to: `${location.origin}${location.pathname}`, code_challenge: challenge })
   location.assign(`${issuer}/link?${query}`)
@@ -61,7 +67,8 @@ export function startBrowserLink(
 
 /** Takes legato.fm's code out of the address bar, before anything renders,
  * and keeps it with this tab's verifier until the owner is signed in. A code
- * this tab didn't ask for is dropped: there's no verifier to spend it with. */
+ * this tab has no verifier for can't be spent, so it's dropped, and the
+ * owner is told the link didn't finish. */
 export function takeLinkReturn(
   deps: { location?: Here; history?: Pick<History, 'replaceState' | 'state'>; storage?: Storage } = {},
 ): void {
@@ -74,16 +81,19 @@ export function takeLinkReturn(
   history.replaceState(history.state, '', `${location.pathname}${location.search}`)
   const pending = readPending(storage)
   if (pending) storage.setItem(PENDING_KEY, JSON.stringify({ ...pending, code }))
+  else storage.setItem(LOST_KEY, '1')
 }
 
-/** True once legato.fm has sent back a code this tab hasn't settled. */
+/** True once legato.fm has sent back a code this tab hasn't settled, or one
+ * it couldn't take. */
 export function hasLinkReturn(storage: Storage = sessionStorage): boolean {
-  return Boolean(readPending(storage)?.code)
+  return Boolean(readPending(storage)?.code) || storage.getItem(LOST_KEY) !== null
 }
 
 /** Spends the code legato.fm sent back, then links the server with the
- * token it buys. Null when there's nothing to finish, and a `cancelled`
- * failure when the owner cancelled on legato.fm. After any other failure,
+ * token it buys. Null when there's nothing to finish, a `cancelled` failure
+ * when the owner cancelled on legato.fm, and a `lost` one when legato.fm
+ * sent back a code this tab had no verifier for. After any other failure,
  * hasLinkReturn says whether the same code can be tried again.
  *
  * One at a time: the code stays until legato.fm answers, so a second call
@@ -102,6 +112,10 @@ export function finishBrowserLink(deps: LinkDeps & { storage?: Storage } = {}): 
 async function finishOnce(deps: LinkDeps & { storage?: Storage }): Promise<LinkResult | null> {
   const storage = deps.storage ?? sessionStorage
   const fetchImpl = deps.fetchImpl ?? fetch
+  if (storage.getItem(LOST_KEY) !== null) {
+    storage.removeItem(LOST_KEY)
+    return { ok: false, failure: { step: 'lost' } }
+  }
   const pending = readPending(storage)
   if (!pending?.code) return null
   if (pending.code === CANCELLED) {

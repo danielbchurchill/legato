@@ -79,4 +79,11 @@ describe('coming back from legato.fm', () => {
     expect(() => button('try again')).toThrow()
   })
 
+  it("says the link didn't finish when this window had nothing to finish it with", async () => {
+    sessionStorage.setItem('legato:link-lost', '1')
+    vi.stubGlobal('fetch', vi.fn())
+    await render()
+    expect(document.body.textContent).toContain("link didn't finish")
+    expect(document.body.textContent).toContain('start again from Settings here')
+  })
 })

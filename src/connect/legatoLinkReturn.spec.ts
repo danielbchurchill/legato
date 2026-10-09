@@ -112,16 +112,33 @@ describe('the web client linking through legato.fm', () => {
     expect(await finishBrowserLink({ storage, fetchImpl: net.fetchImpl, apiBase: API })).toBeNull()
   })
 
-  it("drops a code this tab didn't ask for, and leaves an address without one alone", async () => {
-    const storage = memoryStorage()
-    const planted = tab('#legato_link=someone-elses-code')
-    takeLinkReturn({ ...planted, storage })
-    expect(planted.location.hash).toBe('')
-    expect(hasLinkReturn(storage)).toBe(false)
+  // An installed web app on iOS that opened legato.fm in Safari comes back
+  // in Safari, which has no verifier; so does a tab restored without its
+  // storage. The code can't be spent there, but the owner hears why.
+  it("says the link didn't finish when a code or a cancel comes back to a tab with no verifier", async () => {
+    for (const returned of ['#legato_link=someone-elses-code', '#legato_link=cancelled']) {
+      const storage = memoryStorage()
+      const lost = tab(returned)
+      takeLinkReturn({ ...lost, storage })
+      expect(lost.location.hash).toBe('')
+      expect(hasLinkReturn(storage)).toBe(true)
+      const net = network()
+      expect(await finishBrowserLink({ storage, fetchImpl: net.fetchImpl, apiBase: API })).toEqual({ ok: false, failure: { step: 'lost' } })
+      expect(net.calls).toEqual([])
+      expect(hasLinkReturn(storage)).toBe(false)
+    }
+  })
 
+  it('leaves an address without a code alone, and forgets a lost one when a new link starts', async () => {
+    const storage = memoryStorage()
     const plain = tab('#other=1')
     takeLinkReturn({ ...plain, storage })
     expect(plain.location.hash).toBe('#other=1')
+    expect(hasLinkReturn(storage)).toBe(false)
+
+    takeLinkReturn({ ...tab('#legato_link=stray'), storage })
+    await started(storage)
+    expect(hasLinkReturn(storage)).toBe(false)
   })
 
   it('says the owner cancelled, and asks nobody anything', async () => {
