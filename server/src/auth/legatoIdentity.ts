@@ -51,7 +51,15 @@ type IdentityRow = { server_id: string; jwks: string | null; jwks_fetched_at: st
 // means no answer at all; "refused" is any answer but yes, with legato.fm's
 // own message, which says more than a status code would. A yes carries
 // legato.fm's answer, which for a claim's link holds the tunnel credential.
-export type Refusal = { ok: false; reason: "refused"; status: number; message: string; legatoReason: string | null };
+// retryAfterSeconds is the wait a 429 asks for, when it says.
+export type Refusal = {
+  ok: false;
+  reason: "refused";
+  status: number;
+  message: string;
+  legatoReason: string | null;
+  retryAfterSeconds?: number;
+};
 
 export type ReportResult = { ok: true; answer: Record<string, unknown> | null } | { ok: false; reason: "unreachable" } | Refusal;
 
@@ -190,10 +198,11 @@ export class LegatoIdentity {
   // with the identity key so legato.fm answers for this server's id only.
   // Only auth/claim.ts calls it, and only while a /setup page is open.
   // A 404 is the usual answer and isn't logged: it comes every few seconds.
+  // Nor is a 429 (issue #324): auth/claim.ts waits it out and logs once.
   async exchangeClaim(code: string): Promise<ExchangeResult> {
     if (!this.origin) return { ok: false, reason: "unreachable" };
     const proof = claimProof(loadServerKey(this.db), { issuer: this.origin, code, nowSeconds: Math.floor(this.now() / 1000) });
-    const result = await this.report("/pair/exchange", proof, { quiet: [404], quietUnreachable: true });
+    const result = await this.report("/pair/exchange", proof, { quiet: [404, 429], quietUnreachable: true });
     if (!result.ok) return result;
     const linkToken = result.answer?.linkToken;
     if (typeof linkToken === "string" && linkToken) return { ok: true, linkToken };
@@ -239,12 +248,15 @@ export class LegatoIdentity {
     if (res.ok) return { ok: true, answer };
     const message = typeof answer?.error === "string" ? answer.error : `HTTP ${res.status}`;
     if (!options.quiet?.includes(res.status)) this.log("warn", `legato.fm: ${url} refused (${res.status}): ${message}`);
+    // legato.fm only ever sends Retry-After as whole seconds.
+    const retryAfter = res.headers.get("retry-after")?.trim();
     return {
       ok: false,
       reason: "refused",
       status: res.status,
       message,
       legatoReason: typeof answer?.reason === "string" ? answer.reason : null,
+      ...(retryAfter && /^\d+$/.test(retryAfter) ? { retryAfterSeconds: Number(retryAfter) } : {}),
     };
   }
 

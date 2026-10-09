@@ -20,6 +20,11 @@ import type { SetupCodes } from "./setupCode.js";
 // and the requests stop with it. Nothing asks once an owner exists: that
 // route refuses then, and the page is gone.
 //
+// When legato.fm says to wait (a 429: something on this network asked about
+// too many codes nobody claimed, relay/src/rate-limit.ts), it isn't a
+// refusal. This server stops asking for as long as legato.fm says, logs it
+// once, and /setup says legato.fm is busy and it'll keep trying.
+//
 // What a claim holds, and what it leaves behind. The link token lasts ten
 // minutes, and lives only in this object: a restart forgets it. legato.fm
 // mints the tunnel credential only when this server reports the link it
@@ -35,14 +40,19 @@ const PREVIOUS_CODE_GRACE_MS = 2 * 60_000;
 // report made at owner creation never carries a token about to run out on
 // legato.fm's clock.
 const LAPSE_MARGIN_MS = 30_000;
+// How long to wait after a 429 that doesn't say, and the longest this takes
+// legato.fm's word for: its longest lockout.
+const BUSY_DEFAULT_MS = 60_000;
+const BUSY_MAX_MS = 15 * 60_000;
 
 // email is masked (maskEmail): /setup has no sign-in, so anyone on the
 // network who can see the code can read it. Enough for someone to
 // recognise their own account.
 export type ClaimAccount = { id: string; name: string | null; email: string | null };
 
+// busy: legato.fm asked this server to wait before asking again.
 export type ClaimView =
-  | { state: "waiting"; unreachable: boolean }
+  | { state: "waiting"; unreachable: boolean; busy: boolean }
   | { state: "claimed"; account: ClaimAccount; expiresInMs: number }
   | { state: "lapsed"; account: ClaimAccount }
   | { state: "used" }
@@ -69,6 +79,8 @@ export class ServerClaims {
   // The last thing worth telling /setup while nothing is pending.
   private notice: Notice | null = null;
   private unreachable = false;
+  private busy = false;
+  private busyUntil = Number.NEGATIVE_INFINITY;
   private lastPollAt = Number.NEGATIVE_INFINITY;
   private inFlight: Promise<void> | null = null;
   private readonly now: () => number;
@@ -96,7 +108,8 @@ export class ServerClaims {
   checkIn(): ClaimView {
     this.lapse();
     const now = this.now();
-    if (this.enabled && !this.pending && !this.inFlight && now - this.lastPollAt >= POLL_INTERVAL_MS) {
+    const due = now - this.lastPollAt >= POLL_INTERVAL_MS && now >= this.busyUntil;
+    if (this.enabled && !this.pending && !this.inFlight && due) {
       this.lastPollAt = now;
       this.inFlight = this.poll().finally(() => {
         this.inFlight = null;
@@ -115,7 +128,7 @@ export class ServerClaims {
     if (this.pending) {
       return { state: "claimed", account: this.pending.account, expiresInMs: Math.max(this.pending.lapsesAt - this.now(), 0) };
     }
-    return this.notice ?? { state: "waiting", unreachable: this.unreachable };
+    return this.notice ?? { state: "waiting", unreachable: this.unreachable, busy: this.busy };
   }
 
   /**
@@ -163,6 +176,7 @@ export class ServerClaims {
       const result = await identity.exchangeClaim(code);
       if (result.ok) {
         this.spent.add(code);
+        this.busy = false;
         return this.accept(identity, result.linkToken);
       }
       if (result.reason === "unreachable") {
@@ -172,6 +186,21 @@ export class ServerClaims {
         return;
       }
       this.unreachable = false;
+      if (result.status === 429) {
+        const waitMs = Math.min(result.retryAfterSeconds !== undefined ? result.retryAfterSeconds * 1000 : BUSY_DEFAULT_MS, BUSY_MAX_MS);
+        if (!this.busy) {
+          this.log(
+            "info",
+            `legato.fm: busy, so checking for a claim again in ${Math.ceil(waitMs / 1000)} s ` +
+              "(something on this network asked about too many codes nobody claimed)",
+          );
+        }
+        this.busy = true;
+        this.busyUntil = this.now() + waitMs;
+        if (this.notice?.state === "refused") this.notice = null;
+        return;
+      }
+      this.busy = false;
       if (result.status === 404) {
         if (code === live && this.notice?.state === "refused") this.notice = null;
         continue;

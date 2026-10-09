@@ -133,6 +133,16 @@ describe('OwnerGate on /setup, before a claim', () => {
     expect(container.textContent).not.toContain('create owner and link')
   })
 
+  it('says legato.fm is busy and the server keeps trying, rather than that it refused', async () => {
+    serve({ state: 'waiting', unreachable: false, busy: true })
+    const { container } = await render()
+    expect(container.querySelector('svg[aria-label^="QR code"]')).not.toBeNull()
+    expect(container.textContent).toContain(
+      'legato.fm is busy, so a claim may take a few minutes to show up here. This server keeps trying.',
+    )
+    expect(container.textContent).not.toContain('refused')
+  })
+
   it.each([
     [{ state: 'lapsed', account: ROWAN } as ClaimView, 'The claim for Rowan (r•••@example.com) lapsed before the owner was created'],
     [{ state: 'used' } as ClaimView, 'Someone used the last code to claim a different server'],

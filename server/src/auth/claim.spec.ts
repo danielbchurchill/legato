@@ -36,6 +36,9 @@ function fakeRelay(nowSeconds: () => number) {
   const calls: Call[] = [];
   let down = false;
   let refuseLinks = false;
+  // Retry-After for a 429 from /pair/exchange: a number, "none" for a 429
+  // without one, or null for no 429 at all.
+  let limited: number | "none" | null = null;
 
   const impl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -44,6 +47,13 @@ function fakeRelay(nowSeconds: () => number) {
     if (down) throw new Error("offline");
     if (url.endsWith("/.well-known/jwks.json")) return Response.json({ keys: [key.jwk] });
     if (url.endsWith("/pair/exchange")) {
+      if (limited !== null) {
+        const headers: Record<string, string> = limited === "none" ? {} : { "Retry-After": String(limited) };
+        return Response.json(
+          { error: "Too many unknown setup codes from this address.", reason: "rate_limited" },
+          { status: 429, headers },
+        );
+      }
       const code = body!.code as string;
       if (used.has(code)) return Response.json({ error: "pairing code used", reason: "used" }, { status: 410 });
       if (expired.has(code)) return Response.json({ error: "pairing code expired", reason: "expired" }, { status: 410 });
@@ -82,6 +92,9 @@ function fakeRelay(nowSeconds: () => number) {
     },
     refuseLinks: () => {
       refuseLinks = true;
+    },
+    limit: (retryAfter: number | "none" | null) => {
+      limited = retryAfter;
     },
   };
 }
@@ -234,17 +247,82 @@ describe("when the server asks legato.fm", () => {
     const h = await setup();
     h.relay.goDown();
     for (let i = 0; i < 3; i++) {
-      expect(await h.view()).toEqual({ state: "waiting", unreachable: true });
+      expect(await h.view()).toEqual({ state: "waiting", unreachable: true, busy: false });
       h.advance(5_000);
     }
     expect(h.logs.filter((line) => line.includes("couldn't reach"))).toHaveLength(1);
   });
 });
 
+// Issue #324: legato.fm answers 429 when something on this server's network
+// has asked about too many codes nobody claimed.
+describe("when legato.fm says to wait", () => {
+  it("waits as long as it says, says on /setup that legato.fm is busy, and logs it once", async () => {
+    const h = await setup();
+    h.relay.limit(30);
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: true });
+    expect(h.relay.exchanges()).toHaveLength(1);
+
+    // Check-ins every five seconds, and no asking until the thirty are up.
+    for (let t = 5_000; t < 30_000; t += 5_000) {
+      h.advance(5_000);
+      await h.checkIn();
+    }
+    expect(h.relay.exchanges()).toHaveLength(1);
+    h.advance(5_000);
+    expect(await h.view()).toMatchObject({ busy: true });
+    expect(h.relay.exchanges()).toHaveLength(2);
+
+    // Still a 429: still busy, and no second log line.
+    h.advance(30_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(3);
+    expect(h.logs.filter((line) => line.includes("busy"))).toEqual([
+      "legato.fm: busy, so checking for a claim again in 30 s (something on this network asked about too many codes nobody claimed)",
+    ]);
+    expect(h.logs.filter((line) => line.includes("refused"))).toEqual([]);
+
+    // Over: a claim made meanwhile is picked up as usual.
+    h.relay.limit(null);
+    h.relay.claim("AAAA-AAAA");
+    h.advance(30_000);
+    expect(await h.view()).toMatchObject({ state: "claimed", account: { name: "Rowan" } });
+  });
+
+  it("never shows a 429 as a refusal, and stops saying busy once legato.fm answers", async () => {
+    const h = await setup();
+    h.relay.limit(10);
+    expect((await h.view()).state).toBe("waiting");
+    h.relay.limit(null);
+    h.advance(10_000);
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: false });
+  });
+
+  it("waits a minute when it isn't told how long, and never more than fifteen", async () => {
+    const h = await setup();
+    h.relay.limit("none");
+    await h.checkIn();
+    h.advance(59_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(1);
+    h.advance(1_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(2);
+
+    h.relay.limit(24 * 60 * 60);
+    h.advance(60_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(3);
+    h.advance(15 * 60_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(4);
+  });
+});
+
 describe("a claim", () => {
   it("shows whose account it is, with the email masked", async () => {
     const h = await setup();
-    expect(await h.view()).toEqual({ state: "waiting", unreachable: false });
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: false });
     h.relay.claim("AAAA-AAAA");
     h.advance(5_000);
     const claim = await h.view();
@@ -287,7 +365,7 @@ describe("a claim", () => {
     expect(h.linkedAccount()).toBeNull();
     expect(h.relay.reports()).toEqual([]);
     expect(readTunnelCredential(h.db, TEST_ISSUER)).toBeNull();
-    expect(h.claims.view()).toEqual({ state: "waiting", unreachable: false });
+    expect(h.claims.view()).toEqual({ state: "waiting", unreachable: false, busy: false });
   });
 
   it("refuses an account id that isn't the claim's, and creates and links nobody", async () => {
@@ -343,7 +421,7 @@ describe("a claim", () => {
 
     // The same database, a new process: a new claims object and code store.
     const restarted = await setup({ db: h.db, relay: h.relay, codes: ["EEEE-EEEE"] });
-    expect(await restarted.view()).toEqual({ state: "waiting", unreachable: false });
+    expect(await restarted.view()).toEqual({ state: "waiting", unreachable: false, busy: false });
     expect(readTunnelCredential(h.db, TEST_ISSUER)).toBeNull();
     expect((await restarted.createOwner({ linkAccountId: "7" })).json().reason).toBe("claim_no_claim");
     expect(h.relay.reports()).toEqual([]);
