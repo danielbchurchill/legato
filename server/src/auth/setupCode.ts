@@ -1,6 +1,7 @@
 import { BlockList, isIP } from "node:net";
 import { randomInt } from "node:crypto";
 import type { FastifyRequest } from "fastify";
+import { TUNNEL_HEADER } from "../tunnel/client.js";
 
 // Who may create the owner on a server that doesn't have one yet (issue
 // #112). Without some proof of physical access, the first stranger on the
@@ -202,8 +203,14 @@ function isLocalOrigin(origin: string): boolean {
  *     which can POST to 127.0.0.1 like anything else can.
  * A request with no Origin at all is a non-browser client (curl on this
  * machine), which is someone with a shell here already.
+ *
+ * Except a request legato.fm's tunnel brought (issue #310): the tunnel
+ * client replays it from 127.0.0.1 to 127.0.0.1, with no Origin, but it
+ * came from anywhere. The client marks every one with TUNNEL_HEADER, and
+ * the mark only ever takes privileges away, so nothing checks its value.
  */
 export function isLocalRequest(request: FastifyRequest): boolean {
+  if (request.headers[TUNNEL_HEADER] !== undefined) return false;
   if (!LOOPBACK_ADDRESSES.has(request.socket.remoteAddress ?? "")) return false;
   const host = hostnameOf(request.headers.host);
   if (!host || !LOOPBACK_HOSTNAMES.has(host)) return false;
@@ -249,7 +256,8 @@ function isHomeNetworkHostname(hostname: string): boolean {
  * server; this is what keeps it to the home network and to pages that
  * aren't someone else's:
  *   * the peer is on a private network, and not behind a reverse proxy
- *     (whose own address says nothing about who's on the far side of it);
+ *     or legato.fm's tunnel (whose own address says nothing about who's
+ *     on the far side of it);
  *   * the Host is a name only the home network can resolve, so a
  *     DNS-rebinding page on a public domain can't read it same-origin;
  *   * the Origin, if any, is this same host or the desktop app. CORS here
@@ -260,7 +268,7 @@ function isHomeNetworkHostname(hostname: string): boolean {
 export function maySeeSetupCode(request: FastifyRequest): boolean {
   if (isLocalRequest(request)) return true;
   const headers = request.headers;
-  if (headers["x-forwarded-for"] || headers.forwarded || headers["x-real-ip"]) return false;
+  if (headers["x-forwarded-for"] || headers.forwarded || headers["x-real-ip"] || headers[TUNNEL_HEADER] !== undefined) return false;
   if (!isPrivateAddress(request.socket.remoteAddress ?? "")) return false;
   const host = hostnameOf(headers.host);
   if (!host || !isHomeNetworkHostname(host)) return false;

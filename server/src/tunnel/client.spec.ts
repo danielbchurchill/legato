@@ -1,0 +1,244 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer, type Server, type Socket } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import Fastify, { type FastifyInstance } from "fastify";
+import { afterEach, describe, expect, it } from "bun:test";
+import { buildTestApp } from "../auth/test-app.js";
+import { openDb } from "../db.js";
+import { filesRoutes } from "../routes/files.js";
+import { backoffDelay, TunnelClient, type TunnelState } from "./client.js";
+import { startFakeRelay, type FakeRelay } from "./fake-relay.js";
+
+// Issue #310: this server's end of legato.fm's tunnel, against a stand-in
+// relay. relay/src/tunnel.spec.ts runs the same client against the real one.
+
+const FAST = { baseMs: 20, capMs: 80 };
+
+const cleanups: (() => unknown)[] = [];
+afterEach(async () => {
+  while (cleanups.length) await cleanups.pop()!();
+});
+
+function waitFor(client: TunnelClient, state: TunnelState, timeoutMs = 3_000): Promise<void> {
+  if (client.state === state) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`stayed ${client.state}, never ${state}`)), timeoutMs);
+    const off = client.onState((next) => {
+      if (next !== state) return;
+      clearTimeout(timer);
+      off();
+      resolve();
+    });
+  });
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function relay(accept: (credential: string) => boolean = () => true): FakeRelay {
+  const started = startFakeRelay({ accept });
+  cleanups.push(() => started.stop());
+  return started;
+}
+
+function client(url: string, target: string, extra: Partial<ConstructorParameters<typeof TunnelClient>[0]> = {}) {
+  const started = new TunnelClient({ url, credential: "the-credential", target, backoff: FAST, ...extra });
+  cleanups.push(() => started.stop());
+  started.start();
+  return started;
+}
+
+async function listen(app: FastifyInstance): Promise<string> {
+  cleanups.push(() => app.close());
+  return app.listen({ port: 0, host: "127.0.0.1" });
+}
+
+describe("backoffDelay", () => {
+  it("doubles from the base up to the cap, with up to half of each delay left to chance", () => {
+    const backoff = { baseMs: 1_000, capMs: 60_000 };
+    expect([0, 1, 2, 3, 6, 7, 20].map((attempt) => backoffDelay(attempt, backoff, () => 1))).toEqual([
+      1_000, 2_000, 4_000, 8_000, 60_000, 60_000, 60_000,
+    ]);
+    expect(backoffDelay(3, backoff, () => 0)).toBe(4_000);
+    expect(backoffDelay(3, backoff, () => 0.5)).toBe(6_000);
+  });
+});
+
+describe("TunnelClient", () => {
+  it("signs in with its credential, as legato-server and nothing more specific", async () => {
+    const fake = relay();
+    const tunnel = client(fake.url, "http://127.0.0.1:9");
+    await waitFor(tunnel, "connected");
+    expect(fake.auths).toEqual(["the-credential"]);
+    expect(fake.userAgents).toEqual(["legato-server"]);
+  });
+
+  it("replays a request against this server, where it never counts as coming from this machine", async () => {
+    // A server with no owner shows its setup code to a page on this machine
+    // (auth/setupCode.ts). The tunnel replays requests from 127.0.0.1, so
+    // without its mark a request from anywhere would look like one.
+    const { app } = await buildTestApp(openDb(":memory:"));
+    const origin = await listen(app);
+    const direct = await fetch(`${origin}/api/v1/auth/setup`);
+    expect(direct.status).toBe(200);
+
+    const fake = relay();
+    const tunnel = client(fake.url, origin);
+    await waitFor(tunnel, "connected");
+    const relayed = await fake.request({
+      method: "GET",
+      path: "/api/v1/auth/setup",
+      // A device can't take the mark off by sending its own.
+      headers: { "x-legato-tunnel": "", host: "127.0.0.1" },
+    });
+    expect(relayed.status).toBe(403);
+    expect(JSON.parse(relayed.body.toString()).reason).toBe("setup_code_hidden");
+  });
+
+  it("streams audio through the existing stream route, ranges included", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "legato-tunnel-stream-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const sourcePath = path.join(dir, "track.flac");
+    execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=3", sourcePath], { stdio: "ignore" });
+    const db = openDb(":memory:");
+    const root = db.prepare("INSERT INTO library_roots (path) VALUES (?) RETURNING id").get(dir) as { id: number };
+    const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id").get() as { id: number };
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(node.id);
+    const { id: fileId } = db
+      .prepare(
+        `INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size, file_hash)
+         VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z', 0, ?) RETURNING id`,
+      )
+      .get(node.id, root.id, sourcePath, "abcdef0123456789abcdef0123456789abcdef01") as { id: number };
+    const app = Fastify();
+    await app.register(filesRoutes(db, { cacheDir: path.join(dir, "streams") }), { prefix: "/api/v1" });
+    const origin = await listen(app);
+
+    const fake = relay();
+    const tunnel = client(fake.url, origin);
+    await waitFor(tunnel, "connected");
+    const source = readFileSync(sourcePath);
+
+    const whole = await fake.request({ method: "GET", path: `/api/v1/files/${fileId}/stream`, headers: {} });
+    expect(whole.status).toBe(200);
+    expect(whole.headers["content-type"]).toBe("audio/flac");
+    expect(whole.body.equals(source)).toBe(true);
+
+    const part = await fake.request({
+      method: "GET",
+      path: `/api/v1/files/${fileId}/stream?quality=original`,
+      headers: { range: "bytes=100-199" },
+    });
+    expect(part.status).toBe(206);
+    expect(part.headers["content-range"]).toBe(`bytes 100-199/${source.length}`);
+    expect(part.body.equals(source.subarray(100, 200))).toBe(true);
+  });
+
+  it("answers a path that isn't a path on this server with an error, not a request elsewhere", async () => {
+    const fake = relay();
+    const tunnel = client(fake.url, "http://127.0.0.1:9");
+    await waitFor(tunnel, "connected");
+    await expect(fake.request({ method: "GET", path: "http://example.com/", headers: {} })).rejects.toThrow("not a path on this server");
+  });
+
+  it("stops for good when legato.fm refuses the credential, with one warning that says what to do", async () => {
+    const fake = relay(() => false);
+    const warnings: string[] = [];
+    const tunnel = client(fake.url, "http://127.0.0.1:9", { log: (level, message) => level === "warn" && warnings.push(message) });
+    await waitFor(tunnel, "refused");
+    await sleep(FAST.capMs * 4);
+    expect(tunnel.state).toBe("refused");
+    expect(fake.opened).toBe(1);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("link this server to your legato.fm account again");
+  });
+
+  it("backs off between failed attempts, doubling up to the cap, and logs the outage once", async () => {
+    // Accepts the TCP connection and hangs up straight away: a relay that's
+    // down behind a proxy that isn't.
+    const attempts: number[] = [];
+    const server = createServer((socket) => {
+      attempts.push(Date.now());
+      socket.destroy();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => new Promise((resolve) => server.close(resolve)));
+    const { port } = server.address() as { port: number };
+
+    const lines: string[] = [];
+    client(`ws://127.0.0.1:${port}/tunnel`, "http://127.0.0.1:9", {
+      random: () => 1,
+      log: (_level, message) => lines.push(message),
+    });
+    while (attempts.length < 6) await sleep(10);
+    const gaps = attempts.slice(1).map((at, i) => at - attempts[i]!);
+    // 20, 40, 80, 80, 80 ms, plus however long each attempt took to fail.
+    expect(gaps[0]!).toBeGreaterThanOrEqual(15);
+    expect(gaps[1]!).toBeGreaterThanOrEqual(35);
+    expect(gaps[2]!).toBeGreaterThanOrEqual(70);
+    expect(gaps[4]!).toBeGreaterThanOrEqual(70);
+    expect(Math.max(...gaps)).toBeLessThan(400);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("couldn't open the tunnel");
+  });
+
+  it("reconnects when the relay restarts, and says so", async () => {
+    const lines: string[] = [];
+    const first = relay();
+    const tunnel = client(first.url, "http://127.0.0.1:9", { log: (_level, message) => lines.push(message) });
+    await waitFor(tunnel, "connected");
+
+    first.stop();
+    await waitFor(tunnel, "waiting");
+    // On the same port, as a restarted relay would be.
+    const second = startFakeRelay({ accept: () => true, port: Number(new URL(first.url).port) });
+    cleanups.push(() => second.stop());
+    await waitFor(tunnel, "connected");
+    expect(lines.some((line) => line.includes("tunnel dropped"))).toBe(true);
+    expect(lines.at(-1)).toContain("connected again");
+  });
+
+  it("reconnects when the relay stops answering its pings", async () => {
+    // Completes the WebSocket handshake, says auth-ok, then goes silent:
+    // what a network change looks like before TCP notices.
+    const sockets: Socket[] = [];
+    const silent: Server = createServer((socket) => {
+      sockets.push(socket);
+      socket.once("data", (data) => {
+        const key = /sec-websocket-key: (.+)\r\n/i.exec(data.toString())![1]!.trim();
+        const accept = createHash("sha1").update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+        socket.write(
+          `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+        );
+        const payload = Buffer.from(JSON.stringify({ type: "auth-ok" }));
+        socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
+      });
+      socket.on("error", () => {});
+    });
+    await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve));
+    cleanups.push(() => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise((resolve) => silent.close(resolve));
+    });
+    const { port } = silent.address() as { port: number };
+
+    const tunnel = client(`ws://127.0.0.1:${port}/tunnel`, "http://127.0.0.1:9", { heartbeatMs: 30 });
+    await waitFor(tunnel, "connected");
+    await waitFor(tunnel, "waiting");
+    await waitFor(tunnel, "connected");
+    expect(sockets.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("stops when told to, and stays stopped", async () => {
+    const fake = relay();
+    const tunnel = client(fake.url, "http://127.0.0.1:9");
+    await waitFor(tunnel, "connected");
+    tunnel.stop();
+    await sleep(FAST.capMs * 3);
+    expect(tunnel.state).toBe("stopped");
+    expect(fake.opened).toBe(1);
+    expect(fake.closed).toBe(1);
+  });
+});
