@@ -313,6 +313,26 @@ describe("TunnelClient", () => {
     expect(sockets.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("keeps one heartbeat however many times it's told it signed in", async () => {
+    const fake = relay();
+    const tunnel = client(fake.url, "http://127.0.0.1:9", { heartbeatMs: 40 });
+    await waitFor(tunnel, "connected");
+    for (let i = 0; i < 4; i++) fake.send({ type: "auth-ok" });
+    await sleep(400);
+    // Each extra auth-ok used to start another heartbeat that nothing
+    // stopped. They took turns clearing each other's pongs, so the client
+    // decided a healthy connection had died and dropped it.
+    expect(tunnel.state).toBe("connected");
+    expect(fake.opened).toBe(1);
+    // About ten beats in 400 ms, from one heartbeat.
+    expect(fake.pings).toBeGreaterThanOrEqual(5);
+    expect(fake.pings).toBeLessThanOrEqual(13);
+    tunnel.stop();
+    const atStop = fake.pings;
+    await sleep(200);
+    expect(fake.pings).toBe(atStop);
+  });
+
   it("stops when told to, and stays stopped", async () => {
     const fake = relay();
     const tunnel = client(fake.url, "http://127.0.0.1:9");

@@ -161,7 +161,8 @@ export class TunnelClient {
       this.alive = true;
       try {
         const frame = parseFrame(event.data);
-        if (frame?.type === "auth-ok") {
+        // auth-ok only means something once, while signing in.
+        if (frame?.type === "auth-ok" && this.current === "connecting") {
           clearTimeout(authTimer);
           this.connected(socket);
         } else if (frame?.type === "auth-error") {
@@ -199,6 +200,7 @@ export class TunnelClient {
     this.everConnected = true;
     this.failing = false;
     this.alive = true;
+    if (this.beatTimer) clearInterval(this.beatTimer);
     this.beatTimer = setInterval(() => {
       if (!this.alive) {
         this.lost(socket, "the connection stopped answering");

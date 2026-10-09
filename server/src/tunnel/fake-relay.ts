@@ -21,6 +21,8 @@ export type FakeRelay = {
   auths: string[];
   userAgents: (string | null)[];
   closed: number;
+  /** Pings that reached it, from any tunnel. */
+  pings: number;
   /** Sends a request down the newest signed-in tunnel and collects the answer. */
   request(frame: Omit<RequestFrame, "type" | "requestId">): Promise<RelayedResponse>;
   /** Sends any frame at all down the newest signed-in tunnel, the way a broken or hostile relay could. */
@@ -59,6 +61,9 @@ export function startFakeRelay(options: { accept: (credential: string) => boolea
         }
         if ("requestId" in frame) waiting.get(frame.requestId)?.(frame);
       },
+      ping() {
+        relay.pings += 1;
+      },
       close(ws) {
         relay.closed += 1;
         const at = signedIn.indexOf(ws);
@@ -74,6 +79,7 @@ export function startFakeRelay(options: { accept: (credential: string) => boolea
     auths: [],
     userAgents: [],
     closed: 0,
+    pings: 0,
     request(frame) {
       const socket = signedIn.at(-1);
       if (!socket) return Promise.reject(new Error("no tunnel is signed in"));
