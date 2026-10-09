@@ -122,6 +122,20 @@ export function isMemberLookupArtist(db: Database, artistNodeId: number): boolea
   return db.prepare(`SELECT 1 FROM (${MEMBER_LOOKUP_ARTISTS_SQL}) WHERE id = ?`).get(artistNodeId) !== undefined;
 }
 
+/** Issue #321: whether one artist is inside the bound, for the photo and
+ *  description lookups (worker.ts). The same three sets as
+ *  artistsInBoundFrom, asked one at a time. Written as one query, the last
+ *  set can't be narrowed to one artist, so SQLite built the whole
+ *  member-lookup set to answer it: 6.5 s an artist past the bound at
+ *  30,000 albums, where this takes under a millisecond. */
+export function isArtistInBound(db: Database, artistNodeId: number): boolean {
+  if (isMemberLookupArtist(db, artistNodeId)) return true;
+  if (db.prepare(`SELECT 1 FROM (${LIBRARY_ARTISTS}) WHERE id = ?`).get(artistNodeId)) return true;
+  // memberHop's third set: a member or group of a member-lookup artist.
+  const linked = db.prepare(memberHop("SELECT ? AS id")).all(artistNodeId, artistNodeId) as { id: number }[];
+  return linked.some(({ id }) => isMemberLookupArtist(db, id));
+}
+
 const BOUND_TABLES = ["performers", "member_lookup_artists", "artists_in_bound"];
 
 /** Issue #321: the statements withBound reads the bound with, in order.

@@ -10,6 +10,7 @@ import {
   enqueueDescriptionLookupIfNeeded,
   enqueueEnrichmentIfNeeded,
   enqueueLookupsInBound,
+  isArtistInBound,
   isEnrichmentEnabled,
   withBound,
   BOUND_SQL,
@@ -244,6 +245,23 @@ describe("withBound", () => {
 
     expect(sets).toEqual({ lookup: [beatles, george], inBound: [beatles, george, wilburys] });
     expect(tempTables()).toEqual([]);
+  });
+
+  it("agrees with isArtistInBound about every artist", () => {
+    const { wilburys } = library(db);
+    const dylan = node(db, "artist", "Bob Dylan");
+    edge(db, dylan, wilburys, "member_of");
+    edge(db, dylan, node(db, "artist", "The Band"), "member_of");
+    edge(db, node(db, "recording", "Produced"), node(db, "artist", "George Martin"), "produced_by");
+    node(db, "artist", "Nobody's");
+
+    const inBound = withBound(db, () => ids("artists_in_bound"));
+
+    const artists = (db.prepare("SELECT id FROM nodes WHERE type = 'artist' ORDER BY id").all() as { id: number }[]).map(
+      (r) => r.id,
+    );
+    expect(artists.filter((id) => isArtistInBound(db, id))).toEqual(inBound);
+    expect(inBound).toHaveLength(4);
   });
 
   it("reads all three sets from one snapshot, whatever another connection commits in between", () => {
