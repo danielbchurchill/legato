@@ -48,25 +48,60 @@ describe("ensureServerKey", () => {
     expect(a.serverId).not.toBe(b.serverId);
     expect(a.publicKey).not.toBe(b.publicKey);
   });
+});
 
-  it("logs the id change once at startup, and asks for a relink only when there's a link to redo", () => {
+// Issue #329: when the move onto the key is worth a line in the log.
+describe("the id change at startup", () => {
+  function start(db: ReturnType<typeof openDb>) {
     const lines: [string, string][] = [];
-    const log = (level: "info" | "warn", message: string) => void lines.push([level, message]);
+    const before = identityRow(db).server_id;
+    const identity = new LegatoIdentity(db, { origin: TEST_ISSUER, log: (level, message) => void lines.push([level, message]) });
+    return { lines, before, after: identity.serverId() };
+  }
 
+  // A server from before 0037, as the first start after the upgrade finds
+  // it: an owner, 0032's random id, no key yet.
+  function upgraded() {
     const db = openDb(":memory:");
-    const old = identityRow(db).server_id;
-    const identity = new LegatoIdentity(db, { origin: TEST_ISSUER, log });
-    expect(lines).toEqual([
-      ["warn", `legato.fm: this server's id is now ${identity.serverId()} (was ${old}), made from its new identity key.`],
-    ]);
-    new LegatoIdentity(db, { origin: TEST_ISSUER, log });
-    expect(lines).toHaveLength(1);
+    db.prepare("INSERT INTO users (provider, provider_user_id, password_hash, role) VALUES ('local', 'owner', 'x', 'owner')").run();
+    return db;
+  }
 
-    const linked = openDb(":memory:");
-    linked.prepare("INSERT INTO users (provider, provider_user_id, role, legato_account_id) VALUES ('google', 'g', 'legacy', '42')").run();
-    lines.length = 0;
-    new LegatoIdentity(linked, { origin: TEST_ISSUER, log });
-    expect(lines[0]![1]).toMatch(/Link its legato.fm account again/);
+  it("says nothing on a brand-new server, whose first id lived for under a second", () => {
+    const db = openDb(":memory:");
+    const { lines, before, after } = start(db);
+    expect(lines).toEqual([]);
+    expect(after).not.toBe(before);
+    expect(identityRow(db).private_key).toContain("BEGIN PRIVATE KEY");
+  });
+
+  it("says nothing on an upgraded server that never linked or contacted legato.fm", () => {
+    const db = upgraded();
+    const { lines, before, after } = start(db);
+    expect(lines).toEqual([]);
+    expect(after).not.toBe(before);
+  });
+
+  it("warns once on an upgraded server that was linked, and asks for the link again", () => {
+    const db = upgraded();
+    db.prepare("UPDATE users SET legato_account_id = '42'").run();
+    db.prepare("UPDATE server_identity SET jwks = '{\"keys\":[]}', jwks_fetched_at = datetime('now')").run();
+    const { lines, before, after } = start(db);
+    expect(lines).toEqual([
+      [
+        "warn",
+        `legato.fm: this server's id is now ${after} (was ${before}), made from its new identity key. ` +
+          "Link its legato.fm account again: legato.fm only opens servers that reported their link.",
+      ],
+    ]);
+    expect(start(db).lines).toEqual([]);
+  });
+
+  it("warns, without asking for a link, when legato.fm knew the id but nothing's linked now", () => {
+    const db = upgraded();
+    db.prepare("UPDATE server_identity SET jwks = '{\"keys\":[]}', jwks_fetched_at = datetime('now')").run();
+    const { lines, before, after } = start(db);
+    expect(lines).toEqual([["warn", `legato.fm: this server's id is now ${after} (was ${before}), made from its new identity key.`]]);
   });
 });
 
