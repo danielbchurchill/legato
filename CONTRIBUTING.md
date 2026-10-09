@@ -17,7 +17,7 @@ Thanks for wanting to help. Legato is pre-release and built mostly by one person
 ## Opening the pull request
 
 - Explain the reasoning, how you tested it, and the edge cases you considered.
-- Write "Closes #N" only if the change fully resolves the issue on every platform it affects. Otherwise write "Refs #N" and say what's left.
+- Write "Closes #N" if the change does everything the issue asks and you've tested all you can. A check that needs a device or platform you don't have goes under a **Release checks** heading, with steps. Those run in batches before a release and don't hold the issue open. Write "Refs #N" if part of the issue isn't done yet, and say what's left.
 - Anything platform-specific should work on Linux as well as macOS and Windows. If you couldn't test a platform, say so.
 
 ## The Contributor License Agreement

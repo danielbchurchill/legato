@@ -65,5 +65,8 @@ How to work on Legato: the layout, the conventions, and the non-obvious things t
 
 - One logical change per commit. The subject tells the story ("Fix race condition in gapless scheduling", not "fix bug"), and the body says why.
 - Branches are descriptive: `feature/…` or `fix/…`.
-- A PR explains the reasoning, the testing done and the edge cases considered, with file and line references. Write "Closes #N" only when every item in the issue's "Done when" list was checked on the platform it's about. Otherwise write "Refs #N" and list the remaining steps.
+- A PR explains the reasoning, the testing done and the edge cases considered, with file and line references.
+- **Closing an issue doesn't wait for the maintainer's own devices.** Some checks need the maintainer's own phone, accounts, hardware or eyes on a native window, or a machine nobody else has, such as Windows or an Intel Mac. The PR lists them, with exact steps, under a **Release checks** heading. They go into the milestone's release-checks issue and are run in batches before a release. They don't hold the issue open, and one that fails there becomes a new issue.
+  - Write "Closes #N" when every item in the issue's "Done when" list is built, and every check other than a release check has run: tests, a browser, a throwaway server, Docker, a deploy to a test machine.
+  - Otherwise write "Refs #N". That's when part of the issue isn't built, or a check anyone can run after merging is still owed. Say what's left; whoever runs that check closes the issue.
 - Linux (x64 and arm64) is a main platform, not deferred work. Anything platform-specific covers Linux as well as macOS and Windows.
