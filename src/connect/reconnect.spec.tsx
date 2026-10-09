@@ -111,7 +111,7 @@ describe('the reconnect epoch', () => {
 
     library = after
     await act(async () => {
-      await announceServerBack(Date.now() - 60_000)
+      await announceServerBack()
     })
     await settle()
 
@@ -134,7 +134,7 @@ describe('the reconnect epoch', () => {
       return { ok: true, status: 200, json: async () => [] } as Response
     })
     await act(async () => {
-      await announceServerBack(0)
+      await announceServerBack()
     })
     await act(async () => {
       await seen.settings?.updateSettings({ viewMode: 'library' })
@@ -165,7 +165,7 @@ describe('the reconnect epoch', () => {
 
     let announced: Promise<void> = Promise.resolve()
     act(() => {
-      announced = announceServerBack(0)
+      announced = announceServerBack()
     })
     await settle()
     expect(epochs.at(-1)).toBe(start)

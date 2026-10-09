@@ -314,7 +314,7 @@ describe('watchForDrops', () => {
     page.dispatchEvent(new Event('online'))
     expect(reloads).toHaveLength(0)
 
-    await announceServerBack(0)
+    await announceServerBack()
     expect(reloads).toHaveLength(1)
   })
 

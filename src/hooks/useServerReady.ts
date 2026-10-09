@@ -251,7 +251,6 @@ export function useServerReady(): ServerStatus {
         // Back after an outage, not after a check or two that failed: those
         // are a hiccup, and nothing needs to load again for one.
         const recovered = down
-        const since = lastSeenAt ?? 0
         failingSince = null
         failedHow = null
         shown = null
@@ -274,7 +273,7 @@ export function useServerReady(): ServerStatus {
         setServer((prev) => (sameServerVersion(prev, next) ? prev : next))
         if (seenName) setName(seenName)
         setOutage(null)
-        if (recovered) void announceServerBack(since)
+        if (recovered) void announceServerBack()
         return
       }
 

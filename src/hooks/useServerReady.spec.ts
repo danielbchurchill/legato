@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MIN_SERVER_SCHEMA_VERSION } from '../config/serverVersion'
 import { HEALTH_TIMEOUT_MS } from '../connect/unreachable'
-import { SERVER_BACK_EVENT, type ServerBackDetail } from '../connect/reconnect'
+import { SERVER_BACK_EVENT } from '../connect/reconnect'
 import { readServerVersion, useServerReady, type ServerStatus } from './useServerReady'
 
 describe('readServerVersion', () => {
@@ -362,11 +362,10 @@ describe('useServerReady when the server goes away', () => {
     expect(result.current?.outage?.failure).toEqual({ kind: 'bad-status', status: 200 })
   })
 
-  it('clears the outage when the server answers again, and says so once, with when it last answered before', async () => {
-    const back = vi.fn((event: Event) => (event as CustomEvent<ServerBackDetail>).detail)
+  it('clears the outage when the server answers again, and says so once', async () => {
+    const back = vi.fn()
     window.addEventListener(SERVER_BACK_EVENT, back)
     const result = await mount()
-    const lastAnswer = Date.now()
     mode = 'refused'
     await advance(3000 + 3000)
     expect(result.current?.outage).not.toBeNull()
@@ -377,7 +376,6 @@ describe('useServerReady when the server goes away', () => {
     expect(result.current?.ready).toBe(true)
     expect(result.current?.outage).toBeNull()
     expect(back).toHaveBeenCalledTimes(1)
-    expect(back.mock.results[0].value).toEqual({ since: lastAnswer })
     window.removeEventListener(SERVER_BACK_EVENT, back)
   })
 

@@ -76,7 +76,7 @@ describe('useWsEvent', () => {
     halfOpen.open()
 
     await act(async () => {
-      await announceServerBack(0)
+      await announceServerBack()
     })
 
     expect(halfOpen.close).toHaveBeenCalled()
@@ -105,7 +105,7 @@ describe('useWsEvent', () => {
     FakeSocket.made.at(-1)?.close() // the next try waits 16 s
 
     await act(async () => {
-      await announceServerBack(0)
+      await announceServerBack()
     })
     expect(FakeSocket.made).toHaveLength(count + 1)
 
