@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import cookie from "@fastify/cookie";
 import websocketPlugin from "@fastify/websocket";
 import type { Database } from "./sqlite.js";
 import Fastify, { type FastifyInstance } from "fastify";
-import { authRoutes, type AuthRoutesOptions } from "./routes/auth.js";
+import { authRoutes, SUCCESS_PAGE_STYLE, type AuthRoutesOptions } from "./routes/auth.js";
 import { relayRoutes } from "./routes/relay.js";
 import { tunnelRoutes } from "./routes/tunnel.js";
 import { TunnelRegistry } from "./tunnel-registry.js";
@@ -17,11 +18,35 @@ export interface BuildAppOptions {
   tunnelHeartbeatMs?: number;
 }
 
+// Every HTML page this service sends has a Content-Security-Policy (issue
+// #324). A page with its own inline script or style sets its own policy,
+// naming them by hash or nonce, as /claim does. Any other page gets this
+// one, so a page added later can't go out without a policy because nobody
+// remembered to give it one. It runs and loads nothing, and styles nothing
+// but the one attribute the sign-in success page paints ink's canvas with
+// (#291), named by its hash. 'unsafe-hashes' is what lets a hash match a
+// style attribute; with no script hash beside it, it allows no script.
+export const DEFAULT_PAGE_CSP = [
+  "default-src 'none'",
+  `style-src 'unsafe-hashes' 'sha256-${createHash("sha256").update(SUCCESS_PAGE_STYLE).digest("base64")}'`,
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 export function buildApp(options: BuildAppOptions): FastifyInstance {
   const app = Fastify({ logger: options.logger ?? false });
   const registry = new TunnelRegistry();
 
   app.register(cookie);
+
+  app.addHook("onSend", async (_request, reply, payload) => {
+    const type = reply.getHeader("content-type");
+    if (typeof type === "string" && type.startsWith("text/html") && !reply.hasHeader("content-security-policy")) {
+      reply.header("Content-Security-Policy", DEFAULT_PAGE_CSP);
+    }
+    return payload;
+  });
 
   // Unauthenticated on purpose — this is what a platform health check hits,
   // and it has no reason to know about relay accounts or tunnel credentials.

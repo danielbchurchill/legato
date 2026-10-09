@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
-import { cookieAttributes } from "./auth.js";
-import { buildApp } from "../app.js";
+import { cookieAttributes, SUCCESS_PAGE_STYLE } from "./auth.js";
+import { buildApp, DEFAULT_PAGE_CSP } from "../app.js";
 import { openDb } from "../db.js";
 import type { Database } from "../sqlite.js";
 
@@ -160,6 +161,32 @@ describe("native sign-in (issue #215)", () => {
 
     const me = await app.inject({ url: "/auth/me", cookies: { relay_session: session.value } });
     expect((me.json() as { user: { displayName: string } }).user.displayName).toBe("Rowan");
+  });
+
+  // Issue #324: every HTML page has a policy, whether or not it sets one.
+  it("sends the success page under the default policy, which allows its one style and nothing more", async () => {
+    const start = await app.inject({ url: "/auth/github" });
+    const state = new URL(String(start.headers.location)).searchParams.get("state")!;
+    const callback = await app.inject({
+      url: `/auth/github/callback?code=provider-code&state=${state}`,
+      cookies: { relay_oauth_state: start.cookies.find((c) => c.name === "relay_oauth_state")!.value },
+    });
+    expect(String(callback.headers["content-type"])).toStartWith("text/html");
+    expect(callback.headers["content-security-policy"]).toBe(DEFAULT_PAGE_CSP);
+    expect(DEFAULT_PAGE_CSP).toStartWith("default-src 'none';");
+    expect(DEFAULT_PAGE_CSP).toContain("frame-ancestors 'none'");
+    // Nothing on it that policy would block: no script, stylesheet or
+    // handler, and one style attribute, the one it names by hash.
+    expect(callback.body).not.toMatch(/<(script|style|link|img)\b|\son[a-z]+=/);
+    const styles = [...callback.body.matchAll(/\sstyle="([^"]*)"/g)].map((m) => m[1]!);
+    expect(styles).toEqual([SUCCESS_PAGE_STYLE]);
+    expect(DEFAULT_PAGE_CSP).toContain(`style-src 'unsafe-hashes' 'sha256-${createHash("sha256").update(styles[0]!).digest("base64")}';`);
+    expect(DEFAULT_PAGE_CSP).not.toContain("script-src");
+
+    // JSON isn't a page, and a page with its own policy keeps it.
+    expect((await app.inject({ url: "/health" })).headers["content-security-policy"]).toBeUndefined();
+    const claim = await app.inject({ url: "/claim?code=K7QM-4XRD&server=0123456789abcdef0123456789abcdef" });
+    expect(String(claim.headers["content-security-policy"])).toContain("script-src 'sha256-");
   });
 
   it("rejects a non-loopback redirect before the provider is ever involved", async () => {

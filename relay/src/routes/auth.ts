@@ -291,6 +291,11 @@ function successPage(displayName: string | null): string {
 </html>`;
 }
 
+// The style attribute on successPage's <body>, the one style app.ts's
+// default policy allows (by hash). Read out of the page itself so the two
+// can't drift apart.
+export const SUCCESS_PAGE_STYLE = /<body style="([^"]*)"/.exec(successPage(null))![1]!;
+
 function publicUser(user: RelayUserRow) {
   return {
     id: user.id,
