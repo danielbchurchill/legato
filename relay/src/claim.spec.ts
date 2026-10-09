@@ -9,7 +9,7 @@ import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
 import { claimProofMessage, isLinkedServer, linkProofMessage, unlinkProofMessage, verifyServerSignature } from "./linked-servers.js";
 import { OPEN_CODES_PER_ACCOUNT, tunnelCredentialHolder } from "./pairing.js";
-import { FREE_CODES } from "./rate-limit.js";
+import { ASKS_PER_WINDOW, FREE_CODES } from "./rate-limit.js";
 import { claimReturnPath } from "./routes/claim-page.js";
 import { parseSigningKeys, type SigningKeys } from "./signing-keys.js";
 
@@ -412,14 +412,57 @@ describe("guessing codes at POST /pair/exchange", () => {
     expect((await h.exchangeAs(guesser, guess(FREE_CODES + 1), GUESSER)).statusCode).toBe(429);
   });
 
-  it("refuses a locked-out address before it checks the signature", async () => {
+  // A 404 says the same whoever signed the proof, so the relay doesn't
+  // check: a code nobody claimed for this server costs a lookup, not a
+  // signature check. A code claimed for it is always checked.
+  it("answers a code nobody claimed for the server asking without checking the signature", async () => {
     const h = setup();
     const guesser = homeServer();
+    const forged = (code: string, server = guesser) => ({
+      ...claimProof(server, { issuer: ISSUER, code, nowSeconds: now() }),
+      signature: "x",
+    });
+    expect((await h.exchange(forged("AAAA-BBBB"), "198.51.100.4")).json()).toMatchObject({ reason: "not_found" });
+    for (let i = 0; i <= FREE_CODES; i++) await h.exchange(forged(guess(i)), GUESSER);
+    expect((await h.exchange(forged(guess(FREE_CODES + 1)), GUESSER)).statusCode).toBe(429);
+
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD");
+    const res = await h.exchange(forged("K7QM-4XRD", SERVER), GUESSER);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ reason: "bad_signature" });
+  });
+
+  // Issue #324, review: the limiter used to run before the lookup, so this
+  // claim got a 429 until it expired.
+  it("answers a claim from an address that's locked out, for a code that address never asked about", async () => {
+    const h = setup();
+    const server = homeServer();
+    expect((await h.exchangeAs(server, "AAAA-AAAA", GUESSER)).statusCode).toBe(404);
+    // Something else behind the same NAT or /64 asks about too many codes.
+    const guesser = homeServer();
     for (let i = 0; i <= FREE_CODES; i++) await h.exchangeAs(guesser, guess(i), GUESSER);
-    const forged = { ...claimProof(guesser, { issuer: ISSUER, code: guess(FREE_CODES + 1), nowSeconds: now() }), signature: "x" };
-    expect((await h.exchange(forged, GUESSER)).statusCode).toBe(429);
-    // From an address that isn't locked out, the same proof is checked.
-    expect((await h.exchange(forged, "198.51.100.4")).json()).toMatchObject({ reason: "bad_signature" });
+
+    // The server's code changes during the lockout. The new one is new to
+    // the relay, so asking about it waits.
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(429);
+    // Until someone claims it for this server.
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD", server);
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(200);
+  });
+
+  it(`answers a claim from an address past its ${ASKS_PER_WINDOW} asks a minute`, async () => {
+    const h = setup();
+    const server = homeServer();
+    const looper = homeServer();
+    for (let i = 0; i < ASKS_PER_WINDOW; i++) await h.exchangeAs(looper, guess(i % 3), GUESSER);
+    expect((await h.exchangeAs(looper, guess(0), GUESSER)).statusCode).toBe(429);
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(429);
+
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD", server);
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(200);
   });
 
   it("takes no notice of a Fly-Client-IP header off Fly", async () => {

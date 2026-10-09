@@ -10,7 +10,7 @@ import { parseSqliteDatetime } from "./sqlite-datetime.js";
 // Every code starts on a server's /setup page (issue #237). An account
 // claims it on the claim page (claimServerCode), for the server whose QR it
 // scanned. That server proves which server it is (linked-servers.ts,
-// checkClaimProof) and redeems the code for a `link` token for that account
+// claimProofSigned) and redeems the code for a `link` token for that account
 // and its own id. The tunnel credential is minted only when the server
 // reports that link, signed with its key (acceptLinkProof), so a claim
 // nobody finishes leaves no credential behind.
@@ -145,6 +145,12 @@ export function claimStatus(db: Database, relayUserId: number, typed: unknown): 
 }
 
 // --- redeeming a code ---
+
+// Whether this code is claimed for this server, in any state: one primary
+// key lookup, before anything else about the ask is checked (routes/pair.ts).
+export function isClaimedFor(db: Database, code: string, serverId: string): boolean {
+  return db.prepare("SELECT 1 FROM pairing_codes WHERE code = ? AND server_id = ?").get(code, serverId) !== undefined;
+}
 
 export type RedeemResult = { ok: true; relayUserId: number } | { ok: false; reason: "not_found" | "expired" | "used" };
 

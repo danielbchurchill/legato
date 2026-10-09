@@ -1,7 +1,7 @@
 -- Issue #324: which server a claim is for.
 --
 -- A setup code is 40 bits, and the proof a server signs to redeem one
--- (linked-servers.ts, checkClaimProof) costs nothing to make: any key will
+-- (linked-servers.ts, claimProofSigned) costs nothing to make: any key will
 -- do. So whoever guessed a code someone had just claimed could redeem it
 -- for a server of their own, and the claiming account's link would go to a
 -- server its owner never saw. Now the QR on a server's /setup page carries

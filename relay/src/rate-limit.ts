@@ -65,21 +65,35 @@ export class TokenLimiter {
   }
 }
 
-// A lighter brake for POST /pair/exchange (issue #324), and only defense
-// in depth. A claim names the server whose QR was scanned, and the exchange
+// A lighter brake for POST /pair/exchange (issue #324). It guards cost, not
+// codes. A claim names the server whose QR was scanned, and the exchange
 // redeems it for that server only (pairing.ts), so a guessed code is
 // worthless: a code claimed for another server gets the same 404 as one
-// nobody claimed. What's left to stop is a script asking as fast as the
-// relay answers, each ask a database lookup and a signature check.
+// nobody claimed. And a code claimed for the server asking never comes
+// here: routes/pair.ts looks it up first and answers it whatever this says,
+// so nothing else asking from that server's address can hold its claim up.
+// What's left is everything else, the asks about codes this relay has no
+// claim of for the server asking. Each costs a primary-key lookup, and is
+// answered 404 without checking the signature.
 //
-// A failure is a code this relay doesn't know, and only a new one: a home
-// server asks about its own code every five seconds while its /setup page
-// is open and gets a 404 every time until someone claims it. So each
-// address remembers the unknown codes it asked about, for CODE_MEMORY_MS
-// from the first time, and asking about one of those again is free and
-// never refused, during a lockout too. FREE_CODES remembered codes are
-// free; each new one past them locks the address out of new codes for a
-// minute, doubling with each further one, up to fifteen.
+// A home server asks about its own code every five seconds at most while
+// its /setup page is open (server/src/auth/claim.ts, POLL_INTERVAL_MS; one
+// page checking in every three seconds makes that every six), and gets a
+// 404 every time until someone claims it. For the two minutes after its
+// code changes it asks about the one it replaced as well. So one server
+// asks at most 24 times in any minute, and ten behind one address at most
+// 240, about at most three codes each in any fifteen minutes (a code is
+// asked about for twelve minutes at most, and /setup can open late in one's
+// life). Two limits, each well past that:
+//   * every ask counts, repeats included: ASKS_PER_WINDOW in each minute,
+//     then nothing more until the minute is up. That's what bounds a loop.
+//   * each new code counts once. Each address remembers the codes it asked
+//     about for CODE_MEMORY_MS from the first ask; FREE_CODES of them are
+//     free, and each new one past them locks the address out of new codes
+//     for a minute, doubling with each further one, up to fifteen. A code it
+//     already asked about is still answered then, within the first limit.
+// A refused ask counts toward neither, so a server that keeps asking while
+// it's refused doesn't stretch the wait.
 //
 // Per address only. A global cap would let anyone with enough addresses
 // refuse every server's first ask, everywhere at once. An IPv6 address
@@ -87,22 +101,18 @@ export class TokenLimiter {
 // step through its own addresses for a fresh allowance each time.
 //
 // The clock is monotonic, so a wall-clock step can't lift or stretch a
-// lockout. Memory stays bounded: a record goes once its codes age out, and
-// past MAX_ADDRESSES the oldest record makes room.
-
-// A server asks about one code for at most twelve minutes: ten while it's
-// live, two more as the code it replaced (server/src/auth/claim.ts). So
-// until it restarts it brings at most three codes in any fifteen minutes
-// (when /setup opens late in a code's life), and ten servers behind one
-// address fit in FREE_CODES.
+// wait. Memory stays bounded: a record goes once its codes age out and its
+// minute is up, and past MAX_ADDRESSES the oldest record makes room.
+export const ASK_WINDOW_MS = 60_000;
+export const ASKS_PER_WINDOW = 300;
 export const CODE_MEMORY_MS = 15 * 60_000;
 export const FREE_CODES = 30;
 export const MAX_ADDRESSES = 10_000;
-// How often recording a new code also drops other addresses' aged-out
-// codes. Each address's own are dropped whenever it's looked up.
+// How often an ask also drops other addresses' aged-out records. Each
+// address's own are dropped whenever it asks.
 const SWEEP_EVERY_MS = 60_000;
 
-type ExchangeRecord = { codes: Map<string, number>; lockedUntil: number };
+type ExchangeRecord = { codes: Map<string, number>; lockedUntil: number; windowStart: number; asks: number };
 
 export class ExchangeLimiter {
   private readonly byBlock = new Map<string, ExchangeRecord>();
@@ -112,43 +122,51 @@ export class ExchangeLimiter {
     this.lastSweepAt = now();
   }
 
-  /** Seconds until this address may ask about this code, or 0 if it may now. */
-  retryAfterSeconds(address: string, code: string): number {
-    const now = this.now();
-    const record = this.record(addressBlock(address), now);
-    if (!record || record.codes.has(code)) return 0;
-    return Math.max(0, Math.ceil((record.lockedUntil - now) / 1000));
-  }
-
-  /** This relay has no such code for the server that asked. */
-  recordUnknown(address: string, code: string): void {
+  /**
+   * An ask about a code this relay has no claim of for the server asking.
+   * Seconds until this address may ask it, or 0 if it's answered now, and
+   * then it's counted.
+   */
+  ask(address: string, code: string): number {
     const now = this.now();
     const block = addressBlock(address);
-    let record = this.record(block, now);
-    if (record?.codes.has(code)) return;
     this.sweep(now);
-    if (!record) {
+    const record = this.current(block, now) ?? { codes: new Map<string, number>(), lockedUntil: 0, windowStart: now, asks: 0 };
+    if (now - record.windowStart >= ASK_WINDOW_MS) {
+      record.windowStart = now;
+      record.asks = 0;
+    }
+    const known = record.codes.has(code);
+    let waitMs = 0;
+    if (record.asks >= ASKS_PER_WINDOW) {
+      waitMs = record.windowStart + ASK_WINDOW_MS - now;
+    } else if (!known && record.lockedUntil > now) {
+      waitMs = record.lockedUntil - now;
+    } else {
+      record.asks++;
+      if (!known) record.codes.set(code, now);
+      if (!known && record.codes.size > FREE_CODES) {
+        const doublings = record.codes.size - FREE_CODES - 1;
+        record.lockedUntil = now + Math.min(MAX_LOCKOUT_MS, FIRST_LOCKOUT_MS * 2 ** doublings);
+      }
+    }
+    if (!this.byBlock.has(block)) {
       if (this.byBlock.size >= MAX_ADDRESSES) this.byBlock.delete(this.byBlock.keys().next().value!);
-      record = { codes: new Map<string, number>(), lockedUntil: 0 };
       this.byBlock.set(block, record);
     }
-    record.codes.set(code, now);
-    if (record.codes.size > FREE_CODES) {
-      const doublings = record.codes.size - FREE_CODES - 1;
-      record.lockedUntil = now + Math.min(MAX_LOCKOUT_MS, FIRST_LOCKOUT_MS * 2 ** doublings);
-    }
+    return Math.ceil(waitMs / 1000);
   }
 
   // A lockout never outlasts the code that set it (MAX_LOCKOUT_MS is no
-  // longer than CODE_MEMORY_MS), so a record with no codes left has
-  // nothing more to say.
-  private record(block: string, now: number): ExchangeRecord | undefined {
+  // longer than CODE_MEMORY_MS), so a record with no codes left and its
+  // minute up has nothing more to say.
+  private current(block: string, now: number): ExchangeRecord | undefined {
     const record = this.byBlock.get(block);
     if (!record) return undefined;
     for (const [code, firstAskedAt] of record.codes) {
       if (firstAskedAt <= now - CODE_MEMORY_MS) record.codes.delete(code);
     }
-    if (record.codes.size > 0) return record;
+    if (record.codes.size > 0 || now - record.windowStart < ASK_WINDOW_MS) return record;
     this.byBlock.delete(block);
     return undefined;
   }
@@ -156,7 +174,7 @@ export class ExchangeLimiter {
   private sweep(now: number): void {
     if (now - this.lastSweepAt < SWEEP_EVERY_MS) return;
     this.lastSweepAt = now;
-    for (const block of this.byBlock.keys()) this.record(block, now);
+    for (const block of this.byBlock.keys()) this.current(block, now);
   }
 }
 

@@ -1,9 +1,8 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { getUserBySessionToken, sessionToken, type RelayUserRow } from "../accounts.js";
-import { normalizeCode } from "../claimCode.js";
-import { checkClaimProof, PROOF_FAILURE_MESSAGES, type ClaimProofFailure } from "../linked-servers.js";
-import { claimServerCode, claimStatus, redeemPairingCode, type ClaimFailure } from "../pairing.js";
+import { claimProofSigned, PROOF_FAILURE_MESSAGES, readClaimProof, type ClaimProofFailure } from "../linked-servers.js";
+import { claimServerCode, claimStatus, isClaimedFor, redeemPairingCode, type ClaimFailure } from "../pairing.js";
 import { clientAddress, type ExchangeLimiter } from "../rate-limit.js";
 import { signServerToken, type SigningKeys } from "../signing-keys.js";
 
@@ -102,36 +101,46 @@ export function pairRoutes(
 
     // Polled by a home server while its /setup page is open (issue #237):
     // 404 until someone claims the code for this server, then a `link`
-    // token for the claiming account and this server's id, once. A code
-    // claimed for another server is a 404 too (issue #324), and asking
-    // about codes nobody here knows is rate-limited (rate-limit.ts).
+    // token for the claiming account and this server's id, once.
+    //
+    // A code claimed for the server the proof names is that server's claim
+    // (issue #324). It's looked up first, by primary key, and checked and
+    // answered whatever the limiter says, so nobody else asking from the
+    // server's address can hold it up. Anything else is a code this relay
+    // has no claim of for that server, claimed for another or for nobody,
+    // and the answer is the same 404 whoever signed the proof, so it isn't
+    // checked: those asks are what the limiter counts (rate-limit.ts).
     app.post<{ Body: Record<string, unknown> | null }>("/pair/exchange", async (request, reply) => {
       if (!signingKeys || !issuer) {
         reply.code(503);
         return { error: SIGNING_UNAVAILABLE, reason: "signing_not_configured" };
       }
-      // Before the signature check, so an address that's locked out costs
-      // a map lookup and nothing more. Something that can't be a code
-      // fails that check anyway.
-      const address = clientAddress(request.headers, request.ip);
-      const code = normalizeCode(request.body?.code);
-      const retryAfter = code ? limiter.retryAfterSeconds(address, code) : 0;
-      if (retryAfter > 0) {
-        reply.code(429).header("Retry-After", String(retryAfter));
-        return {
-          error: `Too many unknown setup codes from this address. Try again in ${retryAfter} seconds.`,
-          reason: "rate_limited",
-        };
+      const read = readClaimProof(request.body);
+      if (!read.ok) {
+        reply.code(CLAIM_PROOF_STATUS[read.reason]);
+        return { error: PROOF_FAILURE_MESSAGES[read.reason], reason: read.reason };
       }
-      const proof = checkClaimProof(issuer, request.body);
-      if (!proof.ok) {
-        reply.code(CLAIM_PROOF_STATUS[proof.reason]);
-        return { error: PROOF_FAILURE_MESSAGES[proof.reason], reason: proof.reason };
+      const { proof } = read;
+
+      if (!isClaimedFor(db, proof.code, proof.serverId)) {
+        const retryAfter = limiter.ask(clientAddress(request.headers, request.ip), proof.code);
+        if (retryAfter > 0) {
+          reply.code(429).header("Retry-After", String(retryAfter));
+          return {
+            error: `Too many unknown setup codes from this address. Try again in ${retryAfter} seconds.`,
+            reason: "rate_limited",
+          };
+        }
+        reply.code(404);
+        return { error: "pairing code not found", reason: "not_found" };
+      }
+      if (!claimProofSigned(issuer, proof)) {
+        reply.code(CLAIM_PROOF_STATUS.bad_signature);
+        return { error: PROOF_FAILURE_MESSAGES.bad_signature, reason: "bad_signature" };
       }
 
       const result = redeemPairingCode(db, proof.code, proof.serverId);
       if (!result.ok) {
-        if (result.reason === "not_found") limiter.recordUnknown(address, proof.code);
         reply.code(result.reason === "not_found" ? 404 : 410);
         return {
           error: `pairing code ${result.reason === "not_found" ? "not found" : result.reason}`,
