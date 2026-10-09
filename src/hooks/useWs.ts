@@ -6,9 +6,16 @@ import { SERVER_BACK_EVENT } from '../connect/reconnect'
 const WS_URL = `${WS_BASE}/ws`
 
 // #119: a socket the server dropped (a restart, an outage) opens again,
-// waiting a little longer after each failed try, and straight away once the
-// server answers its health check again. The shell stays mounted through an
-// outage now, so nothing else would reopen it.
+// waiting a little longer after each failed try. The shell stays mounted
+// through an outage now, so nothing else would reopen it.
+//
+// When an outage ends (connect/reconnect.ts), every socket is replaced,
+// whatever state it reads. A host that slept, or a network that changed,
+// leaves a half-open socket: it still reads OPEN, nothing ever arrives on
+// it, and nothing tells the browser so until it sends. Replacing it costs
+// one upgrade per outage and needs nothing from the server; a ping would
+// need the server to answer it. A socket left half open with no outage
+// (an idle connection a NAT forgot) isn't caught, which is a follow-up.
 const RECONNECT_FIRST_MS = 1000
 const RECONNECT_MAX_MS = 30_000
 
@@ -58,10 +65,12 @@ export function useWsEvent(eventNames: string[], onEvent: (payload?: unknown) =>
     }
 
     const onServerBack = () => {
-      if (ws?.readyState !== WebSocket.CLOSED || retryTimer === null) return
-      clearTimeout(retryTimer)
+      if (retryTimer !== null) clearTimeout(retryTimer)
       retryMs = RECONNECT_FIRST_MS
+      const old = ws
       open()
+      // After open(), so its close can't schedule a retry of its own.
+      old?.close()
     }
 
     open()
