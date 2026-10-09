@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { libraryRoutes } from "./library.js";
 import { statsRoutes } from "./stats.js";
 import { recomputeEntities } from "../entities/aggregate.js";
+import { libraryChanged } from "../libraryRevision.js";
 
 let db: Database;
 let app: FastifyInstance;
@@ -413,6 +414,29 @@ describe("GET /library/artists", () => {
     const stats = (await app.inject({ method: "GET", url: "/api/v1/stats" })).json();
     expect(stats.artists).toBe(2);
     expect(stats.artists).toBe((await getArtists()).total);
+  });
+
+  // A recompute is the only thing that changes the list, and it bumps the
+  // revision when it's done (libraryRevision.ts).
+  it("reads and sorts the list once per revision, for /stats and every page, until the library changes", async () => {
+    libraryChanged();
+    for (let i = 0; i < 5; i++) makeAlbum(`Album ${i}`, { artistId: makeNode("artist", `Artist ${i}`) });
+    const prepare = spyOn(db, "prepare");
+    const reads = () => prepare.mock.calls.filter(([sql]) => sql.includes("GROUP BY al.primary_artist_node_id")).length;
+
+    await app.inject({ method: "GET", url: "/api/v1/stats" });
+    for (let offset = 0; offset < 5; offset += 2) await getArtists(`?limit=2&offset=${offset}`);
+    expect(reads()).toBe(1);
+    await getArtists("?dir=desc");
+    expect(reads()).toBe(2);
+
+    makeAlbum("Album 5", { artistId: makeNode("artist", "Artist 5") });
+    expect((await getArtists()).total).toBe(5);
+    libraryChanged();
+    expect((await getArtists()).total).toBe(6);
+    expect((await app.inject({ method: "GET", url: "/api/v1/stats" })).json().artists).toBe(6);
+    expect(reads()).toBe(3);
+    prepare.mockRestore();
   });
 });
 

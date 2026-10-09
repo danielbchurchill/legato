@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { resolveCoverForNode } from "../cover/extract.js";
+import { libraryRevision } from "../libraryRevision.js";
 
 // The library view's layouts (issue #126 — see DESIGN.md "The library"): a
 // paginated, sortable, searchable read model over the same albums, artists
@@ -140,19 +141,47 @@ const LIBRARY_ARTISTS = `
   WHERE a.type = 'artist'
   GROUP BY al.primary_artist_node_id`;
 
-export function countLibraryArtists(db: Database): number {
-  return (db.prepare(`SELECT COUNT(*) AS count FROM (${LIBRARY_ARTISTS})`).get() as { count: number }).count;
+// The whole list, sorted, once per revision of the library and per sort,
+// for each database. Ties go to the lower id either way, so paging never
+// reshuffles equal names.
+//
+// The Artists tab asks for 3,000 artists as 20 pages of 150, and each page
+// used to rerun the GROUP BY and sort every artist, on the request loop, to
+// keep one slice. Now the first page of a revision does that and the rest
+// are slices. What the list reads (the albums table and the artists' names)
+// is only written by a recompute, which bumps the revision when it's done
+// (libraryRevision.ts), so a list is never kept past a change.
+const sortedArtists = new WeakMap<Database, { revision: number; lists: Map<string, ArtistRow[]> }>();
+
+function libraryArtists(db: Database, sort: ArtistSort, dir: "asc" | "desc"): ArtistRow[] {
+  const revision = libraryRevision();
+  let cache = sortedArtists.get(db);
+  if (cache?.revision !== revision) {
+    cache = { revision, lists: new Map() };
+    sortedArtists.set(db, cache);
+  }
+  const key = `${sort} ${dir}`;
+  let list = cache.lists.get(key);
+  if (!list) {
+    list = db.prepare(LIBRARY_ARTISTS).all() as ArtistRow[];
+    const compare = ARTIST_SORTS[sort];
+    list.sort((a, b) => (dir === "desc" ? compare(b, a) : compare(a, b)) || a.id - b.id);
+    cache.lists.set(key, list);
+  }
+  return list;
 }
 
-// The whole list in one pass, sorted, then the page cut from it. Ties go to
-// the lower id either way, so paging never reshuffles equal names.
+// The tab's first page in the default order sorts the same list, so the
+// header and the tab share one read per revision.
+export function countLibraryArtists(db: Database): number {
+  return libraryArtists(db, "name", "asc").length;
+}
+
 function listArtists(
   db: Database,
   { sort, dir, limit, offset }: { sort: ArtistSort; dir: "asc" | "desc"; limit: number; offset: number },
 ): { items: ArtistRow[]; total: number } {
-  const all = db.prepare(LIBRARY_ARTISTS).all() as ArtistRow[];
-  const compare = ARTIST_SORTS[sort];
-  all.sort((a, b) => (dir === "desc" ? compare(b, a) : compare(a, b)) || a.id - b.id);
+  const all = libraryArtists(db, sort, dir);
   return { items: all.slice(offset, offset + limit), total: all.length };
 }
 
