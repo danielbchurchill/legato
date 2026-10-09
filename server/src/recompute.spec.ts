@@ -5,6 +5,8 @@ import path from "node:path";
 import type { Database } from "./sqlite.js";
 import { openDb } from "./db.js";
 import { recompute, recomputeOffThread } from "./recompute.js";
+import { libraryRevision } from "./libraryRevision.js";
+import { registerSocket } from "./ws.js";
 
 let db: Database;
 let libraryRootId: number;
@@ -231,6 +233,39 @@ describe("recomputeOffThread", () => {
     await second;
 
     expect(count(`SELECT COUNT(*) AS n FROM edges WHERE from_node = ${late} AND type = 'performed_by'`)).toBe(1);
+  });
+
+  it("ends each run, finished or failed, with one library:changed and a higher revision, once its writes are in", async () => {
+    const sent: { event: string; revision: number; albums: number }[] = [];
+    let close = () => {};
+    registerSocket({
+      readyState: 1,
+      OPEN: 1,
+      send: (message: string) => {
+        const { event, payload } = JSON.parse(message);
+        sent.push({ event, revision: payload.revision, albums: count("SELECT COUNT(*) AS n FROM albums") });
+      },
+      on: (_event: string, onClose: () => void) => (close = onClose),
+    } as unknown as Parameters<typeof registerSocket>[0]);
+    try {
+      const before = libraryRevision();
+      const first = recomputeOffThread(fileDb);
+      const second = recomputeOffThread(fileDb);
+      await first;
+      await second;
+      fileDb.exec("ALTER TABLE articles RENAME TO articles_away");
+      await recomputeOffThread(fileDb).catch(() => undefined);
+      fileDb.exec("ALTER TABLE articles_away RENAME TO articles");
+
+      expect(sent).toEqual([
+        { event: "library:changed", revision: before + 1, albums: 40 },
+        { event: "library:changed", revision: before + 2, albums: 40 },
+        { event: "library:changed", revision: before + 3, albums: 40 },
+      ]);
+      expect(libraryRevision()).toBe(before + 3);
+    } finally {
+      close();
+    }
   });
 
   it("rejects with what went wrong, and the next call starts a new run", async () => {

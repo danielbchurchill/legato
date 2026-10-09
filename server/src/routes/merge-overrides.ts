@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { collapseFile } from "../match/collapse.js";
 import { deriveLocalEdges } from "../match/edges.js";
 import { broadcast } from "../ws.js";
+import { libraryChanged } from "../libraryRevision.js";
 
 export function mergeOverridesRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
@@ -46,6 +47,9 @@ export function mergeOverridesRoutes(db: Database) {
         await collapseFile(db, fileId);
         deriveLocalEdges(db, fileId);
         broadcast("hygiene:changed", { fileId });
+        // The file has moved to another recording, which can change how many
+        // tracks GET /stats counts (libraryRevision.ts).
+        libraryChanged();
 
         return override;
       },

@@ -8,6 +8,7 @@ import { recomputeAllLayouts } from "./layout/seed.js";
 import { recomputeSimilarityFeatures } from "./similarity/similarity.js";
 import { recomputeArticles } from "./articles/recompute.js";
 import { writeInChunks } from "./writeInChunks.js";
+import { libraryChanged } from "./libraryRevision.js";
 
 // B-1: three sessions in a row hit the same bug shape and each got its own
 // one-off backfill script — scanFile()'s unchanged-mtime/size short-circuit
@@ -85,7 +86,9 @@ export function recompute(db: Database): void {
 //
 // The promise resolves once every write has been committed, so what a
 // caller broadcasts after awaiting it (scan:done, enrich:applied) sends
-// clients to refetch data that's already there.
+// clients to refetch data that's already there. Each run ends with one
+// library:changed (libraryRevision.ts), sent whether it finished or failed
+// partway, since a failed run may still have committed some of its pieces.
 //
 // One runs at a time. A call made while one is running gets the run after
 // it, shared with every other call made meanwhile: a recompute derives
@@ -110,6 +113,7 @@ export function recomputeOffThread(db: Database): Promise<void> {
   }
   running = runRecompute(db).finally(() => {
     running = null;
+    libraryChanged();
   });
   return running;
 }
