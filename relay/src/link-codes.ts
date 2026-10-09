@@ -13,9 +13,17 @@ import type { Database } from "./sqlite.js";
 // useless without the verifier, which never leaves that page's tab.
 const LINK_CODE_TTL_SQL = "+5 minutes";
 
-// Spent and expired codes are kept for an hour before they're swept, so
-// a reuse still reads "already used" instead of "unknown" in that window.
-const LINK_CODE_SWEEP_SQL = "-1 hour";
+// Spent and expired codes are kept five more minutes, so a reuse still
+// reads "already used" or "expired" instead of "unknown" in that window.
+// That's ten minutes from minting, the retention site/privacy.html states.
+// Every mint and redeem sweeps, so a row outlives it only until the next
+// of those.
+const LINK_CODE_SWEEP_SQL = "-5 minutes";
+
+// How many codes one account may hold unspent and unexpired at once, as
+// for claims (pairing.ts's OPEN_CODES_PER_ACCOUNT). An owner needs one; a
+// few more covers a page left open and started again.
+export const OPEN_LINK_CODES_PER_ACCOUNT = 5;
 
 // mintLinkCode's 32 random bytes in base64url.
 const CODE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -87,14 +95,31 @@ export function linkPath(request: LinkRequest): string {
   return `/link?${query}`;
 }
 
-export function mintLinkCode(db: Database, relayUserId: number, request: LinkRequest): string {
+// Indexed on expires_at (0008), so it never scans the live rows.
+function sweepLinkCodes(db: Database): void {
   db.prepare("DELETE FROM relay_link_codes WHERE expires_at <= datetime('now', ?)").run(LINK_CODE_SWEEP_SQL);
-  const code = randomBytes(32).toString("base64url");
-  db.prepare(
-    `INSERT INTO relay_link_codes (code_hash, relay_user_id, server_id, code_challenge, return_origin_hash, expires_at)
-     VALUES (?, ?, ?, ?, ?, datetime('now', ?))`,
-  ).run(sha256Hex(code), relayUserId, request.serverId, request.codeChallenge, sha256Hex(request.returnTo.origin), LINK_CODE_TTL_SQL);
-  return code;
+}
+
+export type MintLinkCodeResult = { ok: true; code: string } | { ok: false; reason: "too_many" };
+
+export function mintLinkCode(db: Database, relayUserId: number, request: LinkRequest): MintLinkCodeResult {
+  return db.transaction((): MintLinkCodeResult => {
+    sweepLinkCodes(db);
+    const { open } = db
+      .prepare(
+        `SELECT COUNT(*) AS open FROM relay_link_codes
+         WHERE relay_user_id = ? AND used_at IS NULL AND expires_at > datetime('now')`,
+      )
+      .get(relayUserId) as { open: number };
+    if (open >= OPEN_LINK_CODES_PER_ACCOUNT) return { ok: false, reason: "too_many" };
+
+    const code = randomBytes(32).toString("base64url");
+    db.prepare(
+      `INSERT INTO relay_link_codes (code_hash, relay_user_id, server_id, code_challenge, return_origin_hash, expires_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now', ?))`,
+    ).run(sha256Hex(code), relayUserId, request.serverId, request.codeChallenge, sha256Hex(request.returnTo.origin), LINK_CODE_TTL_SQL);
+    return { ok: true, code };
+  })();
 }
 
 // The page goes back to its own address, with the code where no server
@@ -147,6 +172,7 @@ export function redeemLinkCode(
 ): LinkRedeemResult {
   const { code, codeVerifier, origin } = input;
   return db.transaction((): LinkRedeemResult => {
+    sweepLinkCodes(db);
     const codeHash = sha256Hex(code);
     const row = db
       .prepare(

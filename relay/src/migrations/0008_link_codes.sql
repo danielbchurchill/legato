@@ -17,6 +17,10 @@
 -- link, and used_at spends a code on the first attempt, right verifier or
 -- not, inside one transaction. The origin is only ever compared, so it's a
 -- hash too: legato.fm keeps no record of a home server's local address.
+--
+-- A row is deleted ten minutes after it's minted, the retention
+-- site/privacy.html states, by the next mint or redeem after that:
+-- link-codes.ts sweeps on both, through the expires_at index.
 
 CREATE TABLE relay_link_codes (
   code_hash TEXT PRIMARY KEY,
@@ -30,3 +34,4 @@ CREATE TABLE relay_link_codes (
 );
 
 CREATE INDEX relay_link_codes_relay_user_id_idx ON relay_link_codes (relay_user_id);
+CREATE INDEX relay_link_codes_expires_at_idx ON relay_link_codes (expires_at);

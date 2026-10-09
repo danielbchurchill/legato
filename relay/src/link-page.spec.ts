@@ -9,7 +9,7 @@ import { importEd25519Jwk, verifyLegatoToken } from "../../server/src/auth/legat
 import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
-import { parseReturnTo } from "./link-codes.js";
+import { OPEN_LINK_CODES_PER_ACCOUNT, parseReturnTo } from "./link-codes.js";
 import { s256Challenge, sha256Hex } from "./native-sign-in.js";
 import { tunnelCredentialHolder } from "./pairing.js";
 import { linkReturnPath } from "./routes/link-page.js";
@@ -308,6 +308,26 @@ describe("the link page", () => {
     expect(cleared).toMatch(/^relay_return_to=;/);
     expect(cleared).toContain("Expires=Thu, 01 Jan 1970");
   });
+  it(`holds an account to ${OPEN_LINK_CODES_PER_ACCOUNT} links waiting to finish`, async () => {
+    const h = setup();
+    const { cookie } = h.signIn();
+    const server = homeServer().serverId;
+    const waiting: { code: string; verifier: string }[] = [];
+    for (let i = 0; i < OPEN_LINK_CODES_PER_ACCOUNT; i++) {
+      const { verifier, query } = h.start(server);
+      const res = await h.press(cookie, query);
+      expect(res.statusCode).toBe(200);
+      waiting.push({ verifier, code: codeFrom(res.json().redirect) });
+    }
+    const refused = await h.press(cookie, h.start(server).query);
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json().reason).toBe("too_many");
+    // Another account isn't held to this one's count.
+    expect((await h.press(h.signIn("g-2", "Ana").cookie, h.start(server).query)).statusCode).toBe(200);
+    // Spending one frees its place.
+    expect((await h.redeem(waiting[0]!.code, waiting[0]!.verifier)).statusCode).toBe(200);
+    expect((await h.press(cookie, h.start(server).query)).statusCode).toBe(200);
+  });
 });
 
 describe("redeeming a link code", () => {
@@ -401,5 +421,31 @@ describe("redeeming a link code", () => {
     const rows = JSON.stringify(h.db.prepare("SELECT * FROM relay_link_codes").all());
     expect(rows).not.toContain(code);
     expect(rows).not.toContain("192.168.1.20");
+  });
+
+  it("sweeps every code ten minutes after it was minted, at the next mint or redeem", async () => {
+    const h = setup();
+    const codes = () => (h.db.prepare("SELECT code_hash FROM relay_link_codes").all() as { code_hash: string }[]).map((r) => r.code_hash);
+    const expireAgo = (code: string, ago: string) =>
+      h.db.prepare("UPDATE relay_link_codes SET expires_at = datetime('now', ?) WHERE code_hash = ?").run(ago, sha256Hex(code));
+
+    const old = await minted(h);
+    const recent = await minted(h);
+    // Minted ten minutes and a second ago, and nine minutes ago.
+    expireAgo(old.code, "-301 seconds");
+    expireAgo(recent.code, "-4 minutes");
+    await h.redeem(guess(), guess());
+    expect(codes()).toEqual([sha256Hex(recent.code)]);
+    // Still on record until then, so a late try says why.
+    expect((await h.redeem(recent.code, recent.verifier)).json().reason).toBe("expired");
+
+    expireAgo(recent.code, "-301 seconds");
+    const fresh = await minted(h);
+    expect(codes()).toEqual([sha256Hex(fresh.code)]);
+
+    const plan = h.db
+      .prepare("EXPLAIN QUERY PLAN DELETE FROM relay_link_codes WHERE expires_at <= datetime('now', '-5 minutes')")
+      .all() as { detail: string }[];
+    expect(plan.map((step) => step.detail).join(" ")).toContain("relay_link_codes_expires_at_idx");
   });
 });

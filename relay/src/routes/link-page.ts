@@ -337,9 +337,16 @@ export function linkPageRoutes(
         reply.code(400);
         return { error: "That link request isn't complete. Start again from your server's Settings.", reason: "bad_request" };
       }
-      const code = mintLinkCode(db, user.id, link);
+      const minted = mintLinkCode(db, user.id, link);
+      if (!minted.ok) {
+        reply.code(429);
+        return {
+          error: "This account has too many links waiting to finish. Wait five minutes for them to expire, then try again.",
+          reason: "too_many",
+        };
+      }
       request.log.info(`link: account ${user.id} is linking server ${link.serverId} from its web client`);
-      return { redirect: returnUrl(link, code) };
+      return { redirect: returnUrl(link, minted.code) };
     });
 
     app.options("/link/redeem", async (request, reply) => {
