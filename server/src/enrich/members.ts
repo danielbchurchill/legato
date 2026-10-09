@@ -81,9 +81,10 @@ export function applyMemberRelations(
 // Issue #269: until the bound in enrich/queue.ts, the member lookup crawled
 // without limit. The Pi held 180,395 artist nodes, 239,539 member_of edges
 // and about 541,000 done lookups for a library with 98 artists. This brings
-// a database back inside the bound. index.ts runs it on every start, after
-// the #273 merge, so the bound it reads already counts merged producers as
-// library artists. On a database that's inside the bound it deletes nothing.
+// a database back inside the bound. index.ts runs it before the server
+// listens, after the #273 merge, so the bound it reads already counts merged
+// producers as library artists. Issue #321: once per database
+// (pruneBeyondMemberBoundOnce, below).
 
 type NodeReference = { table: string; column: string };
 
@@ -135,7 +136,23 @@ const DERIVED_ROWS: Record<string, string> = {
 // and a start that prunes a handful of artists isn't worth the rewrite.
 const VACUUM_FREE_SHARE = 0.25;
 
-export type MemberBoundPrune = { artists: number; memberEdges: number; jobs: number; reclaimedBytes: number };
+// Issue #321: once a prune has committed, a settings row holds this, and
+// later starts skip it. Reading the bound takes seconds on a large library
+// (withBound in queue.ts), and nothing answers meanwhile, so it can't run on
+// every start. A change to what the bound keeps bumps this, so every
+// database is pruned once more.
+export const PRUNE_VERSION = 1;
+export const PRUNE_VERSION_SETTING = "memberBoundPruneVersion";
+
+/** What a prune removed. `reclaimError` is set when the prune committed but
+ *  the VACUUM after it failed. */
+export type MemberBoundPrune = {
+  artists: number;
+  memberEdges: number;
+  jobs: number;
+  reclaimedBytes: number;
+  reclaimError?: string;
+};
 
 function count(db: Database, sql: string): number {
   return (db.prepare(sql).get() as { n: number }).n;
@@ -145,10 +162,15 @@ function pragma(db: Database, name: string): number {
   return (db.prepare(`PRAGMA ${name}`).get() as Record<string, number>)[name]!;
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** Deletes what the unbounded crawl left past the bound: member_of edges
  *  that no member-lookup artist is on, the member lookups of artists that
  *  no longer get one, and artist nodes outside the bound that carry no user
- *  data, with every row that references them. Then reclaims the space. */
+ *  data, with every row that references them. Records PRUNE_VERSION in the
+ *  same transaction, then reclaims the space. */
 export function pruneBeyondMemberBound(db: Database): MemberBoundPrune {
   const references = nodeReferences(db);
   const totals = () => ({
@@ -206,13 +228,17 @@ export function pruneBeyondMemberBound(db: Database): MemberBoundPrune {
         }
         db.exec("DROP TABLE temp.artists_past_bound");
       });
+      db.prepare(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      ).run(PRUNE_VERSION_SETTING, String(PRUNE_VERSION));
     })();
   } finally {
     db.exec("PRAGMA foreign_keys = ON");
   }
 
   const after = totals();
-  const pruned = {
+  const pruned: MemberBoundPrune = {
     artists: before.artists - after.artists,
     memberEdges: before.memberEdges - after.memberEdges,
     jobs: before.jobs - after.jobs,
@@ -221,13 +247,70 @@ export function pruneBeyondMemberBound(db: Database): MemberBoundPrune {
   if (pruned.artists + pruned.memberEdges + pruned.jobs === 0) return pruned;
 
   // Outside the transaction: VACUUM can't run inside one. The copy from
-  // before the prune is the backup openDb took to apply migration 0033.
-  const pagesBefore = pragma(db, "page_count");
-  if (pragma(db, "freelist_count") >= pagesBefore * VACUUM_FREE_SHARE) {
-    db.exec("VACUUM");
-    // In WAL mode the file only shrinks once the rewrite is checkpointed.
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    pruned.reclaimedBytes = (pagesBefore - pragma(db, "page_count")) * pragma(db, "page_size");
+  // before the prune is the backup openDb took to apply migration 0033. A
+  // VACUUM that fails leaves the file as it was, pruned: SQLite reuses the
+  // free pages for new rows, so the space isn't lost, only not returned.
+  try {
+    const pagesBefore = pragma(db, "page_count");
+    if (pragma(db, "freelist_count") >= pagesBefore * VACUUM_FREE_SHARE) {
+      db.exec("VACUUM");
+      // In WAL mode the file only shrinks once the rewrite is checkpointed.
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      pruned.reclaimedBytes = (pagesBefore - pragma(db, "page_count")) * pragma(db, "page_size");
+    }
+  } catch (err) {
+    pruned.reclaimError = errorMessage(err);
+  }
+  return pruned;
+}
+
+/** Issue #321: index.ts's call, on every start before the server listens.
+ *  Skips the prune, without reading the bound, once this database has had
+ *  one at PRUNE_VERSION. Otherwise prunes, and logs what it did with its
+ *  time, even when it found nothing, since that's once. A failed prune is
+ *  logged, not thrown: nothing is marked, so the next start tries again,
+ *  and a server carrying the old crawl still works. Returns what it pruned,
+ *  or null if it skipped or failed.
+ *
+ *  Before listen, not after it on recompute's worker: there it would hold
+ *  the write lock while the request loop and the enrichment poller write,
+ *  its VACUUM would block every write for the whole rewrite, and it could
+ *  land between a member lookup's writes. */
+export function pruneBeyondMemberBoundOnce(
+  db: Database,
+  log: (level: "info" | "warn" | "error", message: string) => void,
+): MemberBoundPrune | null {
+  const marked = db.prepare("SELECT value FROM settings WHERE key = ?").get(PRUNE_VERSION_SETTING) as
+    | { value: string }
+    | undefined;
+  if (marked?.value === String(PRUNE_VERSION)) return null;
+
+  const started = performance.now();
+  let pruned: MemberBoundPrune;
+  try {
+    pruned = pruneBeyondMemberBound(db);
+  } catch (err) {
+    log("error", `membership: couldn't prune past the membership bound: ${errorMessage(err)}`);
+    return null;
+  }
+  const seconds = ((performance.now() - started) / 1000).toFixed(1);
+  if (pruned.artists + pruned.memberEdges + pruned.jobs === 0) {
+    log("info", `membership: nothing past the membership bound (checked once for this database, in ${seconds} s)`);
+    return pruned;
+  }
+  const reclaimed =
+    pruned.reclaimedBytes > 0 ? `, reclaimed ${(pruned.reclaimedBytes / 1024 / 1024).toFixed(1)} MB` : "";
+  log(
+    "info",
+    `membership: removed ${pruned.artists} artist(s), ${pruned.memberEdges} member_of edge(s) and ` +
+      `${pruned.jobs} enrichment job(s) past the membership bound${reclaimed} in ${seconds} s`,
+  );
+  if (pruned.reclaimError !== undefined) {
+    log(
+      "warn",
+      `membership: the prune is done, but couldn't reclaim the space it freed: ${pruned.reclaimError}. ` +
+        "SQLite reuses the free pages for new rows.",
+    );
   }
   return pruned;
 }

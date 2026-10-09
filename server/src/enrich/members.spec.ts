@@ -4,7 +4,13 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
-import { applyMemberRelations, pruneBeyondMemberBound } from "./members.js";
+import {
+  applyMemberRelations,
+  pruneBeyondMemberBound,
+  pruneBeyondMemberBoundOnce,
+  PRUNE_VERSION,
+  PRUNE_VERSION_SETTING,
+} from "./members.js";
 import type { MbArtistRelation } from "./mbClient.js";
 
 let db: Database;
@@ -331,37 +337,44 @@ describe("pruneBeyondMemberBound", () => {
     expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
   });
 
+  // A library of one artist, and 2,000 crawled artists past the bound with
+  // a long description each, so the prune frees most of the file.
+  function crawlOnDisk(file: string): Database {
+    const onDisk = openDb(file, { log: () => {} });
+    const library = onDisk
+      .prepare("INSERT INTO nodes (type, title) VALUES ('artist', 'The Beatles') RETURNING id")
+      .get() as {
+      id: number;
+    };
+    const recording = onDisk
+      .prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id")
+      .get() as {
+      id: number;
+    };
+    onDisk
+      .prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')")
+      .run(recording.id, library.id);
+    onDisk.transaction(() => {
+      for (let i = 0; i < 2000; i++) {
+        const id = (
+          onDisk.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get(`Far ${i}`) as {
+            id: number;
+          }
+        ).id;
+        onDisk
+          .prepare("INSERT INTO descriptions (node_id, body, source) VALUES (?, ?, 'wikipedia')")
+          .run(id, "x".repeat(2000));
+      }
+    })();
+    onDisk.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    return onDisk;
+  }
+
   it("reclaims the space on disk once most of the file is free", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "legato-prune-"));
     try {
       const file = path.join(dir, "legato.db");
-      const onDisk = openDb(file, { log: () => {} });
-      const library = onDisk
-        .prepare("INSERT INTO nodes (type, title) VALUES ('artist', 'The Beatles') RETURNING id")
-        .get() as {
-        id: number;
-      };
-      const recording = onDisk
-        .prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id")
-        .get() as {
-        id: number;
-      };
-      onDisk
-        .prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')")
-        .run(recording.id, library.id);
-      onDisk.transaction(() => {
-        for (let i = 0; i < 2000; i++) {
-          const id = (
-            onDisk.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get(`Far ${i}`) as {
-              id: number;
-            }
-          ).id;
-          onDisk
-            .prepare("INSERT INTO descriptions (node_id, body, source) VALUES (?, ?, 'wikipedia')")
-            .run(id, "x".repeat(2000));
-        }
-      })();
-      onDisk.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      const onDisk = crawlOnDisk(file);
       const before = statSync(file).size;
 
       const pruned = pruneBeyondMemberBound(onDisk);
@@ -373,5 +386,139 @@ describe("pruneBeyondMemberBound", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // Issue #321: index.ts's call, on every start before the server listens.
+  describe("once per database", () => {
+    let logged: [string, string][];
+    const log = (level: string, message: string) => logged.push([level, message]);
+
+    beforeEach(() => {
+      logged = [];
+    });
+
+    function marker(on: Database = db): string | undefined {
+      const row = on.prepare("SELECT value FROM settings WHERE key = ?").get(PRUNE_VERSION_SETTING) as
+        | { value: string }
+        | undefined;
+      return row?.value;
+    }
+
+    // Every statement the database is given from here on.
+    function recordStatements(): string[] {
+      const statements: string[] = [];
+      const prepare = db.prepare.bind(db);
+      const exec = db.exec.bind(db);
+      Object.assign(db, {
+        prepare: (sql: string) => (statements.push(sql), prepare(sql)),
+        exec: (sql: string) => (statements.push(sql), exec(sql)),
+      });
+      return statements;
+    }
+
+    it("prunes a crawled database, logs what it removed with its time, and marks it done", () => {
+      expect(marker()).toBeUndefined();
+
+      expect(pruneBeyondMemberBoundOnce(db, log)).toMatchObject({ artists: 3, memberEdges: 3 });
+
+      expect(artistTitles()).toEqual(["George Harrison", "George Martin", "The Beatles", "Traveling Wilburys"]);
+      expect(logged).toHaveLength(1);
+      expect(logged[0]![0]).toBe("info");
+      expect(logged[0]![1]).toMatch(
+        /^membership: removed 3 artist\(s\), 3 member_of edge\(s\) and \d+ enrichment job\(s\) past the membership bound in \d+\.\d s$/,
+      );
+      expect(marker()).toBe(String(PRUNE_VERSION));
+    });
+
+    it("on a database with nothing past the bound, logs the check once with its time, and marks it done", () => {
+      pruneBeyondMemberBound(db);
+      db.prepare("DELETE FROM settings WHERE key = ?").run(PRUNE_VERSION_SETTING);
+
+      expect(pruneBeyondMemberBoundOnce(db, log)).toEqual({ artists: 0, memberEdges: 0, jobs: 0, reclaimedBytes: 0 });
+
+      expect(logged).toHaveLength(1);
+      expect(logged[0]![1]).toMatch(
+        /^membership: nothing past the membership bound \(checked once for this database, in \d+\.\d s\)$/,
+      );
+      expect(marker()).toBe(String(PRUNE_VERSION));
+    });
+
+    it("skips every later start without reading the bound", () => {
+      pruneBeyondMemberBoundOnce(db, log);
+      logged = [];
+      // Past the bound, but the bound isn't read again to find it.
+      makeNode("artist", "Far Away");
+      const statements = recordStatements();
+
+      expect(pruneBeyondMemberBoundOnce(db, log)).toBeNull();
+
+      expect(statements).toEqual(["SELECT value FROM settings WHERE key = ?"]);
+      expect(logged).toEqual([]);
+      expect(artistTitles()).toContain("Far Away");
+    });
+
+    it("prunes again once PRUNE_VERSION moves past the one a database was marked with", () => {
+      pruneBeyondMemberBoundOnce(db, log);
+      makeNode("artist", "Far Away");
+      db.prepare("UPDATE settings SET value = ? WHERE key = ?").run(String(PRUNE_VERSION - 1), PRUNE_VERSION_SETTING);
+
+      expect(pruneBeyondMemberBoundOnce(db, log)).toMatchObject({ artists: 1 });
+
+      expect(artistTitles()).not.toContain("Far Away");
+      expect(marker()).toBe(String(PRUNE_VERSION));
+    });
+
+    it("logs a failed prune, leaves the database as it was and unmarked, and tries again next start", () => {
+      const exec = db.exec.bind(db);
+      Object.assign(db, {
+        exec: (sql: string) => {
+          if (sql.startsWith("DELETE FROM enrich_jobs")) throw new Error("disk I/O error");
+          exec(sql);
+        },
+      });
+
+      expect(pruneBeyondMemberBoundOnce(db, log)).toBeNull();
+
+      expect(logged).toEqual([["error", "membership: couldn't prune past the membership bound: disk I/O error"]]);
+      expect(artistTitles()).toContain("Bob Dylan");
+      expect(memberOfEdges()).toHaveLength(5);
+      expect(marker()).toBeUndefined();
+      expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+
+      Object.assign(db, { exec });
+      expect(pruneBeyondMemberBoundOnce(db, log)).toMatchObject({ artists: 3 });
+      expect(marker()).toBe(String(PRUNE_VERSION));
+    });
+
+    it("logs a VACUUM that fails after the prune committed as space not reclaimed, and still marks it done", () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "legato-prune-"));
+      try {
+        const onDisk = crawlOnDisk(path.join(dir, "legato.db"));
+        const exec = onDisk.exec.bind(onDisk);
+        Object.assign(onDisk, {
+          exec: (sql: string) => {
+            if (sql === "VACUUM") throw new Error("database or disk is full");
+            exec(sql);
+          },
+        });
+
+        const pruned = pruneBeyondMemberBoundOnce(onDisk, log);
+
+        expect(pruned).toMatchObject({ artists: 2000, reclaimedBytes: 0, reclaimError: "database or disk is full" });
+        expect(logged.map(([level]) => level)).toEqual(["info", "warn"]);
+        expect(logged[0]![1]).toMatch(/^membership: removed 2000 artist\(s\), .* past the membership bound in \d+\.\d s$/);
+        expect(logged[1]![1]).toBe(
+          "membership: the prune is done, but couldn't reclaim the space it freed: database or disk is full. " +
+            "SQLite reuses the free pages for new rows.",
+        );
+        expect(
+          onDisk.prepare("SELECT COUNT(*) AS n FROM nodes WHERE type = 'artist'").get() as { n: number },
+        ).toEqual({ n: 1 });
+        expect(marker(onDisk)).toBe(String(PRUNE_VERSION));
+        onDisk.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 });
