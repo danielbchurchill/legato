@@ -327,6 +327,16 @@ describe("GET /library/artists", () => {
     expect(await names("?dir=desc")).toEqual(["Zappa", "Beck", "alt-J", "Alt-J"]);
   });
 
+  it("sorts accented names with their letters, either way", async () => {
+    for (const name of ["Zappa", "Ólafur Arnalds", "Émilie Simon", "Ásgeir", "Æ", "Beck", "Oasis"]) {
+      makeAlbum(`Record by ${name}`, { artistId: makeNode("artist", name) });
+    }
+
+    const asc = ["Æ", "Ásgeir", "Beck", "Émilie Simon", "Oasis", "Ólafur Arnalds", "Zappa"];
+    expect(await names()).toEqual(asc);
+    expect(await names("?dir=desc")).toEqual([...asc].reverse());
+  });
+
   it("pages with limit and offset, with the whole count as the total", async () => {
     for (let i = 0; i < 5; i++) makeAlbum(`Album ${i}`, { artistId: makeNode("artist", `Artist ${i}`) });
 

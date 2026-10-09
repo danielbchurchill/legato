@@ -64,10 +64,15 @@ const TRACK_SORTS = {
 } as const;
 export type TrackSort = keyof typeof TRACK_SORTS;
 
-// Case-insensitive, as an artist list reads ("alt-J" among the A's, not
-// after "Zappa"). The albums and tracks sorts compare titles as stored.
+// As an artist list reads: without regard to case or accents, so "alt-J"
+// and "Ólafur Arnalds" sort among the A's and O's, not after "Zappa".
+// SQLite's NOCASE folds ASCII case only, and bun:sqlite has no ICU
+// collation, so the list is sorted here rather than in SQL. It's one row per
+// artist with records of their own, a few thousand at most. The albums and
+// tracks sorts compare titles as stored.
+const nameCollator = new Intl.Collator(undefined, { sensitivity: "base" });
 const ARTIST_SORTS = {
-  name: "n.title COLLATE NOCASE",
+  name: (a: ArtistRow, b: ArtistRow) => nameCollator.compare(a.name, b.name),
 } as const;
 export type ArtistSort = keyof typeof ARTIST_SORTS;
 
@@ -131,7 +136,7 @@ export type ArtistRow = {
 //
 // A record is a release node, as the map only clusters those.
 const LIBRARY_ARTISTS = `
-  SELECT al.primary_artist_node_id AS id, COUNT(*) AS releases
+  SELECT a.id AS id, a.title AS name, COUNT(*) AS releases
   FROM albums al
   JOIN nodes r ON r.id = al.node_id
   JOIN nodes a ON a.id = al.primary_artist_node_id
@@ -142,20 +147,16 @@ export function countLibraryArtists(db: Database): number {
   return (db.prepare(`SELECT COUNT(*) AS count FROM (${LIBRARY_ARTISTS})`).get() as { count: number }).count;
 }
 
+// The whole list in one pass, sorted, then the page cut from it. Ties go to
+// the lower id either way, so paging never reshuffles equal names.
 function listArtists(
   db: Database,
   { sort, dir, limit, offset }: { sort: ArtistSort; dir: "asc" | "desc"; limit: number; offset: number },
 ): { items: ArtistRow[]; total: number } {
-  const items = db
-    .prepare(
-      `SELECT la.id AS id, n.title AS name, la.releases AS releases
-       FROM (${LIBRARY_ARTISTS}) la
-       JOIN nodes n ON n.id = la.id
-       ORDER BY ${orderClause(ARTIST_SORTS[sort], dir, "n.id")}
-       LIMIT ? OFFSET ?`,
-    )
-    .all(limit, offset) as ArtistRow[];
-  return { items, total: countLibraryArtists(db) };
+  const all = db.prepare(LIBRARY_ARTISTS).all() as ArtistRow[];
+  const compare = ARTIST_SORTS[sort];
+  all.sort((a, b) => (dir === "desc" ? compare(b, a) : compare(a, b)) || a.id - b.id);
+  return { items: all.slice(offset, offset + limit), total: all.length };
 }
 
 function listAlbums(
