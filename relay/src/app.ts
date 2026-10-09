@@ -39,12 +39,14 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
 
   app.register(cookie);
 
-  app.addHook("onSend", async (_request, reply, payload) => {
+  // Synchronous: it runs on every response, the JSON ones too, and an async
+  // hook would cost each of them a promise to look at one header.
+  app.addHook("onSend", (_request, reply, payload, done) => {
     const type = reply.getHeader("content-type");
     if (typeof type === "string" && type.startsWith("text/html") && !reply.hasHeader("content-security-policy")) {
       reply.header("Content-Security-Policy", DEFAULT_PAGE_CSP);
     }
-    return payload;
+    done(null, payload);
   });
 
   // Unauthenticated on purpose — this is what a platform health check hits,
