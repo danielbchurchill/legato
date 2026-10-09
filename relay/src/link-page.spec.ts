@@ -10,7 +10,7 @@ import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
 import { parseReturnTo } from "./link-codes.js";
-import { s256Challenge } from "./native-sign-in.js";
+import { s256Challenge, sha256Hex } from "./native-sign-in.js";
 import { tunnelCredentialHolder } from "./pairing.js";
 import { linkReturnPath } from "./routes/link-page.js";
 import { parseSigningKeys, type SigningKeys } from "./signing-keys.js";
@@ -79,12 +79,13 @@ function setup(options: { signing?: boolean } = {}) {
   const page = (url: string, cookie?: string) => app.inject({ method: "GET", url, headers: cookie ? { cookie } : {} });
   const press = (cookie: string, body: Record<string, unknown>, origin: string = ISSUER) =>
     app.inject({ method: "POST", url: "/link", headers: { cookie, origin }, payload: body });
-  // null sends no Origin header at all.
-  const redeem = (code: string, verifier: string, origin: string | null = HOME) =>
+  // null sends no Origin header at all. address stands in for Fly's
+  // Fly-Client-IP (rate-limit.ts's clientAddress).
+  const redeem = (code: string, verifier: string, origin: string | null = HOME, address?: string) =>
     app.inject({
       method: "POST",
       url: "/link/redeem",
-      headers: origin ? { origin } : {},
+      headers: { ...(origin ? { origin } : {}), ...(address ? { "fly-client-ip": address } : {}) },
       payload: { code, code_verifier: verifier },
     });
   const report = (body: Record<string, unknown>) => app.inject({ method: "POST", url: "/linked-servers", payload: body });
@@ -342,18 +343,43 @@ describe("redeeming a link code", () => {
     const late = await minted(h);
     h.db.prepare("UPDATE relay_link_codes SET expires_at = datetime('now', '-1 second') WHERE used_at IS NULL").run();
     expect((await h.redeem(late.code, late.verifier)).json().reason).toBe("expired");
-    expect((await h.redeem("no-such-code", late.verifier)).json().reason).toBe("not_found");
+    expect((await h.redeem(randomBytes(32).toString("base64url"), late.verifier)).json().reason).toBe("not_found");
     expect((await h.redeem(late.code, "short")).json().reason).toBe("malformed");
   });
 
-  it("brakes guessing the way /auth/token does", async () => {
+  const guess = () => randomBytes(32).toString("base64url");
+
+  it("brakes guesses at codes from one address, and only those", async () => {
     const h = setup();
     const { code, verifier } = await minted(h);
-    for (let i = 0; i < 5; i++) expect((await h.redeem(`guess-${i}`, verifier)).statusCode).toBe(400);
+    // Requests that couldn't be a code aren't counted, or even braked.
+    for (const bad of ["short", `${guess()}x`, ""]) {
+      for (let i = 0; i < 6; i++) expect((await h.redeem(bad, verifier)).json().reason).toBe("malformed");
+    }
+    // Nor is a wrong verifier, which burns its code, or a used code tried again.
+    for (let i = 0; i < 6; i++) {
+      const other = await minted(h);
+      expect((await h.redeem(other.code, guess())).json().reason).toBe("mismatch");
+      expect((await h.redeem(other.code, other.verifier)).json().reason).toBe("used");
+    }
+    // An unknown code is, and so is an expired one.
+    const stale = await minted(h);
+    h.db.prepare("UPDATE relay_link_codes SET expires_at = datetime('now', '-1 second') WHERE code_hash = ?").run(sha256Hex(stale.code));
+    expect((await h.redeem(stale.code, stale.verifier)).json().reason).toBe("expired");
+    for (let i = 0; i < 4; i++) expect((await h.redeem(guess(), verifier)).json().reason).toBe("not_found");
     const limited = await h.redeem(code, verifier);
     expect(limited.statusCode).toBe(429);
     expect(limited.json().reason).toBe("rate_limited");
     expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
+    // Without spending the code: from another address it still works.
+    expect((await h.redeem(code, verifier, HOME, "203.0.113.9")).statusCode).toBe(200);
+  });
+
+  it("never locks everyone out, however many addresses guess", async () => {
+    const h = setup();
+    for (let i = 0; i < 60; i++) expect((await h.redeem(guess(), guess(), HOME, `198.51.100.${i}`)).json().reason).toBe("not_found");
+    const { code, verifier } = await minted(h);
+    expect((await h.redeem(code, verifier, HOME, "203.0.113.9")).statusCode).toBe(200);
   });
 
   it("answers any origin's preflight, without credentials", async () => {

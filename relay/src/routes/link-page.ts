@@ -8,6 +8,7 @@ import {
   LINK_REDEEM_FAILURE_MESSAGES,
   linkPath,
   mintLinkCode,
+  parseLinkRedeem,
   parseLinkRequest,
   redeemLinkCode,
   returnUrl,
@@ -288,8 +289,9 @@ export function linkPageRoutes(
 ) {
   const { signingKeys, issuer } = options;
   const ownOrigin = issuer ? new URL(issuer).origin : null;
-  // Its own, so wrong link codes never slow anyone's sign-in at /auth/token.
-  const limiter = options.limiter ?? new TokenLimiter();
+  // Its own, so wrong link codes never slow anyone's sign-in at /auth/token,
+  // and per address only (see /link/redeem below).
+  const limiter = options.limiter ?? new TokenLimiter(Date.now, { global: false });
 
   return async function routes(app: FastifyInstance) {
     app.get<{ Querystring: LinkQuery }>("/link", async (request, reply) => {
@@ -347,11 +349,24 @@ export function linkPageRoutes(
 
     // A `link` token for the account and server the code was minted for,
     // marked for a tunnel credential (signing-keys.ts). The credential
-    // itself is minted only when the server reports the link. Guesses are
-    // braked the way /auth/token's are (rate-limit.ts), though a code is 32
-    // random bytes and useless without its verifier anyway.
+    // itself is minted only when the server reports the link.
+    //
+    // A code is 32 random bytes, spent on its first try and useless without
+    // its verifier, so guessing gains nothing. The brake (rate-limit.ts) is
+    // only there to keep a script from trying at speed, so it counts only
+    // what a guess looks like: a well-formed code this relay doesn't know,
+    // or one that's expired. A request that couldn't be a code is refused
+    // before it, and a used code or a wrong verifier is a client retrying
+    // or a code already burnt, not a guess. It's per address only: a cap
+    // across all addresses would let a few of them lock every owner out of
+    // linking, for nothing.
     app.post<{ Body: { code?: unknown; code_verifier?: unknown } | null }>("/link/redeem", async (request, reply) => {
       allowAnyOrigin(request, reply);
+      const input = parseLinkRedeem(request.body);
+      if (!input) {
+        reply.code(400);
+        return { error: LINK_REDEEM_FAILURE_MESSAGES.malformed, reason: "malformed" };
+      }
       const address = clientAddress(request.headers, request.ip);
       const retryAfter = limiter.retryAfterSeconds(address);
       if (retryAfter > 0) {
@@ -365,13 +380,9 @@ export function linkPageRoutes(
         reply.code(503);
         return { error: "legato.fm can't link servers yet: this relay doesn't sign server tokens.", reason: "signing_not_configured" };
       }
-      const result = redeemLinkCode(db, {
-        code: request.body?.code,
-        codeVerifier: request.body?.code_verifier,
-        origin: request.headers.origin,
-      });
+      const result = redeemLinkCode(db, { ...input, origin: request.headers.origin });
       if (!result.ok) {
-        limiter.recordFailure(address);
+        if (result.reason === "not_found" || result.reason === "expired") limiter.recordFailure(address);
         reply.code(400);
         return { error: LINK_REDEEM_FAILURE_MESSAGES[result.reason], reason: result.reason };
       }

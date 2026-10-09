@@ -11,7 +11,8 @@
 //     one minute and doubles on every further failure, capped at 15;
 //   * across all addresses: more than 30 failures in a minute locks
 //     everyone out until the window drains, so spreading guesses over
-//     many addresses doesn't buy a faster rate.
+//     many addresses doesn't buy a faster rate. A brake can leave this
+//     layer out (POST /link/redeem does, routes/link-page.ts).
 // A success clears that address's record.
 
 const FREE_FAILURES = 5;
@@ -26,14 +27,17 @@ export class TokenLimiter {
   private readonly byAddress = new Map<string, AddressRecord>();
   private globalFailures: number[] = [];
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly options: { global: boolean } = { global: true },
+  ) {}
 
   /** Seconds until this address may try again, or 0 if it may now. */
   retryAfterSeconds(address: string): number {
     const now = this.now();
     this.globalFailures = this.globalFailures.filter((at) => at > now - GLOBAL_WINDOW_MS);
     let waitMs = 0;
-    if (this.globalFailures.length >= GLOBAL_MAX_FAILURES) {
+    if (this.options.global && this.globalFailures.length >= GLOBAL_MAX_FAILURES) {
       waitMs = this.globalFailures[0]! + GLOBAL_WINDOW_MS - now;
     }
     const record = this.byAddress.get(address);
@@ -43,7 +47,7 @@ export class TokenLimiter {
 
   recordFailure(address: string): void {
     const now = this.now();
-    this.globalFailures.push(now);
+    if (this.options.global) this.globalFailures.push(now);
     const record = this.byAddress.get(address) ?? { failures: 0, lockedUntil: 0 };
     record.failures++;
     if (record.failures >= FREE_FAILURES) {

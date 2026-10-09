@@ -17,6 +17,8 @@ const LINK_CODE_TTL_SQL = "+5 minutes";
 // a reuse still reads "already used" instead of "unknown" in that window.
 const LINK_CODE_SWEEP_SQL = "-1 hour";
 
+// mintLinkCode's 32 random bytes in base64url.
+const CODE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 // A base64url SHA-256 digest is always exactly 43 characters.
 const CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 // RFC 7636 §4.1: 43 to 128 characters from the unreserved set.
@@ -114,12 +116,25 @@ export type LinkRedeemFailure = "malformed" | "not_found" | "used" | "expired" |
 export type LinkRedeemResult = { ok: true; relayUserId: number; serverId: string } | { ok: false; reason: LinkRedeemFailure };
 
 export const LINK_REDEEM_FAILURE_MESSAGES: Record<LinkRedeemFailure, string> = {
-  malformed: "code and code_verifier (43 to 128 characters) are both required.",
+  malformed: "code (43 characters) and code_verifier (43 to 128 characters) are both required.",
   not_found: "legato.fm doesn't recognise this link code. Start again from your server's Settings.",
   used: "This link code was already used. Start again from your server's Settings.",
   expired: "This link code expired. Codes last five minutes; start again from your server's Settings.",
   mismatch: "This link code was issued to a different page. Start again from your server's Settings.",
 };
+
+export type LinkRedeemInput = { code: string; codeVerifier: string };
+
+// Checked before anything is looked up or counted (routes/link-page.ts): a
+// request that couldn't be a code and a verifier is a broken client, not a
+// guess.
+export function parseLinkRedeem(body: { code?: unknown; code_verifier?: unknown } | null | undefined): LinkRedeemInput | null {
+  const code = body?.code;
+  const codeVerifier = body?.code_verifier;
+  if (typeof code !== "string" || !CODE_PATTERN.test(code)) return null;
+  if (typeof codeVerifier !== "string" || !VERIFIER_PATTERN.test(codeVerifier)) return null;
+  return { code, codeVerifier };
+}
 
 // The code is spent on the first attempt that finds it, before anything
 // else is checked (RFC 6749 §4.1.2), the same as redeemAuthCode: a wrong
@@ -128,13 +143,9 @@ export const LINK_REDEEM_FAILURE_MESSAGES: Record<LinkRedeemFailure, string> = {
 // cross-origin POST; it has to be where the code was sent.
 export function redeemLinkCode(
   db: Database,
-  input: { code?: unknown; codeVerifier?: unknown; origin?: unknown },
+  input: LinkRedeemInput & { origin?: unknown },
 ): LinkRedeemResult {
   const { code, codeVerifier, origin } = input;
-  if (typeof code !== "string" || !code || typeof codeVerifier !== "string" || !VERIFIER_PATTERN.test(codeVerifier)) {
-    return { ok: false, reason: "malformed" };
-  }
-
   return db.transaction((): LinkRedeemResult => {
     const codeHash = sha256Hex(code);
     const row = db
