@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { Button } from '../ui/Button'
 import { Shimmer, Skeleton } from '../ui/Skeleton'
 import { IS_TAURI } from '../config/runtime'
+import { RELAY_ORIGIN } from '../config/relayHost'
 import { API_BASE } from '../config/serverHost'
 import { useAccount } from '../auth/accountContext'
 import type { AuthStatus } from '../auth/useAuth'
@@ -202,6 +203,22 @@ function useLinkStatus(): { status: LinkStatus | null | 'unavailable'; reload: (
   return { status, reload }
 }
 
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin
+  } catch {
+    return false
+  }
+}
+
+function hostOf(origin: string): string {
+  try {
+    return new URL(origin).host
+  } catch {
+    return origin
+  }
+}
+
 /* Issue #325: linking this server to legato.fm from Settings, for a server
  * whose owner was created without a claim, or whose first link failed, or
  * that legato.fm stopped vouching for ("link again"). Both clients end at the
@@ -230,6 +247,10 @@ function ServerLink({ relaySignedIn }: { relaySignedIn: boolean }) {
 
   const owner = account?.role === 'owner'
   const { issuer } = status
+  // The desktop app gets its token from the legato.fm it signs in to, so it
+  // can only link a server that trusts that one. The web client goes to
+  // whichever the server trusts.
+  const otherIssuer = IS_TAURI && issuer !== null && !sameOrigin(issuer, RELAY_ORIGIN)
   const said =
     issuer === null
       ? "legato.fm is turned off on this server, so it can't be linked."
@@ -237,8 +258,16 @@ function ServerLink({ relaySignedIn }: { relaySignedIn: boolean }) {
         ? 'This server is linked to legato.fm.'
         : "This server isn't linked to a legato.fm account yet."
   const hint =
-    issuer === null ? null : !owner ? "Only this server's owner can link it." : IS_TAURI && !relaySignedIn ? 'Sign in to legato.fm to link it.' : null
-  const canLink = issuer !== null && owner && (!IS_TAURI || relaySignedIn)
+    issuer === null
+      ? null
+      : !owner
+        ? "Only this server's owner can link it."
+        : otherIssuer
+          ? `It uses legato.fm at ${hostOf(issuer)}, and this app signs in at ${hostOf(RELAY_ORIGIN)}, so it can't link it from here.`
+          : IS_TAURI && !relaySignedIn
+            ? 'Sign in to legato.fm to link it.'
+            : null
+  const canLink = issuer !== null && owner && !otherIssuer && (!IS_TAURI || relaySignedIn)
 
   const link = async () => {
     setNotice(null)

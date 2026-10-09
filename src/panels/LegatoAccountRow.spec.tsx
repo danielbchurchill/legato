@@ -81,6 +81,15 @@ afterEach(() => {
 })
 
 describe('linking this server from Settings', () => {
+  it('says why instead of offering a link the desktop app would get refused', async () => {
+    serverSays({ issuer: 'https://id.example.net' })
+    const container = await render()
+    expect(container.textContent).toContain(
+      "It uses legato.fm at id.example.net, and this app signs in at auth.legato.fm, so it can't link it from here.",
+    )
+    expect(() => button('link to legato.fm')).toThrow()
+  })
+
   it('is ready to link again when the browser brings the page back from its back-forward cache', async () => {
     runtime.IS_TAURI = false
     serverSays({})
