@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import cookie from "@fastify/cookie";
 import websocketPlugin from "@fastify/websocket";
 import type { Database } from "./sqlite.js";
 import Fastify, { type FastifyInstance } from "fastify";
+import { hashSource } from "./csp.js";
 import { authRoutes, SUCCESS_PAGE_STYLE, type AuthRoutesOptions } from "./routes/auth.js";
 import { relayRoutes } from "./routes/relay.js";
 import { tunnelRoutes } from "./routes/tunnel.js";
@@ -23,12 +23,11 @@ export interface BuildAppOptions {
 // naming them by hash or nonce, as /claim does. Any other page gets this
 // one, so a page added later can't go out without a policy because nobody
 // remembered to give it one. It runs and loads nothing, and styles nothing
-// but the one attribute the sign-in success page paints ink's canvas with
-// (#291), named by its hash. 'unsafe-hashes' is what lets a hash match a
-// style attribute; with no script hash beside it, it allows no script.
+// but the one <style> the sign-in success page paints ink's canvas with
+// (#291), named by its hash.
 export const DEFAULT_PAGE_CSP = [
   "default-src 'none'",
-  `style-src 'unsafe-hashes' 'sha256-${createHash("sha256").update(SUCCESS_PAGE_STYLE).digest("base64")}'`,
+  `style-src ${hashSource(SUCCESS_PAGE_STYLE)}`,
   "base-uri 'none'",
   "form-action 'none'",
   "frame-ancestors 'none'",

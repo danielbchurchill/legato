@@ -87,14 +87,17 @@ describe("ink's canvas, where only one colour fits", () => {
     for (const window of windows) expect(window.backgroundColor?.toLowerCase()).toBe(canvas.dark)
   })
 
-  // Each page's <body style="…">. The Rust one sits in a string literal, so
-  // its quotes are escaped.
+  // Each page's <body style="…">, or its body rule where the page keeps its
+  // style in a <style> of its own (the relay's, #324). The Rust one sits in a
+  // string literal, so its quotes are escaped.
   it.each([
     ['server/src/routes/auth.ts', serverAuth],
     ['relay/src/routes/auth.ts', relayAuth],
     ['src-tauri/src/relay_sign_in.rs', relaySignIn],
   ])('paints the sign-in page in %s', (_file, source) => {
-    const backgrounds = [...source.matchAll(/<body style=\\?"[^"]*?background(?:-color)?:\s*([^;"\\]+)/g)].map((m) => m[1].toLowerCase())
+    const backgrounds = [...source.matchAll(/(?:<body style=\\?"|\bbody\s*\{)[^"}]*?background(?:-color)?:\s*([^;"}\\]+)/g)].map((m) =>
+      m[1].toLowerCase(),
+    )
     expect(backgrounds.length).toBeGreaterThan(0)
     for (const background of backgrounds) expect(background).toBe(canvas.dark)
   })

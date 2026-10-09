@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { getUserBySessionToken, sessionToken, type RelayUserRow } from "../accounts.js";
 import { normalizeCode } from "../claimCode.js";
+import { hashSource } from "../csp.js";
 import { claimStatus } from "../pairing.js";
 import { SERVER_ID_PATTERN } from "../signing-keys.js";
 import type { Database } from "../sqlite.js";
@@ -257,8 +257,6 @@ const SCRIPT = `
       }, 3000);
     }
   `;
-
-const hashSource = (text: string) => `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
 
 // Nothing on the page runs, loads or styles but those two, and its script
 // only talks to this service. Where it can be framed, where a form could

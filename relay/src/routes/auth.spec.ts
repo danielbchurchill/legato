@@ -175,13 +175,14 @@ describe("native sign-in (issue #215)", () => {
     expect(callback.headers["content-security-policy"]).toBe(DEFAULT_PAGE_CSP);
     expect(DEFAULT_PAGE_CSP).toStartWith("default-src 'none';");
     expect(DEFAULT_PAGE_CSP).toContain("frame-ancestors 'none'");
-    // Nothing on it that policy would block: no script, stylesheet or
-    // handler, and one style attribute, the one it names by hash.
-    expect(callback.body).not.toMatch(/<(script|style|link|img)\b|\son[a-z]+=/);
-    const styles = [...callback.body.matchAll(/\sstyle="([^"]*)"/g)].map((m) => m[1]!);
+    // Nothing on it that policy would block: no script, stylesheet, handler
+    // or style attribute, and one <style>, the one it names by hash.
+    expect(callback.body).not.toMatch(/<(script|link|img)\b|\s(on[a-z]+|style)=/);
+    const styles = [...callback.body.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]!);
     expect(styles).toEqual([SUCCESS_PAGE_STYLE]);
-    expect(DEFAULT_PAGE_CSP).toContain(`style-src 'unsafe-hashes' 'sha256-${createHash("sha256").update(styles[0]!).digest("base64")}';`);
+    expect(DEFAULT_PAGE_CSP).toContain(`style-src 'sha256-${createHash("sha256").update(styles[0]!).digest("base64")}';`);
     expect(DEFAULT_PAGE_CSP).not.toContain("script-src");
+    expect(DEFAULT_PAGE_CSP).not.toContain("unsafe");
 
     // JSON isn't a page, and a page with its own policy keeps it.
     expect((await app.inject({ url: "/health" })).headers["content-security-policy"]).toBeUndefined();

@@ -281,20 +281,23 @@ function escapeHtml(s: string): string {
 // A bare confirmation page: the relay has no frontend of its own, so the
 // sign-in button that got here (in whatever client — desktop app, phone)
 // opens this flow in a new window/tab and re-checks GET /auth/me itself.
+// Its one style is in a <style> of its own, which app.ts's default policy
+// names by hash (issue #324).
+export const SUCCESS_PAGE_STYLE =
+  "body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f1214;color:#c9c9c9;font-family:system-ui,sans-serif;font-size:14px}";
+
 function successPage(displayName: string | null): string {
   const name = displayName ? escapeHtml(displayName) : "your account";
   return `<!doctype html>
 <html>
-  <body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f1214;color:#c9c9c9;font-family:system-ui,sans-serif;font-size:14px;">
+  <head>
+    <style>${SUCCESS_PAGE_STYLE}</style>
+  </head>
+  <body>
     <p>Signed in as ${name}. You can close this window.</p>
   </body>
 </html>`;
 }
-
-// The style attribute on successPage's <body>, the one style app.ts's
-// default policy allows (by hash). Read out of the page itself so the two
-// can't drift apart.
-export const SUCCESS_PAGE_STYLE = /<body style="([^"]*)"/.exec(successPage(null))![1]!;
 
 function publicUser(user: RelayUserRow) {
   return {
