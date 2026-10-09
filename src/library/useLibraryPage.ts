@@ -60,17 +60,25 @@ export type LibraryPage<Row> = {
 
 /** `entity` is a URL segment (`library/albums`, `library/artists` or
  * `library/tracks`), not a free string, so a typo here fails at compile time
- * rather than as a 404 nobody notices until the view stays empty. */
+ * rather than as a 404 nobody notices until the view stays empty.
+ *
+ * `revision` is a count that goes up when the server's library has changed
+ * (LibraryView's useLibraryChanges). Each step fetches page 0 and the range
+ * on screen again, and keeps showing the rows it has until theirs land, so
+ * the grid neither blanks nor jumps back to the top. */
 export function useLibraryPage<Row>(
   entity: 'library/albums' | 'library/artists' | 'library/tracks',
   query: string,
   sort: string,
   dir: SortDir,
+  revision = 0,
 ): LibraryPage<Row> {
   const [rows, setRows] = useState<(Row | undefined)[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const loadedPages = useRef<Set<number>>(new Set())
+  // The range the grid last asked for, which a refresh fetches again.
+  const shownRange = useRef<[number, number]>([0, 0])
   // Bumped on every filter/sort change so a page fetch that was already in
   // flight when the user typed the next character lands as a no-op instead
   // of splicing stale rows into the new result set.
@@ -79,6 +87,7 @@ export function useLibraryPage<Row>(
   useEffect(() => {
     generation.current += 1
     loadedPages.current = new Set()
+    shownRange.current = [0, 0]
     // A new query drops the old pages together with the generation bump above, so no stale page lands in the new result.
     // oxlint-disable-next-line react/set-state-in-effect
     setRows([])
@@ -128,12 +137,27 @@ export function useLibraryPage<Row>(
 
   const ensureRange = useCallback(
     (startIndex: number, endIndex: number) => {
+      shownRange.current = [startIndex, endIndex]
       const firstPage = Math.floor(startIndex / PAGE_SIZE)
       const lastPage = Math.floor(Math.max(startIndex, endIndex) / PAGE_SIZE)
       for (let page = firstPage; page <= lastPage; page++) loadPage(page)
     },
     [loadPage],
   )
+
+  // A page from before the change lands as a no-op (the generation), and
+  // every page counts as unfetched again, so one scrolled back to later is
+  // fetched afresh. If the total moved, the first page to land drops the
+  // rest (mergePage), and the grid asks for its range again.
+  const fetchedRevision = useRef(revision)
+  useEffect(() => {
+    if (revision === fetchedRevision.current) return
+    fetchedRevision.current = revision
+    generation.current += 1
+    loadedPages.current = new Set()
+    loadPage(0)
+    ensureRange(...shownRange.current)
+  }, [revision, loadPage, ensureRange])
 
   const wait = useLoadingWait(loading)
 

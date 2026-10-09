@@ -15,6 +15,11 @@ import type { ArtistRow } from './types'
 
 const STATS = { albums: 30_000, artists: 3_000, tracks: 300_000, totalBytes: 0, totalDurationMs: 0 }
 
+// What the fake server answers with, which a test changes to stand for a
+// rescan or a merge, and how often it was asked.
+let server: { stats: typeof STATS; statsStatus: number }
+let requests: Record<string, number>
+
 // The first 5,000 nodes by id of the synthetic library, as GET /nodes sent
 // them: every album's tracks ahead of the artists, so no artist at all.
 function cappedGraph(): GraphData {
@@ -27,29 +32,46 @@ function cappedGraph(): GraphData {
 function artistsPage(url: URL): { items: ArtistRow[]; total: number } {
   const offset = Number(url.searchParams.get('offset'))
   const limit = Number(url.searchParams.get('limit'))
-  const count = Math.max(0, Math.min(limit, STATS.artists - offset))
+  const total = server.stats.artists
+  const count = Math.max(0, Math.min(limit, total - offset))
   return {
     items: Array.from({ length: count }, (_, i) => ({ id: 100_000 + offset + i, name: `Artist ${offset + i}`, releases: 10 })),
-    total: STATS.artists,
+    total,
   }
+}
+
+// Every socket the view opened, to send server events through.
+let sockets: { onmessage: ((msg: { data: string }) => void) | null }[]
+
+function send(event: string) {
+  for (const socket of sockets) socket.onmessage?.({ data: JSON.stringify({ event, payload: {} }) })
 }
 
 let root: Root | null = null
 
 beforeEach(() => {
+  server = { stats: STATS, statsStatus: 200 }
+  requests = {}
+  sockets = []
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string) => {
       const url = new URL(input)
-      if (url.pathname.endsWith('/stats')) return Response.json(STATS)
-      if (url.pathname.endsWith('/library/artists')) return Response.json(artistsPage(url))
-      if (url.pathname.endsWith('/scan-jobs')) return Response.json([])
+      const route = url.pathname.replace(/^.*\/api\/v1/, '')
+      requests[route] = (requests[route] ?? 0) + 1
+      if (route === '/stats') return Response.json(server.stats, { status: server.statsStatus })
+      if (route === '/library/artists') return Response.json(artistsPage(url))
+      if (route === '/scan-jobs') return Response.json([])
       return Response.json({ items: [], total: 0 })
     }),
   )
   vi.stubGlobal(
     'WebSocket',
     class {
+      onmessage: ((msg: { data: string }) => void) | null = null
+      constructor() {
+        sockets.push(this)
+      }
       close() {}
     },
   )
@@ -71,6 +93,7 @@ afterEach(() => {
   act(() => root?.unmount())
   root = null
   document.body.innerHTML = ''
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -102,6 +125,17 @@ async function render(graph: GraphData) {
 }
 
 const countsLine = (container: HTMLElement) => container.querySelector('h1')?.nextElementSibling?.textContent
+const tabCount = (container: HTMLElement) =>
+  [...container.querySelectorAll('h2')].find((h) => h.textContent === 'All artists')?.nextElementSibling?.textContent
+
+// Sends the events, then lets the view's coalescing wait run out and what it
+// fetched land.
+async function after(events: string[]) {
+  await act(async () => {
+    for (const event of events) send(event)
+    await vi.advanceTimersByTimeAsync(1_500)
+  })
+}
 
 describe('Library header past the graph cap (#302)', () => {
   it("counts the whole library from the server, not the map's capped graph", async () => {
@@ -129,4 +163,65 @@ describe('Library header past the graph cap (#302)', () => {
     const container = await render({ ...cappedGraph(), nodes: [], byId: new Map(), loading: true })
     expect(countsLine(container)).toBe('30,000 albums · 3,000 artists · 300,000 tracks')
   })
+})
+
+describe('Library header and Artists tab after the library changes (#302)', () => {
+  // A merge took one artist away.
+  function changeLibrary() {
+    server.stats = { ...STATS, artists: 2_999 }
+  }
+
+  for (const event of ['scan:done', 'enrich:applied', 'hygiene:changed']) {
+    it(`fetches both again after ${event}, so they agree`, async () => {
+      const container = await render(cappedGraph())
+      vi.useFakeTimers()
+
+      changeLibrary()
+      await after([event])
+
+      expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
+      expect(countsLine(container)).toBe('30,000 albums · 2,999 artists · 300,000 tracks')
+      expect(tabCount(container)).toBe('2,999')
+    })
+  }
+
+  it('fetches once for a burst of changes, not once per event', async () => {
+    await render(cappedGraph())
+    vi.useFakeTimers()
+    expect(requests).toMatchObject({ '/stats': 1, '/library/artists': 1 })
+
+    await act(async () => {
+      for (let i = 0; i < 20; i++) {
+        send('hygiene:changed')
+        await vi.advanceTimersByTimeAsync(1_000)
+      }
+    })
+    await after(['scan:done', 'enrich:applied'])
+
+    expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
+  })
+
+  it("doesn't fetch on scan:file, which a scan sends for every file it reads", async () => {
+    const container = await render(cappedGraph())
+    vi.useFakeTimers()
+
+    changeLibrary()
+    await after(Array.from({ length: 1_000 }, () => 'scan:file'))
+
+    expect(requests).toMatchObject({ '/stats': 1, '/library/artists': 1 })
+    expect(countsLine(container)).toBe('30,000 albums · 3,000 artists · 300,000 tracks')
+  })
+
+  for (const status of [500, 401]) {
+    it(`keeps the counts it has when a refetch answers ${status}`, async () => {
+      const container = await render(cappedGraph())
+      vi.useFakeTimers()
+
+      server.statsStatus = status
+      await after(['scan:done'])
+
+      expect(requests['/stats']).toBe(2)
+      expect(countsLine(container)).toBe('30,000 albums · 3,000 artists · 300,000 tracks')
+    })
+  }
 })

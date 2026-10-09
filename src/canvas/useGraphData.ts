@@ -6,7 +6,7 @@ import { API_BASE as API } from '../config/serverHost'
  * the graph. Longer than the enrichment queue's own ~1/sec spacing, so a
  * drain of many nodes collapses into one refetch at the end rather than one
  * per node. */
-const REFETCH_COALESCE_MS = 1500
+export const REFETCH_COALESCE_MS = 1500
 
 export type GraphNode = {
   id: number

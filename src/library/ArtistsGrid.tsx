@@ -21,6 +21,9 @@ import type { ArtistRow, SortDir } from './types'
 type ArtistsGridProps = {
   scrollRef: RefObject<HTMLDivElement | null>
   sortDir: SortDir
+  /** LibraryView's useLibraryChanges: the list is fetched again when it
+   * moves, as the header's counts are. */
+  revision: number
   onOpen: (id: number) => void
 }
 
@@ -52,8 +55,8 @@ const ArtistCell = memo(function ArtistCell({ artist, onOpen }: { artist: Artist
   )
 })
 
-export function ArtistsGrid({ scrollRef, sortDir, onOpen }: ArtistsGridProps) {
-  const { rows, total, loading, waitVisible, ensureRange } = useLibraryPage<ArtistRow>('library/artists', '', 'name', sortDir)
+export function ArtistsGrid({ scrollRef, sortDir, revision, onOpen }: ArtistsGridProps) {
+  const { rows, total, loading, waitVisible, ensureRange } = useLibraryPage<ArtistRow>('library/artists', '', 'name', sortDir, revision)
 
   if (loading) return waitVisible ? <GridSkeleton round label="Loading artists" /> : null
   if (total === 0) return <LibraryEmpty title="No artists yet" body="Tracks without an artist tag are listed under tracks." />

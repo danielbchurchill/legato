@@ -6,7 +6,7 @@ import { plural } from '../ui/format'
 import { useGraph } from '../canvas/graphContext'
 import { useShellLayout } from '../shell/layout'
 import { useScanStatus } from '../hooks/useScanStatus'
-import { useStats } from '../panels/healthData'
+import { useLibraryChanges, useLibraryStats } from './useLibraryChanges'
 import type { usePlayback } from '../playback/usePlayback'
 import type { Settings } from '../hooks/useSettings'
 import { AlbumsGrid } from './AlbumsGrid'
@@ -34,7 +34,9 @@ import { ALBUM_SORT_OPTIONS, TRACK_SORT_OPTIONS, type AlbumSort, type SortDir, t
  * The counts are GET /stats's, Library health's numbers, counted on the
  * server over the whole library (#302). The map's graph stops at 5,000
  * nodes, so counting it said "455 albums · 0 artists" at 30,000 albums.
- * They show as soon as /stats answers, without waiting for the graph.
+ * They show as soon as /stats answers, without waiting for the graph, and
+ * they and the Artists tab are fetched again together when the library
+ * changes (useLibraryChanges).
  *
  * Opening anything here — a cover, a row, an artist — opens its details in
  * the right panel: there's no node card to show off the map. */
@@ -73,7 +75,8 @@ type LibraryViewProps = {
 export function LibraryView({ onOpenNode, playback, settings, updateSettings, firstRun }: LibraryViewProps) {
   const layout = useShellLayout()
   const { nodes, loading } = useGraph()
-  const stats = useStats()
+  const revision = useLibraryChanges()
+  const stats = useLibraryStats(revision)
   const scan = useScanStatus()
   const scrollRef = useRef<HTMLDivElement>(null)
   // The layout persists like the map/library switch itself; the sort is a
@@ -180,7 +183,7 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
                   }}
                 />
               )}
-              {entity === 'artists' && <ArtistsGrid scrollRef={scrollRef} sortDir={artistDir} onOpen={onOpenNode} />}
+              {entity === 'artists' && <ArtistsGrid scrollRef={scrollRef} sortDir={artistDir} revision={revision} onOpen={onOpenNode} />}
               {entity === 'tracks' && (
                 <TracksTable
                   scrollRef={scrollRef}
