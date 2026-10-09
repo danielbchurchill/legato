@@ -93,6 +93,14 @@ export function applyMemberRelations(
 // listens, after the #273 merge, so the bound it reads already counts merged
 // producers as library artists. Issue #321: only on a start when it may
 // have something to do (pruneBeyondMemberBoundIfDue, below).
+//
+// It deletes only what can be made again: artist nodes outside the bound
+// that carry no user data, and the rows enrichment and recompute derived for
+// them. Nothing makes an artist node by hand. A scan makes one from a tag
+// (match/edges.ts), or a member lookup from MusicBrainz (above), and either
+// makes it again if the artist comes back inside the bound. So it needs no
+// backup, which matters because most prunes run on a start with no
+// migration, where openDb takes none.
 
 type NodeReference = { table: string; column: string };
 
@@ -127,7 +135,7 @@ function nodeReferences(db: Database): NodeReference[] {
 // manual connection, a position the user dragged, a cover they chose, a
 // playlist entry, or a table added after this was written) is user data,
 // and keeps the artist wherever it sits.
-const DERIVED_ROWS: Record<string, string> = {
+export const DERIVED_ROWS: Record<string, string> = {
   edges: "source != 'manual'",
   positions: "user_x IS NULL AND user_y IS NULL",
   cover_art: "source != 'manual'",
@@ -226,7 +234,7 @@ function turnForeignKeysOn(db: Database, after: string): void {
 /** Deletes what the unbounded crawl left past the bound: member_of edges
  *  that no member-lookup artist is on, the member lookups of artists that
  *  no longer get one, and artist nodes outside the bound that carry no user
- *  data, with every row that references them. `inTransaction` runs
+ *  data, with the derived rows that reference them. `inTransaction` runs
  *  last in the prune's transaction, so what it writes commits with the
  *  prune or not at all. Returns what was removed, counted in the
  *  transaction too, so nothing after the commit can fail but the foreign
@@ -262,16 +270,24 @@ export function pruneBeyondMemberBound(db: Database, inTransaction: () => void =
         // Each of these reads a whole table, so they're skipped when no one
         // is past the bound.
         if (count(db, "SELECT EXISTS (SELECT 1 FROM temp.artists_past_bound) AS n") === 1) {
+          // An artist any row of user data references stays.
           for (const { table, column } of references) {
             db.exec(
               `DELETE FROM temp.artists_past_bound WHERE id IN
                  (SELECT ${quote(column)} FROM ${quote(table)} WHERE NOT (${DERIVED_ROWS[table] ?? "0"}))`,
             );
           }
+          // And each delete takes derived rows only, so not even a mistake
+          // in the pass above could take a row a person made.
           for (const { table, column } of references) {
-            db.exec(`DELETE FROM ${quote(table)} WHERE ${quote(column)} IN (SELECT id FROM temp.artists_past_bound)`);
+            const derived = DERIVED_ROWS[table];
+            if (derived === undefined) continue;
+            db.exec(
+              `DELETE FROM ${quote(table)}
+                WHERE ${quote(column)} IN (SELECT id FROM temp.artists_past_bound) AND (${derived})`,
+            );
           }
-          db.exec("DELETE FROM nodes WHERE id IN (SELECT id FROM temp.artists_past_bound)");
+          db.exec("DELETE FROM nodes WHERE type = 'artist' AND id IN (SELECT id FROM temp.artists_past_bound)");
         }
         db.exec("DROP TABLE temp.artists_past_bound");
       });

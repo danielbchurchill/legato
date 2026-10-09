@@ -9,6 +9,7 @@ import { openDb } from "../db.js";
 import {
   applyMemberRelations,
   BOUND_HASH,
+  DERIVED_ROWS,
   ForeignKeysOffError,
   markBoundMayHaveShrunk,
   pruneBeyondMemberBound,
@@ -337,6 +338,81 @@ describe("pruneBeyondMemberBound", () => {
     pruneBeyondMemberBound(db);
 
     expect(pruneBeyondMemberBound(db)).toEqual({ artists: 0, memberEdges: 0, jobs: 0 });
+  });
+
+  // Issue #321: a prune can run on a start with no migration, so no backup
+  // is taken before it. It deletes nothing that can't be made again.
+  it("deletes only artist nodes past the bound and rows derived for them, never a row a person made", () => {
+    const references = (
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as {
+        name: string;
+      }[]
+    ).filter(
+      ({ name }) =>
+        (db.prepare(`SELECT 1 FROM pragma_foreign_key_list(?) WHERE "table" = 'nodes'`).all(name) as unknown[]).length >
+        0,
+    );
+    // Every row that isn't enrichment's or recompute's own, in every table
+    // that references a node.
+    const madeByPeople = () =>
+      Object.fromEntries(
+        references.map(({ name }) => [
+          name,
+          (db.prepare(`SELECT * FROM "${name}" WHERE NOT (${DERIVED_ROWS[name] ?? "0"})`).all() as object[])
+            .map((row) => JSON.stringify(row))
+            .sort(),
+        ]),
+      );
+    const otherNodes = () => db.prepare("SELECT * FROM nodes WHERE type != 'artist' ORDER BY id").all();
+
+    // Past the bound, each with one kind of user data.
+    const kinds = ["favourite", "connection", "dragged", "cover", "edited", "listed", "imported", "album"];
+    const people = Object.fromEntries(kinds.map((kind) => [kind, crawled(`Past the bound, ${kind}`)]));
+    db.prepare("INSERT INTO favourites (node_id) VALUES (?)").run(people.favourite!);
+    db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'sounds_like', 'manual')").run(
+      beatles,
+      people.connection!,
+    );
+    db.prepare("UPDATE positions SET user_x = 1, user_y = 2 WHERE node_id = ?").run(people.dragged!);
+    db.prepare("INSERT INTO cover_art (node_id, source, hash) VALUES (?, 'manual', 'chosen')").run(people.cover!);
+    db.prepare(
+      "INSERT INTO field_provenance (node_id, field, value, source, confidence) VALUES (?, 'title', 'Fixed', 'manual', 1)",
+    ).run(people.edited!);
+    const playlist = (db.prepare("INSERT INTO playlists (name) VALUES ('Mine') RETURNING id").get() as { id: number })
+      .id;
+    db.prepare("INSERT INTO playlist_tracks (playlist_id, node_id, position) VALUES (?, ?, 0)").run(
+      playlist,
+      people.listed!,
+    );
+    const imported = (
+      db.prepare("INSERT INTO playlist_imports (playlist_id, source_filename) VALUES (?, 'mine.m3u') RETURNING id").get(
+        playlist,
+      ) as { id: number }
+    ).id;
+    db.prepare(
+      "INSERT INTO playlist_import_entries (import_id, position, raw_path, match_type, matched_node_id) VALUES (?, 0, 'x', 'metadata', ?)",
+    ).run(imported, people.imported!);
+    // A table this module doesn't list counts as user data too.
+    const album = makeNode("release", "An album");
+    db.prepare("INSERT INTO albums (node_id, primary_artist_node_id) VALUES (?, ?)").run(album, people.album!);
+    // Nodes of other types that nothing references are never the prune's.
+    makeNode("label", "Apple Records");
+    makeNode("credit", "Nobody Credits Me");
+    makeNode("release", "A release with no tracks");
+    const before = madeByPeople();
+    const nodesBefore = otherNodes();
+
+    pruneBeyondMemberBound(db);
+
+    expect(madeByPeople()).toEqual(before);
+    expect(otherNodes()).toEqual(nodesBefore);
+    for (const id of Object.values(people)) {
+      expect(db.prepare("SELECT id FROM nodes WHERE id = ?").get(id)).toEqual({ id });
+    }
+    // What went was Bob Dylan, The Band and The George Martin Orchestra,
+    // and only their derived rows.
+    expect(artistTitles()).not.toContain("Bob Dylan");
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
   it("leaves foreign keys on afterwards", () => {
