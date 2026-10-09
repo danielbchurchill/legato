@@ -527,10 +527,16 @@ describe("frames a home server sends back", () => {
     headers = { "Content-Length": "5", "content-length": "500" };
     expect(await (await get()).text()).toBe("hello");
 
-    headers = { "transfer-encoding": "gzip", connection: "close, x-fine", "keep-alive": "timeout=1", upgrade: "h2c", "x-fine": "kept" };
+    headers = {
+      "transfer-encoding": "gzip",
+      connection: "close, cache-control",
+      "keep-alive": "timeout=1",
+      upgrade: "h2c",
+      "cache-control": "no-store",
+    };
     const response = await get();
     expect(await response.text()).toBe("hello");
-    expect(response.headers.get("x-fine")).toBe("kept");
+    expect(response.headers.get("cache-control")).toBe("no-store");
     // The relay's own connection headers, never the server's.
     expect(response.headers.get("upgrade")).toBeNull();
     expect(response.headers.get("keep-alive")).not.toBe("timeout=1");
@@ -561,6 +567,101 @@ describe("frames a home server sends back", () => {
       expect(response.headers.get("content-range")).toBe(`bytes ${range.slice(6)}/10`);
       expect(response.headers.get("accept-ranges")).toBe("bytes");
       expect(await response.text()).toBe(body);
+    }
+    expect(tunnel.closed).toBe(false);
+  });
+
+  it("keeps legato.fm's cookies, storage and address bar out of a home server's hands", async () => {
+    let location = "https://elsewhere.example/";
+    const { tunnel, get, serverId } = await setUp(() => [
+      start(302, {
+        location,
+        refresh: "0; url=https://elsewhere.example/",
+        "clear-site-data": '"cookies", "storage"',
+        "set-cookie": "relay_session=planted; Path=/",
+        "access-control-allow-origin": "https://elsewhere.example",
+        "access-control-allow-credentials": "true",
+        link: "<https://elsewhere.example/x.css>; rel=preload; as=style",
+        "content-type": "text/plain",
+      }),
+      text("moved"),
+      end,
+    ]);
+
+    // A Legato server never redirects anywhere through the relay (its
+    // only redirects are its own Google and GitHub sign-ins), so a
+    // Location goes nowhere, not even to another of its own paths.
+    for (const where of [location, `/relay/${serverId}/elsewhere`]) {
+      location = where;
+      const response = await fetch(get.url("/x"), { headers: get.headers, redirect: "manual" });
+      expect(response.status).toBe(302);
+      expect(await response.text()).toBe("moved");
+      for (const name of ["location", "refresh", "clear-site-data", "set-cookie", "access-control-allow-origin", "link"]) {
+        expect(response.headers.get(name)).toBeNull();
+      }
+      expect(response.headers.get("content-type")).toBe("text/plain");
+    }
+    expect(tunnel.closed).toBe(false);
+  });
+
+  it("passes the headers a home server's own routes send", async () => {
+    // What server/src sends on the routes a client uses through the relay,
+    // header for header, beside the ones @fastify/cors adds to every
+    // answer (server/src/index.ts). A home server's client never sends a
+    // Content-Length (server/src/tunnel/client.ts), so none here.
+    const cors = { vary: "Origin", "access-control-allow-origin": "https://app.example", "access-control-allow-credentials": "true" };
+    const routes: Record<string, { status: number; headers: Record<string, string> }> = {
+      // routes/files.ts, sendFile: an original FLAC, and a seek in it.
+      "/api/v1/files/1/stream": {
+        status: 206,
+        headers: {
+          "content-type": "audio/flac",
+          "cache-control": "private, no-cache",
+          etag: '"abc123"',
+          "accept-ranges": "bytes",
+          "content-range": "bytes 2-5/10",
+        },
+      },
+      // routes/files.ts: a transcode still being written.
+      "/api/v1/files/1/stream?quality=opus160": {
+        status: 200,
+        headers: {
+          "content-type": "audio/ogg; codecs=opus",
+          "cache-control": "private, max-age=31536000, immutable",
+          "accept-ranges": "bytes",
+        },
+      },
+      // routes/cover.ts.
+      "/api/v1/nodes/7/cover": {
+        status: 200,
+        headers: {
+          "content-type": "image/jpeg",
+          etag: '"cafe-thumb"',
+          "cache-control": "private, max-age=86400",
+          "x-cover-source": "musicbrainz",
+        },
+      },
+      "/api/v1/stats": { status: 200, headers: { "content-type": "application/json; charset=utf-8" } },
+      // routes/auth.ts, the sign-in limiter.
+      "/api/v1/auth/login": { status: 429, headers: { "content-type": "application/json; charset=utf-8", "retry-after": "30" } },
+      // routes/web-client.ts.
+      "/": { status: 200, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } },
+    };
+    const { tunnel, get } = await setUp((_id, request) => {
+      const route = routes[request.path]!;
+      return [start(route.status, { ...route.headers, ...cors }), text("body"), end];
+    });
+
+    for (const [path, route] of Object.entries(routes)) {
+      const response = await get(path);
+      expect(response.status).toBe(route.status);
+      expect(await response.text()).toBe("body");
+      for (const [name, value] of Object.entries(route.headers)) expect(response.headers.get(name)).toBe(value);
+      expect(response.headers.get("vary")).toBe("Origin");
+      // Who may read legato.fm's answers is legato.fm's to say.
+      expect(response.headers.get("access-control-allow-origin")).toBeNull();
+      expect(response.headers.get("access-control-allow-credentials")).toBeNull();
+      expect(response.headers.get("content-security-policy")).toBe("sandbox");
     }
     expect(tunnel.closed).toBe(false);
   });
@@ -613,11 +714,11 @@ describe("frames a home server sends back", () => {
     const { tunnel, get } = await setUp(() => [
       start(200, {
         "content-type": "text/plain",
-        "x-split": "a\r\nset-cookie: relay_session=planted",
+        etag: "a\r\nset-cookie: relay_session=planted",
         "bad name": "x",
-        "x-wide": "日本",
-        "x-number": 5,
-        "x-fine": "kept",
+        vary: "日本",
+        "retry-after": 5,
+        "cache-control": "no-store",
       }),
       chunk(Buffer.from("body").toString("base64")),
       end,
@@ -626,8 +727,8 @@ describe("frames a home server sends back", () => {
     const response = await get();
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("body");
-    expect(response.headers.get("x-fine")).toBe("kept");
-    for (const name of ["x-split", "set-cookie", "x-wide", "x-number"]) expect(response.headers.get(name)).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    for (const name of ["etag", "set-cookie", "vary", "retry-after"]) expect(response.headers.get(name)).toBeNull();
     expect(tunnel.closed).toBe(false);
   });
 

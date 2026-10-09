@@ -194,17 +194,44 @@ function pathOnServer(url: string): string {
 
 const SANDBOX = "sandbox";
 
-// A home server's response headers as they go to the device: no
-// Set-Cookie, and the sandbox above kept whatever the server sent.
-// writeHead()'s headers win over setHeader()'s, so a server's own policy
-// goes out next to the sandbox (both are enforced), and its
-// X-Content-Type-Options is dropped for the relay's.
+// The only headers a home server's answer takes to the device: what its
+// own routes send through the relay. The body's type, length and range
+// (routes/files.ts), caching (covers, the stream cache, the web client),
+// the Vary @fastify/cors adds, a cover's source, and the sign-in
+// limiter's Retry-After. A header a server route starts sending later
+// needs adding here.
+//
+// Everything else stays on the server's side, because the answer lands on
+// legato.fm's origin. Set-Cookie and Clear-Site-Data would change
+// legato.fm's own cookies and storage, the relay session among them. A
+// Location or Refresh would make auth.legato.fm an open redirect, and a
+// Legato server never redirects anywhere through the relay: its only
+// redirects are to Google and GitHub for its own sign-in. And CORS headers
+// would let a server decide who may read legato.fm's answers.
+const DEVICE_HEADERS = new Set([
+  "content-type",
+  "content-length",
+  "content-range",
+  "accept-ranges",
+  "cache-control",
+  "etag",
+  "vary",
+  "x-cover-source",
+  "retry-after",
+  "content-security-policy",
+]);
+
+// A home server's response headers as they go to the device: only those
+// above, and the sandbox kept whatever the server sent. writeHead()'s
+// headers win over setHeader()'s, so a server's own policy goes out next
+// to the sandbox (both are enforced). The relay's X-Content-Type-Options
+// is the only one.
 function forDevice(headers: Record<string, string>): Record<string, string | string[]> {
   const result: Record<string, string | string[]> = {};
   for (const [name, value] of Object.entries(headers)) {
     const key = name.toLowerCase();
-    if (key === "set-cookie" || key === "x-content-type-options") continue;
-    result[name] = key === "content-security-policy" ? [value, SANDBOX] : value;
+    if (!DEVICE_HEADERS.has(key)) continue;
+    result[key] = key === "content-security-policy" ? [value, SANDBOX] : value;
   }
   return result;
 }
