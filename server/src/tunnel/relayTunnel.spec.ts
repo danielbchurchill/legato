@@ -186,19 +186,26 @@ describe("RelayTunnel", () => {
     expect(h.reports.map((report) => report.url)).toEqual([`${h.fake.origin}/linked-servers`, `${h.fake.origin}/linked-servers/unlink`]);
   });
 
-  it("stays stopped after legato.fm refuses the credential, until a new one arrives", async () => {
+  it("asks again about a refused credential on every link change, and connects once a new one arrives", async () => {
     const h = await setup();
     h.link("42");
     h.store("42", "revoked-1");
     h.tunnel.sync();
     await until(() => h.tunnel.state, "refused");
-    h.tunnel.sync();
     await sleep(150);
+    // Not on the backoff's short delays: the next try is an hour away.
     expect(h.fake.opened).toBe(1);
+
+    // A link change with the same credential still stored asks once more.
+    h.tunnel.sync();
+    while (h.fake.auths.length < 2) await sleep(10);
+    await until(() => h.tunnel.state, "refused");
+    expect(h.fake.auths).toEqual(["revoked-1", "revoked-1"]);
 
     h.store("42", "live-2");
     h.tunnel.sync();
     await until(() => h.tunnel.state, "connected");
-    expect(h.fake.auths).toEqual(["revoked-1", "live-2"]);
+    expect(h.fake.auths).toEqual(["revoked-1", "revoked-1", "live-2"]);
+    expect(h.lines.filter((line) => line.level === "warn")).toHaveLength(1);
   });
 });

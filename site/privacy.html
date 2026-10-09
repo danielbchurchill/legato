@@ -99,7 +99,9 @@
         it from outside your home network (see remote access, below). It signs in to that
         connection with the credential legato.fm gave it when you linked it, and legato.fm sees
         its IP address and notes when it was last connected. If the connection drops, the server
-        reconnects on its own, waiting a little longer each time. Nothing travels over it except
+        reconnects on its own, waiting a little longer each time. If legato.fm turns its
+        credential down, the server asks again once an hour, and when you link it again, until
+        legato.fm accepts it or you unlink. Nothing travels over it except
         the requests your devices send your server through legato.fm and your server's answers.
         Unlinking closes the connection and deletes the credential from your server.
       </p>

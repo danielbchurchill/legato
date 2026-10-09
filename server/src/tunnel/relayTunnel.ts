@@ -15,15 +15,17 @@ import { TunnelClient, type TunnelClientOptions, type TunnelState } from "./clie
 // sync() is the one way in: at startup (index.ts, once the server is
 // listening, since the tunnel replays requests against it) and after
 // every link or unlink. It starts, keeps, swaps or stops the client to
-// match what's stored, and does nothing when that hasn't changed, so a
-// refused credential stays refused until a new one arrives.
+// match what's stored, and leaves a running client alone when that hasn't
+// changed. A client whose credential was refused asks again at once:
+// whatever the link change was, it's a better moment than the next
+// hourly try (tunnel/client.ts).
 
 export type RelayTunnelOptions = {
   /** The port this server listens on; the tunnel replays requests against it on loopback. */
   port: number;
   log?: (level: "info" | "warn", message: string) => void;
   /** Passed through to the client: tests shorten the backoff and the heartbeat. */
-  client?: Pick<TunnelClientOptions, "backoff" | "heartbeatMs" | "random">;
+  client?: Pick<TunnelClientOptions, "backoff" | "heartbeatMs" | "refusedRetryMs" | "random">;
 };
 
 /** wss://auth.legato.fm/tunnel for https://auth.legato.fm. */
@@ -69,15 +71,18 @@ export class RelayTunnel {
       this.stop();
       return;
     }
-    if (stored.credential === this.credential) return;
+    if (stored.credential === this.credential) {
+      this.client?.retryRefused();
+      return;
+    }
 
     this.stop();
     this.credential = stored.credential;
     if (!(Date.parse(stored.expiresAt) > Date.now())) {
       this.log(
         "warn",
-        `legato.fm: this server's tunnel credential expired at ${stored.expiresAt}, so it can't be reached through legato.fm. ` +
-          "To turn remote access back on, link this server to your legato.fm account again: that brings a new credential.",
+        `legato.fm: this server's tunnel credential expired at ${stored.expiresAt}, so this server can't be reached through ` +
+          "legato.fm. To turn remote access back on, link this server to your legato.fm account again: a new link brings a new credential.",
       );
       return;
     }

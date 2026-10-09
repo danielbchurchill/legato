@@ -26,9 +26,11 @@ import type { RequestFrame, TunnelFrame } from "../../../relay/src/protocol.js";
 // answering the heartbeat's pings. Either way it reconnects, after a
 // delay that doubles each time up to a cap, with jitter so a relay restart
 // doesn't bring every server back in the same second. A credential the
-// relay refuses (revoked, expired, unknown) stops it for good, with one
-// warning: retrying can't fix that, and only linking again brings a new
-// one (tunnel/relayTunnel.ts picks that up).
+// relay refuses (revoked, expired, unknown) gets one warning, then one try
+// an hour, and another at once whenever the link changes (tunnel/
+// relayTunnel.ts). Linking again is what brings a new credential, but a
+// refusal can also be legato.fm's own mistake (a restored database, a bad
+// deploy), and a server shouldn't need a restart to come back from that.
 
 export const TUNNEL_HEADER = "x-legato-tunnel";
 
@@ -48,6 +50,9 @@ const HEARTBEAT_MS = 30_000;
 // From starting to connect until the relay answers the credential. Covers
 // a connect that hangs as well as an answer that never comes.
 const AUTH_TIMEOUT_MS = 15_000;
+// After a refusal: about an hour, plus up to a quarter more by chance, so
+// every server refused by one incident doesn't come back in one burst.
+const REFUSED_RETRY_MS = 60 * 60_000;
 // When the socket holds more than HIGH_WATER bytes it hasn't sent yet, the
 // local response is paused until it's back under LOW_WATER. Without it, a
 // slow phone on the far side would have a whole FLAC queued in memory here.
@@ -76,6 +81,8 @@ export type TunnelClientOptions = {
   log?: (level: "info" | "warn", message: string) => void;
   backoff?: Backoff;
   heartbeatMs?: number;
+  /** The wait before asking again after a refusal. */
+  refusedRetryMs?: number;
   random?: () => number;
   now?: () => number;
 };
@@ -93,6 +100,9 @@ export class TunnelClient {
   // Whether this run of failed attempts has been logged yet. One line per
   // outage, not one per retry.
   private failing = false;
+  // Whether this run of refusals has been warned about. One warning until
+  // the credential is accepted again.
+  private refusedWarned = false;
   private alive = false;
   private frameWarned = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -125,6 +135,13 @@ export class TunnelClient {
   stop(): void {
     this.setState("stopped");
     this.teardown();
+  }
+
+  /** After a refusal, asks again now rather than at the next hourly try. */
+  retryRefused(): void {
+    if (this.current !== "refused") return;
+    this.teardown();
+    this.connect();
   }
 
   private now(): number {
@@ -192,13 +209,16 @@ export class TunnelClient {
 
   private connected(socket: WebSocket): void {
     this.connectedAt = this.now();
-    if (!this.everConnected) {
+    if (this.refusedWarned) {
+      this.log("info", "legato.fm: accepted this server's tunnel credential again; this server can be reached through legato.fm");
+    } else if (!this.everConnected) {
       this.log("info", `legato.fm: tunnel connected to ${this.options.url}; this server can be reached through legato.fm`);
     } else if (this.failing) {
       this.log("info", "legato.fm: tunnel connected again");
     }
     this.everConnected = true;
     this.failing = false;
+    this.refusedWarned = false;
     this.alive = true;
     if (this.beatTimer) clearInterval(this.beatTimer);
     this.beatTimer = setInterval(() => {
@@ -257,13 +277,22 @@ export class TunnelClient {
   }
 
   private refused(message: string): void {
-    this.log(
-      "warn",
-      `legato.fm refused this server's tunnel credential (${message}), so the server can't be reached through legato.fm, and it won't ` +
-        "try again. To turn remote access back on, link this server to your legato.fm account again: that brings a new credential.",
-    );
+    if (!this.refusedWarned) {
+      this.refusedWarned = true;
+      this.log(
+        "warn",
+        `legato.fm refused this server's tunnel credential (${message}), so this server can't be reached through legato.fm. ` +
+          "It will ask again every hour, in case legato.fm refused it by mistake. To turn remote access back on now, link this " +
+          "server to your legato.fm account again: a new link brings a new credential.",
+      );
+    }
     this.setState("refused");
     this.teardown();
+    const wait = (this.options.refusedRetryMs ?? REFUSED_RETRY_MS) * (1 + (this.options.random ?? Math.random)() / 4);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.connect();
+    }, wait);
   }
 
   // One request from the relay, replayed against this server. Never

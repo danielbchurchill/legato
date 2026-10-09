@@ -225,7 +225,7 @@ describe("TunnelClient", () => {
     expect(answer.body.toString()).toBe("ok");
   });
 
-  it("stops for good when legato.fm refuses the credential, with one warning that says what to do", async () => {
+  it("warns once when legato.fm refuses the credential, and asks again only on the long wait", async () => {
     const fake = relay(() => false);
     const warnings: string[] = [];
     const tunnel = client(fake.url, "http://127.0.0.1:9", { log: (level, message) => level === "warn" && warnings.push(message) });
@@ -234,7 +234,40 @@ describe("TunnelClient", () => {
     expect(tunnel.state).toBe("refused");
     expect(fake.opened).toBe(1);
     expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("It will ask again every hour");
     expect(warnings[0]).toContain("link this server to your legato.fm account again");
+  });
+
+  it("comes back by itself once legato.fm accepts the credential again, warning once in between", async () => {
+    // A relay restored from an old backup refuses a credential it minted
+    // since, until it's put right.
+    let accepting = false;
+    const fake = relay(() => accepting);
+    const lines: { level: string; message: string }[] = [];
+    const tunnel = client(fake.url, "http://127.0.0.1:9", {
+      refusedRetryMs: 60,
+      random: () => 0,
+      log: (level, message) => lines.push({ level, message }),
+    });
+    await waitFor(tunnel, "refused");
+    while (fake.opened < 3) await sleep(10);
+    expect(tunnel.state).toBe("refused");
+
+    accepting = true;
+    await waitFor(tunnel, "connected", 1_000);
+    expect(lines.filter((line) => line.level === "warn")).toHaveLength(1);
+    expect(lines.at(-1)!.message).toContain("accepted this server's tunnel credential again");
+  });
+
+  it("asks again at once when told to after a refusal", async () => {
+    let accepting = false;
+    const fake = relay(() => accepting);
+    const tunnel = client(fake.url, "http://127.0.0.1:9");
+    await waitFor(tunnel, "refused");
+    accepting = true;
+    tunnel.retryRefused();
+    await waitFor(tunnel, "connected", 1_000);
+    expect(fake.opened).toBe(2);
   });
 
   it("backs off between failed attempts, doubling up to the cap, and logs the outage once", async () => {

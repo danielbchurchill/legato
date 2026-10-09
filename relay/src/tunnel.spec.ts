@@ -110,7 +110,7 @@ describe("tunnel lifecycle", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("closes a tunnel whose credential is revoked, and the server stops for good with one warning", async () => {
+  it("closes a tunnel whose credential is revoked, and the server stops with one warning until its long wait is up", async () => {
     const { httpUrl, tunnelUrl } = await relay();
     const account = signIn(db);
     const { serverId, credential } = linkServer(db, account.userId);
@@ -119,7 +119,8 @@ describe("tunnel lifecycle", () => {
     db.prepare("DELETE FROM tunnel_credentials WHERE token = ?").run(credential);
     await waitForState(client, "refused");
 
-    // Several heartbeats and retry delays later, it hasn't come back.
+    // Several heartbeats and retry delays later, it hasn't come back: the
+    // next try after a refusal is an hour away.
     await sleep(HEARTBEAT_MS * 6);
     expect(client.state).toBe("refused");
     expect((await yourServers(httpUrl, account.token))[0]!.tunnel.connected).toBe(false);
@@ -129,7 +130,7 @@ describe("tunnel lifecycle", () => {
     expect(warnings[0]).toContain("link this server to your legato.fm account again");
   });
 
-  it("stops a server whose credential is refused at sign-in, without retrying", async () => {
+  it("stops a server whose credential is refused at sign-in, without retrying on the short backoff", async () => {
     const { tunnelUrl, opened } = await relay();
     const client = startHomeServer({ tunnelUrl, credential: "a-credential-legato-fm-never-minted", targetBaseUrl: fixture.url, log });
     homeServers.push(client);

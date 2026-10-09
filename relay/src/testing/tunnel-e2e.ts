@@ -268,13 +268,14 @@ step(
 );
 
 // 5. Revoke server-b's credential: the relay closes its tunnel at the next
-// heartbeat, server-b stops with one warning, and server-a carries on.
+// heartbeat, server-b stops with one warning (its next try is an hour
+// away), and server-a carries on.
 relayDb.prepare("DELETE FROM tunnel_credentials WHERE server_id = ?").run(servers[1]!.id);
 await until("server-b's tunnel closes", async () => (await tunnelOf(servers[1]!.id))?.connected === false, 45_000);
 await until("server-b says why it stopped", async () => logOf("server-b").includes("refused this server's tunnel credential"));
 const before = tunnelLines("server-b");
 await sleep(5_000);
-check(tunnelLines("server-b") === before, "server-b doesn't try again");
+check(tunnelLines("server-b") === before, "server-b doesn't try again on the short backoff");
 check((logOf("server-b").match(/refused this server's tunnel credential/g) ?? []).length === 1, "server-b warned once");
 check((await tunnelOf(servers[0]!.id))?.connected === true, "server-a is still connected");
 const gone = await fetch(`${RELAY}/relay/${servers[1]!.id}/api/v1/auth/status`, { headers: { cookie } });
