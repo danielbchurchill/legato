@@ -44,6 +44,13 @@ import type { TunnelRegistry } from "../tunnel-registry.js";
 // own policy is kept beside it, and can only narrow it. fetch(), <img> and
 // <audio> don't read either header, so clients are unaffected. Giving each
 // server an origin of its own would make the sandbox unnecessary.
+// The largest request body the relay carries to a home server. A body is
+// held whole in memory and goes down the tunnel as one base64 frame, so it
+// can't be unlimited. The biggest one any Legato client sends is a first
+// map settle (PUT /layout/settled), which the server itself caps at 4 MiB;
+// a playlist import stays under the server's 1 MiB default.
+export const REQUEST_BODY_LIMIT = 4 * 1024 * 1024;
+
 export function relayRoutes(registry: TunnelRegistry, db: Database) {
   return async function routes(app: FastifyInstance) {
     // On the raw response, so it holds for replies Fastify sends (a 401,
@@ -67,19 +74,16 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
     // object by Fastify's default parser and then dropped entirely by
     // the `instanceof Buffer` check below, forwarding an empty body to
     // the home server instead of the real one.
-    const rawBody = (
-      _req: unknown,
-      payload: NodeJS.ReadableStream,
-      done: (err: Error | null, body?: Buffer) => void,
-    ) => {
-      const chunks: Buffer[] = [];
-      payload.on("data", (chunk: Buffer) => chunks.push(chunk));
-      payload.on("end", () => done(null, Buffer.concat(chunks)));
-      payload.on("error", (err: Error) => done(err, undefined));
-    };
-    app.addContentTypeParser("*", rawBody);
-    app.addContentTypeParser("application/json", rawBody);
-    app.addContentTypeParser("text/plain", rawBody);
+    //
+    // parseAs "buffer" is what makes Fastify hold a body to bodyLimit and
+    // answer 413 past it; a parser that reads the stream itself is never
+    // held to any limit.
+    const rawBody = { parseAs: "buffer" as const, bodyLimit: REQUEST_BODY_LIMIT };
+    const passThrough = (_req: unknown, body: Buffer | string, done: (err: Error | null, body?: Buffer | string) => void) =>
+      done(null, body);
+    app.addContentTypeParser("*", rawBody, passThrough);
+    app.addContentTypeParser("application/json", rawBody, passThrough);
+    app.addContentTypeParser("text/plain", rawBody, passThrough);
 
     const forward = async (request: FastifyRequest<{ Params: { serverId: string } }>, reply: FastifyReply) => {
       const token = request.cookies[SESSION_COOKIE];

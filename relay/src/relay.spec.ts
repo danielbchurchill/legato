@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "./sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app.js";
+import { REQUEST_BODY_LIMIT } from "./routes/relay.js";
 import { openDb } from "./db.js";
 import { connectHomeServer, linkServer, listenApp, signIn } from "./testing/tunnel-harness.js";
 import { startFixtureServer, sleep, type FixtureServerHandle } from "./testing/fixture-http-server.js";
@@ -127,6 +128,44 @@ describe("relay HTTP forwarding", () => {
       contentType: "application/json",
       body: requestBody,
     });
+  });
+
+  it("carries a body up to REQUEST_BODY_LIMIT, and answers 413 past it without forwarding anything", async () => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const received: number[] = [];
+    const { serverId, cookieHeader } = await linkedAndConnected(tunnelUrl, (req, res) => {
+      let length = 0;
+      req.on("data", (chunk: Buffer) => (length += chunk.length));
+      req.on("end", () => {
+        received.push(length);
+        res.end(String(length));
+      });
+    });
+    const post = (body: BodyInit, contentType: string) =>
+      fetch(`${httpUrl}/relay/${serverId}/api/v1/layout/settled`, {
+        method: "PUT",
+        headers: { cookie: cookieHeader, "content-type": contentType },
+        body,
+        duplex: "half",
+      } as RequestInit);
+
+    const atLimit = await post(Buffer.alloc(REQUEST_BODY_LIMIT, "a"), "application/json");
+    expect(await atLimit.text()).toBe(String(REQUEST_BODY_LIMIT));
+
+    for (const contentType of ["application/json", "text/plain", "application/octet-stream"]) {
+      const over = await post(Buffer.alloc(REQUEST_BODY_LIMIT + 1, "a"), contentType);
+      expect(over.status).toBe(413);
+    }
+    // Without a Content-Length to refuse up front, it's cut off once past.
+    const streamed = new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < 5; i++) controller.enqueue(new Uint8Array(REQUEST_BODY_LIMIT / 4));
+        controller.close();
+      },
+    });
+    expect((await post(streamed, "application/octet-stream")).status).toBe(413);
+    expect(received).toEqual([REQUEST_BODY_LIMIT]);
   });
 
   it("streams a large chunked response incrementally, not buffered whole", async () => {
