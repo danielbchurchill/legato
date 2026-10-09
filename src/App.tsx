@@ -589,7 +589,7 @@ const connectElsewhere = () => openConnectScreen('unreachable')
 function useUnreachableView({ outage, name, everConnected, retrying, retry }: ServerStatus): UnreachableView | null {
   return useMemo(() => {
     if (!outage) return null
-    const now = Date.now()
+    const now = outage.since
     const reason = inferReason({ ...outage, path: SERVER_PATH }, now)
     const copy = describeOutage(reason, {
       path: SERVER_PATH,

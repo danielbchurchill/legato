@@ -258,6 +258,7 @@ describe('useServerReady when the server goes away', () => {
     expect(result.current?.ready).toBe(false)
     expect(result.current?.everConnected).toBe(true)
     expect(result.current?.outage).toEqual({
+      since: Date.now(),
       failure: { kind: 'refused' },
       lastSeenAt: lastAnswer,
       networkChangedAt: null,

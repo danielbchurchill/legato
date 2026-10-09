@@ -53,6 +53,9 @@ const REMEMBER_SEEN_EVERY_MS = 30_000
 /** What's known about a server that has stopped answering (#119), for
  * src/connect/unreachable.ts to work the likely reason out from. */
 export type Outage = {
+  /** When it became an outage, in ms. The words are worked out as of then,
+   * so they hold still for as long as it lasts. */
+  since: number
   /** How it has failed over the outage so far (unreachable.ts's
    * outageFailure), not just the last check. */
   failure: CheckFailure
@@ -154,6 +157,7 @@ function sameServerVersion(a: ServerVersion | null, b: ServerVersion): boolean {
 function sameOutage(a: Outage | null, b: Outage): boolean {
   return (
     a !== null &&
+    a.since === b.since &&
     a.failure.kind === b.failure.kind &&
     (a.failure.kind === 'bad-status' ? b.failure.kind === 'bad-status' && a.failure.status === b.failure.status : true) &&
     a.lastSeenAt === b.lastSeenAt &&
@@ -284,7 +288,7 @@ export function useServerReady(): ServerStatus {
       }
       if (!down) return
       if (manual) triedAt = now
-      const next: Outage = { failure: failedHow, lastSeenAt, networkChangedAt, deviceOnline: navigator.onLine, triedAt }
+      const next: Outage = { since: downSince, failure: failedHow, lastSeenAt, networkChangedAt, deviceOnline: navigator.onLine, triedAt }
       if (sameOutage(shown, next)) return
       shown = next
       setOutage(next)

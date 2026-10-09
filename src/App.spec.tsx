@@ -97,6 +97,7 @@ function json(status: number, body: unknown): Response {
 
 function asleep(overrides: Partial<Outage> = {}): Outage {
   return {
+    since: Date.now(),
     failure: { kind: 'no-answer' },
     lastSeenAt: Date.now() - 60_000,
     networkChangedAt: null,
