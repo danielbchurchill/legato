@@ -5,7 +5,7 @@ import { Button } from '../ui/Button'
 import type { OutageCopy } from './unreachable'
 
 /* The server-unreachable state (issue #119): what happened as the title,
- * the likely why under it, and one action, "Try again". There's no spinner:
+ * the likely why under it, and one action, "try again". There's no spinner:
  * the client keeps checking in the background and the footer says so, so
  * the state never has to pretend to be busy.
  *
@@ -19,7 +19,7 @@ import type { OutageCopy } from './unreachable'
  *     still waiting. */
 
 export type UnreachableView = OutageCopy & {
-  /** Says the client keeps trying, and when a "Try again" last failed. */
+  /** Says the client keeps trying, and when a "try again" last failed. */
   footer: string
   retrying: boolean
   onRetry: () => void
@@ -36,7 +36,7 @@ function Content({ view, heading: Heading }: { view: UnreachableView; heading: '
       </div>
       <div className="flex flex-wrap items-center justify-center gap-x-[var(--spacing-lg)] gap-y-[8px] pt-[6px]">
         <Button variant="primary" size="lg" onClick={view.onRetry} disabled={view.retrying}>
-          {view.retrying ? 'trying…' : 'Try again'}
+          {view.retrying ? 'trying…' : 'try again'}
         </Button>
         <Button onClick={view.onConnectElsewhere}>connect to a different server</Button>
       </div>

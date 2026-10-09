@@ -172,7 +172,7 @@ export function describeOutage(
 }
 
 /** The line under the action. The client keeps checking whatever happens,
- * which is why the state needs no spinner, and a "Try again" that found
+ * which is why the state needs no spinner, and a "try again" that found
  * nothing says it ran. */
 export function outageFooter({ everConnected, triedAt }: { everConnected: boolean; triedAt: number | null }): string {
   const tried = triedAt != null ? `Tried again at ${new Date(triedAt).toLocaleTimeString()}. ` : ''
