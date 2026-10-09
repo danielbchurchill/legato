@@ -17,6 +17,9 @@ const harness = vi.hoisted(() => {
     status: null as unknown as ServerStatus,
     listeners,
     railRenders: 0,
+    // Mounts of the workspace: a second one means the app was remounted,
+    // and the queue and the web player with it.
+    railMounts: 0,
     connectMounts: 0,
     set(patch: Partial<ServerStatus>) {
       harness.status = { ...harness.status, ...patch }
@@ -38,12 +41,18 @@ vi.mock('./hooks/useServerReady', () => ({
 
 vi.mock('./canvas/Canvas', () => ({ default: forwardRef(() => null) }))
 
-vi.mock('./shell/Rail', () => ({
-  Rail: () => {
-    harness.railRenders++
-    return null
-  },
-}))
+vi.mock('./shell/Rail', async () => {
+  const { useEffect: useMountEffect } = await import('react')
+  return {
+    Rail: () => {
+      harness.railRenders++
+      useMountEffect(() => {
+        harness.railMounts++
+      }, [])
+      return null
+    },
+  }
+})
 
 vi.mock('./search/SearchPalette', () => ({ SearchPalette: () => createElement('div', { 'data-testid': 'search' }) }))
 
@@ -123,6 +132,7 @@ describe('App across an outage', () => {
 
   beforeEach(() => {
     harness.railRenders = 0
+    harness.railMounts = 0
     harness.connectMounts = 0
     harness.status = {
       ready: true,
@@ -309,5 +319,29 @@ describe('App across an outage', () => {
     expect(harness.connectMounts).toBe(1)
     expect(container.querySelector<HTMLInputElement>('[aria-label="Server address"]')).toBe(input)
     expect(input.value).toBe('192.168.1.20')
+  })
+
+  // The coordinator's second review of #346: App switched between the bare
+  // app and the app inside the owner gate on outOfDate, so updating an
+  // out-of-date server, and the restart that takes, remounted the app and
+  // lost the queue, the current track and the web player.
+  it('keeps the app mounted when an out-of-date server is updated underneath it', async () => {
+    const outOfDate = { version: '0.3.0', gitSha: 'abc1234', schemaVersion: MIN_SERVER_SCHEMA_VERSION - 1, outOfDate: true, update: null }
+    harness.status = { ...harness.status, server: outOfDate }
+    await mount()
+    expect(harness.railMounts).toBe(1)
+
+    // The update's restart: an outage, then the new server.
+    await setStatus({ ready: false, outage: asleep() })
+    await setStatus({
+      ready: true,
+      outage: null,
+      server: { version: '0.4.0', gitSha: 'def5678', schemaVersion: MIN_SERVER_SCHEMA_VERSION, outOfDate: false, update: null },
+    })
+    expect(harness.railMounts).toBe(1)
+
+    // And back, should a check read it as out of date again.
+    await setStatus({ server: outOfDate })
+    expect(harness.railMounts).toBe(1)
   })
 })

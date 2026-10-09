@@ -670,8 +670,10 @@ export default function App() {
       <ToastProvider>
         {/* A server older than migration 0029 has no owner gate and no
          * /auth/status to ask, so it runs ungated exactly as before,
-         * with the notice saying to update it. */}
-        {server?.outOfDate ? app : <OwnerGated>{app}</OwnerGated>}
+         * with the notice saying to update it. The gate is there either
+         * way, so updating the server (and the restart that takes) doesn't
+         * remount the app and lose the queue. */}
+        <OwnerGated gated={!server?.outOfDate}>{app}</OwnerGated>
         <ServerUpdateNotice server={server} />
       </ToastProvider>
     )
@@ -710,13 +712,27 @@ export default function App() {
 }
 
 // Issue #112: nothing past this point renders until the server has an
-// owner and this client holds a session for them.
-function OwnerGated({ children }: { children: ReactNode }) {
+// owner and this client holds a session for them. Ungated, for a server too
+// old to have an owner, it renders the app as it is. The app sits at the
+// same place in the tree either way (#119): a server updated underneath a
+// running client flips `gated`, and that mustn't remount the app.
+function OwnerGated({ gated, children }: { gated: boolean; children: ReactNode }) {
   const { state, refresh, acceptSession } = useAuth()
   // The same store MainApp's useTheme() reads, not a second copy of the
   // preference, so the two can't disagree (#282).
   const { resolvedTheme } = useTheme()
   useLegatoRenewal(state.kind === 'signed-in')
+
+  // A server that has just gained its gate is asked again: what the old one
+  // said about sign-in (nothing, or a 404) no longer holds.
+  const wasGated = useRef(gated)
+  useEffect(() => {
+    if (gated && !wasGated.current) void refresh()
+    wasGated.current = gated
+  }, [gated, refresh])
+
+  const user = state.kind === 'signed-in' ? state.status.user : null
+  if (!gated || state.kind === 'signed-in') return <AccountContext.Provider value={user}>{children}</AccountContext.Provider>
 
   switch (state.kind) {
     case 'checking':
@@ -748,7 +764,5 @@ function OwnerGated({ children }: { children: ReactNode }) {
           </div>
         </>
       )
-    case 'signed-in':
-      return <AccountContext.Provider value={state.status.user}>{children}</AccountContext.Provider>
   }
 }
