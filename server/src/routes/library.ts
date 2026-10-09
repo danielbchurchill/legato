@@ -2,14 +2,14 @@ import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { resolveCoverForNode } from "../cover/extract.js";
 
-// The library view's two layouts (issue #126 — see DESIGN.md "Library
-// view"): a paginated, sortable, searchable read model over the same
-// albums/tracks the graph already draws. GET /nodes exists for the canvas
-// and returns the *whole* graph in one shot (fine for a force layout that
-// needs every node up front) — the library view instead has to stay smooth
-// scrolling through 30k albums, so it gets its own limit/offset routes
-// rather than asking the client to paginate a 30k-row array it already
-// downloaded whole.
+// The library view's layouts (issue #126 — see DESIGN.md "The library"): a
+// paginated, sortable, searchable read model over the same albums, artists
+// and tracks the graph already draws. GET /nodes exists for the canvas and
+// returns the graph in one shot, up to 5,000 nodes (fine for a force layout
+// that needs every node up front) — the library view instead has to stay
+// smooth scrolling through 30k albums, and has to see all of them, so it
+// gets its own limit/offset routes rather than asking the client to
+// paginate an array it already downloaded whole.
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
@@ -64,6 +64,13 @@ const TRACK_SORTS = {
 } as const;
 export type TrackSort = keyof typeof TRACK_SORTS;
 
+// Case-insensitive, as an artist list reads ("alt-J" among the A's, not
+// after "Zappa"). The albums and tracks sorts compare titles as stored.
+const ARTIST_SORTS = {
+  name: "n.title COLLATE NOCASE",
+} as const;
+export type ArtistSort = keyof typeof ARTIST_SORTS;
+
 type LibraryQuery = {
   q?: string;
   sort?: string;
@@ -95,6 +102,52 @@ export type TrackRow = {
   format: string | null;
   dateAdded: string;
 };
+
+export type ArtistRow = {
+  id: number;
+  name: string;
+  releases: number;
+};
+
+// The artists the library lists (#276): an artist with records of its own,
+// meaning the primary artist of at least one album. That's
+// entities/aggregate.ts's rule for an album's artist: each track goes to its
+// first performed_by credit, and a record to whoever most of its tracks went
+// to, ties to the lower id. The map clusters records by the same rule
+// (src/canvas/clusters.ts), so every artist listed here has records beside
+// it on the map. An artist who is only ever featured, or credited after
+// someone else, has no record of its own and is left out: they'd fill the
+// grid with names that lead nowhere.
+//
+// One definition, read twice: the Artists tab pages through it below, and
+// GET /stats counts it for the Library header, so the two can't disagree.
+// Both used to read the map's graph, which stops at 5,000 nodes (#302).
+const LIBRARY_ARTISTS = `
+  SELECT al.primary_artist_node_id AS id, COUNT(*) AS releases
+  FROM albums al
+  JOIN nodes a ON a.id = al.primary_artist_node_id
+  WHERE a.type = 'artist'
+  GROUP BY al.primary_artist_node_id`;
+
+export function countLibraryArtists(db: Database): number {
+  return (db.prepare(`SELECT COUNT(*) AS count FROM (${LIBRARY_ARTISTS})`).get() as { count: number }).count;
+}
+
+function listArtists(
+  db: Database,
+  { sort, dir, limit, offset }: { sort: ArtistSort; dir: "asc" | "desc"; limit: number; offset: number },
+): { items: ArtistRow[]; total: number } {
+  const items = db
+    .prepare(
+      `SELECT la.id AS id, n.title AS name, la.releases AS releases
+       FROM (${LIBRARY_ARTISTS}) la
+       JOIN nodes n ON n.id = la.id
+       ORDER BY ${orderClause(ARTIST_SORTS[sort], dir, "n.id")}
+       LIMIT ? OFFSET ?`,
+    )
+    .all(limit, offset) as ArtistRow[];
+  return { items, total: countLibraryArtists(db) };
+}
 
 function listAlbums(
   db: Database,
@@ -248,6 +301,18 @@ export function libraryRoutes(db: Database) {
       return listAlbums(db, {
         q: request.query.q?.trim() || null,
         sort: sort in ALBUM_SORTS ? sort : "title",
+        dir: request.query.dir === "desc" ? "desc" : "asc",
+        limit: clampLimit(request.query.limit),
+        offset: clampOffset(request.query.offset),
+      });
+    });
+
+    // No search: since v2 the library has no filter, and an artist is found
+    // through the search palette like anything else.
+    app.get<{ Querystring: LibraryQuery }>("/library/artists", async (request) => {
+      const sort = (request.query.sort ?? "name") as ArtistSort;
+      return listArtists(db, {
+        sort: sort in ARTIST_SORTS ? sort : "name",
         dir: request.query.dir === "desc" ? "desc" : "asc",
         limit: clampLimit(request.query.limit),
         offset: clampOffset(request.query.offset),
