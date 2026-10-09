@@ -39,7 +39,7 @@
     <article class="legal-body">
       <p class="eyebrow">legal</p>
       <h1>Privacy policy</h1>
-      <p class="legal-updated">Last updated October 8, 2026</p>
+      <p class="legal-updated">Last updated October 9, 2026</p>
 
       <p>
         Legato is a music player you run on your own hardware. Most of it never talks to us at
@@ -95,6 +95,15 @@
         short-lived sign-in token you linked with, or, when you unlink, your account ID.
       </p>
       <p>
+        A linked server also keeps one connection open to legato.fm, so your devices can reach
+        it from outside your home network (see remote access, below). It signs in to that
+        connection with the credential legato.fm gave it when you linked it, and legato.fm sees
+        its IP address and notes when it was last connected. If the connection drops, the server
+        reconnects on its own, waiting a little longer each time. Nothing travels over it except
+        the requests your devices send your server through legato.fm and your server's answers.
+        Unlinking closes the connection and deletes the credential from your server.
+      </p>
+      <p>
         Until a server has an owner, it has a setup page with a code you can scan to claim it
         for your legato.fm account. While that page is open in a browser, and only then, the
         server asks legato.fm every few seconds whether its code has been claimed. Each request
@@ -141,7 +150,7 @@
         <li>your display name and profile picture link;</li>
         <li>when you created the account and when you last signed in;</li>
         <li>your active sign-in sessions, so you stay signed in on your devices;</li>
-        <li>for each Legato server you link to your account, its ID and public key, the credential it uses to connect, and the short-lived code you used to link or claim it.</li>
+        <li>for each Legato server you link to your account, its ID and public key, the credential it uses to connect, when it was last connected, and the short-lived code you used to link or claim it.</li>
       </ul>
       <p>
         From Google we request only <span class="mono">openid</span>, <span class="mono">email</span>
