@@ -37,6 +37,10 @@ export function useScanStatus(): ScanStatus & { retry: () => void; progress: Sca
         const latest = jobs[0]
         noteLatestScan(latest ?? null)
         setFirstScan(!jobs.some((job) => job.status === 'done'))
+        // Progress is only ever for a run under way. A run the server's
+        // restart stopped (it's paused now), or one that ended while its
+        // events had nowhere to go (#119), leaves none.
+        if (latest?.status !== 'running') setProgress(null)
         if (!latest) {
           setStatus({ scanning: false, error: null })
           return
