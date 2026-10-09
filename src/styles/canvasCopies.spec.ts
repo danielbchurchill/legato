@@ -16,6 +16,7 @@ import tauriConf from '../../src-tauri/tauri.conf.json?raw'
 import serverAuth from '../../server/src/routes/auth.ts?raw'
 import relayAuth from '../../relay/src/routes/auth.ts?raw'
 import relayClaimPage from '../../relay/src/routes/claim-page.ts?raw'
+import relayLinkPage from '../../relay/src/routes/link-page.ts?raw'
 import relaySignIn from '../../src-tauri/src/relay_sign_in.rs?raw'
 import designMd from '../../DESIGN.md?raw'
 
@@ -99,16 +100,19 @@ describe("ink's canvas, where only one colour fits", () => {
   })
 })
 
-// #237's claim page on the relay follows the system theme, so it carries
-// both palettes as custom properties: ink in its first :root, paper in the
-// one under prefers-color-scheme: light. Each must be tokens.css's value for
-// the same role.
-describe("the relay's claim page", () => {
+// #237's claim page and #325's link page on the relay follow the system
+// theme, so each carries both palettes as custom properties: ink in its
+// first :root, paper in the one under prefers-color-scheme: light. Each must
+// be tokens.css's value for the same role.
+describe.each([
+  ['claim-page.ts', relayClaimPage],
+  ['link-page.ts', relayLinkPage],
+])("the relay's %s", (_file, page) => {
   function properties(css: string): [string, string][] {
     return [...css.matchAll(/--([\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()])
   }
-  const ink = relayClaimPage.match(/:root \{([^}]*)\}/)?.[1] ?? ''
-  const paper = relayClaimPage.match(/prefers-color-scheme: light\) \{\s*:root \{([^}]*)\}/)?.[1] ?? ''
+  const ink = page.match(/:root \{([^}]*)\}/)?.[1] ?? ''
+  const paper = page.match(/prefers-color-scheme: light\) \{\s*:root \{([^}]*)\}/)?.[1] ?? ''
 
   it.each([
     ['dark', ink],

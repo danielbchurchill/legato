@@ -35,6 +35,7 @@ import { clientAddress, TokenLimiter } from "../rate-limit.js";
 import { parseSigningKeys, SERVER_ID_PATTERN, signServerToken, type SigningKeys } from "../signing-keys.js";
 import type { TunnelRegistry } from "../tunnel-registry.js";
 import { claimPageRoutes, claimReturnPath } from "./claim-page.js";
+import { linkPageRoutes, linkReturnPath } from "./link-page.js";
 import { linkedServerRoutes } from "./linked-servers.js";
 import { pairRoutes } from "./pair.js";
 
@@ -231,9 +232,16 @@ const PROVIDERS: Record<Provider, ProviderFlow> = {
 // --- routes ---
 
 const STATE_COOKIE = "relay_oauth_state";
-// A browser sign-in started from the claim page (issue #237) ends back on
-// it rather than on "you can close this window".
+// A browser sign-in started from the claim page (issue #237) or the link
+// page (issue #325) ends back on it rather than on "you can close this
+// window".
 const RETURN_COOKIE = "relay_return_to";
+
+// Each page checks and rebuilds its own path, so this only ever answers one
+// of those two pages on this service.
+function returnPath(candidate: unknown): string | null {
+  return claimReturnPath(candidate) ?? linkReturnPath(candidate);
+}
 
 // Every cookie this relay sets or clears shares these attributes. Secure
 // is on whenever the relay is served over https, as it is in production
@@ -326,6 +334,8 @@ export interface AuthRoutesOptions {
   // never passes it.
   exchange?: Partial<Record<Provider, (code: string) => Promise<OAuthProfile>>>;
   tokenLimiter?: TokenLimiter;
+  // POST /link/redeem's own brake (routes/link-page.ts, issue #325).
+  linkLimiter?: TokenLimiter;
   // Token signing keys (issue #114). Undefined reads RELAY_SIGNING_KEYS;
   // null is "signing off", which is what tests of the unconfigured path pass.
   signingKeys?: SigningKeys | null;
@@ -369,6 +379,14 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
         signingAvailable: Boolean(signingKeys && config.callbackBaseUrl),
       }),
     );
+    app.register(
+      linkPageRoutes(db, {
+        providers: { google: isGoogleConfigured(config), github: isGithubConfigured(config) },
+        signingKeys,
+        issuer: config.callbackBaseUrl,
+        limiter: options.linkLimiter,
+      }),
+    );
     for (const url of CORS_ROUTES) {
       app.options(url, async (_request, reply) => reply.code(204).send());
     }
@@ -390,7 +408,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
         const state = generateState();
         reply.setCookie(STATE_COOKIE, state, { ...cookie, maxAge: 600 });
         if (start.kind === "native") createNativeRequest(db, state, provider, start.params);
-        const returnTo = start.kind === "browser" ? claimReturnPath(request.query.return_to) : null;
+        const returnTo = start.kind === "browser" ? returnPath(request.query.return_to) : null;
         if (returnTo) reply.setCookie(RETURN_COOKIE, returnTo, { ...cookie, maxAge: 600 });
         return reply.redirect(flow.authorizeUrl(config, state));
       });
@@ -437,7 +455,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
           const user = upsertUser(db, provider, profile);
           const { token, expiresAt } = createSession(db, user.id);
           reply.setCookie(SESSION_COOKIE, token, { ...cookie, expires: expiresAt });
-          const returnTo = claimReturnPath(request.cookies[RETURN_COOKIE]);
+          const returnTo = returnPath(request.cookies[RETURN_COOKIE]);
           if (returnTo) {
             reply.clearCookie(RETURN_COOKIE, cookie);
             return reply.redirect(returnTo);

@@ -95,8 +95,9 @@ function b64(value: unknown): string {
 // tunnel marks a `link` token whose link, once the server reports it, also
 // mints the server's tunnel credential (linked-servers.ts). A claim's token
 // carries it (issue #237, routes/pair.ts), and so does every link token a
-// client asks for (issue #325, routes/auth.ts). Only this service reads it;
-// home servers ignore claims they don't know.
+// client asks for (issue #325: routes/auth.ts, and routes/link-page.ts for
+// the web client). Only this service reads it; home servers ignore claims
+// they don't know.
 export function signServerToken(
   keys: SigningKeys,
   input: { issuer: string; user: RelayUserRow; serverId: string; scope: ServerTokenScope; tunnel?: boolean; nowSeconds?: number },
