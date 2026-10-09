@@ -3,6 +3,8 @@ import {
   CAPSULE_BORDER,
   CAPSULE_DIVIDER_WIDTH,
   CAPSULE_GAP,
+  CAPSULE_LIBRARY_LABEL_WIDTH,
+  CAPSULE_MAP_LABEL_WIDTH,
   CAPSULE_PADDING_LEFT,
   CAPSULE_PADDING_RIGHT,
   CAPSULE_PLACEHOLDER_WIDTH,
@@ -10,19 +12,31 @@ import {
   CAPSULE_SEARCH_ICON_SIZE,
   CAPSULE_SEARCH_PADDING_RIGHT,
   CAPSULE_SEARCH_WORD_WIDTH,
-  CAPSULE_SHORTCUT_WIDTH,
-  CAPSULE_SWITCH_ICONS_WIDTH,
-  CAPSULE_SWITCH_WIDTH,
+  CAPSULE_SHORTCUT_TEXT_WIDTH,
 } from './capsuleGeometry'
 import {
-  IDLE_BUTTON_ICON_SIZE,
-  IDLE_BUTTON_WIDTH,
+  BUTTON_ICON_GAP,
+  BUTTON_ICON_SIZE,
+  BUTTON_MD_HEIGHT,
+  BUTTON_PADDING_LEFT,
+  BUTTON_PADDING_RIGHT,
+  KBD_BORDER,
+  KBD_PADDING,
+  TABS_ICON_GAP,
+  TABS_LG_ICON_SIZE,
+  TABS_LG_PADDING,
+  TABS_LG_SQUARE,
+  TABS_SEGMENT_GAP,
+  TABS_WELL_PADDING,
+} from './controlGeometry'
+import {
+  IDLE_BUTTON_LABEL_WIDTH,
   IDLE_GAP,
   IDLE_HEIGHT,
   IDLE_PADDING,
   IDLE_PADDING_TEXT,
   IDLE_SENTENCE_WIDTH,
-  IDLE_SHORTCUT_WIDTH,
+  IDLE_SHORTCUT_TEXT_WIDTH,
   PLAYER_BAR_GAP,
   PLAYER_BAR_MIN_WIDTH,
   PLAYER_BORDER,
@@ -80,6 +94,14 @@ const LEFT_OCCUPANCY_OPEN = LEFT_OCCUPANCY_CLOSED + PANEL_GAP + LEFT_PANEL_WIDTH
 /* Right occupancy: the panel and its inset plus a gap, or nothing. */
 const RIGHT_OCCUPANCY_OPEN = RIGHT_PANEL_WIDTH + INSET + PANEL_GAP // 380
 
+/* The capsule's and the idle pill's text widths are Chromium's
+ * (capsuleGeometry.ts, playerGeometry.ts). Another engine, or a fallback
+ * font before Rubik loads, can draw a label a few px wider, so a set of
+ * parts that shows any text keeps this much to spare. Both pills also clip
+ * to their own width, so text wider still is cut off at the edge rather than
+ * spilling out (#308). */
+const TEXT_SLACK = 3
+
 /* A row of parts with a gap between each. A width of 0 is a part that isn't
  * shown, so it takes no gap either. */
 function sumWithGaps(widths: number[], gap: number): number {
@@ -104,6 +126,11 @@ function pickStage<Parts>(stages: Stage<Parts>[], width: number): Parts {
 /* cx, unless a box that wide centred there would cross the window's inset. */
 function clampCentre(cx: number, boxWidth: number, width: number): number {
   return Math.min(Math.max(cx, INSET + boxWidth / 2), width - INSET - boxWidth / 2)
+}
+
+/* A keycap: Kbd's border and padding either side of the key's name. */
+function keycapWidth(textWidth: number): number {
+  return KBD_BORDER + KBD_PADDING + textWidth + KBD_PADDING + KBD_BORDER
 }
 
 /* What the player shows. A dropped title stays for screen readers; the rest
@@ -184,9 +211,9 @@ export type IdleParts = {
 /* The idle pill takes the bar's width as its limit and gives way in its own
  * order (DESIGN.md, Shell). The narrowest bar each set fits:
  *
- *   325  everything
- *   269  no space keycap: it says what the button does
- *   153  no "Nothing playing": the button alone says it
+ *   328  everything
+ *   272  no space keycap: it says what the button does
+ *   156  no "Nothing playing": the button alone says it
  *    52  the button's icon alone, in a round pill
  *
  * The last is under the bar's 134px floor, so the pill always fits. */
@@ -201,19 +228,20 @@ const IDLE_STAGES = stagesOf<IdleParts>(
 )
 
 /* The width a set of idle parts needs: the most the pill draws, since it
- * hugs its content and the text widths are rounded up. Alone, the button's
- * icon sits in a circle as wide as the pill is tall. */
+ * hugs its content and the text widths are rounded up, plus the slack for
+ * text. Alone, the button's icon sits in a circle as wide as the pill is
+ * tall. */
 export function idleContentWidth(parts: IdleParts): number {
+  const button = parts.buttonLabel
+    ? BUTTON_PADDING_LEFT + sumWithGaps([BUTTON_ICON_SIZE, IDLE_BUTTON_LABEL_WIDTH], BUTTON_ICON_GAP) + BUTTON_PADDING_RIGHT
+    : BUTTON_MD_HEIGHT
   const content = sumWithGaps(
-    [
-      parts.sentence ? IDLE_SENTENCE_WIDTH : 0,
-      parts.buttonLabel ? IDLE_BUTTON_WIDTH : IDLE_BUTTON_ICON_SIZE,
-      parts.shortcut ? IDLE_SHORTCUT_WIDTH : 0,
-    ],
+    [parts.sentence ? IDLE_SENTENCE_WIDTH : 0, button, parts.shortcut ? keycapWidth(IDLE_SHORTCUT_TEXT_WIDTH) : 0],
     IDLE_GAP,
   )
   const paddingLeft = parts.sentence ? IDLE_PADDING_TEXT : IDLE_PADDING
-  return Math.max(IDLE_HEIGHT, PLAYER_BORDER + paddingLeft + content + IDLE_PADDING + PLAYER_BORDER)
+  const slack = parts.sentence || parts.buttonLabel || parts.shortcut ? TEXT_SLACK : 0
+  return Math.max(IDLE_HEIGHT, PLAYER_BORDER + paddingLeft + content + IDLE_PADDING + PLAYER_BORDER + slack)
 }
 
 export function idleParts(playerWidth: number): IdleParts {
@@ -235,10 +263,10 @@ export type CapsuleParts = {
 /* The capsule gives way the same way (#308), at the capsule width where each
  * set stops fitting, widest first:
  *
- *   507  everything
- *   360  the placeholder shortens to "Search"
- *   299  no keycap; ⌘K and / still open search
- *   243  no "Search": the magnifier alone
+ *   511  everything
+ *   364  the placeholder shortens to "Search"
+ *   303  no keycap; ⌘K and / still open search
+ *   247  no "Search": the magnifier alone
  *   135  the switch's icons alone, its labels in tooltips and for screen readers
  *
  * It doesn't get narrower than the last. The words go before the switch's
@@ -255,14 +283,21 @@ const CAPSULE_STAGES = stagesOf<CapsuleParts>(
   capsuleContentWidth,
 )
 
-/* The width a set of capsule parts needs, from capsuleGeometry.ts. */
+/* The width a set of capsule parts needs, from capsuleGeometry.ts and the
+ * switch's and keycap's sizes in controlGeometry.ts, plus the slack for
+ * text. */
 export function capsuleContentWidth(parts: CapsuleParts): number {
+  const segment = (labelWidth: number) => TABS_LG_PADDING + sumWithGaps([TABS_LG_ICON_SIZE, labelWidth], TABS_ICON_GAP) + TABS_LG_PADDING
+  const segments = parts.switchLabels
+    ? [segment(CAPSULE_MAP_LABEL_WIDTH), segment(CAPSULE_LIBRARY_LABEL_WIDTH)]
+    : [TABS_LG_SQUARE, TABS_LG_SQUARE]
+  const switchWidth = TABS_WELL_PADDING + sumWithGaps(segments, TABS_SEGMENT_GAP) + TABS_WELL_PADDING
   const label = parts.searchLabel === 'full' ? CAPSULE_PLACEHOLDER_WIDTH : parts.searchLabel === 'short' ? CAPSULE_SEARCH_WORD_WIDTH : 0
-  const shortcut = parts.searchShortcut ? CAPSULE_SHORTCUT_WIDTH : 0
+  const shortcut = parts.searchShortcut ? keycapWidth(CAPSULE_SHORTCUT_TEXT_WIDTH) : 0
   const search = sumWithGaps([CAPSULE_SEARCH_ICON_SIZE, label, shortcut], CAPSULE_SEARCH_GAP) + CAPSULE_SEARCH_PADDING_RIGHT
-  const switchWidth = parts.switchLabels ? CAPSULE_SWITCH_WIDTH : CAPSULE_SWITCH_ICONS_WIDTH
   const content = sumWithGaps([switchWidth, CAPSULE_DIVIDER_WIDTH, search], CAPSULE_GAP)
-  return CAPSULE_BORDER + CAPSULE_PADDING_LEFT + content + CAPSULE_PADDING_RIGHT + CAPSULE_BORDER
+  const slack = parts.switchLabels || parts.searchLabel != null || parts.searchShortcut ? TEXT_SLACK : 0
+  return CAPSULE_BORDER + CAPSULE_PADDING_LEFT + content + CAPSULE_PADDING_RIGHT + CAPSULE_BORDER + slack
 }
 
 export function capsuleParts(capsuleWidth: number): CapsuleParts {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Capsule } from './Capsule'
 import { ShellLayoutContext, computeShellLayout } from './layout'
 import * as geometry from './capsuleGeometry'
+import * as controls from './controlGeometry'
 
 const roots: Root[] = []
 
@@ -45,10 +46,11 @@ function renderCapsule(windowWidth: number) {
       ),
     )
   })
-  const capsule = container.querySelector<HTMLElement>('[role="tablist"]')!.parentElement!
+  const tablist = container.querySelector<HTMLElement>('[role="tablist"]')!
+  const capsule = tablist.parentElement!
   const search = container.querySelector<HTMLElement>('[aria-label="Search artists, albums, tracks"]')!
-  const tabs = [...container.querySelectorAll('[role="tab"]')]
-  return { layout, capsule, search, tabs }
+  const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')]
+  return { layout, capsule, tablist, search, tabs }
 }
 
 // #308: layout.ts picks what the capsule shows by adding up
@@ -67,6 +69,25 @@ describe('Capsule geometry', () => {
     expect(search.style.gap).toBe(px(geometry.CAPSULE_SEARCH_GAP))
     expect(search.style.paddingRight).toBe(px(geometry.CAPSULE_SEARCH_PADDING_RIGHT))
     expect((search.firstElementChild as HTMLElement).style.width).toBe(px(geometry.CAPSULE_SEARCH_ICON_SIZE))
+  })
+
+  // The switch and the keycap are Tabs and Kbd, whose sizes are Tailwind classes
+  // there. controlGeometry.ts keeps a second copy for layout.ts, so check one
+  // against the other.
+  it("draws the switch and the keycap at controlGeometry.ts's sizes", () => {
+    const wide = renderCapsule(1440)
+    expect(wide.tablist.classList).toContain(`p-[${controls.TABS_WELL_PADDING}px]`)
+    expect(wide.tablist.classList).toContain(`gap-[${controls.TABS_SEGMENT_GAP}px]`)
+    for (const tab of wide.tabs) {
+      expect(tab.classList).toContain(`px-[${controls.TABS_LG_PADDING}px]`)
+      expect(tab.classList).toContain(`gap-[${controls.TABS_ICON_GAP}px]`)
+      expect(tab.querySelector<HTMLElement>('[aria-hidden="true"]')!.style.width).toBe(px(controls.TABS_LG_ICON_SIZE))
+    }
+    const kbd = wide.search.querySelector('kbd')!
+    expect(kbd.classList).toContain(controls.KBD_BORDER === 1 ? 'border' : `border-[${controls.KBD_BORDER}px]`)
+    expect(kbd.classList).toContain(`px-[${controls.KBD_PADDING}px]`)
+
+    for (const tab of renderCapsule(900).tabs) expect(tab.classList).toContain(`size-[${controls.TABS_LG_SQUARE}px]`)
   })
 })
 

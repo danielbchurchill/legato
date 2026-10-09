@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IdlePlayer, Player } from './Player'
 import { ShellLayoutContext, computeShellLayout, type ShellLayout } from './layout'
 import * as geometry from './playerGeometry'
+import * as controls from './controlGeometry'
 import type { PlaybackProblem } from '../playback/playbackError'
 
 const roots: Root[] = []
@@ -210,6 +211,26 @@ describe('IdlePlayer as the bar narrows', () => {
     expect(pill.style.gap).toBe(px(geometry.IDLE_GAP))
     expect(pill.style.paddingLeft).toBe(px(geometry.IDLE_PADDING_TEXT))
     expect(pill.style.paddingRight).toBe(px(geometry.IDLE_PADDING))
+  })
+
+  // The button and the keycap are Button and Kbd, whose sizes are Tailwind
+  // classes there. controlGeometry.ts keeps a second copy for layout.ts, so
+  // check one against the other.
+  it("draws the button and the keycap at controlGeometry.ts's sizes", () => {
+    const { pill, button } = renderIdle(1440)
+    expect(button.classList).toContain(`h-[${controls.BUTTON_MD_HEIGHT}px]`)
+    expect(button.classList).toContain(`pl-[${controls.BUTTON_PADDING_LEFT}px]`)
+    expect(button.classList).toContain(`pr-[${controls.BUTTON_PADDING_RIGHT}px]`)
+    expect(button.classList).toContain(`gap-[${controls.BUTTON_ICON_GAP}px]`)
+    expect(button.querySelector<HTMLElement>('[aria-hidden="true"]')!.style.width).toBe(px(controls.BUTTON_ICON_SIZE))
+    const kbd = pill.querySelector('kbd')!
+    expect(kbd.classList).toContain(controls.KBD_BORDER === 1 ? 'border' : `border-[${controls.KBD_BORDER}px]`)
+    expect(kbd.classList).toContain(`px-[${controls.KBD_PADDING}px]`)
+
+    // Alone, the icon's button is a circle as wide as it is tall.
+    const iconAlone = renderIdle(900).button
+    expect(iconAlone.classList).toContain(`h-[${controls.BUTTON_MD_HEIGHT}px]`)
+    expect(iconAlone.classList).toContain('aspect-square')
   })
 
   it('shows everything in a wide bar', () => {

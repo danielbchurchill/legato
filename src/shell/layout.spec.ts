@@ -168,15 +168,15 @@ describe('the capsule as it narrows', () => {
   // With both panels open the capsule is the window less 824px, up to 520.
   it.each([
     [1440, 520, full],
-    [1331, 507, full],
-    [1330, 506, short],
-    [1184, 360, short],
-    [1183, 359, noShortcut],
-    [1123, 299, noShortcut],
-    [1122, 298, magnifier],
+    [1335, 511, full],
+    [1334, 510, short],
+    [1188, 364, short],
+    [1187, 363, noShortcut],
+    [1127, 303, noShortcut],
+    [1126, 302, magnifier],
     [1100, 276, magnifier],
-    [1067, 243, magnifier],
-    [1066, 242, icons],
+    [1071, 247, magnifier],
+    [1070, 246, icons],
     [959, 135, icons],
     [900, 135, icons],
   ])('a %ipx window with both panels open has a %ipx capsule', (windowWidth, capsule, parts) => {
@@ -191,8 +191,15 @@ describe('the capsule as it narrows', () => {
     }
   })
 
+  it("adds the labelled switch up from Tabs' sizes, with room to spare for its text", () => {
+    // Each segment is 14px either side of an 18px icon, 6px from its label ("map" 28, "library" 41), in the 2px well.
+    const labelledSwitch = 2 + (14 + 18 + 6 + 28 + 14) + 2 + (14 + 18 + 6 + 41 + 14) + 2
+    expect(capsuleContentWidth(magnifier)).toBe(1 + 6 + labelledSwitch + 10 + 1 + 10 + (18 + 10) + 8 + 1 + 3)
+  })
+
   it('stops narrowing at its icons, in the window, however narrow the window', () => {
     // Two 32px segments in the switch's well, the divider, the magnifier, and the padding, gaps and border around them.
+    // No text, so no slack for it.
     expect(CAPSULE_MIN_WIDTH).toBe(1 + 6 + (2 + 32 + 2 + 32 + 2) + 10 + 1 + 10 + (18 + 10) + 8 + 1)
     for (const panels of PANELS) {
       for (let width = 320; width <= 3840; width += 2) {
@@ -228,13 +235,13 @@ describe('the idle player as the bar narrows', () => {
 
   it.each([
     [1440, 616, full],
-    [1149, 325, full],
-    [1148, 324, noShortcut],
+    [1152, 328, full],
+    [1151, 327, noShortcut],
     [1100, 276, noShortcut],
-    [1093, 269, noShortcut],
-    [1092, 268, buttonAlone],
-    [977, 153, buttonAlone],
-    [976, 152, iconAlone],
+    [1096, 272, noShortcut],
+    [1095, 271, buttonAlone],
+    [980, 156, buttonAlone],
+    [979, 155, iconAlone],
     [900, 134, iconAlone],
   ])('a %ipx window with both panels open gives it a %ipx bar', (windowWidth, bar, parts) => {
     const layout = computeShellLayout(windowWidth, 900, { leftOpen: true, rightOpen: true })
@@ -246,6 +253,13 @@ describe('the idle player as the bar narrows', () => {
     for (let width = PLAYER_MIN_WIDTH; width <= 720; width++) {
       expect(idleContentWidth(idleParts(width)), `bar ${width}`).toBeLessThanOrEqual(width)
     }
+  })
+
+  it("adds the button up from Button's sizes, with room to spare for its text", () => {
+    // 10px, the 16px icon, 6px, "Shuffle library" (89) and 14px, inside the pill's 8px padding and border.
+    expect(idleContentWidth(buttonAlone)).toBe(1 + 8 + (10 + 16 + 6 + 89 + 14) + 8 + 1 + 3)
+    // The space keycap: Kbd's border and 5px either side of "space" (32).
+    expect(idleContentWidth(full) - idleContentWidth(noShortcut)).toBe(12 + (1 + 5 + 32 + 5 + 1))
   })
 
   it("stays inside the bar's box, so in the window, however narrow the window", () => {
@@ -278,3 +292,4 @@ describe('the idle player as the bar narrows', () => {
     }
   })
 })
+
