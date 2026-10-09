@@ -19,19 +19,32 @@ export function useSettings() {
   // Strictly increasing per-call sequence number. Lets a call recognize,
   // once its own request resolves, whether it's still the most recent one.
   const requestIdRef = useRef(0)
+  // Whether a load has ever come back.
+  const everLoadedRef = useRef(false)
 
   // Loaded once, and again after every outage (#119), when another device
   // may have changed them. A change made here since the load began wins
-  // over what the load brings back.
+  // over what the load brings back. The first load always counts as
+  // loaded, though: the stage waits for it (App.tsx), and a click on the
+  // map/library switch before a slow first load came back would otherwise
+  // leave it blank. What it brought fills in under that change.
   const reconnects = useReconnectEpoch()
   useEffect(() => {
     const requestId = requestIdRef.current
     fetch(`${API}/settings`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`settings returned ${r.status}`))))
       .then((s: Settings) => {
-        if (requestIdRef.current !== requestId) return
-        confirmedSettingsRef.current = s
-        setSettings(s)
+        const first = !everLoadedRef.current
+        everLoadedRef.current = true
+        if (requestIdRef.current === requestId) {
+          confirmedSettingsRef.current = s
+          setSettings(s)
+        } else if (first) {
+          // A change made before it came back may have been confirmed
+          // already, and is newer than this.
+          confirmedSettingsRef.current = { ...s, ...confirmedSettingsRef.current }
+          setSettings((current) => ({ ...s, ...current }))
+        }
         setLoaded(true)
       })
       .catch(() => setLoaded(true))
