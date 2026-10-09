@@ -90,14 +90,21 @@ export class LegatoIdentity {
     this.log = options.log ?? (() => {});
     // Before anything can read the id, so it's never seen changing. Once in
     // the server's life (serverKey.ts); index.ts builds this at startup, so
-    // the line lands in the startup log.
+    // the line lands in the startup log. It's only news if legato.fm could
+    // have known the old id: a link, or the key fetch every link starts
+    // with, means it signed a token for it. Otherwise the line says nothing
+    // anyone can act on, and on a brand-new server the "was" id is the one
+    // 0032 seeded under a second before (issue #329).
     const moved = ensureServerKey(db);
     if (moved) {
-      this.log(
-        "warn",
-        `legato.fm: this server's id is now ${moved.to} (was ${moved.from}), made from its new identity key.` +
-          (anyLinkedAccount(db) ? " Link its legato.fm account again: legato.fm only opens servers that reported their link." : ""),
-      );
+      const linked = anyLinkedAccount(db);
+      if (linked || this.fetchedAtMs() !== null) {
+        this.log(
+          "warn",
+          `legato.fm: this server's id is now ${moved.to} (was ${moved.from}), made from its new identity key.` +
+            (linked ? " Link its legato.fm account again: legato.fm only opens servers that reported their link." : ""),
+        );
+      }
     }
   }
 
