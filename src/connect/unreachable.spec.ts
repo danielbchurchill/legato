@@ -148,6 +148,8 @@ describe('describeOutage', () => {
 
   it("tells the desktop app's own server stopping apart from it not having started yet", () => {
     expect(describeOutage('stopped', { ...ctx, path: 'embedded' }).why).toBe("Legato's server on this computer stopped.")
+    // Pausing serving from the tray stops it too, and the tray starts it again.
+    expect(describeOutage('stopped', { ...ctx, path: 'embedded' }).hint).toContain("resume it from Legato's icon")
     expect(describeOutage('stopped', { ...ctx, path: 'embedded', everConnected: false }).why).toBe(
       "Legato's server on this computer hasn't started.",
     )

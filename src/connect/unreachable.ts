@@ -139,8 +139,14 @@ export function describeOutage(
           }
     case 'stopped':
       if (ctx.path === 'embedded') {
+        // The tray's toggle (src-tauri/src/tray.rs) starts a fresh server,
+        // whether serving was paused there or the server fell over.
         return ctx.everConnected
-          ? { title, why: "Legato's server on this computer stopped.", hint: 'Quit and reopen Legato to start it again.' }
+          ? {
+              title,
+              why: "Legato's server on this computer stopped.",
+              hint: "If you paused serving, resume it from Legato's icon in the menu bar or system tray. Otherwise, quit and reopen Legato.",
+            }
           : {
               title,
               why: "Legato's server on this computer hasn't started.",
