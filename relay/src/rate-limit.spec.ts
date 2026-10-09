@@ -8,11 +8,13 @@ import {
   ExchangeLimiter,
   FREE_CODES,
   MAX_ADDRESSES,
+  TokenLimiter,
 } from "./rate-limit.js";
 
-// Issue #324: the brake on asking about pairing codes at POST /pair/exchange.
-// Every code asked about here is one the relay has no claim of for the
-// server asking, as the route would find it.
+// Issue #324: the brake on asking about pairing codes at POST /pair/exchange,
+// and the one on failed native sign-ins at POST /auth/token. Every code
+// asked about here is one the relay has no claim of for the server asking,
+// as the route would find it.
 
 const ADDRESS = "203.0.113.9";
 
@@ -245,6 +247,73 @@ describe("ExchangeLimiter", () => {
     try {
       setSystemTime(new Date(Date.now() + 24 * 60 * 60_000));
       expect(limiter.ask(ADDRESS, "GUESS-NEXT")).toBeGreaterThan(55);
+    } finally {
+      setSystemTime();
+    }
+  });
+});
+
+describe("TokenLimiter", () => {
+  function tokenClock() {
+    let now = 1_000_000;
+    const limiter = new TokenLimiter(() => now);
+    return { limiter, advance: (ms: number) => (now += ms) };
+  }
+
+  function fail(limiter: TokenLimiter, address: string, times: number) {
+    for (let i = 0; i < times; i++) limiter.recordFailure(address);
+  }
+
+  it("locks an address out after five failures, for a minute and then doubling, until a success", () => {
+    const { limiter, advance } = tokenClock();
+    fail(limiter, ADDRESS, 4);
+    expect(limiter.retryAfterSeconds(ADDRESS)).toBe(0);
+    fail(limiter, ADDRESS, 1);
+    expect(limiter.retryAfterSeconds(ADDRESS)).toBe(60);
+    advance(60_000);
+    fail(limiter, ADDRESS, 1);
+    expect(limiter.retryAfterSeconds(ADDRESS)).toBe(120);
+    limiter.recordSuccess(ADDRESS);
+    expect(limiter.retryAfterSeconds(ADDRESS)).toBe(0);
+  });
+
+  // Issue #324, review: 30 failures a minute from anywhere used to lock out
+  // every account's native sign-in.
+  it("has no global cap: however many addresses are locked out, another isn't", () => {
+    const { limiter } = tokenClock();
+    for (let a = 0; a < 200; a++) fail(limiter, `10.0.${a >> 8}.${a & 255}`, 5);
+    expect(limiter.retryAfterSeconds("10.0.0.0")).toBe(60);
+    expect(limiter.retryAfterSeconds("198.51.100.4")).toBe(0);
+    fail(limiter, "198.51.100.4", 4);
+    expect(limiter.retryAfterSeconds("198.51.100.4")).toBe(0);
+  });
+
+  it("holds a whole IPv6 /64 to one allowance", () => {
+    const { limiter } = tokenClock();
+    for (let i = 1; i <= 5; i++) limiter.recordFailure(`2001:db8:1:2::${i}`);
+    expect(limiter.retryAfterSeconds("2001:db8:1:2::ffff")).toBe(60);
+    expect(limiter.retryAfterSeconds("2001:db8:1:3::1")).toBe(0);
+    limiter.recordSuccess("2001:db8:1:2::9");
+    expect(limiter.retryAfterSeconds("2001:db8:1:2::1")).toBe(0);
+  });
+
+  it(`remembers at most ${MAX_ADDRESSES} addresses, and keeps one that's locked out`, () => {
+    const { limiter } = tokenClock();
+    fail(limiter, ADDRESS, 5);
+    fail(limiter, "198.51.100.4", 1);
+    for (let a = 0; a < MAX_ADDRESSES; a++) limiter.recordFailure(`10.${a >> 16}.${(a >> 8) & 255}.${a & 255}`);
+    expect(limiter.retryAfterSeconds(ADDRESS)).toBe(60);
+    // Its one failure was forgotten to make room: four more don't lock it out.
+    fail(limiter, "198.51.100.4", 4);
+    expect(limiter.retryAfterSeconds("198.51.100.4")).toBe(0);
+  });
+
+  it("keeps time by a clock the wall clock can't move", () => {
+    const limiter = new TokenLimiter();
+    fail(limiter, ADDRESS, 5);
+    try {
+      setSystemTime(new Date(Date.now() + 24 * 60 * 60_000));
+      expect(limiter.retryAfterSeconds(ADDRESS)).toBeGreaterThan(55);
     } finally {
       setSystemTime();
     }

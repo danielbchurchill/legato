@@ -404,6 +404,16 @@ describe("redeeming a link code", () => {
     expect((await h.redeem(code, verifier, HOME, "203.0.113.9")).statusCode).toBe(200);
   });
 
+  // Issue #324: the brake counts an IPv6 address as its /64, as every
+  // TokenLimiter does, so one host can't step through its own addresses.
+  it("holds one IPv6 /64 to one allowance", async () => {
+    const h = setup();
+    for (let i = 1; i <= 5; i++) expect((await h.redeem(guess(), guess(), HOME, `2001:db8:1:2::${i}`)).json().reason).toBe("not_found");
+    const { code, verifier } = await minted(h);
+    expect((await h.redeem(code, verifier, HOME, "2001:db8:1:2::ffff")).json().reason).toBe("rate_limited");
+    expect((await h.redeem(code, verifier, HOME, "2001:db8:1:3::1")).statusCode).toBe(200);
+  });
+
   it("answers any origin's preflight, without credentials", async () => {
     const h = setup();
     const res = await h.app.inject({
