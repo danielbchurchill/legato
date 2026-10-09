@@ -32,8 +32,27 @@ import type { TunnelRegistry } from "../tunnel-registry.js";
 // replace the caller's legato.fm session. Home servers don't need either:
 // clients send them a bearer token, and a media ticket in the URL
 // (server/src/auth/gate.ts).
+//
+// No script runs on this origin. A server's responses are served from
+// legato.fm's own origin, where a same-origin request carries the
+// relay_session cookie: a page a home server sent here could call POST
+// /auth/server-token or DELETE /linked-servers as whoever opened it. So
+// every /relay/* response, the relay's own refusals included, carries
+// `Content-Security-Policy: sandbox`, which opens a document in an opaque
+// origin with no script and no forms, and `X-Content-Type-Options:
+// nosniff`, so a body is only ever what its Content-Type says. A server's
+// own policy is kept beside it, and can only narrow it. fetch(), <img> and
+// <audio> don't read either header, so clients are unaffected. Giving each
+// server an origin of its own would make the sandbox unnecessary.
 export function relayRoutes(registry: TunnelRegistry, db: Database) {
   return async function routes(app: FastifyInstance) {
+    // On the raw response, so it holds for replies Fastify sends (a 401,
+    // a 413) and for the hijacked ones below alike.
+    app.addHook("onRequest", async (_request, reply) => {
+      reply.raw.setHeader("content-security-policy", SANDBOX);
+      reply.raw.setHeader("x-content-type-options", "nosniff");
+    });
+
     // Scoped to this plugin only — not the root app — so /auth/* and
     // /pair/* keep Fastify's normal JSON body parsing. Every byte of
     // every /relay/* request body just needs to reach the home server
@@ -110,7 +129,7 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
           // is still on its way, and so a failure after it can only break
           // the connection off (onError).
           onStart: (status, responseHeaders) => {
-            reply.raw.writeHead(status, withoutSetCookie(responseHeaders));
+            reply.raw.writeHead(status, forDevice(responseHeaders));
             reply.raw.flushHeaders();
           },
           onChunk: (buf) => {
@@ -157,6 +176,19 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
   };
 }
 
-function withoutSetCookie(headers: Record<string, string>): Record<string, string> {
-  return Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== "set-cookie"));
+const SANDBOX = "sandbox";
+
+// A home server's response headers as they go to the device: no
+// Set-Cookie, and the sandbox above kept whatever the server sent.
+// writeHead()'s headers win over setHeader()'s, so a server's own policy
+// goes out next to the sandbox (both are enforced), and its
+// X-Content-Type-Options is dropped for the relay's.
+function forDevice(headers: Record<string, string>): Record<string, string | string[]> {
+  const result: Record<string, string | string[]> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const key = name.toLowerCase();
+    if (key === "set-cookie" || key === "x-content-type-options") continue;
+    result[name] = key === "content-security-policy" ? [value, SANDBOX] : value;
+  }
+  return result;
 }

@@ -261,6 +261,48 @@ describe("relay HTTP forwarding", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 
+  it("sandboxes everything served under /relay, so no home server's page runs as legato.fm", async () => {
+    app = buildApp({ db });
+    const { httpUrl, tunnelUrl } = await listenApp(app);
+    const account = signIn(db);
+    const { serverId, cookieHeader } = await linkedAndConnected(
+      tunnelUrl,
+      (req, res) => {
+        if (req.url === "/page.html") {
+          res.writeHead(200, { "content-type": "text/html", "x-content-type-options": "off" });
+          res.end("<script>fetch('/auth/server-token', { method: 'POST' })</script>");
+        } else if (req.url === "/picture.svg") {
+          res.writeHead(200, { "content-type": "image/svg+xml", "content-security-policy": "default-src 'none'" });
+          res.end('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+        } else {
+          res.end("{}");
+        }
+      },
+      account,
+    );
+    const get = (path: string, cookie = cookieHeader) => fetch(`${httpUrl}/relay/${path}`, { headers: { cookie } });
+
+    const page = await get(`${serverId}/page.html`);
+    expect(page.headers.get("content-type")).toBe("text/html");
+    expect(page.headers.get("content-security-policy")).toBe("sandbox");
+    expect(page.headers.get("x-content-type-options")).toBe("nosniff");
+
+    // A server's own policy goes out beside the sandbox, never instead of it.
+    const picture = await get(`${serverId}/picture.svg`);
+    expect(picture.headers.get("content-security-policy")).toBe("default-src 'none', sandbox");
+    expect(picture.headers.get("x-content-type-options")).toBe("nosniff");
+
+    // The relay's own answers too: not signed in, not linked, not connected.
+    const someoneElses = linkServer(db, signIn(db).userId).serverId;
+    const notConnected = linkServer(db, account.userId).serverId;
+    const refusals = [await get(`${serverId}/x`, ""), await get(`${someoneElses}/x`), await get(`${notConnected}/x`)];
+    expect(refusals.map((response) => response.status)).toEqual([401, 404, 503]);
+    for (const response of refusals) {
+      expect(response.headers.get("content-security-policy")).toBe("sandbox");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    }
+  });
+
   it("keeps a path that looks like a URL on the home server", async () => {
     app = buildApp({ db });
     const { httpUrl, tunnelUrl } = await listenApp(app);
