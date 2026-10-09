@@ -147,8 +147,8 @@ export const PROOF_FAILURE_MESSAGES: Record<ProofFailure, string> = {
   no_account: "The legato.fm account in that proof no longer exists.",
 };
 
-// tunnel is the credential a claim's link mints (issue #237), null for
-// every other proof.
+// tunnel is the credential a link mints (issues #237 and #325), null for an
+// unlink and for a link token that wasn't marked for one.
 export type ProofResult =
   | { ok: true; relayUserId: number; serverId: string; changed: boolean; tunnel: TunnelCredentialMinted | null }
   | { ok: false; reason: ProofFailure };
@@ -165,11 +165,14 @@ function strings<K extends string>(body: Record<string, unknown> | null | undefi
 // tokens on every request, and one of those mustn't be able to bring back a
 // pair the account has just removed.
 //
-// A link token from a claim (routes/pair.ts) also mints the server's tunnel
-// credential, bound to its id, in the transaction that records the pair. So
-// a claim the server never reports, because its owner chose not to link or
-// the token ran out first, leaves no credential behind, and the token's
-// spent jti means one claim mints one credential.
+// A link token marked `tunnel` also mints the server's tunnel credential,
+// bound to its id, in the transaction that records the pair. A claim's
+// token is marked (routes/pair.ts), and since issue #325 so is every link
+// token a client asks for, so a server linked from Settings can open the
+// tunnel as a claimed one can. A link the server never reports, because
+// its owner chose not to link or the token ran out first, leaves no
+// credential behind, and the token's spent jti means one token mints one
+// credential.
 export function acceptLinkProof(
   db: Database,
   keys: SigningKeys,

@@ -506,6 +506,11 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     // legato.fm still has the pair (the owner unlinked on the server while
     // it couldn't reach legato.fm, say). Asking for "access" for a server
     // that isn't linked still gets "link"; the response's scope says which.
+    //
+    // A link token from here asks for a tunnel credential, as a claim's does
+    // (issue #325): a server linked from Settings needs one as much as a
+    // claimed one. It's minted only when the server reports the link
+    // (linked-servers.ts), so a token nobody uses leaves nothing behind.
     app.post<{ Body: { serverId?: unknown; scope?: unknown } | null }>("/auth/server-token", async (request, reply) => {
       const token = sessionToken(request);
       const user = token ? getUserBySessionToken(db, token) : null;
@@ -531,7 +536,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
         return { error: 'scope must be "access" or "link", or left out.', reason: "bad_scope" };
       }
       const scope = requested !== "link" && isLinkedServer(db, user.id, serverId) ? "access" : "link";
-      const issued = signServerToken(signingKeys, { issuer: config.callbackBaseUrl, user, serverId, scope });
+      const issued = signServerToken(signingKeys, { issuer: config.callbackBaseUrl, user, serverId, scope, tunnel: scope === "link" });
       return { token: issued.token, expiresAt: issued.expiresAt.toISOString(), scope: issued.scope };
     });
 

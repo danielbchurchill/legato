@@ -6,16 +6,18 @@ import { forgetTunnelCredential, storeTunnelCredential } from "./tunnelCredentia
 
 // Linking a user here to a legato.fm account with a `link` token (issues
 // #114 and #231). Two callers: POST /auth/legato/link, where the owner
-// brings a token from the app, and creating the owner on /setup with a
-// claim (issue #237, auth/claim.ts), where the token came from legato.fm's
-// /pair/exchange. Both run the same checks and the same signed report.
+// brings a token from Settings, in the desktop app or the web client
+// (issue #325), and creating the owner on /setup with a claim (issue #237,
+// auth/claim.ts), where the token came from legato.fm's /pair/exchange.
+// Both run the same checks and the same signed report.
 //
 // The server sees legato.fm's own signature on who the account is, then
 // reports the link to legato.fm, signed with this server's identity key
 // (auth/serverKey.ts). Nothing changes here unless legato.fm recorded it,
-// so the two can't disagree about a link that just failed. A claim's report
-// also brings back the tunnel credential, stored with the link. The caller
-// syncs the tunnel once its answer has gone (issue #310, tunnel/
+// so the two can't disagree about a link that just failed. The report also
+// brings back the tunnel credential, stored with the link: legato.fm mints
+// one for a claim's link and, since #325, for a link from Settings too. The
+// caller syncs the tunnel once its answer has gone (issue #310, tunnel/
 // relayTunnel.ts's syncRelayTunnelOnceAnswered): a link made through the
 // tunnel comes down the connection a new credential replaces.
 

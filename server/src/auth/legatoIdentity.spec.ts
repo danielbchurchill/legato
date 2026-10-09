@@ -17,6 +17,7 @@ import {
 } from "./legato-test-keys.js";
 import { serverIdForPublicKey } from "./serverKey.js";
 import { createSession } from "./sessions.js";
+import { readTunnelCredential } from "./tunnelCredential.js";
 import { buildTestApp, createOwnerForTest } from "./test-app.js";
 
 // Issue #114 end to end through the real gate and routes: a legato.fm token
@@ -388,6 +389,33 @@ describe("telling legato.fm about links (issue #231)", () => {
     expect(res.json()).toMatchObject({ reason: "legato_refused", legatoReason: "used" });
     expect(res.json().error).toContain("That proof has already been used.");
     expect(await linkedStatus(h, owner)).toBe(false);
+  });
+
+  // Issue #325: a link from Settings brings a tunnel credential back, as a
+  // claim's does, and it's stored with the link. A link legato.fm didn't
+  // record stores none.
+  it("stores the tunnel credential legato.fm's answer brings, and never shows it", async () => {
+    const credential = "c".repeat(64);
+    const h = await setup({
+      answer: () => Response.json({ linked: {}, tunnel: { credential, expiresAt: "2027-10-09T12:00:00.000Z" } }),
+    });
+    const { token: owner } = await createOwnerForTest(h.app);
+    const res = await linkOwner(h, owner);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain(credential);
+    expect(readTunnelCredential(h.db, TEST_ISSUER)).toEqual({
+      origin: TEST_ISSUER,
+      accountId: "42",
+      credential,
+      expiresAt: "2027-10-09T12:00:00.000Z",
+    });
+  });
+
+  it("stores no tunnel credential when legato.fm refuses the link", async () => {
+    const h = await setup({ answer: () => Response.json({ error: "No.", reason: "used" }, { status: 409 }) });
+    const { token: owner } = await createOwnerForTest(h.app);
+    expect((await linkOwner(h, owner)).statusCode).toBe(409);
+    expect(readTunnelCredential(h.db, TEST_ISSUER)).toBeNull();
   });
 
   it("refuses an access token or an account taken here without telling legato.fm anything", async () => {

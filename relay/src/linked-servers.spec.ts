@@ -8,6 +8,7 @@ import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
 import { acceptUnlinkProof, isLinkedServer, serverIdForPublicKey, UNLINK_PROOF_WINDOW_SECONDS } from "./linked-servers.js";
+import { tunnelCredentialHolder } from "./pairing.js";
 import { parseSigningKeys, signServerToken, type SigningKeys } from "./signing-keys.js";
 import type { Database } from "./sqlite.js";
 
@@ -98,7 +99,7 @@ describe("POST /auth/server-token signs access only for linked servers", () => {
 
     const res = await h.link(owner.headers, server);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ linked: { accountId: String(owner.user.id), serverId: server.serverId } });
+    expect(res.json()).toMatchObject({ linked: { accountId: String(owner.user.id), serverId: server.serverId } });
 
     expect((await h.serverToken(owner.headers, server.serverId)).scope).toBe("access");
     expect((await h.serverToken(owner.headers, other.serverId)).scope).toBe("link");
@@ -126,6 +127,48 @@ describe("POST /auth/server-token signs access only for linked servers", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().reason).toBe("bad_scope");
+  });
+});
+
+// Issue #325: a server linked from Settings, with no claim behind it, gets a
+// tunnel credential the way a claimed one does, and only once it reports the
+// link. A token handed out and never used leaves nothing here.
+describe("a link token from /auth/server-token mints a tunnel credential when it's reported", () => {
+  const credentials = (db: Database) => db.prepare("SELECT relay_user_id, server_id FROM tunnel_credentials").all();
+
+  it("mints one, bound to the server's id, in the report's answer", async () => {
+    const h = setup();
+    const { user, headers } = h.signIn();
+    const server = homeServer();
+    const res = await h.link(headers, server);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { tunnel: { credential: string; expiresAt: string } };
+    expect(body.tunnel.credential).toMatch(/^[0-9a-f]{64}$/);
+    expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 300 * 24 * 3600 * 1000);
+    expect(tunnelCredentialHolder(h.db, body.tunnel.credential)).toEqual({ relayUserId: user.id, serverId: server.serverId });
+    expect(credentials(h.db)).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
+  });
+
+  it("mints nothing for a token that's handed out and never reported, or for a report refused", async () => {
+    const h = setup();
+    const { user, headers } = h.signIn();
+    const server = homeServer();
+    const { token } = await h.serverToken(headers, server.serverId, "link");
+    expect(credentials(h.db)).toEqual([]);
+    // Signed by a different server: refused, so nothing is recorded.
+    expect((await h.postLink(linkProof(homeServer(), token))).statusCode).toBe(403);
+    expect(credentials(h.db)).toEqual([]);
+    expect(isLinkedServer(h.db, user.id, server.serverId)).toBe(false);
+  });
+
+  it("mints one per token: the same report again is spent", async () => {
+    const h = setup();
+    const { headers } = h.signIn();
+    const server = homeServer();
+    const { token } = await h.serverToken(headers, server.serverId, "link");
+    expect((await h.postLink(linkProof(server, token))).statusCode).toBe(200);
+    expect((await h.postLink(linkProof(server, token))).json()).toMatchObject({ reason: "used" });
+    expect(credentials(h.db)).toHaveLength(1);
   });
 });
 
