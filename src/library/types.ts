@@ -29,6 +29,12 @@ export type TrackRow = {
   dateAdded: string
 }
 
+export type ArtistRow = {
+  id: number
+  name: string
+  releases: number
+}
+
 export type AlbumSort = 'artist' | 'title' | 'year' | 'dateAdded' | 'recentlyPlayed'
 export type TrackSort = 'title' | 'artist' | 'album' | 'duration' | 'format' | 'dateAdded'
 export type SortDir = 'asc' | 'desc'

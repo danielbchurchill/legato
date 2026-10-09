@@ -4,7 +4,7 @@ import { useLoadingWait } from './useLoadingWait'
 import type { SortDir } from './types'
 
 // One fetch covers this many rows. DOM virtualization (AlbumsGrid,
-// TracksTable) only solves half of "smooth at 30k albums" — it keeps the
+// ArtistsGrid, TracksTable) only solves half of "smooth at 30k albums" — it keeps the
 // node count down, but a single GET /library/albums for the whole table
 // would still ship and JSON-parse 30k rows before the first frame. This
 // hook is the other half: it sizes the scrollable area from `total` (known
@@ -58,11 +58,11 @@ export type LibraryPage<Row> = {
   ensureRange: (startIndex: number, endIndex: number) => void
 }
 
-/** `entity` is a URL segment (`library/albums` or `library/tracks`), not a
- * free string, so a typo here fails at compile time rather than as a 404
- * nobody notices until the view stays empty. */
+/** `entity` is a URL segment (`library/albums`, `library/artists` or
+ * `library/tracks`), not a free string, so a typo here fails at compile time
+ * rather than as a 404 nobody notices until the view stays empty. */
 export function useLibraryPage<Row>(
-  entity: 'library/albums' | 'library/tracks',
+  entity: 'library/albums' | 'library/artists' | 'library/tracks',
   query: string,
   sort: string,
   dir: SortDir,

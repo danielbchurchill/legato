@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useRef, useState, type ReactNode } from 'react'
 import { Tabs } from '../ui/Tabs'
 import { Button } from '../ui/Button'
 import { ScrollArea } from '../ui/ScrollArea'
@@ -6,11 +6,11 @@ import { plural } from '../ui/format'
 import { useGraph } from '../canvas/graphContext'
 import { useShellLayout } from '../shell/layout'
 import { useScanStatus } from '../hooks/useScanStatus'
+import { useStats } from '../panels/healthData'
 import type { usePlayback } from '../playback/usePlayback'
 import type { Settings } from '../hooks/useSettings'
 import { AlbumsGrid } from './AlbumsGrid'
 import { ArtistsGrid } from './ArtistsGrid'
-import { libraryArtists } from './libraryArtists'
 import { TracksTable } from './TracksTable'
 import { LibraryEmpty } from './LibraryEmpty'
 import { SortPill, type SortKind } from './SortPill'
@@ -31,6 +31,9 @@ import { ALBUM_SORT_OPTIONS, TRACK_SORT_OPTIONS, type AlbumSort, type SortDir, t
  *
  * The header stays in every state, as the frame keeps it: the counts line
  * reads "Loading…" or "Nothing here yet" while there's nothing to count.
+ * The counts are GET /stats's, Library health's numbers, counted on the
+ * server over the whole library (#302). The map's graph stops at 5,000
+ * nodes, so counting it said "455 albums · 0 artists" at 30,000 albums.
  *
  * Opening anything here — a cover, a row, an artist — opens its details in
  * the right panel: there's no node card to show off the map. */
@@ -68,7 +71,8 @@ type LibraryViewProps = {
 
 export function LibraryView({ onOpenNode, playback, settings, updateSettings, firstRun }: LibraryViewProps) {
   const layout = useShellLayout()
-  const { nodes, edges, loading } = useGraph()
+  const { nodes, loading } = useGraph()
+  const stats = useStats()
   const scan = useScanStatus()
   const scrollRef = useRef<HTMLDivElement>(null)
   // The layout persists like the map/library switch itself; the sort is a
@@ -78,15 +82,9 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
   const [trackSort, setTrackSort] = useState<{ sort: TrackSort; dir: SortDir }>({ sort: 'title', dir: 'asc' })
   const [artistDir, setArtistDir] = useState<SortDir>('asc')
 
-  const counts = useMemo(() => {
-    const byType = { release: 0, recording: 0 }
-    for (const node of nodes) if (node.type in byType) byType[node.type as keyof typeof byType]++
-    // The artists the Artists tab lists, not every artist node: featured-only
-    // credits aren't in the tab, so they aren't in the count either.
-    return { ...byType, artist: libraryArtists(nodes, edges).length }
-  }, [nodes, edges])
   // A folder is set but nothing has been matched yet: the first scan is
-  // still running, or the folder holds nothing Legato reads.
+  // still running, or the folder holds nothing Legato reads. The graph's
+  // cap doesn't matter here: a graph with any node is a library with one.
   const empty = firstRun == null && !loading && nodes.length === 0
 
   const scrollToTop = () => scrollRef.current?.scrollTo({ top: 0 })
@@ -108,9 +106,9 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
             <span className="text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]">
               {firstRun != null || empty
                 ? 'Nothing here yet'
-                : loading
+                : loading || !stats
                   ? 'Loading…'
-                  : `${plural(counts.release, 'album')} · ${plural(counts.artist, 'artist')} · ${plural(counts.recording, 'track')}`}
+                  : `${plural(stats.albums, 'album')} · ${plural(stats.artists, 'artist')} · ${plural(stats.tracks, 'track')}`}
             </span>
           </div>
           <div className="flex items-center gap-[10px]">
@@ -177,7 +175,7 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
                   }}
                 />
               )}
-              {entity === 'artists' && <ArtistsGrid sortDir={artistDir} onOpen={onOpenNode} />}
+              {entity === 'artists' && <ArtistsGrid scrollRef={scrollRef} sortDir={artistDir} onOpen={onOpenNode} />}
               {entity === 'tracks' && (
                 <TracksTable
                   scrollRef={scrollRef}
