@@ -72,27 +72,37 @@ export function computeArtistCollaborations(performerEdges: { fromNode: number; 
 // groups" rule pairEdges already applies within a single call.
 export type CreditedRecording = { recordingNodeId: number; creditNodeId: number };
 
-// Issue #320: how many artists after it in its decade each artist is tied
-// to, so it has up to twice this many era ties: its closest on either side.
+// Issue #320: how many artists after it in a decade's order each artist is
+// tied to. With as many tied to it from before, that's up to twice this
+// many era ties for each decade an artist has an album in: 6k for an
+// artist in k decades.
 export const ERA_NEIGHBOURS = 3;
 
 // An era tie used to pair every artist in a decade with every other, n(n−1)/2
 // edges: 1.6M of them at 30,000 albums, for a tie that says little about two
 // artists. Now each decade's artists are put in order of their earliest year
 // in it (node id breaking a tie, so a recompute that changed nothing pairs
-// the same ones) and each is tied to the next ERA_NEIGHBOURS. That's linear
-// in the number of artists, and every decade is still one chain, so the
-// connected components similarity's artist clusters take are the same as
-// before.
-function eraNeighbours(earliestYearByArtist: Iterable<Map<number, number>>): [number, number][] {
-  const pairs: [number, number][] = [];
+// the same ones) and each is tied to the next ERA_NEIGHBOURS in that order.
+// That's linear in the number of artists, and every decade is still one
+// chain, so the connected components similarity's artist clusters take are
+// the same as before. Two artists side by side in two decades are one edge.
+function eraNeighbours(earliestYearByArtist: Iterable<Map<number, number>>): CollaborationEdge[] {
+  const seen = new Set<string>();
+  const result: CollaborationEdge[] = [];
   for (const years of earliestYearByArtist) {
     const order = [...years].sort(([a, yearA], [b, yearB]) => yearA - yearB || a - b).map(([artist]) => artist);
     for (let i = 0; i < order.length; i++) {
-      for (let j = i + 1; j <= i + ERA_NEIGHBOURS && j < order.length; j++) pairs.push([order[i], order[j]]);
+      for (let j = i + 1; j <= i + ERA_NEIGHBOURS && j < order.length; j++) {
+        const fromNode = Math.min(order[i], order[j]);
+        const toNode = Math.max(order[i], order[j]);
+        const key = `${fromNode}:${toNode}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push({ fromNode, toNode, type: "collaborated_with", affinityReason: "same_era" });
+      }
     }
   }
-  return pairs;
+  return result;
 }
 
 export function computeArtistAffinities(
@@ -143,7 +153,7 @@ export function computeArtistAffinities(
 
   return [
     ...pairEdges(byLabel.values(), "collaborated_with", "same_label"),
-    ...pairEdges(eraNeighbours(byEra.values()), "collaborated_with", "same_era"),
+    ...eraNeighbours(byEra.values()),
     ...pairEdges(byCredit.values(), "collaborated_with", "same_credit"),
   ];
 }
@@ -180,15 +190,6 @@ export function computeAlbumRelations(
   return [...pairEdges(byArtist.values(), "same_artist"), ...pairEdges(byLabel.values(), "same_label")];
 }
 
-// Recomputed wholesale after every scan (called from scan/scanner.ts
-// alongside recomputeEntities) — same reasoning: cheap at real-library
-// scale, avoids keeping a derived graph in sync across collapse/re-scan/
-// manual-edge flows. Stored as source='local' (entirely derived from local
-// tag data, no MusicBrainz/Discogs/manual involvement) — safe to co-exist
-// with deriveLocalEdges's own source='local' rows because that function
-// only ever deletes edges scoped to one specific recording's from_node,
-// and these edges' from_node values are always artist/release ids, never
-// recording ids.
 // A release's dominant label — the mode label node among its own tracks'
 // released_on edges, for the same_label ties between albums and between
 // their artists. This module is its only reader.
@@ -239,6 +240,14 @@ function dedupeEdges(edges: CollaborationEdge[]): CollaborationEdge[] {
   return result;
 }
 
+// recompute.ts runs this after every scan, after recomputeEntities. It works
+// out every collaboration, same_artist and same_label edge from scratch, and
+// writes only the difference from what's stored (below). Stored as
+// source='local' (entirely derived from local tag data, no MusicBrainz/
+// Discogs/manual involvement) — safe to co-exist with deriveLocalEdges's own
+// source='local' rows because that function only ever deletes edges scoped
+// to one specific recording's from_node, and these edges' from_node values
+// are always artist/release ids, never recording ids.
 export function recomputeCollaborationEdges(db: Database): void {
   const performerEdges = db
     .prepare(
@@ -274,14 +283,14 @@ export function recomputeCollaborationEdges(db: Database): void {
   const missing = new Map(edges.map((e) => [edgeKey(e.fromNode, e.toNode, e.type, e.affinityReason ?? null), e]));
 
   // Issue #281: written as a diff rather than deleted and inserted whole.
-  // The era affinity alone was about 750,000 pairs on a 3,000-artist
-  // library before #320 capped it, and rewriting them held the write lock
-  // for seconds on every scan; a rescan that changed nothing now writes
-  // nothing. Every edge of these types that isn't wanted goes, a duplicate
-  // or one from another source included, as the wholesale delete always
-  // did. (A database from before the cap doesn't rely on this to lose its
-  // old era ties: migration 0041 deletes them all, and the next recompute
-  // writes the capped ones.)
+  // The era affinity alone was 1,647,358 pairs on a 30,000-album synthetic
+  // library of 3,000 artists before #320 capped it, and rewriting them held
+  // the write lock for seconds on every scan; a rescan that changed nothing
+  // now writes nothing. Every edge of these types that isn't wanted goes, a
+  // duplicate or one from another source included, as the wholesale delete
+  // always did. (A database from before the cap doesn't rely on this to
+  // lose its old era ties: migration 0041 deletes them all, and the next
+  // recompute writes the capped ones.)
   const existing = db
     .prepare(
       `SELECT id, from_node AS fromNode, to_node AS toNode, type, source, label FROM edges
