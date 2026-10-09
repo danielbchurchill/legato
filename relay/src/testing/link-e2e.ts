@@ -2,7 +2,10 @@
 // its own web client, in headless Chrome. The first link from Settings is
 // made to fail (this relay drops the server's report, as if legato.fm
 // couldn't be reached), the owner tries again and it links, then links once
-// more to check the old tunnel credential is retired. No real provider, and
+// more to check the old tunnel credential is retired. Then the review's
+// cases: a redeem that's rate limited keeps its code for "try again", Back
+// from legato.fm leaves the button ready, and a code that comes back to a
+// tab with no verifier says the link didn't finish. No real provider, and
 // nothing sent to auth.legato.fm: GitHub's authorize page is answered inside
 // Chrome.
 //
@@ -38,6 +41,7 @@
 // index isn't shared reliably across Docker Desktop's file share.
 // Chrome: Google Chrome --headless=new --remote-debugging-port=9342
 // --user-data-dir=<a fresh dir> about:blank.
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createSession, upsertUser } from "../accounts.js";
@@ -99,12 +103,23 @@ const relay = buildApp({
   },
 });
 let dropReports = 0;
+let limitRedeems = 0;
 relay.addHook("onRequest", async (request, reply) => {
   if (request.method === "POST" && request.url === "/linked-servers" && dropReports > 0) {
     dropReports--;
     // Hung up on, as a server sees legato.fm down: a fetch that throws.
     reply.hijack();
     request.raw.socket.destroy();
+  }
+  if (request.method === "POST" && request.url === "/link/redeem" && limitRedeems > 0) {
+    limitRedeems--;
+    // The answer /link/redeem gives an address that's tried too often,
+    // before it looks at the code.
+    return reply
+      .code(429)
+      .header("Access-Control-Allow-Origin", request.headers.origin ?? "*")
+      .header("Retry-After", "1")
+      .send({ error: "Too many failed link attempts from this address. Try again in 1 seconds.", reason: "rate_limited" });
   }
 });
 await relay.listen({ port: PORT, host: new URL(RELAY).hostname });
@@ -353,6 +368,67 @@ const after = relayCredentials();
 check(after.length === 1 && after[0]!.token !== stored!.credential, "one credential, a new one");
 check(storedCredential()?.credential === after[0]!.token, "the server stored the new one");
 step("linking again retired the old credential");
+
+// The relay keeps no plain hash of where a code went (review B2).
+const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+const codeRows = db.prepare("SELECT return_origin_mac, used_at FROM relay_link_codes").all() as { return_origin_mac: string }[];
+check(codeRows.length > 0 && codeRows.every((row) => row.return_origin_mac !== sha256(SERVER)), "the return address is kept only as an HMAC");
+
+// 7. A rate-limited redeem keeps the code, and "try again" spends it (B1).
+await openSettings();
+await click("link again");
+await waitFor(`location.origin === ${JSON.stringify(RELAY)} && document.body.dataset.view === 'ready'`, "the ready link page");
+limitRedeems = 1;
+await click("link this server");
+await waitFor(`location.origin === ${JSON.stringify(SERVER)}`, "back on the server");
+await waitFor(textIs("Too many failed link attempts from this address."), "the rate-limited toast");
+check(await evaluate<boolean>(`sessionStorage.getItem('legato:link-pending') !== null`), "the code and verifier are kept");
+const unspent = db.prepare("SELECT COUNT(*) AS n FROM relay_link_codes WHERE used_at IS NULL AND expires_at > datetime('now')").get() as {
+  n: number;
+};
+check(unspent.n === 1, "the relay hasn't spent the code");
+await screenshot("rate-limited-try-again");
+const beforeRetry = relayCredentials()[0]!.token;
+await click("try again");
+await waitFor(textIs("This server is linked to Rowan."), "the success toast after trying again");
+check(await evaluate<boolean>(`sessionStorage.getItem('legato:link-pending') === null`), "the spent code is gone from the tab");
+check(relayCredentials().length === 1 && relayCredentials()[0]!.token !== beforeRetry, "trying again linked, with a new credential");
+check(storedCredential()?.credential === relayCredentials()[0]!.token, "and the server stored it");
+await screenshot("linked-after-try-again");
+step("a rate-limited redeem kept its code, and trying again linked");
+
+// 8. Back from legato.fm, the button is ready again (B4). Chrome only
+// restores a page from its back-forward cache when nothing blocks it (an
+// open WebSocket can), so the run says which it was.
+await openSettings();
+await evaluate("window.__e2eLeft = true");
+await click("link again");
+await waitFor(`location.origin === ${JSON.stringify(RELAY)} && document.body.dataset.view === 'ready'`, "the ready link page");
+await evaluate("history.back()");
+await waitFor(`location.origin === ${JSON.stringify(SERVER)}`, "back on the server");
+const restored = await evaluate<boolean>("window.__e2eLeft === true");
+await openSettings();
+await waitFor(
+  `[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'link again' && !b.disabled)`,
+  "a ready link again button",
+);
+await screenshot("back-from-legato-fm");
+step("Back from legato.fm leaves the button ready", restored ? "(restored from the back-forward cache)" : "(loaded again, not from the back-forward cache)");
+
+// 9. A code that comes back to a tab with no verifier: an installed web
+// app on iOS that opened legato.fm in Safari, say (B7).
+await cdp("Page.navigate", { url: "about:blank" });
+await evaluate("true");
+await cdp("Page.navigate", { url: `${SERVER}/` });
+await waitFor("document.readyState === 'complete'", "the web client");
+await evaluate("sessionStorage.clear()");
+await cdp("Page.navigate", { url: "about:blank" });
+await cdp("Page.navigate", { url: `${SERVER}/#legato_link=${"x".repeat(43)}` });
+await waitFor(textIs("link didn't finish"), "the didn't-finish toast");
+check(!(await location()).includes("legato_link"), "the code is out of the address bar");
+check(await evaluate<boolean>(textIs("start again from Settings here")), "it says where to start again");
+await screenshot("link-did-not-finish");
+step("a code with no verifier says the link didn't finish");
 
 socket.close();
 await relay.close();
