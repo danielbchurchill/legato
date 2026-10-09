@@ -5,30 +5,12 @@ import path from "node:path";
 import { BACKUPS_KEPT, openDb } from "./db.js";
 import { MIGRATIONS } from "./migrations/manifest.generated.js";
 import { openSqlite } from "./sqlite.js";
+import { openDbAt } from "./testing.js";
 
 // The newest migration is left pending so openDb() has exactly one thing to
 // apply — the same shape as a real upgrade, without mocking the manifest.
 const LATEST = MIGRATIONS[MIGRATIONS.length - 1].version;
 const PREVIOUS = MIGRATIONS[MIGRATIONS.length - 2].version;
-
-// Builds an on-disk DB as an older release would have left it: every
-// migration up to and including `upTo` applied, the rest still pending.
-function buildDbAt(dbPath: string, upTo: number): void {
-  const db = openSqlite(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec(`
-    CREATE TABLE schema_migrations (
-      version INTEGER PRIMARY KEY,
-      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-    )
-  `);
-  for (const { version, sql } of MIGRATIONS) {
-    if (version > upTo) break;
-    db.exec(sql);
-    db.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
-  }
-  db.close();
-}
 
 function highestApplied(dbPath: string): number {
   const db = openSqlite(dbPath);
@@ -62,7 +44,7 @@ afterEach(() => {
 
 describe("openDb pre-migration backup", () => {
   test("backs up a DB with pending migrations, then migrates it", () => {
-    buildDbAt(dbPath, PREVIOUS);
+    openDbAt(dbPath, PREVIOUS).close();
     const log = mock((_message: string) => {});
 
     openDb(dbPath, { log }).close();
@@ -80,7 +62,7 @@ describe("openDb pre-migration backup", () => {
   });
 
   test("makes no backup when nothing is pending", () => {
-    buildDbAt(dbPath, LATEST);
+    openDbAt(dbPath, LATEST).close();
     const log = mock((_message: string) => {});
 
     openDb(dbPath, { log }).close();
@@ -123,7 +105,7 @@ describe("openDb pre-migration backup", () => {
     const made: string[] = [];
     for (let upgrade = 0; upgrade < BACKUPS_KEPT + 1; upgrade++) {
       removeDbFiles(dbPath);
-      buildDbAt(dbPath, PREVIOUS);
+      openDbAt(dbPath, PREVIOUS).close();
       openDb(dbPath, { log: () => {} }).close();
       const newest = readdirSync(backupsDir)
         .filter((name) => name.startsWith(`legato-v${PREVIOUS}-`))
@@ -141,7 +123,7 @@ describe("openDb pre-migration backup", () => {
 
   // Root ignores directory permissions, so there's nothing to block there.
   test.skipIf(process.getuid?.() === 0)("a backup that can't be written blocks the migration", () => {
-    buildDbAt(dbPath, PREVIOUS);
+    openDbAt(dbPath, PREVIOUS).close();
     mkdirSync(backupsDir);
     chmodSync(backupsDir, 0o555);
 

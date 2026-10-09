@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { openSqlite, type Database } from "../sqlite.js";
+import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
-import { MIGRATIONS } from "../migrations/manifest.generated.js";
 import { computeArtistClusters } from "../similarity/features.js";
+import { openDbAt } from "../testing.js";
 import {
   computeAlbumRelations,
   computeArtistAffinities,
@@ -532,13 +532,7 @@ describe("migration 0041", () => {
   function upgradeFrom0040(write: (old: Database) => void): Database {
     dataDir = mkdtempSync(path.join(tmpdir(), "legato-0041-"));
     const dbPath = path.join(dataDir, "legato.db");
-    const old = openSqlite(dbPath);
-    old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))");
-    for (const { version, sql } of MIGRATIONS) {
-      if (version >= 41) break;
-      old.exec(sql);
-      old.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
-    }
+    const old = openDbAt(dbPath, 40);
     write(old);
     old.close();
     return openDb(dbPath, { log: () => {} });

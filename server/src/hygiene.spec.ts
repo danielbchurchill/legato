@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { openSqlite, type Database } from "./sqlite.js";
+import type { Database } from "./sqlite.js";
 import { openDb } from "./db.js";
 import { getWorklist } from "./hygiene.js";
-import { MIGRATIONS } from "./migrations/manifest.generated.js";
+import { openDbAt } from "./testing.js";
 
 let db: Database;
 
@@ -217,13 +217,7 @@ describe("migration 0034 (#272)", () => {
   it("deletes the null mbid rows the artist photo job wrote, and nothing else", () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "legato-0034-"));
     const dbPath = path.join(dataDir, "legato.db");
-    const old = openSqlite(dbPath);
-    old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))");
-    for (const { version, sql } of MIGRATIONS) {
-      if (version >= 34) break;
-      old.exec(sql);
-      old.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
-    }
+    const old = openDbAt(dbPath, 33);
     const artist = (old.prepare("INSERT INTO nodes (type, title) VALUES ('artist', 'A; B') RETURNING id").get() as { id: number }).id;
     const recording = (old.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'Song') RETURNING id").get() as { id: number })
       .id;
