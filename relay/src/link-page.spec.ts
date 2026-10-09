@@ -278,6 +278,15 @@ describe("the link page", () => {
     expect(parseReturnTo("http://[::1]:5182")?.href).toBe("http://[::1]:5182/");
     expect(parseReturnTo("http://a".padEnd(2100, "a"))).toBeNull();
   });
+
+  it("clears a return left by an earlier sign-in when the next one has nowhere to go back to", async () => {
+    const h = setup();
+    const begin = await h.app.inject({ method: "GET", url: "/auth/github" });
+    const setCookies = ([] as string[]).concat(begin.headers["set-cookie"] ?? []);
+    const cleared = setCookies.find((c) => c.startsWith("relay_return_to="));
+    expect(cleared).toMatch(/^relay_return_to=;/);
+    expect(cleared).toContain("Expires=Thu, 01 Jan 1970");
+  });
 });
 
 describe("redeeming a link code", () => {

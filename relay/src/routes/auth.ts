@@ -410,7 +410,10 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
         reply.setCookie(STATE_COOKIE, state, { ...cookie, maxAge: 600 });
         if (start.kind === "native") createNativeRequest(db, state, provider, start.params);
         const returnTo = start.kind === "browser" ? returnPath(request.query.return_to) : null;
+        // A sign-in with nowhere to go back to clears any left from an
+        // earlier one that never came back, so this one can't end there.
         if (returnTo) reply.setCookie(RETURN_COOKIE, returnTo, { ...cookie, maxAge: 600 });
+        else reply.clearCookie(RETURN_COOKIE, cookie);
         return reply.redirect(flow.authorizeUrl(config, state));
       });
 
