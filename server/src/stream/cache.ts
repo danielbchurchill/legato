@@ -34,10 +34,27 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
+// How long an encode outlives the last request listening to it. Safari's
+// media engine (iOS, and Safari on a Mac) opens a stream, hangs up once it
+// has the bytes it needs to probe the format, and opens it again a moment
+// later; a seek does the same. Five seconds covers that reopen, so the
+// encode it started isn't thrown away and begun again, without holding a
+// media-queue slot for long for a track that was skipped.
+export const ABANDON_GRACE_MS = 5_000;
+
 // One encode in progress. Readers follow `tempPath` as it grows, reading
 // only up to `flushedBytes` — bytes the write stream has confirmed landed
 // on disk, not merely bytes ffmpeg has produced — so a reader never reads
 // past what the file actually holds and mistakes that for the end.
+//
+// Listeners. Each request that wants the encode's bytes joins it (routes/
+// files.ts), whether it reads as they're written or waits for the whole
+// file to seek in, and leaves when it's over or its client goes away. Once
+// the last one has been gone for the grace, `abandoned` fires and the
+// encode stops (transcodeToFile): ffmpeg is killed, the temp file goes,
+// and the slot is free for the track someone is listening to now. So a
+// skipped track's partial encode is discarded, and playing it again
+// encodes it again. An encode nobody ever joined runs to the end.
 export class TranscodeJob {
   readonly tempPath: string;
   readonly targetPath: string;
@@ -52,10 +69,22 @@ export class TranscodeJob {
   private wakeReaders: (() => void)[] = [];
   private resolveStarted!: () => void;
   private rejectStarted!: (err: Error) => void;
+  private listeners = 0;
+  private abandonTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly abandonment = new AbortController();
+  /** Fires once the last listener has been gone for the grace. */
+  readonly abandoned: AbortSignal = this.abandonment.signal;
+  private readonly graceMs: number;
 
-  constructor(tempPath: string, targetPath: string, run: (job: TranscodeJob) => Promise<void>) {
+  constructor(
+    tempPath: string,
+    targetPath: string,
+    run: (job: TranscodeJob) => Promise<void>,
+    graceMs: number = ABANDON_GRACE_MS,
+  ) {
     this.tempPath = tempPath;
     this.targetPath = targetPath;
+    this.graceMs = graceMs;
     this.started = new Promise((resolve, reject) => {
       this.resolveStarted = resolve;
       this.rejectStarted = reject;
@@ -66,18 +95,42 @@ export class TranscodeJob {
     this.finished = run(this).then(
       () => {
         this.state = "done";
+        this.stopAbandonTimer();
         this.resolveStarted();
         this.notify();
       },
       (err: Error) => {
         this.state = "failed";
         this.error = err;
+        this.stopAbandonTimer();
         this.rejectStarted(err);
         this.notify();
         throw err;
       },
     );
     this.finished.catch(() => {});
+  }
+
+  /** One more request listening. Call what it returns when that request is over. */
+  join(): () => void {
+    this.listeners += 1;
+    this.stopAbandonTimer();
+    let left = false;
+    return () => {
+      if (left) return;
+      left = true;
+      this.listeners -= 1;
+      if (this.listeners > 0 || this.state !== "running") return;
+      this.abandonTimer = setTimeout(() => {
+        this.abandonTimer = null;
+        if (this.listeners === 0 && this.state === "running") this.abandonment.abort();
+      }, this.graceMs);
+    };
+  }
+
+  private stopAbandonTimer(): void {
+    if (this.abandonTimer) clearTimeout(this.abandonTimer);
+    this.abandonTimer = null;
   }
 
   flushed(bytes: number): void {
@@ -152,6 +205,8 @@ export function stopFfmpeg(ffmpeg: ChildProcessByStdio<null, Readable, Readable>
 // manual (pause stdout until the file drains) because pipeline() has no
 // per-chunk completion hook to hang the flush count on.
 function transcodeToFile(sourcePath: string, quality: TranscodedQuality, job: TranscodeJob): Promise<void> {
+  // Abandoned while it waited for a slot: nothing to start.
+  if (job.abandoned.aborted) return Promise.reject(abandonedError());
   const ffmpeg = spawn(FFMPEG_PATH, [
     "-hide_banner",
     "-loglevel",
@@ -173,6 +228,7 @@ function transcodeToFile(sourcePath: string, quality: TranscodedQuality, job: Tr
   return new Promise<void>((resolve, reject) => {
     const out: WriteStream = createWriteStream(job.tempPath);
     let failed = false;
+    let exited = false;
     const fail = (err: Error) => {
       if (failed) return;
       failed = true;
@@ -180,6 +236,18 @@ function transcodeToFile(sourcePath: string, quality: TranscodedQuality, job: Tr
       out.destroy();
       reject(err);
     };
+    // Nobody's listening any more. Settles only once ffmpeg has exited,
+    // because settling is what releases the media-queue slot
+    // (runMediaTask). One that has already exited is finishing its file,
+    // and lands in the cache like any other.
+    const abandon = () => {
+      if (failed || exited) return;
+      failed = true;
+      ffmpeg.once("close", () => reject(abandonedError()));
+      stopFfmpeg(ffmpeg);
+      out.destroy();
+    };
+    job.abandoned.addEventListener("abort", abandon, { once: true });
 
     out.on("error", fail);
     ffmpeg.on("error", fail);
@@ -193,6 +261,7 @@ function transcodeToFile(sourcePath: string, quality: TranscodedQuality, job: Tr
       }
     });
     ffmpeg.on("close", (code) => {
+      exited = true;
       if (failed) return;
       if (code !== 0) {
         fail(new Error(`ffmpeg failed to transcode to ${quality} (exit ${code}): ${stderr.trim()}`));
@@ -203,6 +272,10 @@ function transcodeToFile(sourcePath: string, quality: TranscodedQuality, job: Tr
       out.end(() => resolve());
     });
   });
+}
+
+function abandonedError(): Error {
+  return new Error("transcode stopped: nobody was listening");
 }
 
 // One job per (hash, quality) at a time. Two listeners starting the same
@@ -221,11 +294,17 @@ export type CachedVariant = { kind: "complete"; path: string } | { kind: "growin
 // Issue #111: every encode through here is real playback, so it takes the
 // media queue's "playback" lane, ahead of whatever background
 // fingerprinting/cover/waveform work a scan already has queued.
+//
+// An abandoned job leaves the in-flight table at once, so the next request
+// for the same pair starts a fresh encode rather than joining one that's
+// being killed. Its own temp file is removed, and nothing is renamed into
+// place.
 export async function ensureVariant(
   fileHash: string,
   sourcePath: string,
   quality: TranscodedQuality,
   cacheDir = CACHE_DIR,
+  graceMs = ABANDON_GRACE_MS,
 ): Promise<CachedVariant> {
   const target = cachePath(fileHash, quality, cacheDir);
   const key = `${quality}:${fileHash}`;
@@ -239,17 +318,25 @@ export async function ensureVariant(
   if (raced) return { kind: "growing", job: raced };
 
   const temp = `${target}.${randomUUID()}.tmp`;
-  const job = new TranscodeJob(temp, target, async (self) => {
-    try {
-      await mkdir(path.dirname(target), { recursive: true });
-      await runMediaTask("playback", () => transcodeToFile(sourcePath, quality, self));
-      await rename(temp, target);
-    } catch (err) {
-      await unlink(temp).catch(() => {});
-      throw err;
-    } finally {
-      inFlight.delete(key);
-    }
+  const job = new TranscodeJob(
+    temp,
+    target,
+    async (self) => {
+      try {
+        await mkdir(path.dirname(target), { recursive: true });
+        await runMediaTask("playback", () => transcodeToFile(sourcePath, quality, self));
+        await rename(temp, target);
+      } catch (err) {
+        await unlink(temp).catch(() => {});
+        throw err;
+      } finally {
+        if (inFlight.get(key) === self) inFlight.delete(key);
+      }
+    },
+    graceMs,
+  );
+  job.abandoned.addEventListener("abort", () => {
+    if (inFlight.get(key) === job) inFlight.delete(key);
   });
   inFlight.set(key, job);
   return { kind: "growing", job };

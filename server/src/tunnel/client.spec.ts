@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "bun:test";
 import { buildTestApp } from "../auth/test-app.js";
 import { openDb } from "../db.js";
+import { mediaSlotsInUse } from "../media/queue.js";
 import { filesRoutes } from "../routes/files.js";
 import { backoffDelay, TunnelClient, type TunnelState } from "./client.js";
 import { startFakeRelay, type FakeRelay } from "./fake-relay.js";
@@ -134,6 +135,45 @@ describe("TunnelClient", () => {
     expect(part.status).toBe(206);
     expect(part.headers["content-range"]).toBe(`bytes 100-199/${source.length}`);
     expect(part.body.equals(source.subarray(100, 200))).toBe(true);
+  });
+
+  it("gives a transcode's media-queue slot back when legato.fm cancels the stream", async () => {
+    // Twenty minutes of audio: a few seconds of encoding, still going when
+    // the device hangs up.
+    const dir = mkdtempSync(path.join(tmpdir(), "legato-tunnel-cancel-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const sourcePath = path.join(dir, "long.flac");
+    execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=1200", sourcePath], { stdio: "ignore" });
+    const db = openDb(":memory:");
+    const root = db.prepare("INSERT INTO library_roots (path) VALUES (?) RETURNING id").get(dir) as { id: number };
+    const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id").get() as { id: number };
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(node.id);
+    const { id: fileId } = db
+      .prepare(
+        `INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size, file_hash)
+         VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z', 0, ?) RETURNING id`,
+      )
+      .get(node.id, root.id, sourcePath, "cafe0123456789abcdef0123456789abcdef0123") as { id: number };
+    const cacheDir = path.join(dir, "streams");
+    const app = Fastify();
+    await app.register(filesRoutes(db, { cacheDir, abandonGraceMs: 50 }), { prefix: "/api/v1" });
+    const origin = await listen(app);
+
+    const fake = relay();
+    const tunnel = client(fake.url, origin);
+    await waitFor(tunnel, "connected");
+    const before = mediaSlotsInUse();
+    void fake.request({ method: "GET", path: `/api/v1/files/${fileId}/stream?quality=opus160`, headers: {} }).catch(() => {});
+    const shard = path.join(cacheDir, "opus160", "ca");
+    while (!existsSync(shard) || readdirSync(shard).length === 0) await sleep(10);
+    expect(mediaSlotsInUse()).toBe(before + 1);
+
+    fake.send({ type: "cancel", requestId: fake.lastRequestId });
+    const deadline = Date.now() + 2_000;
+    while ((mediaSlotsInUse() > before || readdirSync(shard).length > 0) && Date.now() < deadline) await sleep(10);
+    expect(mediaSlotsInUse()).toBe(before);
+    // Nothing left that looks like a finished variant, nor a temp file.
+    expect(readdirSync(shard)).toEqual([]);
   });
 
   it("answers a path that isn't a path on this server with an error, not a request elsewhere", async () => {

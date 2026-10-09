@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
@@ -7,6 +7,7 @@ import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
+import { mediaSlotsInUse } from "../media/queue.js";
 import { cachePath } from "../stream/cache.js";
 import { filesRoutes, parseRange } from "./files.js";
 
@@ -173,6 +174,54 @@ describe("GET /api/v1/files/:id/stream", () => {
     expect(res.headers["content-type"]).toBe("audio/mp4");
     expect(res.headers["content-range"]).toBe(`bytes 100-199/${cached.length}`);
     expect(res.rawPayload.equals(cached.subarray(100, 200))).toBe(true);
+  });
+
+  it("stops an encode once the only player hangs up, and caches nothing", async () => {
+    execFileSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1200", sourcePath], { stdio: "ignore" });
+    const app = Fastify();
+    await app.register(filesRoutes(db, { cacheDir: path.join(dir, "streams"), abandonGraceMs: 30 }), { prefix: "/api/v1" });
+    const origin = await app.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      const hangUp = new AbortController();
+      const player = await fetch(`${origin}/api/v1/files/${fileId}/stream?quality=opus160`, { signal: hangUp.signal });
+      await player.body!.getReader().read();
+      const before = mediaSlotsInUse();
+      hangUp.abort();
+
+      const shard = path.dirname(cachePath(HASH, "opus160", path.join(dir, "streams")));
+      const deadline = Date.now() + 2_000;
+      while (mediaSlotsInUse() >= before && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(mediaSlotsInUse()).toBe(before - 1);
+      while (readdirSync(shard).length > 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(readdirSync(shard)).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps an encode going for a seek waiting on it after the player that started it hangs up", async () => {
+    // Five minutes of audio, so the encode is still going when the first
+    // listener leaves and its grace runs out.
+    execFileSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=300", sourcePath], { stdio: "ignore" });
+    const app = Fastify();
+    await app.register(filesRoutes(db, { cacheDir: path.join(dir, "streams"), abandonGraceMs: 30 }), { prefix: "/api/v1" });
+    const origin = await app.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      const url = `${origin}/api/v1/files/${fileId}/stream?quality=opus96`;
+      const hangUp = new AbortController();
+      const player = await fetch(url, { signal: hangUp.signal });
+      await player.body!.getReader().read();
+      const seek = fetch(url, { headers: { range: "bytes=1000-1999" } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      hangUp.abort();
+
+      const sought = await seek;
+      expect(sought.status).toBe(206);
+      const cached = readFileSync(cachePath(HASH, "opus96", path.join(dir, "streams")));
+      expect(Buffer.from(await sought.arrayBuffer()).equals(cached.subarray(1000, 2000))).toBe(true);
+    } finally {
+      await app.close();
+    }
   });
 
   it("returns 502 before any audio header when ffmpeg can't read the source", async () => {

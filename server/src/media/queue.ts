@@ -81,9 +81,14 @@ export function createMediaQueue(limit: number) {
     }
   }
 
-  return { acquireMediaSlot, runMediaTask };
+  // How many slots are taken right now: for specs that check a slot was
+  // given back.
+  const inUse = () => active;
+
+  return { acquireMediaSlot, runMediaTask, inUse };
 }
 
 const sharedMediaQueue = createMediaQueue(MEDIA_CONCURRENCY_LIMIT);
 
 export const runMediaTask = sharedMediaQueue.runMediaTask;
+export const mediaSlotsInUse = sharedMediaQueue.inUse;

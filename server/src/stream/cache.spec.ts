@@ -4,6 +4,7 @@ import { appendFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mediaSlotsInUse } from "../media/queue.js";
 import { cachePath, ensureVariant, readGrowing, stopFfmpeg, TranscodeJob } from "./cache.js";
 
 const HASH = "0123456789abcdef0123456789abcdef01234567";
@@ -26,8 +27,8 @@ async function collect(stream: AsyncIterable<Buffer>): Promise<Buffer> {
 
 // A real FLAC source, same as tagwrite's fixtures: the encode paths under
 // test are ffmpeg's, so a hand-built header would prove nothing.
-function sineFlac(seconds: number): string {
-  const source = path.join(dir, "source.flac");
+function sineFlac(seconds: number, name = "source.flac"): string {
+  const source = path.join(dir, name);
   execFileSync("ffmpeg", ["-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`, source], {
     stdio: "ignore",
   });
@@ -183,5 +184,105 @@ describe("stopFfmpeg", () => {
     const stopped = await Promise.race([closed, timedOut]);
     if (!stopped) ffmpeg.kill("SIGKILL");
     expect(stopped).toBe(true);
+  });
+});
+
+describe("TranscodeJob listeners", () => {
+  const GRACE = 60;
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // A job that runs until it's abandoned or told to finish.
+  function job() {
+    let finish!: () => void;
+    const made = new TranscodeJob(
+      path.join(dir, "job.tmp"),
+      path.join(dir, "job.done"),
+      (self) =>
+        new Promise<void>((resolve, reject) => {
+          finish = resolve;
+          self.abandoned.addEventListener("abort", () => reject(new Error("abandoned")));
+        }),
+      GRACE,
+    );
+    return { job: made, finish: () => finish() };
+  }
+
+  it("is abandoned once its last listener has been gone for the grace", async () => {
+    const { job: encode } = job();
+    const leave = encode.join();
+    leave();
+    await sleep(GRACE / 2);
+    expect(encode.abandoned.aborted).toBe(false);
+    await sleep(GRACE);
+    expect(encode.abandoned.aborted).toBe(true);
+    expect(encode.finished).rejects.toThrow("abandoned");
+  });
+
+  it("carries on for a listener that comes back within the grace, as Safari's reopen does", async () => {
+    const { job: encode, finish } = job();
+    encode.join()();
+    await sleep(GRACE / 2);
+    const back = encode.join();
+    await sleep(GRACE * 2);
+    expect(encode.abandoned.aborted).toBe(false);
+    finish();
+    await encode.finished;
+    back();
+  });
+
+  it("carries on while any listener is left", async () => {
+    const { job: encode, finish } = job();
+    const first = encode.join();
+    encode.join();
+    first();
+    // Leaving twice counts once.
+    first();
+    await sleep(GRACE * 2);
+    expect(encode.abandoned.aborted).toBe(false);
+    finish();
+    await encode.finished;
+  });
+
+  it("is never abandoned once it's done, or if nobody ever listened", async () => {
+    const { job: unheard, finish: finishUnheard } = job();
+    await sleep(GRACE * 2);
+    expect(unheard.abandoned.aborted).toBe(false);
+    finishUnheard();
+
+    const { job: encode, finish } = job();
+    const leave = encode.join();
+    finish();
+    await encode.finished;
+    leave();
+    await sleep(GRACE * 2);
+    expect(encode.abandoned.aborted).toBe(false);
+  });
+
+  it("kills ffmpeg, removes its temp file and frees its slot, and the next request encodes afresh", async () => {
+    // Twenty minutes of audio: a few seconds of encoding, so it's still
+    // going when its listener leaves.
+    const source = sineFlac(1200, "long.flac");
+    const cacheDir = path.join(dir, "streams");
+    const shard = path.dirname(cachePath(HASH, "opus160", cacheDir));
+    const before = mediaSlotsInUse();
+
+    const variant = await ensureVariant(HASH, source, "opus160", cacheDir, GRACE);
+    if (variant.kind !== "growing") throw new Error("expected a fresh encode");
+    const leave = variant.job.join();
+    await variant.job.started;
+    expect(mediaSlotsInUse()).toBe(before + 1);
+    leave();
+
+    await expect(variant.job.finished).rejects.toThrow("nobody was listening");
+    expect(mediaSlotsInUse()).toBe(before);
+    expect(existsSync(shard) ? readdirSync(shard) : []).toEqual([]);
+
+    // Not the dying job: a new one, which runs to the end and is cached.
+    const short = sineFlac(1, "short.flac");
+    const again = await ensureVariant(HASH, short, "opus160", cacheDir, GRACE);
+    if (again.kind !== "growing") throw new Error("expected a fresh encode");
+    expect(again.job).not.toBe(variant.job);
+    await collect(readGrowing(again.job));
+    expect(readdirSync(shard)).toEqual([path.basename(cachePath(HASH, "opus160", cacheDir))]);
   });
 });

@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { streamActivity, type StreamActivity } from "../stream/activity.js";
-import { CACHE_DIR, ensureVariant, readGrowing } from "../stream/cache.js";
+import { ABANDON_GRACE_MS, CACHE_DIR, ensureVariant, readGrowing } from "../stream/cache.js";
 import {
   isStreamQuality,
   passthroughContentType,
@@ -31,7 +31,11 @@ import {
 // computer awake for it. See stream/activity.ts.
 export function filesRoutes(
   db: Database,
-  { cacheDir = CACHE_DIR, activity = streamActivity }: { cacheDir?: string; activity?: StreamActivity } = {},
+  {
+    cacheDir = CACHE_DIR,
+    activity = streamActivity,
+    abandonGraceMs = ABANDON_GRACE_MS,
+  }: { cacheDir?: string; activity?: StreamActivity; abandonGraceMs?: number } = {},
 ) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Params: { id: string }; Querystring: { quality?: string } }>(
@@ -66,8 +70,12 @@ export function filesRoutes(
         }
 
         try {
-          let variant = await ensureVariant(file.file_hash, file.file_path, quality, cacheDir);
+          let variant = await ensureVariant(file.file_hash, file.file_path, quality, cacheDir, abandonGraceMs);
           if (variant.kind === "growing") {
+            // This request listens to the encode until its response is
+            // over or its client hangs up, waiting for a seek included.
+            // An encode nobody listens to stops (stream/cache.ts).
+            reply.raw.once("close", variant.job.join());
             // A first byte (or an early failure) before any header goes
             // out, so a source ffmpeg can't read is still a clean 502.
             await variant.job.started;
