@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useWsEvent } from './useWs'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 
 type ScanJob = {
   status: 'running' | 'paused' | 'canceled' | 'done' | 'error'
@@ -30,7 +31,7 @@ export function useScanStatus(): ScanStatus & { retry: () => void; progress: Sca
 
   const checkLatest = () => {
     fetch(`${API}/scan-jobs`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`scan-jobs returned ${r.status}`))))
       .then((jobs: ScanJob[]) => {
         const latest = jobs[0]
         setFirstScan(!jobs.some((job) => job.status === 'done'))
@@ -46,7 +47,11 @@ export function useScanStatus(): ScanStatus & { retry: () => void; progress: Sca
       .catch(() => undefined)
   }
 
-  useEffect(checkLatest, [])
+  // Again after an outage (#119): a scan that started, finished or failed
+  // meanwhile sent its event to a socket that wasn't there.
+  const reconnects = useReconnectEpoch()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(checkLatest, [reconnects])
   useWsEvent(['scan:progress'], (payload) => {
     setStatus({ scanning: true, error: null })
     setProgress(payload as ScanProgress)

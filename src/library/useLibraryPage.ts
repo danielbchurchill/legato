@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 import { useLoadingWait } from './useLoadingWait'
 import type { SortDir } from './types'
 
@@ -89,6 +90,18 @@ export function useLibraryPage<Row>(
   // of splicing stale rows into the new result set.
   const generation = useRef(0)
 
+  // #119: after an outage the pages load again, over the rows already shown
+  // rather than blanking the view: page 0 here, and the visible range
+  // through ensureRange, whose identity changes with it.
+  const reconnects = useReconnectEpoch()
+  const loadedFor = useRef(reconnects)
+  useEffect(() => {
+    if (loadedFor.current === reconnects) return
+    loadedFor.current = reconnects
+    generation.current += 1
+    loadedPages.current = new Set()
+  }, [reconnects])
+
   useEffect(() => {
     generation.current += 1
     loadedPages.current = new Set()
@@ -143,7 +156,8 @@ export function useLibraryPage<Row>(
           loadedPages.current.delete(pageIndex)
         })
     },
-    [entity, query, sort, dir],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [entity, query, sort, dir, reconnects],
   )
 
   // Sizes the virtualizer from `total` immediately instead of waiting on it

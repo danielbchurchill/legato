@@ -10,6 +10,7 @@ import { AddToPlaylistButton } from '../panels/AddToPlaylistButton'
 import type { ShellLayout } from '../shell/layout'
 import { INSET, CAPSULE_HEIGHT } from '../shell/layout'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 import type { usePlayback } from '../playback/usePlayback'
 import type { GraphNode } from './useGraphData'
 import { useNodeAnchor, type NodeAnchor } from './useNodeAnchor'
@@ -54,6 +55,7 @@ function useCardData(node: GraphNode) {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [detail, setDetail] = useState<Detail | null>(null)
   const [facts, setFacts] = useState<FileFacts | null>(null)
+  const reconnects = useReconnectEpoch()
 
   useEffect(() => {
     let cancelled = false
@@ -81,7 +83,7 @@ function useCardData(node: GraphNode) {
     return () => {
       cancelled = true
     }
-  }, [node.id, node.type])
+  }, [node.id, node.type, reconnects])
 
   return { summary, detail, facts }
 }

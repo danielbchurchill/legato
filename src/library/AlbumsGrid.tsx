@@ -4,6 +4,7 @@ import { PlayCircle } from '../ui/PlayCircle'
 import { Button } from '../ui/Button'
 import { formatCount } from '../ui/format'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 import { useLibraryPage } from './useLibraryPage'
 import { CoverGrid } from './CoverGrid'
 import { GridSkeleton } from './LibrarySkeleton'
@@ -96,6 +97,7 @@ function RecentlyAdded({
   const widthRef = useRef<HTMLDivElement>(null)
   const [fit, setFit] = useState(0)
   const [albums, setAlbums] = useState<AlbumRow[] | null>(null)
+  const reconnects = useReconnectEpoch()
 
   useLayoutEffect(() => {
     const element = widthRef.current
@@ -123,7 +125,7 @@ function RecentlyAdded({
     return () => {
       cancelled = true
     }
-  }, [fit])
+  }, [fit, reconnects])
 
   return (
     <div ref={widthRef}>

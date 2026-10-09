@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 import type { DbInspectorSnapshot } from './DatabaseInspector'
 
 /* Everything Library health shows, from the endpoints that already exist:
  * /stats for the library's size, /db-inspector for the last scan and match
  * quality, /hygiene/worklist and /tag-writes for what needs a look, and
  * /tag-manager for the metadata gaps. Each refetches on the server events
- * that change it. */
+ * that change it, and after an outage (#119), whose events never arrived. */
 
 export type WorklistItem =
   | {
@@ -103,9 +104,11 @@ export function useFetched<T>(
   }, [path, keep])
   reloadRef.current = reload
 
+  // Again after an outage (#119), whose events never arrived.
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     reload()
-  }, [reload, revision])
+  }, [reload, revision, reconnects])
   useEffect(
     () => () => {
       if (retry.current.timer != null) clearTimeout(retry.current.timer)
@@ -155,7 +158,8 @@ export function useGapCounts(): Record<GapField, number> | null {
       ),
     ).then((entries) => setCounts(Object.fromEntries(entries) as Record<GapField, number>))
   }, [])
-  useEffect(load, [load])
+  const reconnects = useReconnectEpoch()
+  useEffect(load, [load, reconnects])
   useWsEvent([...LIBRARY_EVENTS, ...TAG_EVENTS], load)
   return counts
 }

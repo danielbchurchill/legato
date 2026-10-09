@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useCoalescedWsEvent } from '../hooks/useCoalescedWsEvent'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 
 export type GraphNode = {
   id: number
@@ -50,16 +51,24 @@ export function useGraphData() {
   const refetch = useCallback(async () => {
     setLoading(true)
     const [nodesRes, edgesRes] = await Promise.all([fetch(`${API}/nodes`), fetch(`${API}/edges`)])
-    setNodes(await nodesRes.json())
-    setEdges(await edgesRes.json())
+    const [nextNodes, nextEdges] = await Promise.all([nodesRes.json(), edgesRes.json()])
+    // Only lists replace the graph. An error's JSON object (a 500 from a
+    // server still starting) would leave the map nothing it can draw.
+    if (!Array.isArray(nextNodes) || !Array.isArray(nextEdges)) throw new Error(`the graph answered ${nodesRes.status}/${edgesRes.status}`)
+    setNodes(nextNodes)
+    setEdges(nextEdges)
     setLoading(false)
   }, [])
 
+  // Fetched once, and once more after every outage (#119): a scan that
+  // finished while the server was out of reach, or a restart onto a changed
+  // library, sent its scan:done to a socket that wasn't there.
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     // Initial graph fetch; the nodes and edges it sets come from the server.
     // oxlint-disable-next-line react/set-state-in-effect
-    refetch()
-  }, [refetch])
+    void refetch().catch(() => undefined)
+  }, [refetch, reconnects])
 
   // An artist photo arriving replaces the album cover that node was borrowing,
   // and a scan changes the node set outright — both while the canvas is on

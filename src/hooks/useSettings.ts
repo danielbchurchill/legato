@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 
 // The generic key-value store server/src/routes/settings.ts exposes —
 // every value is a plain string (the enrichment toggle is '1'/'0' rather
@@ -19,16 +20,22 @@ export function useSettings() {
   // once its own request resolves, whether it's still the most recent one.
   const requestIdRef = useRef(0)
 
+  // Loaded once, and again after every outage (#119), when another device
+  // may have changed them. A change made here since the load began wins
+  // over what the load brings back.
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
+    const requestId = requestIdRef.current
     fetch(`${API}/settings`)
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`settings returned ${r.status}`))))
       .then((s: Settings) => {
+        if (requestIdRef.current !== requestId) return
         confirmedSettingsRef.current = s
         setSettings(s)
         setLoaded(true)
       })
       .catch(() => setLoaded(true))
-  }, [])
+  }, [reconnects])
 
   // Issue #81: every settings-backed toggle/button in the app (repeat mode,
   // view switch, map presets, the MusicMapSettings/LegatoSettings panels)

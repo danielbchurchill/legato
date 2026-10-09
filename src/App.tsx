@@ -43,7 +43,7 @@ import { useLegatoRenewal } from './connect/hooks'
 import { OPEN_CONNECT_EVENT, openConnectScreen, type ConnectReason } from './connect/openConnect'
 import { ServerUnreachableOverShell, ServerUnreachableWindow, type UnreachableView } from './connect/ServerUnreachable'
 import { describeOutage, inferReason, outageFooter, pathFor } from './connect/unreachable'
-import { SERVER_BACK_EVENT } from './connect/reconnect'
+import { useReconnectEpoch } from './connect/reconnect'
 import { UnreachableContext, useUnreachableInShell, type UnreachableSurface } from './connect/unreachableSurface'
 import { IS_TAURI } from './config/runtime'
 import { useInstallOffer } from './pwa/installOffer'
@@ -102,6 +102,9 @@ function MainApp() {
   const theme = useTheme()
   const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
   const known = useRef(false)
+  // #119: again after an outage, so a load it broke doesn't leave "loading
+  // library…" up for good, and folders added elsewhere meanwhile show.
+  const reconnects = useReconnectEpoch()
 
   useEffect(() => {
     let cancelled = false
@@ -126,14 +129,11 @@ function MainApp() {
         })
     }
     load()
-    // #119: a load the outage broke runs again once the server's back.
-    window.addEventListener(SERVER_BACK_EVENT, load)
     return () => {
       cancelled = true
       clearTimeout(retry)
-      window.removeEventListener(SERVER_BACK_EVENT, load)
     }
-  }, [])
+  }, [reconnects])
 
   if (hasLibrary === null) return <Centered>loading library…</Centered>
 

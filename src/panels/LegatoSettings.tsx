@@ -18,6 +18,7 @@ import type { ThemePreference } from '../hooks/useTheme'
 import type { ReplayGainMode } from '../playback/usePlayback'
 import { signOut } from '../auth/useAuth'
 import { API_BASE as API, SERVER_ORIGIN } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 import { openConnectScreen } from '../connect/openConnect'
 import { IS_TAURI } from '../config/runtime'
 import { FOLDER_PICKER } from '../library/folderPicker'
@@ -197,13 +198,14 @@ type MeResponse = { user: AccountUser | null }
 // screen itself (src/auth/OwnerGate.tsx).
 function AccountGroup() {
   const [me, setMe] = useState<MeResponse | null>(null)
+  const reconnects = useReconnectEpoch()
 
   useEffect(() => {
     fetch(`${API}/auth/me`)
       .then((r) => r.json())
       .then(setMe)
       .catch(() => setMe({ user: null }))
-  }, [])
+  }, [reconnects])
 
   if (me === null) {
     return (
@@ -282,8 +284,13 @@ export function LegatoSettings({
       .then(setRoots)
   }
 
+  // #119: the folders load again after an outage; their watch and scan
+  // events went to a socket that wasn't there.
+  const reconnects = useReconnectEpoch()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(loadRoots, [reconnects])
+
   useEffect(() => {
-    loadRoots()
     if (IS_TAURI) {
       invoke<AudioDevice[]>('list_audio_devices')
         .then(setDevices)
