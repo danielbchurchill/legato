@@ -221,6 +221,21 @@ describe('Library header and Artists tab after the library changes (#302)', () =
     expect(requests).toMatchObject({ '/stats': 2, '/library/artists': 2 })
   })
 
+  it("fetches every 10 s while changes don't stop, rather than waiting for them to", async () => {
+    await render(cappedGraph())
+    vi.useFakeTimers()
+
+    // One act a second, so each fetch renders before the next event.
+    for (let i = 0; i < 30; i++) {
+      await act(async () => {
+        libraryChanged()
+        await vi.advanceTimersByTimeAsync(1_000)
+      })
+    }
+
+    expect(requests).toMatchObject({ '/stats': 4, '/library/artists': 4 })
+  })
+
   it("doesn't fetch for a revision it has already fetched", async () => {
     await render(cappedGraph())
     vi.useFakeTimers()

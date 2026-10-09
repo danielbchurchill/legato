@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { useWsEvent } from '../hooks/useWs'
+import { useCoalescedWsEvent } from '../hooks/useCoalescedWsEvent'
 import { API_BASE as API } from '../config/serverHost'
-import { REFETCH_COALESCE_MS } from '../canvas/useGraphData'
 import type { Stats } from '../panels/healthData'
 
 /* When the Library header's counts and the Artists tab fetch again (#302).
@@ -27,23 +26,14 @@ export function useLibraryChanges(): number {
   // The newest revision the server has sent, which a settled burst shows.
   // An event that isn't newer (sent again, or out of order) is left out.
   const latest = useRef(0)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useWsEvent(['library:changed'], (payload) => {
-    const next = (payload as { revision?: unknown } | undefined)?.revision
-    if (typeof next !== 'number' || next <= latest.current) return
-    latest.current = next
-    if (timerRef.current != null) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null
-      setRevision(latest.current)
-    }, REFETCH_COALESCE_MS)
-  })
-  useEffect(
-    () => () => {
-      if (timerRef.current != null) clearTimeout(timerRef.current)
+  useCoalescedWsEvent(['library:changed'], () => setRevision(latest.current), {
+    accept: (payload) => {
+      const next = (payload as { revision?: unknown } | undefined)?.revision
+      if (typeof next !== 'number' || next <= latest.current) return false
+      latest.current = next
+      return true
     },
-    [],
-  )
+  })
   return revision
 }
 
