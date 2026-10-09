@@ -401,6 +401,18 @@ describe("when legato.fm says to wait", () => {
     await h.checkIn();
     expect(h.relay.exchanges()).toHaveLength(3);
   });
+
+  // Issue #324, review: /setup used to show a notice left from before.
+  it("says it's busy rather than what happened to an earlier claim", async () => {
+    const h = await setup();
+    h.relay.expire("AAAA-AAAA");
+    expect(await h.view()).toEqual({ state: "expired" });
+    h.relay.limit(30);
+    h.advance(5_000);
+    // An expired code would be answered as one anyway; this is a new one.
+    h.setupCodes.replace();
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: true });
+  });
 });
 
 describe("a claim", () => {

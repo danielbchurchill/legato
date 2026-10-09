@@ -142,7 +142,9 @@ export class ServerClaims {
     if (this.pending) {
       return { state: "claimed", account: this.pending.account, expiresInMs: Math.max(this.pending.lapsesAt - this.now(), 0) };
     }
-    return this.notice ?? { state: "waiting", unreachable: this.unreachable, busy: this.busy };
+    // Busy is what's true now. A notice left from before it isn't news.
+    if (this.busy) return { state: "waiting", unreachable: this.unreachable, busy: true };
+    return this.notice ?? { state: "waiting", unreachable: this.unreachable, busy: false };
   }
 
   /**
@@ -206,7 +208,6 @@ export class ServerClaims {
         const waitMs = Math.min((result.retryAfterSeconds ?? Number.POSITIVE_INFINITY) * 1000, HOLD_MAX_MS);
         this.heldUntil.set(code, this.clock() + waitMs);
         if (code === live) {
-          if (this.notice?.state === "refused") this.notice = null;
           if (!this.busy) {
             this.log(
               "info",
