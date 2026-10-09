@@ -309,7 +309,11 @@ export class TunnelClient {
     }, delay);
   }
 
+  // A refusal that comes while a stopped client's last answers go back
+  // changes nothing: a client that's been stopped is never started again,
+  // and an hourly try from one would contact legato.fm after an unlink.
   private refused(message: string): void {
+    if (this.current === "stopped") return;
     if (!this.refusedWarned) {
       this.refusedWarned = true;
       this.log(

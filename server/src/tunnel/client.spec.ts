@@ -510,6 +510,30 @@ describe("TunnelClient", () => {
     expect((await fake.request({ method: "GET", path: "/endless-not", headers: {} })).status).toBe(404);
   });
 
+  it("stays stopped when legato.fm refuses the credential while its last answers go back", async () => {
+    // A stream still playing keeps the stop in its grace, the way it does
+    // when the owner unlinks with music on and the credential is revoked.
+    const app = Fastify();
+    app.get("/endless", (_request, reply) => {
+      reply.raw.writeHead(200, { "content-type": "audio/flac" });
+      reply.raw.write("x");
+    });
+    const origin = await listen(app);
+    const fake = relay();
+    const tunnel = client(fake.url, origin, { refusedRetryMs: 20 });
+    await waitFor(tunnel, "connected");
+    void fake.request({ method: "GET", path: "/endless", headers: {} }).catch(() => {});
+    await sleep(50);
+
+    const states: TunnelState[] = [];
+    tunnel.onState((state) => states.push(state));
+    tunnel.stop();
+    fake.send({ type: "auth-error", message: "missing or invalid tunnel credential" });
+    await sleep(2_500);
+    expect(states).toEqual(["stopped"]);
+    expect(fake.opened).toBe(1);
+  });
+
   it("stops when told to, and stays stopped", async () => {
     const fake = relay();
     const tunnel = client(fake.url, "http://127.0.0.1:9");
