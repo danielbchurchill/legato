@@ -124,4 +124,9 @@ describe('Library header past the graph cap (#302)', () => {
     const container = await render(cappedGraph())
     expect(countsLine(container)).toBe('Loading…')
   })
+
+  it("shows the counts as soon as /stats answers, while the map's graph is still loading", async () => {
+    const container = await render({ ...cappedGraph(), nodes: [], byId: new Map(), loading: true })
+    expect(countsLine(container)).toBe('30,000 albums · 3,000 artists · 300,000 tracks')
+  })
 })

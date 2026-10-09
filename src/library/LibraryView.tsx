@@ -34,6 +34,7 @@ import { ALBUM_SORT_OPTIONS, TRACK_SORT_OPTIONS, type AlbumSort, type SortDir, t
  * The counts are GET /stats's, Library health's numbers, counted on the
  * server over the whole library (#302). The map's graph stops at 5,000
  * nodes, so counting it said "455 albums · 0 artists" at 30,000 albums.
+ * They show as soon as /stats answers, without waiting for the graph.
  *
  * Opening anything here — a cover, a row, an artist — opens its details in
  * the right panel: there's no node card to show off the map. */
@@ -85,6 +86,10 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
   // A folder is set but nothing has been matched yet: the first scan is
   // still running, or the folder holds nothing Legato reads. The graph's
   // cap doesn't matter here: a graph with any node is a library with one.
+  // /stats can't say this. Its tracks count files as the scan reads them,
+  // and the graph and the albums only fill at the scan's recompute, so
+  // partway through a first scan /stats has tracks and the albums grid has
+  // nothing, where this still reads "Reading your library".
   const empty = firstRun == null && !loading && nodes.length === 0
 
   const scrollToTop = () => scrollRef.current?.scrollTo({ top: 0 })
@@ -106,7 +111,7 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
             <span className="text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]">
               {firstRun != null || empty
                 ? 'Nothing here yet'
-                : loading || !stats
+                : !stats
                   ? 'Loading…'
                   : `${plural(stats.albums, 'album')} · ${plural(stats.artists, 'artist')} · ${plural(stats.tracks, 'track')}`}
             </span>
