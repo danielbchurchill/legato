@@ -199,13 +199,44 @@ describe("ExchangeLimiter", () => {
     expect(limiter.ask(ADDRESS, "AAAA-NEXT")).toBe(0);
   });
 
-  it(`remembers at most ${MAX_ADDRESSES} addresses, letting the oldest go first`, () => {
-    const { limiter } = clock();
-    lockOut(limiter, ADDRESS);
-    for (let a = 0; a < MAX_ADDRESSES - 1; a++) limiter.ask(`10.${a >> 16}.${(a >> 8) & 255}.${a & 255}`, "K7QM-4XRD");
-    expect(limiter.ask(ADDRESS, "GUESS-NEXT")).toBe(60);
-    limiter.ask("198.51.100.4", "K7QM-4XRD");
-    expect(limiter.ask(ADDRESS, "GUESS-NEXT")).toBe(0);
+  // Issue #324: asking from thousands of other addresses mustn't push a
+  // locked-out one out of memory, handing it a fresh allowance.
+  describe(`at ${MAX_ADDRESSES} addresses`, () => {
+    const other = (a: number) => `10.${a >> 16}.${(a >> 8) & 255}.${a & 255}`;
+
+    it("lets the least recently used address go first, and keeps one that's locked out", () => {
+      const { limiter } = clock();
+      lockOut(limiter, ADDRESS);
+      for (let a = 0; a < MAX_ADDRESSES - 1; a++) limiter.ask(other(a), "K7QM-4XRD");
+      // other(0) asks again, so other(1) is now the one used longest ago.
+      limiter.ask(other(0), "K7QM-4XRD");
+      for (let a = 0; a < 100; a++) limiter.ask(`198.51.${a >> 8}.${a & 255}`, "K7QM-4XRD");
+
+      expect(limiter.ask(ADDRESS, "GUESS-NEXT")).toBe(60);
+      // other(0) was remembered: its code isn't new, so another 30 lock it out.
+      for (let i = 0; i < FREE_CODES - 1; i++) expect(limiter.ask(other(0), `NEW-${i}`)).toBe(0);
+      expect(limiter.ask(other(0), "NEW-LAST")).toBe(0);
+      expect(limiter.ask(other(0), "NEW-NEXT")).toBe(60);
+      // other(1) wasn't: it starts again from nothing.
+      for (let i = 0; i < FREE_CODES; i++) expect(limiter.ask(other(1), `NEW-${i}`)).toBe(0);
+      expect(limiter.ask(other(1), "NEW-LAST")).toBe(0);
+    });
+
+    it("keeps a record that's held back by its minute's asks too", () => {
+      const { limiter } = clock();
+      for (let i = 0; i < ASKS_PER_WINDOW; i++) limiter.ask(ADDRESS, "LOOP-0");
+      for (let a = 0; a < MAX_ADDRESSES + 100; a++) limiter.ask(other(a), "K7QM-4XRD");
+      expect(limiter.ask(ADDRESS, "LOOP-0")).toBe(60);
+    });
+
+    it("lets the least recently used locked-out address go only once every address is locked out", () => {
+      const { limiter } = clock();
+      lockOut(limiter, ADDRESS);
+      for (let a = 0; a < MAX_ADDRESSES - 1; a++) lockOut(limiter, other(a));
+      lockOut(limiter, other(MAX_ADDRESSES));
+      expect(limiter.ask(other(0), "GUESS-NEXT")).toBe(60);
+      expect(limiter.ask(ADDRESS, "GUESS-NEXT")).toBe(0);
+    });
   });
 
   it("keeps time by a clock the wall clock can't move", () => {

@@ -102,12 +102,12 @@ export class TokenLimiter {
 //
 // The clock is monotonic, so a wall-clock step can't lift or stretch a
 // wait. Memory stays bounded: a record goes once its codes age out and its
-// minute is up, and past MAX_ADDRESSES the oldest record makes room.
+// minute is up, and past MAX_ADDRESSES the least recently used record that
+// isn't holding its address back makes room (AddressRecords).
 export const ASK_WINDOW_MS = 60_000;
 export const ASKS_PER_WINDOW = 300;
 export const CODE_MEMORY_MS = 15 * 60_000;
 export const FREE_CODES = 30;
-export const MAX_ADDRESSES = 10_000;
 // How often an ask also drops other addresses' aged-out records. Each
 // address's own are dropped whenever it asks.
 const SWEEP_EVERY_MS = 60_000;
@@ -115,7 +115,7 @@ const SWEEP_EVERY_MS = 60_000;
 type ExchangeRecord = { codes: Map<string, number>; lockedUntil: number; windowStart: number; asks: number };
 
 export class ExchangeLimiter {
-  private readonly byBlock = new Map<string, ExchangeRecord>();
+  private readonly records = new AddressRecords<ExchangeRecord>();
   private lastSweepAt: number;
 
   constructor(private readonly now: () => number = () => performance.now()) {
@@ -150,10 +150,8 @@ export class ExchangeLimiter {
         record.lockedUntil = now + Math.min(MAX_LOCKOUT_MS, FIRST_LOCKOUT_MS * 2 ** doublings);
       }
     }
-    if (!this.byBlock.has(block)) {
-      if (this.byBlock.size >= MAX_ADDRESSES) this.byBlock.delete(this.byBlock.keys().next().value!);
-      this.byBlock.set(block, record);
-    }
+    const held = record.lockedUntil > now || (record.asks >= ASKS_PER_WINDOW && now - record.windowStart < ASK_WINDOW_MS);
+    this.records.use(block, record, held);
     return Math.ceil(waitMs / 1000);
   }
 
@@ -161,20 +159,58 @@ export class ExchangeLimiter {
   // longer than CODE_MEMORY_MS), so a record with no codes left and its
   // minute up has nothing more to say.
   private current(block: string, now: number): ExchangeRecord | undefined {
-    const record = this.byBlock.get(block);
+    const record = this.records.get(block);
     if (!record) return undefined;
     for (const [code, firstAskedAt] of record.codes) {
       if (firstAskedAt <= now - CODE_MEMORY_MS) record.codes.delete(code);
     }
     if (record.codes.size > 0 || now - record.windowStart < ASK_WINDOW_MS) return record;
-    this.byBlock.delete(block);
+    this.records.delete(block);
     return undefined;
   }
 
   private sweep(now: number): void {
     if (now - this.lastSweepAt < SWEEP_EVERY_MS) return;
     this.lastSweepAt = now;
-    for (const block of this.byBlock.keys()) this.current(block, now);
+    for (const block of this.records.blocks()) this.current(block, now);
+  }
+}
+
+// At most MAX_ADDRESSES records, one per address, for a limiter. A new
+// address past that makes room by pushing out the least recently used
+// record that wasn't holding its address back when it was last used. So
+// asking from thousands of other addresses can't push a locked-out one out
+// and hand it a fresh allowance. Only when every record is holding its
+// address back does the least recently used of those go: that hands its
+// address the allowance stepping through enough /64s gets anyway.
+export const MAX_ADDRESSES = 10_000;
+
+class AddressRecords<T> {
+  // Each in least recently used order: use() moves a record to the end.
+  private readonly open = new Map<string, T>();
+  private readonly held = new Map<string, T>();
+
+  get(block: string): T | undefined {
+    return this.open.get(block) ?? this.held.get(block);
+  }
+
+  /** Files a record as just used, and as holding its address back or not. */
+  use(block: string, record: T, holding: boolean): void {
+    const known = this.open.delete(block) || this.held.delete(block);
+    if (!known && this.open.size + this.held.size >= MAX_ADDRESSES) {
+      const from = this.open.size > 0 ? this.open : this.held;
+      from.delete(from.keys().next().value!);
+    }
+    (holding ? this.held : this.open).set(block, record);
+  }
+
+  delete(block: string): void {
+    if (!this.open.delete(block)) this.held.delete(block);
+  }
+
+  *blocks(): IterableIterator<string> {
+    yield* this.open.keys();
+    yield* this.held.keys();
   }
 }
 
