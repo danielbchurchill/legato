@@ -1,9 +1,10 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import { appendFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mediaSlotsInUse } from "../media/queue.js";
 import { cachePath, ensureVariant, readGrowing, stopFfmpeg, TranscodeJob } from "./cache.js";
 
@@ -256,6 +257,37 @@ describe("TranscodeJob listeners", () => {
     leave();
     await sleep(GRACE * 2);
     expect(encode.abandoned.aborted).toBe(false);
+  });
+
+  it("isn't abandoned once ffmpeg has exited, so nothing encodes it again while its file is finished", async () => {
+    // ffmpeg has written the whole file and exited, and the rename into
+    // place is held back: the window a last listener's grace can end in.
+    const source = sineFlac(1, "short.flac");
+    const cacheDir = path.join(dir, "streams");
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const rename = fsPromises.rename;
+    const renaming = spyOn(fsPromises, "rename").mockImplementation(async (...args: Parameters<typeof rename>) => {
+      await held;
+      return rename(...args);
+    });
+    try {
+      const first = await ensureVariant(HASH, source, "opus160", cacheDir, GRACE);
+      if (first.kind !== "growing") throw new Error("expected a fresh encode");
+      const leave = first.job.join();
+      while (renaming.mock.calls.length === 0) await sleep(5);
+      leave();
+      await sleep(GRACE * 2);
+
+      const second = await ensureVariant(HASH, source, "opus160", cacheDir, GRACE);
+      expect(second.kind === "growing" && second.job === first.job).toBe(true);
+      release();
+      await first.job.finished;
+      expect(existsSync(cachePath(HASH, "opus160", cacheDir))).toBe(true);
+    } finally {
+      release();
+      renaming.mockRestore();
+    }
   });
 
   it("kills ffmpeg, removes its temp file and frees its slot, and the next request encodes afresh", async () => {

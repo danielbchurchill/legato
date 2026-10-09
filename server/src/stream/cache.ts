@@ -70,6 +70,8 @@ export class TranscodeJob {
   private resolveStarted!: () => void;
   private rejectStarted!: (err: Error) => void;
   private listeners = 0;
+  // ffmpeg has exited cleanly, and the file is being completed.
+  private encoded = false;
   private abandonTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly abandonment = new AbortController();
   /** Fires once the last listener has been gone for the grace. */
@@ -125,12 +127,27 @@ export class TranscodeJob {
       if (left) return;
       left = true;
       this.listeners -= 1;
-      if (this.listeners > 0 || this.state !== "running") return;
+      if (this.listeners > 0 || !this.abandonable()) return;
       this.abandonTimer = setTimeout(() => {
         this.abandonTimer = null;
-        if (this.listeners === 0 && this.state === "running") this.abandonment.abort();
+        if (this.listeners === 0 && this.abandonable()) this.abandonment.abort();
       }, this.graceMs);
     };
+  }
+
+  // Once ffmpeg has exited, it's too late: what it made is a whole variant,
+  // and it lands in the cache like any other. Abandoning it then would
+  // only take it out of the in-flight table (ensureVariant) while its file
+  // is renamed into place, and a request in that window would start a
+  // second ffmpeg for the same pair.
+  private abandonable(): boolean {
+    return this.state === "running" && !this.encoded;
+  }
+
+  /** ffmpeg has exited cleanly; all that's left is completing the file. */
+  finishing(): void {
+    this.encoded = true;
+    this.stopAbandonTimer();
   }
 
   private stopAbandonTimer(): void {
@@ -243,8 +260,8 @@ function transcodeToFile(sourcePath: string, quality: TranscodedQuality, job: Tr
     };
     // Nobody's listening any more. Settles only once ffmpeg has exited,
     // because settling is what releases the media-queue slot
-    // (runMediaTask). One that has already exited is finishing its file,
-    // and lands in the cache like any other.
+    // (runMediaTask). A job is never abandoned once ffmpeg has exited
+    // (TranscodeJob.finishing).
     const abandon = () => {
       if (failed || exited) return;
       failed = true;
@@ -272,6 +289,7 @@ function transcodeToFile(sourcePath: string, quality: TranscodedQuality, job: Tr
         fail(new Error(`ffmpeg failed to transcode to ${quality} (exit ${code}): ${stderr.trim()}`));
         return;
       }
+      job.finishing();
       // end()'s callback runs after every queued write's own callback, so
       // flushedBytes is the whole file by the time this resolves.
       out.end(() => resolve());
