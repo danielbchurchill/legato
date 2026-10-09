@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { API_BASE, SERVER_ORIGIN } from '../config/serverHost'
 import { rememberServer } from '../connect/knownServers'
 import { renewLegatoSession } from '../connect/legatoSignIn'
+import { SERVER_BACK_EVENT } from '../connect/unreachable'
 import { AUTH_REQUIRED_EVENT, clearSession, readSession, storeSession } from './session'
 
 export type AuthStatus = {
@@ -66,7 +67,11 @@ export function useAuth() {
   const [state, setState] = useState<AuthState>({ kind: 'checking' })
 
   const refresh = useCallback(async () => {
-    setState(await loadAuthState(true))
+    const next = await loadAuthState(true)
+    // #119: a check that couldn't reach the server says nothing about the
+    // session. A signed-in app stays mounted, with its queue and anything
+    // still playing, and the unreachable state over it says what happened.
+    setState((prev) => (next.kind === 'unreachable' && prev.kind === 'signed-in' ? prev : next))
   }, [])
 
   useEffect(() => {
@@ -76,9 +81,12 @@ export function useAuth() {
     const onAuthRequired = () => void refresh()
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired)
     window.addEventListener('focus', onAuthRequired)
+    // A check the outage broke runs again once the server answers.
+    window.addEventListener(SERVER_BACK_EVENT, onAuthRequired)
     return () => {
       window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired)
       window.removeEventListener('focus', onAuthRequired)
+      window.removeEventListener(SERVER_BACK_EVENT, onAuthRequired)
     }
   }, [refresh])
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Centered } from './shell/Centered'
-import { useServerReady } from './hooks/useServerReady'
+import { useServerReady, type ServerStatus } from './hooks/useServerReady'
 import { ServerUpdateNotice } from './shell/ServerUpdateNotice'
 import { ToastProvider } from './ui/Toast'
 import { useWsEvent } from './hooks/useWs'
@@ -41,6 +41,10 @@ import { LAUNCHED_OFFLINE } from './pwa/register'
 import { ConnectScreen } from './connect/ConnectScreen'
 import { useLegatoRenewal } from './connect/hooks'
 import { OPEN_CONNECT_EVENT, openConnectScreen, type ConnectReason } from './connect/openConnect'
+import { ServerUnreachableOverShell, ServerUnreachableWindow, type UnreachableView } from './connect/ServerUnreachable'
+import { describeOutage, inferReason, outageFooter, pathFor, SERVER_BACK_EVENT } from './connect/unreachable'
+import { UnreachableContext, useUnreachableInShell, type UnreachableSurface } from './connect/unreachableSurface'
+import { IS_TAURI } from './config/runtime'
 import { useInstallOffer } from './pwa/installOffer'
 
 // #125: off -> all -> one -> off. The player's single repeat button cycles
@@ -94,9 +98,16 @@ function MainApp() {
   const [hasLibrary, setHasLibrary] = useState<boolean | null>(null)
 
   useEffect(() => {
-    fetch(`${API_BASE}/library-roots`)
-      .then((r) => r.json())
-      .then((roots: unknown[]) => setHasLibrary(roots.length > 0))
+    const load = () =>
+      fetch(`${API_BASE}/library-roots`)
+        .then((r) => r.json())
+        .then((roots: unknown[]) => setHasLibrary(roots.length > 0))
+        .catch(() => undefined)
+    void load()
+    // #119: a load the outage broke runs again once the server's back,
+    // rather than leaving "loading library…" up for good.
+    window.addEventListener(SERVER_BACK_EVENT, load)
+    return () => window.removeEventListener(SERVER_BACK_EVENT, load)
   }, [])
 
   if (hasLibrary === null) return <Centered>loading library…</Centered>
@@ -133,6 +144,7 @@ function Workspace({
 }) {
   const graph = useGraph()
   const account = useAccount()
+  const unreachable = useUnreachableInShell()
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null)
   const [leftView, setLeftView] = useState<LeftView | null>(null)
   const [rightView, setRightView] = useState<RightView | null>(null)
@@ -479,6 +491,10 @@ function Workspace({
           </RightPanel>
         )}
 
+        {/* #119: over the stage and panels, under the player, so whatever's
+         * buffered keeps playing and can still be paused. */}
+        {unreachable && <ServerUnreachableOverShell view={unreachable} />}
+
         {playerVisible ? (
           <Player
             title={playback.currentTitle ?? ''}
@@ -503,7 +519,9 @@ function Workspace({
         ) : (
           // Hidden while the map is still empty: there's nothing to
           // shuffle yet, and the first-scan card owns the bottom of the
-          // screen's attention.
+          // screen's attention. Hidden while the server's unreachable too,
+          // since nothing could start.
+          !unreachable &&
           graph.nodes.some((n) => n.type === 'recording') && <IdlePlayer onShuffleLibrary={shuffleLibrary} busy={playback.queueBusy} />
         )}
 
@@ -530,6 +548,45 @@ function Workspace({
 // another server. The desktop app's own server is usually up in a second or
 // two, and a link there from the first frame would be noise.
 const OFFER_ANOTHER_SERVER_MS = 5000
+// Issue #119: how long the desktop app's own server gets to start before
+// the window says it hasn't. A migration's backup of a big library can take
+// a while, and until then "starting" is the truth.
+const EMBEDDED_START_GRACE_MS = 15_000
+
+const SERVER_PATH = pathFor(SERVER_ORIGIN, IS_TAURI && SERVER_ORIGIN === DEFAULT_SERVER_ORIGIN)
+
+// What the unreachable state says, worked out from what useServerReady saw.
+function unreachableView(connection: ServerStatus): UnreachableView | null {
+  const { outage } = connection
+  if (!outage) return null
+  const now = Date.now()
+  const reason = inferReason({ ...outage, path: SERVER_PATH }, now)
+  const copy = describeOutage(reason, {
+    path: SERVER_PATH,
+    name: connection.name,
+    host: new URL(SERVER_ORIGIN).host,
+    lastSeenAt: outage.lastSeenAt,
+    everConnected: connection.everConnected,
+    now,
+  })
+  return {
+    ...copy,
+    footer: outageFooter({ everConnected: connection.everConnected, triedAt: outage.triedAt }),
+    retrying: connection.retrying,
+    onRetry: connection.retry,
+    onConnectElsewhere: () => openConnectScreen('unreachable'),
+  }
+}
+
+function useUnreachableSurface(view: UnreachableView | null): { surface: UnreachableSurface; claimed: boolean } {
+  const [claims, setClaims] = useState(0)
+  const claim = useCallback(() => {
+    setClaims((n) => n + 1)
+    return () => setClaims((n) => n - 1)
+  }, [])
+  const surface = useMemo(() => ({ view, claim }), [view, claim])
+  return { surface, claimed: claims > 0 }
+}
 
 function useConnectScreen(): { reason: ConnectReason | null; close: () => void } {
   const [reason, setReason] = useState<ConnectReason | null>(null)
@@ -552,47 +609,70 @@ function useAfter(ms: number, active: boolean): boolean {
 }
 
 export default function App() {
-  const { ready, everConnected, server } = useServerReady()
+  const connection = useServerReady()
+  const { ready, everConnected, server } = connection
   const connect = useConnectScreen()
   const { resolvedTheme } = useTheme()
   const chosen = SERVER_ORIGIN !== DEFAULT_SERVER_ORIGIN
   const offerAnother = useAfter(OFFER_ANOTHER_SERVER_MS, !ready) || chosen || everConnected || LAUNCHED_OFFLINE
+  const embeddedHadTime = useAfter(EMBEDDED_START_GRACE_MS, !everConnected)
+  const unreachable = unreachableView(connection)
+  const { surface, claimed } = useUnreachableSurface(unreachable)
 
-  if (connect.reason) {
-    // Back goes to whatever was there before: the app, a sign-in screen,
-    // or the wait for a server that isn't answering.
-    return <ConnectScreen theme={resolvedTheme} reason={connect.reason} onClose={connect.close} />
-  }
+  // Back goes to whatever was there before: the app, a sign-in screen, or
+  // the wait for a server that isn't answering. It's drawn over that rather
+  // than in its place (#119), so going back finds the app as it was left:
+  // the same queue, and anything still playing.
+  const connectScreen = connect.reason && (
+    <div role="dialog" aria-modal="true" aria-label="Connect to a server" className="relative z-50">
+      <ConnectScreen theme={resolvedTheme} reason={connect.reason} onClose={connect.close} />
+    </div>
+  )
 
-  if (!ready) {
+  if (!everConnected) {
+    // #119: a server that isn't answering gets the unreachable state, with
+    // the desktop app's own server given time to start first.
+    if (unreachable && (SERVER_PATH !== 'embedded' || embeddedHadTime)) {
+      return (
+        <>
+          <ServerUnreachableWindow view={unreachable} theme={resolvedTheme} />
+          {connectScreen}
+        </>
+      )
+    }
     // #128: an installed web app launched with the server out of reach
     // runs the service worker's cached shell, and "starting" would be a
     // lie there: no browser starts a server. It still polls, so the app
-    // comes up by itself once the server answers.
-    const waiting = everConnected
-      ? 'lost connection to legato-server…'
-      : LAUNCHED_OFFLINE || chosen
-        ? "can't reach legato-server…"
-        : 'starting legato-server…'
-    // #117: the way out when the server this client points at isn't there.
-    // The real unreachable state is #119's.
+    // comes up by itself once the server answers. #117: the link is the
+    // way out when the server this client points at isn't there.
     return (
-      <Centered>
-        {waiting}
-        {offerAnother && <Button onClick={() => openConnectScreen('unreachable')}>connect to a different server</Button>}
-      </Centered>
+      <>
+        <Centered>
+          {SERVER_PATH === 'embedded' ? 'starting legato-server…' : 'connecting…'}
+          {offerAnother && <Button onClick={() => openConnectScreen('unreachable')}>connect to a different server</Button>}
+        </Centered>
+        {connectScreen}
+      </>
     )
   }
 
+  // Once the app has run, it stays mounted through an outage (#119): the
+  // queue and the web player live in it, and anything buffered keeps
+  // playing. The shell draws the unreachable state over itself; anything
+  // else (the sign-in check, loading the library) gets the whole window.
   const app = <MainApp />
   return (
-    <ToastProvider>
-      {/* A server older than migration 0029 has no owner gate and no
-       * /auth/status to ask, so it runs ungated exactly as before,
-       * with the notice saying to update it. */}
-      {server?.outOfDate ? app : <OwnerGated>{app}</OwnerGated>}
-      <ServerUpdateNotice server={server} />
-    </ToastProvider>
+    <UnreachableContext.Provider value={surface}>
+      <ToastProvider>
+        {/* A server older than migration 0029 has no owner gate and no
+         * /auth/status to ask, so it runs ungated exactly as before,
+         * with the notice saying to update it. */}
+        {server?.outOfDate ? app : <OwnerGated>{app}</OwnerGated>}
+        <ServerUpdateNotice server={server} />
+      </ToastProvider>
+      {unreachable && !claimed && <ServerUnreachableWindow view={unreachable} theme={resolvedTheme} />}
+      {connectScreen}
+    </UnreachableContext.Provider>
   )
 }
 
