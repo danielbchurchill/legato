@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Button } from '../ui/Button'
-import { Skeleton } from '../ui/Skeleton'
+import { Shimmer, Skeleton } from '../ui/Skeleton'
 import { IS_TAURI } from '../config/runtime'
+import { API_BASE } from '../config/serverHost'
+import { useAccount } from '../auth/accountContext'
+import type { AuthStatus } from '../auth/useAuth'
+import { describeLinkFailure, LINK_CHANGED_EVENT, linkWithLegato } from '../connect/legatoLink'
+import { startBrowserLink } from '../connect/legatoLinkReturn'
 import { SettingsGroup } from './SettingsPrimitives'
 import {
   clearRelaySession,
@@ -33,8 +38,11 @@ type RowState =
  * to legato.fm as, and the Google/GitHub sign-in that gets it there.
  * Signing in opens the system browser through the Rust loopback listener
  * (src-tauri/src/relay_sign_in.rs); see src/auth/relaySession.ts for the
- * flow. Nothing uses this session yet; #114 is what makes it reach a home
- * server. */
+ * flow.
+ *
+ * Under it, in the desktop app and the web client alike, whether this server
+ * is linked to legato.fm and the way for its owner to link it (issue #325,
+ * ServerLink below). */
 export function LegatoAccountRow() {
   const [state, setState] = useState<RowState>({ kind: 'loading' })
   const [error, setError] = useState<string | null>(null)
@@ -100,12 +108,6 @@ export function LegatoAccountRow() {
 
   return (
     <SettingsGroup title="legato.fm account">
-      {!IS_TAURI && (
-        <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-          Sign in to legato.fm from the Legato desktop app.
-        </p>
-      )}
-
       {IS_TAURI && state.kind === 'loading' && <Skeleton className="h-[12px] w-[140px] rounded-full" />}
 
       {state.kind === 'signed-in' && (
@@ -172,6 +174,88 @@ export function LegatoAccountRow() {
       )}
 
       {error && <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{error}</p>}
+
+      <ServerLink relaySignedIn={state.kind === 'signed-in'} />
     </SettingsGroup>
+  )
+}
+
+type LinkStatus = { serverId: string; issuer: string | null; linked: boolean }
+
+/** This server's id, which legato.fm it trusts, and whether the signed-in
+ * user is linked there; again whenever a link finishes elsewhere. */
+function useLinkStatus(): { status: LinkStatus | null | 'unavailable'; reload: () => void } {
+  const [status, setStatus] = useState<LinkStatus | null | 'unavailable'>(null)
+  const reload = useCallback(() => {
+    fetch(`${API_BASE}/auth/status`)
+      .then((r) => r.json() as Promise<AuthStatus>)
+      .then(({ legato }) =>
+        setStatus(legato ? { serverId: legato.serverId, issuer: legato.issuer ?? null, linked: legato.linked === true } : 'unavailable'),
+      )
+      .catch(() => setStatus('unavailable'))
+  }, [])
+  useEffect(() => {
+    reload()
+    window.addEventListener(LINK_CHANGED_EVENT, reload)
+    return () => window.removeEventListener(LINK_CHANGED_EVENT, reload)
+  }, [reload])
+  return { status, reload }
+}
+
+/* Issue #325: linking this server to legato.fm from Settings, for a server
+ * whose owner was created without a claim, or whose first link failed, or
+ * that legato.fm stopped vouching for ("link again"). Both clients end at the
+ * server's own link endpoint (src/connect/legatoLink.ts). The desktop app
+ * asks legato.fm with the session above; the web client can't hold one, so
+ * it goes to legato.fm's /link page and comes back (legatoLinkReturn.ts). */
+function ServerLink({ relaySignedIn }: { relaySignedIn: boolean }) {
+  const account = useAccount()
+  const { status, reload } = useLinkStatus()
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  if (status === null) return <Skeleton className="h-[12px] w-[200px] rounded-full" />
+  // A server from before #114 has no legato.fm identity to link.
+  if (status === 'unavailable') return null
+
+  const owner = account?.role === 'owner'
+  const { issuer } = status
+  const said =
+    issuer === null
+      ? "legato.fm is turned off on this server, so it can't be linked."
+      : status.linked
+        ? 'This server is linked to legato.fm.'
+        : "This server isn't linked to a legato.fm account yet."
+  const hint =
+    issuer === null ? null : !owner ? "Only this server's owner can link it." : IS_TAURI && !relaySignedIn ? 'Sign in to legato.fm to link it.' : null
+  const canLink = issuer !== null && owner && (!IS_TAURI || relaySignedIn)
+
+  const link = async () => {
+    setNotice(null)
+    setBusy(true)
+    // The web client leaves for legato.fm here and comes back to the app.
+    if (!IS_TAURI) return startBrowserLink(status.serverId, issuer!)
+    const result = await linkWithLegato(status.serverId)
+    setBusy(false)
+    if (!result.ok) return setNotice(describeLinkFailure(result.failure))
+    setNotice(`Linked to ${result.linked.name ?? result.linked.email ?? 'your legato.fm account'}.`)
+    reload()
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
+        <p className="min-w-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+          {said}
+          {hint && ` ${hint}`}
+        </p>
+        {canLink && (
+          <Button onClick={() => void link()} disabled={busy}>
+            {busy ? <Shimmer>linking…</Shimmer> : status.linked ? 'link again' : 'link to legato.fm'}
+          </Button>
+        )}
+      </div>
+      {notice && <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{notice}</p>}
+    </>
   )
 }

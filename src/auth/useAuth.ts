@@ -9,7 +9,9 @@ export type AuthStatus = {
   setupCodeRequired: boolean
   user: { role: 'owner' | 'legacy'; provider: string; displayName: string | null; email: string | null } | null
   oauth: { google: boolean; github: boolean }
-  legato?: { serverId: string } | null
+  // issuer is null when legato.fm is off on the server; linked is about the
+  // signed-in user's own row (server/src/routes/auth.ts).
+  legato?: { serverId: string; issuer?: string | null; linked?: boolean | null } | null
 }
 
 export type AuthState =
