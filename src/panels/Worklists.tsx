@@ -9,6 +9,7 @@ import { BackRow } from '../shell/SidePanel'
 import type { WorklistKind } from '../shell/panels'
 import { useGraph } from '../canvas/graphContext'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 import {
   GAP_FIELDS,
   formatDiffValue,
@@ -79,9 +80,10 @@ function Quiet({ children }: { children: ReactNode }) {
 /* ---- Possible duplicates --------------------------------------------------- */
 
 /* A recording's format isn't in the graph, so each side of a pair asks its
- * node once. */
+ * node once, and again after an outage (#119). */
 function useFormat(nodeId: number): string | null {
   const [format, setFormat] = useState<string | null>(null)
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     let cancelled = false
     fetch(`${API}/nodes/${nodeId}`)
@@ -91,7 +93,7 @@ function useFormat(nodeId: number): string | null {
     return () => {
       cancelled = true
     }
-  }, [nodeId])
+  }, [nodeId, reconnects])
   return format
 }
 
@@ -164,12 +166,15 @@ function MissingFiles({ onFocusNode }: { onFocusNode: (id: number) => void }) {
   const { data } = useWorklist()
   const [roots, setRoots] = useState<LibraryRoot[]>([])
   const [rescanned, setRescanned] = useState<number | null>(null)
+  // Again after an outage (#119), when folders may have been added or
+  // removed elsewhere.
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     fetch(`${API}/library-roots`)
       .then((r) => r.json())
       .then(setRoots)
       .catch(() => undefined)
-  }, [])
+  }, [reconnects])
   const items = (data ?? []).filter((i) => i.type === 'missing_file' || i.type === 'wont_decode') as Extract<
     WorklistItem,
     { type: 'missing_file' | 'wont_decode' }
@@ -258,15 +263,17 @@ function EnrichmentItem({
   const graph = useGraph()
   const [candidates, setCandidates] = useState<Candidate[] | null>(null)
   const [chosen, setChosen] = useState<string | null>(null)
+  // Again after an outage (#119), keeping the pick if it's still there.
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     fetch(`${API}/hygiene/match-candidates/${item.nodeId}`)
       .then((r) => r.json())
       .then((list: Candidate[]) => {
         setCandidates(list)
-        setChosen(list[0]?.mbid ?? null)
+        setChosen((prev) => (prev != null && list.some((c) => c.mbid === prev) ? prev : (list[0]?.mbid ?? null)))
       })
       .catch(() => setCandidates([]))
-  }, [item.nodeId])
+  }, [item.nodeId, reconnects])
   const use = async () => {
     if (!chosen) return
     await fetch(`${API}/hygiene/match-candidates/${item.nodeId}/resolve`, {

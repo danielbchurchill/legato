@@ -11,6 +11,7 @@ import { useShellLayout } from '../shell/layout'
 import { useGraph } from '../canvas/graphContext'
 import { computeClusters } from '../canvas/clusters'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 import type { usePlayback } from '../playback/usePlayback'
 
 /* The search palette: ⌘K from anywhere, or a click on the capsule. It opens
@@ -50,9 +51,11 @@ const FILTERS: { id: Filter; label: string }[] = [
 // Producers and engineers are people too: they search with the artists.
 const filterOf = (kind: Item['kind']): Exclude<Filter, 'all'> => (kind === 'credit' ? 'artist' : kind)
 
-/* The full-text search, debounced, with stale responses dropped. */
+/* The full-text search, debounced, with stale responses dropped. Asked
+ * again after an outage (#119), when an answer that failed came back empty. */
 function useSearch(query: string): { hits: Hit[] | null; pending: boolean } {
   const [state, setState] = useState<{ query: string; hits: Hit[] } | null>(null)
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     const q = query.trim()
     if (!q) return
@@ -67,26 +70,32 @@ function useSearch(query: string): { hits: Hit[] | null; pending: boolean } {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [query])
+  }, [query, reconnects])
   if (!query.trim()) return { hits: null, pending: false }
   return { hits: state?.hits ?? null, pending: state?.query !== query }
 }
 
 function usePlaylists(): Playlist[] {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     fetch(`${API}/playlists`)
       .then((r) => r.json())
       .then(setPlaylists)
       .catch(() => undefined)
-  }, [])
+  }, [reconnects])
   return playlists
 }
 
+const NO_YEARS = new Map<number, string | null>()
+
 /* A record's year, from its summary — fetched once per record, cached for
- * the palette's life. */
+ * the palette's life, or until an outage ends (#119): a summary that
+ * failed while the server was gone is cached as no year. */
 function useReleaseYears(ids: number[]): Map<number, string | null> {
-  const [years, setYears] = useState(new Map<number, string | null>())
+  const reconnects = useReconnectEpoch()
+  const [cache, setCache] = useState({ epoch: reconnects, years: new Map<number, string | null>() })
+  const years = cache.epoch === reconnects ? cache.years : NO_YEARS
   const wanted = ids.filter((id) => !years.has(id)).join(',')
   useEffect(() => {
     if (!wanted) return
@@ -101,16 +110,16 @@ function useReleaseYears(ids: number[]): Map<number, string | null> {
       ),
     ).then((entries) => {
       if (cancelled) return
-      setYears((prev) => {
-        const next = new Map(prev)
+      setCache((prev) => {
+        const next = new Map(prev.epoch === reconnects ? prev.years : NO_YEARS)
         for (const [id, year] of entries) next.set(id, year)
-        return next
+        return { epoch: reconnects, years: next }
       })
     })
     return () => {
       cancelled = true
     }
-  }, [wanted])
+  }, [wanted, reconnects])
   return years
 }
 
