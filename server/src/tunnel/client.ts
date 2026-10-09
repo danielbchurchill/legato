@@ -94,6 +94,7 @@ export class TunnelClient {
   // outage, not one per retry.
   private failing = false;
   private alive = false;
+  private frameWarned = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private beatTimer: ReturnType<typeof setInterval> | null = null;
   private readonly requests = new Map<string, ClientRequest>();
@@ -151,18 +152,28 @@ export class TunnelClient {
     socket.addEventListener("open", () => {
       if (this.socket === socket) socket.send(JSON.stringify({ type: "auth", secret: this.credential }));
     });
+    // Nothing a frame holds may throw out of this listener: Bun exits on
+    // an exception there, and the whole server with it. forward() turns a
+    // request it can't replay into an error for that request alone, and
+    // anything else that throws is logged, once, and dropped.
     socket.addEventListener("message", (event: MessageEvent) => {
       if (this.socket !== socket) return;
       this.alive = true;
-      const frame = parseFrame(event.data);
-      if (frame?.type === "auth-ok") {
-        clearTimeout(authTimer);
-        this.connected(socket);
-      } else if (frame?.type === "auth-error") {
-        clearTimeout(authTimer);
-        this.refused(frame.message);
-      } else if (frame?.type === "request" && this.current === "connected") {
-        this.forward(socket, frame);
+      try {
+        const frame = parseFrame(event.data);
+        if (frame?.type === "auth-ok") {
+          clearTimeout(authTimer);
+          this.connected(socket);
+        } else if (frame?.type === "auth-error") {
+          clearTimeout(authTimer);
+          this.refused(String(frame.message));
+        } else if (frame?.type === "request" && this.current === "connected") {
+          this.forward(socket, frame);
+        }
+      } catch (err) {
+        if (this.frameWarned) return;
+        this.frameWarned = true;
+        this.log("warn", `legato.fm: ignored a tunnel frame this server couldn't handle (${err instanceof Error ? err.message : String(err)})`);
       }
     });
     socket.addEventListener("pong", () => {
@@ -258,6 +269,8 @@ export class TunnelClient {
   // relay turns into a 502 (or a cut-short body, once the status is sent).
   private forward(socket: WebSocket, frame: RequestFrame): void {
     const { requestId } = frame;
+    // Nothing to answer to, or already being answered.
+    if (typeof requestId !== "string" || this.requests.has(requestId)) return;
     let settled = false;
     const send = (out: TunnelFrame) => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(out));
@@ -269,25 +282,15 @@ export class TunnelClient {
       send({ type: "response-error", requestId, message });
     };
 
-    // A path, never a URL: "//elsewhere/x" must stay a path on this server.
-    if (typeof frame.path !== "string" || !frame.path.startsWith("/")) return fail("not a path on this server");
+    const replay = replayable(frame);
+    if (typeof replay === "string") return fail(replay);
 
-    const headers: Record<string, string> = {};
-    for (const [name, value] of Object.entries(frame.headers ?? {})) {
-      const key = name.toLowerCase();
-      if (!HOP_BY_HOP.has(key) && key !== TUNNEL_HEADER && typeof value === "string") headers[key] = value;
+    let request: ClientRequest;
+    try {
+      request = httpRequest({ host: this.target.hostname, port: this.target.port, ...replay.options });
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
     }
-    headers[TUNNEL_HEADER] = "1";
-    const body = frame.body ? Buffer.from(frame.body, "base64") : undefined;
-    if (body) headers["content-length"] = String(body.length);
-
-    const request = httpRequest({
-      host: this.target.hostname,
-      port: this.target.port,
-      method: frame.method,
-      path: frame.path,
-      headers,
-    });
     this.requests.set(requestId, request);
 
     request.on("response", (response) => {
@@ -309,8 +312,47 @@ export class TunnelClient {
       response.on("close", () => fail("the server ended the response early"));
     });
     request.on("error", (err) => fail(err.message));
-    request.end(body);
+    request.end(replay.body);
   }
+}
+
+// What node:http would refuse, checked first, because it refuses by
+// throwing: a method that isn't an HTTP token, a header name that isn't
+// one, a header value with CR, LF or a character past Latin-1, and a path
+// with a space or anything past ASCII in it.
+const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+const HEADER_VALUE = /^[\t\x20-\x7e\x80-\xff]*$/;
+const UNSENDABLE_IN_PATH = /[^\x21-\x7e]+/gu;
+
+type Replay = { options: { method: string; path: string; headers: Record<string, string> }; body: Buffer | undefined };
+
+// A request frame as node:http options, or why it can't be replayed. The
+// path is sent as a path, never resolved as a URL, so "//elsewhere/x"
+// stays a path on this server. A path with raw UTF-8 in it (a search
+// for 日本 typed straight into a URL) goes as its percent-encoding, the
+// way a browser would send it. A header that can't be sent is left off.
+function replayable(frame: RequestFrame): Replay | string {
+  const { method, path, body } = frame;
+  if (typeof method !== "string" || !TOKEN.test(method)) return "not an HTTP method";
+  if (typeof path !== "string" || !path.startsWith("/")) return "not a path on this server";
+  const headerList: unknown = frame.headers ?? {};
+  if (typeof headerList !== "object" || headerList === null || Array.isArray(headerList)) return "the headers aren't a header list";
+  if (body !== undefined && typeof body !== "string") return "the body isn't base64 text";
+
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headerList)) {
+    const key = name.toLowerCase();
+    if (HOP_BY_HOP.has(key) || key === TUNNEL_HEADER || !TOKEN.test(key)) continue;
+    if (typeof value === "string" && HEADER_VALUE.test(value)) headers[key] = value;
+  }
+  headers[TUNNEL_HEADER] = "1";
+  const bytes = body ? Buffer.from(body, "base64") : undefined;
+  if (bytes) headers["content-length"] = String(bytes.length);
+
+  const encodedPath = path.replace(UNSENDABLE_IN_PATH, (run) =>
+    [...Buffer.from(run, "utf8")].map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, "0")}`).join(""),
+  );
+  return { options: { method, path: encodedPath, headers }, body: bytes };
 }
 
 function parseFrame(data: unknown): TunnelFrame | undefined {

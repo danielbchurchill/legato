@@ -23,6 +23,8 @@ export type FakeRelay = {
   closed: number;
   /** Sends a request down the newest signed-in tunnel and collects the answer. */
   request(frame: Omit<RequestFrame, "type" | "requestId">): Promise<RelayedResponse>;
+  /** Sends any frame at all down the newest signed-in tunnel, the way a broken or hostile relay could. */
+  send(frame: unknown): void;
   stop(): void;
 };
 
@@ -96,6 +98,11 @@ export function startFakeRelay(options: { accept: (credential: string) => boolea
         });
         socket.send(JSON.stringify({ type: "request", requestId, ...frame }));
       });
+    },
+    send(frame) {
+      const socket = signedIn.at(-1);
+      if (!socket) throw new Error("no tunnel is signed in");
+      socket.send(JSON.stringify(frame));
     },
     stop() {
       server.stop(true);

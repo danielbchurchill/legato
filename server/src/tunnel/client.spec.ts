@@ -143,6 +143,88 @@ describe("TunnelClient", () => {
     await expect(fake.request({ method: "GET", path: "http://example.com/", headers: {} })).rejects.toThrow("not a path on this server");
   });
 
+  it("replays a path with raw UTF-8 in it as its percent-encoding, rather than crashing", async () => {
+    // Sent unencoded, a search for 日本 made node:http throw inside the
+    // socket's message listener, and Bun exited with code 1.
+    const app = Fastify();
+    app.get("/*", async (request) => ({ url: request.url, q: (request.query as { q?: string }).q }));
+    const origin = await listen(app);
+    const fake = relay();
+    const tunnel = client(fake.url, origin);
+    await waitFor(tunnel, "connected");
+
+    const answer = await fake.request({ method: "GET", path: "/api/v1/search?q=日本 x", headers: {} });
+    expect(JSON.parse(answer.body.toString())).toEqual({ url: "/api/v1/search?q=%E6%97%A5%E6%9C%AC%20x", q: "日本 x" });
+    const latin = await fake.request({ method: "GET", path: "/api/v1/search?q=Björk", headers: {} });
+    expect(JSON.parse(latin.body.toString()).q).toBe("Björk");
+  });
+
+  it("fails a request it can't replay, and only that request", async () => {
+    const app = Fastify();
+    app.all("/*", async (request) => ({ method: request.method, headers: request.headers }));
+    const origin = await listen(app);
+    const fake = relay();
+    const tunnel = client(fake.url, origin);
+    await waitFor(tunnel, "connected");
+
+    const refused = [
+      { method: "GE T", path: "/x", headers: {} },
+      { method: "GET\r\nX-Injected: 1", path: "/x", headers: {} },
+      { method: 42, path: "/x", headers: {} },
+      { method: "GET", path: 42, headers: {} },
+      { method: "POST", path: "/x", headers: {}, body: 42 },
+      { method: "POST", path: "/x", headers: {}, body: { not: "base64" } },
+      { method: "GET", path: "/x", headers: "not a header list" },
+    ];
+    for (const frame of refused) {
+      await expect(fake.request(frame as unknown as Parameters<FakeRelay["request"]>[0])).rejects.toThrow();
+    }
+
+    // A header that can't be sent is left off; the request still goes.
+    const answer = await fake.request({
+      method: "GET",
+      path: "/x",
+      headers: {
+        "x-split": "a\r\nx-injected: 1",
+        "bad name": "x",
+        "x-wide": "日本",
+        "x-number": 5 as unknown as string,
+        "x-fine": "kept",
+      },
+    });
+    const { headers } = JSON.parse(answer.body.toString()) as { headers: Record<string, string> };
+    expect(headers["x-fine"]).toBe("kept");
+    for (const name of ["x-split", "x-injected", "bad name", "x-wide", "x-number"]) expect(headers[name]).toBeUndefined();
+    expect(tunnel.state).toBe("connected");
+  });
+
+  it("never lets a frame throw out of its message listener", async () => {
+    const app = Fastify();
+    app.get("/ok", async () => "ok");
+    const origin = await listen(app);
+    const fake = relay();
+    const tunnel = client(fake.url, origin);
+    await waitFor(tunnel, "connected");
+
+    for (const frame of [
+      { type: "request" },
+      { type: "request", requestId: 5, method: "GET", path: "/ok", headers: {} },
+      { type: "request", requestId: "r", method: "GET", path: "/ok", headers: null },
+      { type: "request", requestId: "r", method: "GET", path: "/ok", headers: { "\u0000": "x" } },
+      { type: "request", requestId: "r", method: "GET", path: "/\ud800", headers: {} },
+      { type: "auth-ok", extra: [] },
+      { type: "response-start", requestId: "r", status: 99999, headers: {} },
+      null,
+      "request",
+      [],
+    ]) {
+      fake.send(frame);
+    }
+    await sleep(100);
+    const answer = await fake.request({ method: "GET", path: "/ok", headers: {} });
+    expect(answer.body.toString()).toBe("ok");
+  });
+
   it("stops for good when legato.fm refuses the credential, with one warning that says what to do", async () => {
     const fake = relay(() => false);
     const warnings: string[] = [];
