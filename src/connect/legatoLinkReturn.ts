@@ -18,7 +18,11 @@ import { sendLinkToken, type LinkDeps, type LinkResult } from './legatoLink'
  *      the server exactly as the desktop app's does (legatoLink.ts).
  * A copied code is useless without the verifier, and legato.fm takes it
  * once, from this page's origin, within five minutes. The token itself only
- * ever travels in request and response bodies. */
+ * ever travels in request and response bodies.
+ *
+ * The code and verifier stay until legato.fm's answer settles it: a token,
+ * or the code refused (used, expired, unknown). A rate limit or a network
+ * failure leaves them, so the owner can try again from here. */
 
 const PENDING_KEY = 'legato:link-pending'
 // What legato.fm puts in the fragment: the code, or `cancelled` when the
@@ -72,23 +76,38 @@ export function takeLinkReturn(
   if (pending) storage.setItem(PENDING_KEY, JSON.stringify({ ...pending, code }))
 }
 
-/** True once legato.fm has sent a code back that this tab hasn't spent. */
+/** True once legato.fm has sent back a code this tab hasn't settled. */
 export function hasLinkReturn(storage: Storage = sessionStorage): boolean {
   return Boolean(readPending(storage)?.code)
 }
 
 /** Spends the code legato.fm sent back, then links the server with the
  * token it buys. Null when there's nothing to finish, and a `cancelled`
- * failure when the owner cancelled on legato.fm. */
-export async function finishBrowserLink(deps: LinkDeps & { storage?: Storage } = {}): Promise<LinkResult | null> {
+ * failure when the owner cancelled on legato.fm. After any other failure,
+ * hasLinkReturn says whether the same code can be tried again.
+ *
+ * One at a time: the code stays until legato.fm answers, so a second call
+ * meanwhile (React runs an effect twice in development) would spend it
+ * again and read "already used". That call gets null. */
+let finishing: Promise<LinkResult | null> | null = null
+
+export function finishBrowserLink(deps: LinkDeps & { storage?: Storage } = {}): Promise<LinkResult | null> {
+  if (finishing) return Promise.resolve(null)
+  finishing = finishOnce(deps).finally(() => {
+    finishing = null
+  })
+  return finishing
+}
+
+async function finishOnce(deps: LinkDeps & { storage?: Storage }): Promise<LinkResult | null> {
   const storage = deps.storage ?? sessionStorage
   const fetchImpl = deps.fetchImpl ?? fetch
   const pending = readPending(storage)
   if (!pending?.code) return null
-  // legato.fm spends a code on its first try, right or wrong, so it's never
-  // tried twice from here either.
-  storage.removeItem(PENDING_KEY)
-  if (pending.code === CANCELLED) return { ok: false, failure: { step: 'cancelled' } }
+  if (pending.code === CANCELLED) {
+    storage.removeItem(PENDING_KEY)
+    return { ok: false, failure: { step: 'cancelled' } }
+  }
 
   let res: Response
   try {
@@ -101,6 +120,11 @@ export async function finishBrowserLink(deps: LinkDeps & { storage?: Storage } =
   } catch {
     return { ok: false, failure: { step: 'relay', message: `Couldn't reach legato.fm at ${new URL(pending.issuer).host}.` } }
   }
+  // legato.fm spends a code on its first try, right or wrong. So once it
+  // has answered with a token, or refused the code, the code is gone.
+  // Anything else (too many tries from this address, legato.fm down) leaves
+  // it to try again.
+  if (res.ok || res.status === 400) storage.removeItem(PENDING_KEY)
   const issued = (await res.json().catch(() => ({}))) as { token?: string; scope?: string; error?: string }
   if (!res.ok || !issued.token || issued.scope !== 'link') {
     return { ok: false, failure: { step: 'relay', message: issued.error ?? `legato.fm answered ${res.status}.` } }

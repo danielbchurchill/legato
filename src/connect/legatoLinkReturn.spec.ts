@@ -36,12 +36,15 @@ function tab(hash = '') {
 
 type Call = { url: string; body: Record<string, unknown>; credentials: RequestCredentials | undefined }
 
-function network(options: { redeemed?: Response; linked?: Response } = {}) {
+// redeemed answers /link/redeem; a function can throw, as fetch does when
+// legato.fm can't be reached.
+function network(options: { redeemed?: Response | (() => Response); linked?: Response } = {}) {
   const calls: Call[] = []
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
     calls.push({ url, body: JSON.parse(String(init?.body ?? '{}')), credentials: init?.credentials })
     if (url === `${ISSUER}/link/redeem`) {
+      if (typeof options.redeemed === 'function') return options.redeemed()
       return options.redeemed ?? Response.json({ token: 'link.jws.token', expiresAt: '2026-10-09T12:10:00.000Z', scope: 'link' })
     }
     if (url === `${API}/auth/legato/link`) return options.linked ?? Response.json({ linked: LINKED })
@@ -142,6 +145,56 @@ describe('the web client linking through legato.fm', () => {
       failure: { step: 'relay', message: error },
     })
     expect(net.calls.map((c) => c.url)).toEqual([`${ISSUER}/link/redeem`])
+    // A refused code is spent: there's nothing to try again.
+    expect(hasLinkReturn(storage)).toBe(false)
+  })
+
+  it('keeps the code through a rate limit or a dropped connection, and spends it on the next try', async () => {
+    const storage = memoryStorage()
+    const { verifier } = await started(storage)
+    takeLinkReturn({ ...tab('#legato_link=patient'), storage })
+
+    const error = 'Too many failed link attempts from this address. Try again in 60 seconds.'
+    const limited = network({ redeemed: Response.json({ error, reason: 'rate_limited' }, { status: 429 }) })
+    expect(await finishBrowserLink({ storage, fetchImpl: limited.fetchImpl, apiBase: API })).toEqual({
+      ok: false,
+      failure: { step: 'relay', message: error },
+    })
+    expect(hasLinkReturn(storage)).toBe(true)
+
+    const offline = network({
+      redeemed: () => {
+        throw new TypeError('Failed to fetch')
+      },
+    })
+    expect(await finishBrowserLink({ storage, fetchImpl: offline.fetchImpl, apiBase: API })).toEqual({
+      ok: false,
+      failure: { step: 'relay', message: "Couldn't reach legato.fm at 127.0.0.1:8912." },
+    })
+    expect(hasLinkReturn(storage)).toBe(true)
+
+    const working = network()
+    expect(await finishBrowserLink({ storage, fetchImpl: working.fetchImpl, apiBase: API })).toEqual({ ok: true, linked: LINKED })
+    expect(working.calls[0]).toEqual({
+      url: `${ISSUER}/link/redeem`,
+      body: { code: 'patient', code_verifier: verifier },
+      credentials: 'omit',
+    })
+    expect(hasLinkReturn(storage)).toBe(false)
+  })
+
+  it('spends a code once even when asked twice at the same time', async () => {
+    const storage = memoryStorage()
+    await started(storage)
+    takeLinkReturn({ ...tab('#legato_link=once'), storage })
+    const net = network()
+    const [first, second] = await Promise.all([
+      finishBrowserLink({ storage, fetchImpl: net.fetchImpl, apiBase: API }),
+      finishBrowserLink({ storage, fetchImpl: net.fetchImpl, apiBase: API }),
+    ])
+    expect(first).toEqual({ ok: true, linked: LINKED })
+    expect(second).toBeNull()
+    expect(net.calls.filter((c) => c.url.endsWith('/link/redeem'))).toHaveLength(1)
   })
 
   it("passes on the server's refusal, and links on a second round trip", async () => {
