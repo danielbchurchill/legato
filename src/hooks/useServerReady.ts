@@ -3,7 +3,7 @@ import { API_BASE, SERVER_ORIGIN } from '../config/serverHost'
 import { MIN_SERVER_SCHEMA_VERSION } from '../config/serverVersion'
 import { updateAction, type UpdateAction } from '../config/installChannel'
 import { readLastSeen, rememberSeen } from '../connect/lastSeen'
-import { announceServerBack, noteOutage } from '../connect/reconnect'
+import { announceServerBack, noteCheckAnswered, noteCheckFailed, noteOutage, provideFreshCheck } from '../connect/reconnect'
 import { classifyFailure, HEALTH_TIMEOUT_MS, outageFailure, type CheckFailure } from '../connect/unreachable'
 
 const HEALTH_URL = `${API_BASE}/health`
@@ -172,6 +172,13 @@ function readServerName(body: unknown): string | null {
   return typeof name === 'string' && name ? name : null
 }
 
+// Which process answered (/health's bootId): a server that restarted, however
+// quickly, answers with a new one. Null from a server too old to say.
+function readBootId(body: unknown): string | null {
+  const bootId = typeof body === 'object' && body !== null ? (body as Record<string, unknown>).bootId : null
+  return typeof bootId === 'string' && bootId ? bootId : null
+}
+
 // The server is embedded and spawned by the Tauri shell (see
 // src-tauri/src/server_process.rs), but its startup (npm -> tsx -> node,
 // then Fastify's own listen()) isn't instant — the UI has to wait for it
@@ -202,6 +209,8 @@ export function useServerReady(): ServerStatus {
     // the server has failed over that run (outageFailure). Null while it
     // answers.
     let failingSince: number | null = null
+    // The bootId of the server's last answer.
+    let bootId: string | null = null
     let failedHow: CheckFailure | null = null
     // What the state was last given, so a check that changes nothing sets
     // nothing: during an outage that's a check a second, and each set would
@@ -249,8 +258,16 @@ export function useServerReady(): ServerStatus {
 
       if (!failure) {
         // Back after an outage, not after a check or two that failed: those
-        // are a hiccup, and nothing needs to load again for one.
+        // are a hiccup, and nothing needs to load again for one. A restart
+        // is something to load again for, outage or not: the scan it
+        // interrupted is paused now, and its events went nowhere. After an
+        // outage, a server too old to say which process it is might have
+        // restarted.
         const recovered = down
+        const seenBoot = readBootId(body)
+        const newProcess = bootId !== null && seenBoot !== null && seenBoot !== bootId
+        const mayHaveRestarted = newProcess || seenBoot === null || bootId === null
+        bootId = seenBoot
         failingSince = null
         failedHow = null
         shown = null
@@ -273,10 +290,12 @@ export function useServerReady(): ServerStatus {
         setServer((prev) => (sameServerVersion(prev, next) ? prev : next))
         if (seenName) setName(seenName)
         setOutage(null)
-        if (recovered) void announceServerBack()
+        noteCheckAnswered({ restarted: newProcess })
+        if (recovered || newProcess) void announceServerBack({ restarted: recovered ? mayHaveRestarted : true })
         return
       }
 
+      noteCheckFailed(now)
       failingSince ??= started
       failedHow = outageFailure(failedHow, failure)
       const limit = failedHow.kind === 'no-answer' ? DOWN_AFTER_SILENCE_MS : DOWN_AFTER_REFUSED_MS
@@ -318,6 +337,9 @@ export function useServerReady(): ServerStatus {
       return inFlight
     }
     checkNow.current = run
+    // A check of its own for the web player, which asks whether the server
+    // failed since a stream began (playback/quality.ts).
+    const withdrawFreshCheck = provideFreshCheck(() => (inFlight ? inFlight.then(() => run()) : run()))
 
     // A network that drops or changes is half of "why", and coming back is
     // the moment to look again rather than waiting out the poll. Only a real
@@ -360,6 +382,7 @@ export function useServerReady(): ServerStatus {
       cancelled = true
       clearTimeout(timer)
       checkNow.current = null
+      withdrawFreshCheck()
       window.removeEventListener('online', onOnline)
       window.removeEventListener('offline', onOffline)
       connection?.removeEventListener('change', onConnectionChange)

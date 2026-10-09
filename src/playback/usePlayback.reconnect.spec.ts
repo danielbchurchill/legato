@@ -9,7 +9,7 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SERVER_BACK_EVENT } from '../connect/reconnect'
+import { noteCheckAnswered, noteCheckFailed, provideFreshCheck, SERVER_BACK_EVENT } from '../connect/reconnect'
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false, invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(() => Promise.resolve(() => undefined)) }))
@@ -100,9 +100,16 @@ type Playback = ReturnType<typeof usePlayback>
 
 describe('usePlayback across a server outage (web player)', () => {
   let root: Root | null = null
+  let withdrawCheck: () => void = () => undefined
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // A failure an earlier test noted is then before anything this one
+    // plays, which is what the player compares it against.
+    await new Promise((resolve) => setTimeout(resolve, 5))
     server.up = true
+    // useServerReady's health check, which the player asks whether the
+    // server failed since a stream began (connect/reconnect.ts).
+    withdrawCheck = provideFreshCheck(async () => (server.up ? noteCheckAnswered({ restarted: false }) : noteCheckFailed()))
     FakeAudio.made = []
     // Also starts the quality ladder over, which drops in earlier tests moved.
     storeQualityPreference('auto')
@@ -122,6 +129,8 @@ describe('usePlayback across a server outage (web player)', () => {
   })
 
   afterEach(() => {
+    noteCheckAnswered({ restarted: false })
+    withdrawCheck()
     act(() => root?.unmount())
     root = null
     vi.unstubAllGlobals()
@@ -252,6 +261,84 @@ describe('usePlayback across a server outage (web player)', () => {
     expect(playback.current.status.playing).toBe(true)
     expect(playback.current.currentTitle).toBe('One')
     expect(titles(playback.current)).toEqual(['Two', 'Three'])
+  })
+
+  // The coordinator's second review of #346: a restart back within two
+  // seconds (systemctl restart, a deploy) never becomes an outage, so no
+  // SERVER_BACK_EVENT comes. The server answering again has to be enough.
+  it('brings back a track pressed during a two-second restart, once the server answers, with no outage', async () => {
+    const playback = await mount()
+    await act(async () => playback.current.playAlbum(9))
+    const audio = player()
+    await act(async () => playback.current.pause())
+
+    server.up = false
+    await act(async () => playback.current.next())
+    expect(audio.src).toContain('/files/20/stream')
+    expect(audio.error).toEqual({ code: SRC_NOT_SUPPORTED })
+
+    server.up = true
+    await act(async () => noteCheckAnswered({ restarted: true }))
+    expect(audio.error).toBeNull()
+    expect(audio.src).toContain('/files/20/stream')
+
+    await act(async () => playback.current.resume())
+    expect(playback.current.status.playing).toBe(true)
+    expect(playback.current.currentTitle).toBe('Two')
+    expect(titles(playback.current)).toEqual(['Three'])
+  })
+
+  it('picks a stream a two-second restart cut mid-track back up where it stopped, with no outage', async () => {
+    const playback = await mount()
+    await act(async () => playback.current.playAlbum(9))
+    const audio = player()
+    await act(async () => {
+      audio.currentTime = 60
+      audio.fire('timeupdate')
+    })
+
+    server.up = false
+    await act(async () => {
+      noteCheckFailed()
+      audio.error = { code: NETWORK }
+      audio.fire('error')
+    })
+    expect(playback.current.status.playing).toBe(false)
+
+    server.up = true
+    await act(async () => noteCheckAnswered({ restarted: true }))
+    expect(audio.error).toBeNull()
+    expect(audio.currentTime).toBe(60)
+
+    await act(async () => playback.current.resume())
+    expect(playback.current.status.playing).toBe(true)
+    expect(playback.current.currentTitle).toBe('One')
+    expect(titles(playback.current)).toEqual(['Two', 'Three'])
+  })
+
+  // A transcode the restart cut at 1:00 plays what arrived and ends at
+  // 1:27, half a minute after the server came back.
+  it('stays on a track whose stream a two-second restart cut, though the server answers when it ends', async () => {
+    const playback = await mount()
+    await act(async () => playback.current.playAlbum(9))
+    const audio = player()
+
+    await act(async () => {
+      noteCheckFailed()
+      noteCheckAnswered({ restarted: true })
+    })
+    await act(async () => {
+      audio.currentTime = 87
+      audio.fire('timeupdate')
+      audio.paused = true
+      audio.fire('ended')
+    })
+
+    expect(playback.current.currentTitle).toBe('One')
+    expect(titles(playback.current)).toEqual(['Two', 'Three'])
+    expect(playback.current.status.playing).toBe(false)
+    expect(audio.src).toContain('/files/10/stream')
+    expect(audio.currentTime).toBe(87)
   })
 
   // The coordinator's review of #346: a VBR MP3 with no Xing header, or a

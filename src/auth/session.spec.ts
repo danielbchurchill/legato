@@ -82,6 +82,29 @@ describe('createAuthFetch', () => {
     await authFetch(`${ORIGIN}/api/v1/auth/sign-in`, { method: 'POST' })
     expect(onAuthRequired).not.toHaveBeenCalled()
   })
+
+  // #119: a read the network failed may have left something on screen
+  // without its data, so the next outage that ends reads everything again.
+  it('reports a request the network failed, but not one that was aborted', async () => {
+    const onNetworkError = vi.fn()
+    const baseFetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new DOMException('The operation was aborted.', 'AbortError'))
+    const authFetch = createAuthFetch({
+      baseFetch: baseFetch as unknown as typeof fetch,
+      origin: ORIGIN,
+      storage: memoryStorage(),
+      onAuthRequired: () => undefined,
+      onNetworkError,
+      pageUrl: 'tauri://localhost/',
+    })
+
+    await expect(authFetch(`${ORIGIN}/api/v1/playlists`)).rejects.toThrow('Failed to fetch')
+    expect(onNetworkError).toHaveBeenCalledTimes(1)
+    await expect(authFetch(`${ORIGIN}/api/v1/playlists`)).rejects.toThrow('aborted')
+    expect(onNetworkError).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('withMediaTicket', () => {

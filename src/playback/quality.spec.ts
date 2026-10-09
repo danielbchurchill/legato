@@ -9,8 +9,17 @@ import {
   storeQualityPreference,
   streamUrl,
   watchForDrops,
+  type ServerTrouble,
 } from './quality'
-import { announceServerBack, noteOutage, SERVER_BACK_EVENT } from '../connect/reconnect'
+import {
+  announceServerBack,
+  noteCheckAnswered,
+  noteCheckFailed,
+  noteOutage,
+  provideFreshCheck,
+  SERVER_ANSWERED_EVENT,
+  SERVER_BACK_EVENT,
+} from '../connect/reconnect'
 import { storeSession } from '../auth/session'
 
 function memoryStorage(): Storage {
@@ -139,8 +148,9 @@ describe('watchForDrops', () => {
   const settle = async () => {
     for (let i = 0; i < 5; i++) await Promise.resolve()
   }
-  const serverUp = () => Promise.resolve(true)
-  const serverDown = () => Promise.resolve(false)
+  // How the server has fared since the stream began.
+  const failing = () => Promise.resolve<ServerTrouble>('now')
+  const steady = () => Promise.resolve<ServerTrouble>('none')
 
   it('on a network error mid-track: pauses, reports it, and moves the next track down a rung', () => {
     const audio = new FakeAudio()
@@ -236,7 +246,7 @@ describe('watchForDrops', () => {
     const audio = new FakeAudio()
     const online = new EventTarget()
     const reloads: string[] = []
-    watchForDrops(audio, () => undefined, { online, serverAnswers: serverDown })
+    watchForDrops(audio, () => undefined, { online, serverTrouble: failing })
     Object.defineProperty(audio, 'src', {
       get: () => 'http://server/api/v1/files/2/stream?quality=original',
       set: (value: string) => reloads.push(value),
@@ -258,7 +268,7 @@ describe('watchForDrops', () => {
     const audio = new FakeAudio()
     const online = new EventTarget()
     const reloads: string[] = []
-    watchForDrops(audio, () => undefined, { online, serverAnswers: serverUp })
+    watchForDrops(audio, () => undefined, { online, serverTrouble: steady })
     Object.defineProperty(audio, 'src', {
       get: () => 'http://server/api/v1/files/2/stream?quality=original',
       set: (value: string) => reloads.push(value),
@@ -314,7 +324,7 @@ describe('watchForDrops', () => {
     page.dispatchEvent(new Event('online'))
     expect(reloads).toHaveLength(0)
 
-    await announceServerBack()
+    await announceServerBack({ restarted: true })
     expect(reloads).toHaveLength(1)
   })
 
@@ -322,13 +332,13 @@ describe('watchForDrops', () => {
     const audio = new FakeAudio()
     const onDrop = vi.fn()
     const onEnded = vi.fn()
-    const serverAnswers = vi.fn(serverDown)
-    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 180_000, serverAnswers })
+    const serverTrouble = vi.fn(failing)
+    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 180_000, serverTrouble })
 
     audio.currentTime = 57.6
     audio.fire('ended')
     await settle()
-    expect(serverAnswers).toHaveBeenCalledTimes(1)
+    expect(serverTrouble).toHaveBeenCalledTimes(1)
     expect(onDrop).toHaveBeenCalledTimes(1)
     expect(onEnded).not.toHaveBeenCalled()
     expect(audio.currentTime).toBe(57.6)
@@ -339,7 +349,7 @@ describe('watchForDrops', () => {
     await settle()
     expect(onEnded).toHaveBeenCalledTimes(1)
     expect(onDrop).toHaveBeenCalledTimes(1)
-    expect(serverAnswers).toHaveBeenCalledTimes(1)
+    expect(serverTrouble).toHaveBeenCalledTimes(1)
   })
 
   // The coordinator's review of #346: a VBR MP3 with no Xing header, or a
@@ -348,7 +358,7 @@ describe('watchForDrops', () => {
     const audio = new FakeAudio()
     const onDrop = vi.fn()
     const onEnded = vi.fn()
-    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 194_000, serverAnswers: serverUp })
+    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 194_000, serverTrouble: steady })
 
     audio.currentTime = 180
     audio.fire('ended')
@@ -363,8 +373,8 @@ describe('watchForDrops', () => {
   it('takes an early end after the element said its data stopped coming as a drop, without asking the server', async () => {
     const audio = new FakeAudio()
     const onDrop = vi.fn()
-    const serverAnswers = vi.fn(serverUp)
-    watchForDrops(audio, onDrop, { online: null, durationMs: () => 180_000, serverAnswers })
+    const serverTrouble = vi.fn(steady)
+    watchForDrops(audio, onDrop, { online: null, durationMs: () => 180_000, serverTrouble })
 
     audio.currentTime = 50
     audio.fire('stalled')
@@ -372,7 +382,7 @@ describe('watchForDrops', () => {
     audio.fire('ended')
     await settle()
 
-    expect(serverAnswers).not.toHaveBeenCalled()
+    expect(serverTrouble).not.toHaveBeenCalled()
     expect(onDrop).toHaveBeenCalledTimes(1)
   })
 
@@ -380,7 +390,7 @@ describe('watchForDrops', () => {
     const audio = new FakeAudio()
     const onDrop = vi.fn()
     const onEnded = vi.fn()
-    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 194_000, serverAnswers: serverUp })
+    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 194_000, serverTrouble: steady })
 
     audio.fire('stalled')
     audio.fire('progress')
@@ -396,7 +406,7 @@ describe('watchForDrops', () => {
     const audio = new FakeAudio()
     const onDrop = vi.fn()
     const onEnded = vi.fn()
-    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 180_000, serverAnswers: serverDown })
+    watchForDrops(audio, onDrop, { online: null, onEnded, durationMs: () => 180_000, serverTrouble: failing })
 
     audio.currentTime = 58
     audio.fire('ended')
@@ -405,6 +415,163 @@ describe('watchForDrops', () => {
 
     expect(onDrop).not.toHaveBeenCalled()
     expect(onEnded).not.toHaveBeenCalled()
+  })
+
+  // The coordinator's second review of #346: a restart back within two
+  // seconds is never an outage, so SERVER_BACK_EVENT never comes, and a
+  // stream it cut has to load again on the server answering at all.
+  describe('across a two-second restart, with the health check behind it', () => {
+    // The page, as window: reconnect.ts fires its events there.
+    let page: EventTarget
+    let serverUp: boolean
+    let withdraw: () => void
+    // Each test on a clock of its own, an hour past the last: reconnect.ts
+    // remembers when the server last failed, across tests.
+    let hour = 0
+
+    beforeEach(() => {
+      vi.setSystemTime(Date.parse('2030-01-01T00:00:00Z') + ++hour * 3_600_000)
+      page = Object.assign(new EventTarget(), { location: { href: 'http://127.0.0.1:5184/' } })
+      vi.stubGlobal('window', page)
+      serverUp = true
+      // useServerReady's check, as the player asks for one.
+      withdraw = provideFreshCheck(async () => (serverUp ? noteCheckAnswered({ restarted: false }) : noteCheckFailed()))
+    })
+
+    afterEach(() => {
+      noteCheckAnswered({ restarted: false })
+      withdraw()
+    })
+
+    // A source whose loads succeed while the server is up and fail while
+    // it isn't, as a real element's do.
+    function streamingAudio() {
+      const audio = new FakeAudio()
+      const loads: { src: string; at: number }[] = []
+      let src = audio.src
+      Object.defineProperty(audio, 'src', {
+        get: () => src,
+        set: (value: string) => {
+          src = value
+          audio.currentTime = 0
+          loads.push({ src: value, at: Date.now() })
+          audio.error = serverUp ? null : { code: 4 }
+          audio.fire('loadstart')
+          if (!serverUp) audio.fire('error')
+        },
+      })
+      // Records where the reload was told to begin.
+      return { audio, loads }
+    }
+
+    it('loads a track that failed to start again once the server answers, with no outage declared', async () => {
+      const { audio, loads } = streamingAudio()
+      watchForDrops(audio, () => undefined, { online: page })
+
+      // Next is pressed 0.3 s into the restart, and its load is refused.
+      serverUp = false
+      audio.src = 'http://server/api/v1/files/2/stream?quality=original'
+      await settle()
+      expect(loads).toHaveLength(1)
+
+      await vi.advanceTimersByTimeAsync(1700)
+      serverUp = true
+      noteCheckAnswered({ restarted: true })
+
+      expect(loads).toHaveLength(2)
+      expect(audio.error).toBeNull()
+      expect(audio.currentTime).toBe(0)
+    })
+
+    it('loads a stream cut mid-track again at the spot it stopped, once the server answers', async () => {
+      const { audio, loads } = streamingAudio()
+      const onDrop = vi.fn()
+      watchForDrops(audio, onDrop, { online: page })
+
+      audio.currentTime = 60
+      serverUp = false
+      noteCheckFailed()
+      audio.error = { code: 2 }
+      audio.fire('error')
+      // The reload at once fails too.
+      expect(loads).toHaveLength(1)
+      expect(onDrop).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(2000)
+      serverUp = true
+      page.dispatchEvent(new Event(SERVER_ANSWERED_EVENT))
+
+      expect(loads).toHaveLength(2)
+      expect(audio.error).toBeNull()
+      expect(audio.currentTime).toBe(60)
+      expect(onDrop).toHaveBeenCalledTimes(1)
+    })
+
+    it('treats an early end as a cut stream when a check failed after the stream began, and loads it again there', async () => {
+      const { audio, loads } = streamingAudio()
+      const onDrop = vi.fn()
+      const onEnded = vi.fn()
+      watchForDrops(audio, onDrop, { online: page, onEnded, durationMs: () => 180_000 })
+      audio.src = 'http://server/api/v1/files/1/stream?quality=opus256'
+
+      // Cut at 1:00 by a two-second restart.
+      await vi.advanceTimersByTimeAsync(60_000)
+      serverUp = false
+      noteCheckFailed()
+      await vi.advanceTimersByTimeAsync(2000)
+      serverUp = true
+      noteCheckAnswered({ restarted: true })
+      // The buffer plays out, and the element ends at 1:27.
+      await vi.advanceTimersByTimeAsync(25_000)
+      audio.currentTime = 87
+      audio.fire('ended')
+      await settle()
+
+      expect(onEnded).not.toHaveBeenCalled()
+      expect(onDrop).toHaveBeenCalledTimes(1)
+      expect(loads).toHaveLength(2)
+      expect(audio.currentTime).toBe(87)
+    })
+
+    it('takes a restart the health check only saw as a new boot id as evidence too', async () => {
+      const { audio, loads } = streamingAudio()
+      const onEnded = vi.fn()
+      watchForDrops(audio, () => undefined, { online: page, onEnded, durationMs: () => 180_000 })
+      audio.src = 'http://server/api/v1/files/1/stream?quality=opus256'
+
+      await vi.advanceTimersByTimeAsync(62_000)
+      noteCheckAnswered({ restarted: true })
+      await vi.advanceTimersByTimeAsync(25_000)
+      audio.currentTime = 87
+      audio.fire('ended')
+      await settle()
+
+      expect(onEnded).not.toHaveBeenCalled()
+      expect(loads).toHaveLength(2)
+      expect(audio.currentTime).toBe(87)
+    })
+
+    it('moves on from an early end when the server neither failed nor restarted since the stream began', async () => {
+      const { audio, loads } = streamingAudio()
+      const onDrop = vi.fn()
+      const onEnded = vi.fn()
+      // A failure before this stream began says nothing about it.
+      noteCheckFailed()
+      noteCheckAnswered({ restarted: false })
+      await vi.advanceTimersByTimeAsync(1000)
+      watchForDrops(audio, onDrop, { online: page, onEnded, durationMs: () => 194_000 })
+      audio.src = 'http://server/api/v1/files/1/stream?quality=original'
+
+      await vi.advanceTimersByTimeAsync(180_000)
+      audio.currentTime = 180
+      audio.fire('ended')
+      await settle()
+
+      expect(onEnded).toHaveBeenCalledTimes(1)
+      expect(onDrop).not.toHaveBeenCalled()
+      expect(loads).toHaveLength(1)
+      expect(nextQuality()).toBe('original')
+    })
   })
 
   it('passes every end on when the length is unknown', () => {

@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MIN_SERVER_SCHEMA_VERSION } from '../config/serverVersion'
 import { HEALTH_TIMEOUT_MS } from '../connect/unreachable'
-import { SERVER_BACK_EVENT } from '../connect/reconnect'
+import { noteLatestScan, reconnectEpoch, SERVER_ANSWERED_EVENT, SERVER_BACK_EVENT } from '../connect/reconnect'
 import { readServerVersion, useServerReady, type ServerStatus } from './useServerReady'
 
 describe('readServerVersion', () => {
@@ -169,6 +169,9 @@ describe('useServerReady when the server goes away', () => {
   // A server that's stopped (SIGSTOP), or whose loop is blocked: requests
   // wait, and are answered once it runs again.
   let frozenUntil = 0
+  // Which process answers (/health's bootId), and its latest scan job.
+  let bootId = 'boot-1'
+  const latestScan = { id: 7, status: 'done' }
 
   beforeEach(() => {
     vi.useFakeTimers()
@@ -176,11 +179,13 @@ describe('useServerReady when the server goes away', () => {
     localStorage.clear()
     mode = 'ok'
     frozenUntil = 0
+    bootId = 'boot-1'
     vi.stubGlobal(
       'fetch',
-      vi.fn((_url: string, init?: RequestInit) => {
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.endsWith('/scan-jobs')) return Promise.resolve({ ok: true, status: 200, json: async () => [latestScan] } as Response)
         if (mode === 'ok') {
-          const body = { status: 'ok', name: 'musicbox', schemaVersion: MIN_SERVER_SCHEMA_VERSION }
+          const body = { status: 'ok', name: 'musicbox', bootId, schemaVersion: MIN_SERVER_SCHEMA_VERSION }
           const answer = { ok: true, status: 200, json: async () => body } as Response
           if (Date.now() >= frozenUntil) return Promise.resolve(answer)
           return new Promise<Response>((resolve, reject) => {
@@ -392,6 +397,75 @@ describe('useServerReady when the server goes away', () => {
 
     expect(result.current?.ready).toBe(true)
     expect(back).not.toHaveBeenCalled()
+    window.removeEventListener(SERVER_BACK_EVENT, back)
+  })
+
+  // The coordinator's second review of #346: a restart back within the
+  // three seconds is no outage, but it's a restart, and the web player has to
+  // hear that the server answers again.
+  it('says the server answers again after a failed check, outage or not', async () => {
+    const answered = vi.fn()
+    window.addEventListener(SERVER_ANSWERED_EVENT, answered)
+    await mount()
+    mode = 'refused'
+    await advance(3000)
+    expect(answered).not.toHaveBeenCalled()
+    mode = 'ok'
+    await advance(300)
+
+    expect(answered).toHaveBeenCalledTimes(1)
+    await advance(3000)
+    expect(answered).toHaveBeenCalledTimes(1)
+    window.removeEventListener(SERVER_ANSWERED_EVENT, answered)
+  })
+
+  // ...and finding 9: a restart is the one thing that needs everything
+  // read again, however quickly it came back.
+  it('reads everything again after a restart between two heartbeats, which no check saw fail', async () => {
+    const back = vi.fn()
+    const answered = vi.fn()
+    window.addEventListener(SERVER_BACK_EVENT, back)
+    window.addEventListener(SERVER_ANSWERED_EVENT, answered)
+    const result = await mount()
+    const epoch = reconnectEpoch()
+
+    bootId = 'boot-2'
+    await advance(3000)
+
+    expect(result.current?.outage).toBeNull()
+    expect(answered).toHaveBeenCalledTimes(1)
+    expect(back).toHaveBeenCalledTimes(1)
+    expect(reconnectEpoch()).toBe(epoch + 1)
+    window.removeEventListener(SERVER_BACK_EVENT, back)
+    window.removeEventListener(SERVER_ANSWERED_EVENT, answered)
+  })
+
+  it('reads everything again after an outage the server restarted in', async () => {
+    noteLatestScan(latestScan)
+    await mount()
+    const epoch = reconnectEpoch()
+    mode = 'refused'
+    await advance(3000 + 3000)
+    bootId = 'boot-2'
+    mode = 'ok'
+    await advance(1000)
+
+    expect(reconnectEpoch()).toBe(epoch + 1)
+  })
+
+  it("only replaces the sockets after an outage the server didn't restart in and no scan moved on", async () => {
+    const back = vi.fn()
+    window.addEventListener(SERVER_BACK_EVENT, back)
+    noteLatestScan(latestScan)
+    await mount()
+    const epoch = reconnectEpoch()
+    mode = 'refused'
+    await advance(3000 + 3000)
+    mode = 'ok'
+    await advance(1000)
+
+    expect(back).toHaveBeenCalledTimes(1)
+    expect(reconnectEpoch()).toBe(epoch)
     window.removeEventListener(SERVER_BACK_EVENT, back)
   })
 

@@ -92,7 +92,7 @@ describe('useAuth across a server outage', () => {
 
     server.up = true
     await act(async () => {
-      await announceServerBack()
+      await announceServerBack({ restarted: true })
     })
     await settle()
 
@@ -114,7 +114,7 @@ describe('useAuth across a server outage', () => {
 
     let announced: Promise<void> = Promise.resolve()
     await act(async () => {
-      announced = announceServerBack()
+      announced = announceServerBack({ restarted: true })
     })
     await settle()
     expect(back).not.toHaveBeenCalled()

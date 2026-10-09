@@ -14,7 +14,18 @@ import { useSettings } from '../hooks/useSettings'
 import { useFavourites, usePlaylists } from '../panels/collectionsData'
 import { useStats } from '../panels/healthData'
 import { useNodeDetail } from '../panels/useNodeDetail'
-import { announceServerBack, provideSessionCheck, reconnectEpoch, useReconnectEpoch } from './reconnect'
+import {
+  announceServerBack,
+  inOutage,
+  noteLatestScan,
+  noteOutage,
+  noteReadFailed,
+  provideSessionCheck,
+  reconnectEpoch,
+  SERVER_BACK_EVENT,
+  serverBackEpoch,
+  useReconnectEpoch,
+} from './reconnect'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -111,7 +122,7 @@ describe('the reconnect epoch', () => {
 
     library = after
     await act(async () => {
-      await announceServerBack()
+      await announceServerBack({ restarted: true })
     })
     await settle()
 
@@ -134,7 +145,7 @@ describe('the reconnect epoch', () => {
       return { ok: true, status: 200, json: async () => [] } as Response
     })
     await act(async () => {
-      await announceServerBack()
+      await announceServerBack({ restarted: true })
     })
     await act(async () => {
       await seen.settings?.updateSettings({ viewMode: 'library' })
@@ -165,7 +176,7 @@ describe('the reconnect epoch', () => {
 
     let announced: Promise<void> = Promise.resolve()
     act(() => {
-      announced = announceServerBack()
+      announced = announceServerBack({ restarted: true })
     })
     await settle()
     expect(epochs.at(-1)).toBe(start)
@@ -176,5 +187,86 @@ describe('the reconnect epoch', () => {
     })
     expect(epochs.at(-1)).toBe(start + 1)
     withdraw()
+  })
+})
+
+// The coordinator's second review of #346, finding 9: the full resync costs
+// the graph, every panel and their covers, so it runs only when the
+// server's data could have moved on.
+describe('what an outage reads again', () => {
+  // The server's latest scan job, as /scan-jobs gives it.
+  let latest = { id: 7, status: 'done' }
+
+  beforeEach(() => {
+    latest = { id: 7, status: 'done' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => [latest] }) as Response),
+    )
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  async function outage(restarted: boolean) {
+    noteOutage()
+    await announceServerBack({ restarted })
+  }
+
+  it('reads everything again after a restart', async () => {
+    noteLatestScan(latest)
+    const epoch = reconnectEpoch()
+    await outage(true)
+    expect(reconnectEpoch()).toBe(epoch + 1)
+  })
+
+  it("only replaces the sockets and retries media after an outage on this device's side", async () => {
+    noteLatestScan(latest)
+    const epoch = reconnectEpoch()
+    const backs = serverBackEpoch()
+    const back = vi.fn()
+    window.addEventListener(SERVER_BACK_EVENT, back)
+    await outage(false)
+
+    expect(back).toHaveBeenCalledTimes(1)
+    expect(serverBackEpoch()).toBe(backs + 1)
+    expect(reconnectEpoch()).toBe(epoch)
+    expect(inOutage()).toBe(false)
+    window.removeEventListener(SERVER_BACK_EVENT, back)
+  })
+
+  it('reads everything again when a scan started or finished while the server was out of reach', async () => {
+    noteLatestScan({ id: 7, status: 'running' })
+    const epoch = reconnectEpoch()
+    await outage(false)
+    expect(reconnectEpoch()).toBe(epoch + 1)
+
+    latest = { id: 8, status: 'done' }
+    await outage(false)
+    expect(reconnectEpoch()).toBe(epoch + 2)
+
+    // Nothing new the next time.
+    await outage(false)
+    expect(reconnectEpoch()).toBe(epoch + 2)
+  })
+
+  it('reads everything again when a read failed meanwhile, so nothing is left without its data', async () => {
+    noteLatestScan(latest)
+    const epoch = reconnectEpoch()
+    noteReadFailed()
+    await outage(false)
+    expect(reconnectEpoch()).toBe(epoch + 1)
+
+    await outage(false)
+    expect(reconnectEpoch()).toBe(epoch + 1)
+  })
+
+  it("reads everything again when it can't tell which scan is the latest", async () => {
+    noteLatestScan(latest)
+    vi.mocked(fetch).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const epoch = reconnectEpoch()
+    await outage(false)
+    expect(reconnectEpoch()).toBe(epoch + 1)
   })
 })

@@ -1,4 +1,5 @@
 import { SERVER_ORIGIN } from '../config/serverHost'
+import { noteReadFailed } from '../connect/reconnect'
 
 /* The client half of issue #112's owner gate (server/src/auth/gate.ts).
  *
@@ -78,12 +79,14 @@ type AuthFetchDeps = {
   origin: string
   storage: Storage
   onAuthRequired: () => void
+  /** A request the network failed: not one that was aborted. */
+  onNetworkError?: () => void
   pageUrl: string
 }
 
 // Split out from installAuthFetch so session.spec.ts can drive it without a
 // browser window.
-export function createAuthFetch({ baseFetch, origin, storage, onAuthRequired, pageUrl }: AuthFetchDeps): typeof fetch {
+export function createAuthFetch({ baseFetch, origin, storage, onAuthRequired, onNetworkError, pageUrl }: AuthFetchDeps): typeof fetch {
   return async (input, init) => {
     const url = new URL(requestUrl(input), pageUrl)
     if (url.origin !== origin) return baseFetch(input, init)
@@ -95,7 +98,10 @@ export function createAuthFetch({ baseFetch, origin, storage, onAuthRequired, pa
     // leaves a cookie behind, and the dev page on 127.0.0.1:5173 is a
     // different origin from the server on :8899 (same site, though, so a
     // SameSite=Lax cookie is still sent).
-    const res = await baseFetch(input, { ...init, headers, credentials: init?.credentials ?? 'include' })
+    const res = await baseFetch(input, { ...init, headers, credentials: init?.credentials ?? 'include' }).catch((err: unknown) => {
+      if (!(err instanceof DOMException && err.name === 'AbortError')) onNetworkError?.()
+      throw err
+    })
 
     // A 401 from /auth/* is a wrong password or setup code, which the form
     // that sent it shows itself. Anywhere else it means this session is no
@@ -119,6 +125,9 @@ export function installAuthFetch(): void {
     origin: serverOrigin(),
     storage: localStorage,
     onAuthRequired: () => window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT)),
+    // #119: whatever asked may now show nothing in its place, so the next
+    // outage that ends has everything read again (connect/reconnect.ts).
+    onNetworkError: noteReadFailed,
     pageUrl: window.location.href,
   })
 }
