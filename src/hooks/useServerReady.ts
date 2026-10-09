@@ -6,21 +6,46 @@ import { readLastSeen, rememberSeen } from '../connect/lastSeen'
 import { classifyFailure, HEALTH_TIMEOUT_MS, SERVER_BACK_EVENT, type CheckFailure } from '../connect/unreachable'
 
 const HEALTH_URL = `${API_BASE}/health`
-const STARTUP_POLL_INTERVAL_MS = 300
 const HEARTBEAT_INTERVAL_MS = 3000
-// A single missed heartbeat is noise (a GC pause, a slow tick) — only a
-// sustained outage should flip the whole window into "server not
-// reachable," per DESIGN.md's empty-state catalogue.
-const HEARTBEAT_FAILURE_THRESHOLD = 3
-// Two checks in a row with no answer at all are already eight seconds of
-// silence, which isn't noise either.
-const UNANSWERED_THRESHOLD = 2
-// While it's unreachable (#119): a check a second at first, since most
-// outages are a restart. After a minute it's likelier asleep or gone, and a
-// check every five seconds still has it back moments after it returns.
+
+// When failed checks become an outage (#119). A slow answer isn't one: a Pi
+// whose event loop a recompute blocks answers /health after nine seconds,
+// and a phone's round trip spikes for seconds over DERP or cellular. So what
+// counts is how long the server has gone without answering, timed from the
+// first check it failed, and how long depends on how the checks failed:
+//   - turned away, or answered by something that isn't Legato: a definite
+//     answer, so three seconds. A restart without a migration is back within
+//     a second or two, as is a phone roaming between access points, and
+//     neither should flash the state. A server that has stopped is still
+//     named promptly.
+//   - no answer at all: a host asleep or gone, or one that's only slow, so
+//     fifteen seconds, which outlasts the slowest working answers above with
+//     room. Checks time out after HEALTH_TIMEOUT_MS, so a host that's really
+//     asleep is named in about twenty.
+const DOWN_AFTER_REFUSED_MS = 3000
+const DOWN_AFTER_SILENCE_MS = 15_000
+
+// How often it checks:
+//   - while the server answers, the heartbeat above;
+//   - after a check fails, every 300 ms until it's an outage or answers, so
+//     a restart is back on screen the moment it's up;
+//   - during an outage, every second at first, since most outages are a
+//     restart. After a minute it's likelier asleep or gone, and every five
+//     seconds still has it back moments after it returns.
+const SUSPECT_POLL_INTERVAL_MS = 300
 const OUTAGE_POLL_INTERVAL_MS = 1000
 const LONG_OUTAGE_POLL_INTERVAL_MS = 5000
 const LONG_OUTAGE_AFTER_MS = 60_000
+
+// Before the first answer: every 300 ms for the first minute, however the
+// checks fail. The desktop app's own server is usually up in a second or
+// two, and every moment a poll waits is a moment the window still says
+// "starting". A migration that backs up a big library first can take
+// minutes, so after the first minute it eases off: every second, then every
+// five once it has waited five minutes.
+const STARTUP_POLL_INTERVAL_MS = 300
+const STARTUP_WINDOW_MS = 60_000
+const LONG_STARTUP_AFTER_MS = 5 * 60_000
 // How often a heartbeat writes down "last seen" for the next launch.
 const REMEMBER_SEEN_EVERY_MS = 30_000
 
@@ -151,8 +176,12 @@ export function useServerReady(): ServerStatus {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let inFlight: Promise<void> | null = null
-    let consecutiveFailures = 0
-    let unanswered = 0
+    const mountedAt = Date.now()
+    let everAnswered = false
+    // When the first check in the current run of failures started, and
+    // whether any of them got no answer at all. Null while it answers.
+    let failingSince: number | null = null
+    let silent = false
     let down = false
     let downSince = 0
     const remembered = Date.parse(readLastSeen(SERVER_ORIGIN)?.at ?? '')
@@ -193,10 +222,11 @@ export function useServerReady(): ServerStatus {
       const now = Date.now()
 
       if (!failure) {
-        const recovered = consecutiveFailures > 0
-        consecutiveFailures = 0
-        unanswered = 0
+        const recovered = failingSince !== null
+        failingSince = null
+        silent = false
         down = false
+        everAnswered = true
         lastSeenAt = now
         const next = readServerVersion(body)
         const seenName = readServerName(body)
@@ -217,9 +247,9 @@ export function useServerReady(): ServerStatus {
         return
       }
 
-      consecutiveFailures++
-      if (failure.kind === 'no-answer') unanswered++
-      if (!down && (consecutiveFailures >= HEARTBEAT_FAILURE_THRESHOLD || unanswered >= UNANSWERED_THRESHOLD)) {
+      failingSince ??= started
+      if (failure.kind === 'no-answer') silent = true
+      if (!down && now - failingSince >= (silent ? DOWN_AFTER_SILENCE_MS : DOWN_AFTER_REFUSED_MS)) {
         down = true
         downSince = now
       }
@@ -230,9 +260,15 @@ export function useServerReady(): ServerStatus {
     }
 
     const nextDelay = () => {
-      if (consecutiveFailures === 0) return HEARTBEAT_INTERVAL_MS
-      if (!down) return STARTUP_POLL_INTERVAL_MS
-      return Date.now() - downSince < LONG_OUTAGE_AFTER_MS ? OUTAGE_POLL_INTERVAL_MS : LONG_OUTAGE_POLL_INTERVAL_MS
+      const now = Date.now()
+      if (!everAnswered) {
+        const waited = now - mountedAt
+        if (waited < STARTUP_WINDOW_MS) return STARTUP_POLL_INTERVAL_MS
+        return waited < LONG_STARTUP_AFTER_MS ? OUTAGE_POLL_INTERVAL_MS : LONG_OUTAGE_POLL_INTERVAL_MS
+      }
+      if (failingSince === null) return HEARTBEAT_INTERVAL_MS
+      if (!down) return SUSPECT_POLL_INTERVAL_MS
+      return now - downSince < LONG_OUTAGE_AFTER_MS ? OUTAGE_POLL_INTERVAL_MS : LONG_OUTAGE_POLL_INTERVAL_MS
     }
 
     // One check at a time. A manual one asked for while a scheduled one is
@@ -255,7 +291,7 @@ export function useServerReady(): ServerStatus {
       void run()
     }
     const onVisible = () => {
-      if (document.visibilityState === 'visible' && consecutiveFailures > 0) void run()
+      if (document.visibilityState === 'visible' && failingSince !== null) void run()
     }
     // Chromium's NetworkInformation, which also fires on a switch between
     // two networks that never goes offline in between.

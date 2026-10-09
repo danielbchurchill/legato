@@ -48,7 +48,11 @@ export type CheckFailure =
    * 502 with Legato stopped behind it, or another program on the port. */
   | { kind: 'bad-status'; status: number }
 
-export const HEALTH_TIMEOUT_MS = 4000
+// How long one health check waits for an answer. Longer than the slowest
+// working answer seen, a Pi whose loop a recompute blocked for nine seconds,
+// so a slow server's answer still counts as one. Whether the server is out
+// of reach doesn't rest on one check anyway (useServerReady.ts).
+export const HEALTH_TIMEOUT_MS = 10_000
 
 // A refused connection comes back within a round trip. A host that's gone
 // takes seconds (an ARP or connect timeout), or never answers at all.

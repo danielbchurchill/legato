@@ -165,18 +165,30 @@ describe('useServerReady when the server goes away', () => {
   let root: Root | null = null
   // What the fake server does with the next health check.
   let mode: 'ok' | 'refused' | 'silent' | 'cut-body' | 'not-json' | 502 = 'ok'
+  // A server that's stopped (SIGSTOP), or whose loop is blocked: requests
+  // wait, and are answered once it runs again.
+  let frozenUntil = 0
 
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(Date.parse('2026-10-09T14:00:00Z'))
     localStorage.clear()
     mode = 'ok'
+    frozenUntil = 0
     vi.stubGlobal(
       'fetch',
       vi.fn((_url: string, init?: RequestInit) => {
         if (mode === 'ok') {
           const body = { status: 'ok', name: 'musicbox', schemaVersion: MIN_SERVER_SCHEMA_VERSION }
-          return Promise.resolve({ ok: true, status: 200, json: async () => body } as Response)
+          const answer = { ok: true, status: 200, json: async () => body } as Response
+          if (Date.now() >= frozenUntil) return Promise.resolve(answer)
+          return new Promise<Response>((resolve, reject) => {
+            const thaw = setTimeout(() => resolve(answer), frozenUntil - Date.now())
+            init?.signal?.addEventListener('abort', () => {
+              clearTimeout(thaw)
+              reject(new DOMException('The operation was aborted.', 'AbortError'))
+            })
+          })
         }
         if (mode === 'refused') return Promise.reject(new TypeError('Failed to fetch'))
         if (mode === 502) return Promise.resolve({ ok: false, status: 502, json: async () => null } as Response)
@@ -229,7 +241,7 @@ describe('useServerReady when the server goes away', () => {
     return result
   }
 
-  it('turns unreachable after three refused checks, and keeps when the server last answered', async () => {
+  it('turns unreachable once it has turned checks away for three seconds, and keeps when the server last answered', async () => {
     const result = await mount()
     expect(result.current?.ready).toBe(true)
     expect(result.current?.name).toBe('musicbox')
@@ -237,8 +249,8 @@ describe('useServerReady when the server goes away', () => {
 
     mode = 'refused'
     await advance(3000) // the heartbeat that finds it gone
-    await advance(300)
-    expect(result.current?.outage).toBeNull() // two misses are still noise
+    await advance(2700)
+    expect(result.current?.outage).toBeNull() // a restart is back by now
     await advance(300)
 
     expect(result.current?.ready).toBe(false)
@@ -252,7 +264,7 @@ describe('useServerReady when the server goes away', () => {
     })
   })
 
-  it('turns unreachable after two checks with no answer at all', async () => {
+  it('turns unreachable only after fifteen seconds with no answer at all', async () => {
     const result = await mount()
     mode = 'silent'
     await advance(3000 + HEALTH_TIMEOUT_MS)
@@ -262,10 +274,30 @@ describe('useServerReady when the server goes away', () => {
     expect(result.current?.outage?.failure).toEqual({ kind: 'no-answer' })
   })
 
+  // The coordinator's review of #346: a slow answer isn't an outage.
+  it('takes a server that answers after nine seconds as up', async () => {
+    const result = await mount()
+    frozenUntil = Date.now() + 3000 + 9000
+    await advance(3000 + 9000)
+
+    expect(result.current?.ready).toBe(true)
+    expect(result.current?.outage).toBeNull()
+  })
+
+  it('takes a server that stops answering for twelve seconds, longer than one check waits, as up', async () => {
+    const result = await mount()
+    frozenUntil = Date.now() + 3000 + 12_000
+    for (let t = 0; t < 3000 + 12_000 + 1000; t += 500) {
+      await advance(500)
+      expect(result.current?.outage).toBeNull()
+    }
+    expect(result.current?.ready).toBe(true)
+  })
+
   it("records an answer that isn't Legato's health as a bad status", async () => {
     const result = await mount()
     mode = 502
-    await advance(3000 + 300 + 300)
+    await advance(3000 + 3000)
 
     expect(result.current?.outage?.failure).toEqual({ kind: 'bad-status', status: 502 })
   })
@@ -301,7 +333,7 @@ describe('useServerReady when the server goes away', () => {
     window.addEventListener(SERVER_BACK_EVENT, back)
     const result = await mount()
     mode = 'refused'
-    await advance(3000 + 300 + 300)
+    await advance(3000 + 3000)
     expect(result.current?.outage).not.toBeNull()
 
     mode = 'ok'
@@ -316,7 +348,7 @@ describe('useServerReady when the server goes away', () => {
   it('checks straight away on "Try again", and records that it ran', async () => {
     const result = await mount()
     mode = 'refused'
-    await advance(3000 + 300 + 300)
+    await advance(3000 + 3000)
     const calls = vi.mocked(fetch).mock.calls.length
 
     // A host that doesn't answer keeps the try running until the timeout.
@@ -334,7 +366,7 @@ describe('useServerReady when the server goes away', () => {
   it('notes a network that dropped, and checks again when it does', async () => {
     const result = await mount()
     mode = 'refused'
-    await advance(3000 + 300 + 300)
+    await advance(3000 + 3000)
 
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
     const calls = vi.mocked(fetch).mock.calls.length
@@ -357,10 +389,44 @@ describe('useServerReady when the server goes away', () => {
     vi.setSystemTime(Date.parse('2026-10-10T09:00:00Z'))
     mode = 'refused'
     const result = await mount()
-    await advance(300 + 300)
+    await advance(3000)
 
     expect(result.current?.everConnected).toBe(false)
     expect(result.current?.name).toBe('musicbox')
     expect(result.current?.outage?.lastSeenAt).toBe(seenAt)
+  })
+
+  // A cold launch of the desktop app: its own server takes a moment to
+  // listen, and the window opens the moment it does.
+  it('keeps checking every 300 ms for the first minute before the first answer, then eases off', async () => {
+    mode = 'refused'
+    await mount()
+    const calls = () => vi.mocked(fetch).mock.calls.length
+
+    await advance(30_000)
+    let before = calls()
+    await advance(3000)
+    expect(calls() - before).toBeGreaterThanOrEqual(9)
+
+    await advance(61_000 - 33_000)
+    before = calls()
+    await advance(3000)
+    expect(calls() - before).toBe(3)
+
+    await advance(5 * 60_000 - 64_000)
+    before = calls()
+    await advance(10_000)
+    expect(calls() - before).toBe(2)
+  })
+
+  it('opens as soon as the server answers, however many checks it turned away first', async () => {
+    mode = 'refused'
+    const result = await mount()
+    await advance(20_000)
+    expect(result.current?.everConnected).toBe(false)
+
+    mode = 'ok'
+    await advance(300)
+    expect(result.current?.everConnected).toBe(true)
   })
 })
