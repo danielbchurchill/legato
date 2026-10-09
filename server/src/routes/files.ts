@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { streamActivity, type StreamActivity } from "../stream/activity.js";
-import { ABANDON_GRACE_MS, CACHE_DIR, ensureVariant, readGrowing } from "../stream/cache.js";
+import { CACHE_DIR, ensureVariant, readGrowing } from "../stream/cache.js";
 import {
   isStreamQuality,
   passthroughContentType,
@@ -31,11 +31,7 @@ import {
 // computer awake for it. See stream/activity.ts.
 export function filesRoutes(
   db: Database,
-  {
-    cacheDir = CACHE_DIR,
-    activity = streamActivity,
-    abandonGraceMs = ABANDON_GRACE_MS,
-  }: { cacheDir?: string; activity?: StreamActivity; abandonGraceMs?: number } = {},
+  { cacheDir = CACHE_DIR, activity = streamActivity }: { cacheDir?: string; activity?: StreamActivity } = {},
 ) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Params: { id: string }; Querystring: { quality?: string } }>(
@@ -70,11 +66,12 @@ export function filesRoutes(
         }
 
         try {
-          let variant = await ensureVariant(file.file_hash, file.file_path, quality, cacheDir, abandonGraceMs);
+          let variant = await ensureVariant(file.file_hash, file.file_path, quality, cacheDir);
           if (variant.kind === "growing") {
             // This request listens to the encode until its response is
             // over or its client hangs up, waiting for a seek included.
-            // An encode nobody listens to stops (stream/cache.ts). A client
+            // An encode nobody listens to gives its slot up to a track
+            // someone is waiting for (stream/cache.ts). A client
             // that hung up while the encode was being set up has already
             // closed, and would never leave.
             const leave = variant.job.join();

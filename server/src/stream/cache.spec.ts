@@ -5,8 +5,9 @@ import { appendFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { mediaSlotsInUse } from "../media/queue.js";
-import { cachePath, ensureVariant, readGrowing, stopFfmpeg, TranscodeJob } from "./cache.js";
+import { mediaSlotsInUse, playbackWaiting } from "../media/queue.js";
+import { fillMediaSlots, queuePlayback } from "../media/test-slots.js";
+import { cachePath, ensureVariant, Orphans, readGrowing, stopFfmpeg, TranscodeJob } from "./cache.js";
 
 const HASH = "0123456789abcdef0123456789abcdef01234567";
 
@@ -210,79 +211,150 @@ describe("stopFfmpeg", () => {
 });
 
 describe("TranscodeJob listeners", () => {
-  const GRACE = 60;
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  // A job that runs until it's abandoned or told to finish.
-  function job() {
+  // Stands in for the media queue's playback waiters: wait() is a track
+  // starting to wait for a slot, given() one being handed a slot.
+  function demand() {
+    let waiting = 0;
+    const listeners = new Set<() => void>();
+    return {
+      waiting: () => waiting,
+      onWaiting: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      wait: () => {
+        waiting += 1;
+        for (const listener of listeners) listener();
+      },
+      given: () => (waiting -= 1),
+    };
+  }
+
+  // A job that runs until it's abandoned or told to finish, with ffmpeg
+  // started unless `queued`.
+  let jobs = 0;
+  function job(orphans: Orphans, { queued = false } = {}) {
     let finish!: () => void;
+    jobs += 1;
     const made = new TranscodeJob(
-      path.join(dir, "job.tmp"),
-      path.join(dir, "job.done"),
+      path.join(dir, `job-${jobs}.tmp`),
+      path.join(dir, `job-${jobs}.done`),
       (self) =>
         new Promise<void>((resolve, reject) => {
           finish = resolve;
-          self.abandoned.addEventListener("abort", () => reject(new Error("abandoned")));
+          if (!queued) self.encoding();
+          self.abandoned.addEventListener("abort", () => reject(self.abandoned.reason));
         }),
-      GRACE,
+      orphans,
     );
     return { job: made, finish: () => finish() };
   }
 
-  it("is abandoned once its last listener has been gone for the grace", async () => {
-    const { job: encode } = job();
-    const leave = encode.join();
-    leave();
-    await sleep(GRACE / 2);
-    expect(encode.abandoned.aborted).toBe(false);
-    await sleep(GRACE);
-    expect(encode.abandoned.aborted).toBe(true);
-    expect(encode.finished).rejects.toThrow("abandoned");
-  });
-
-  it("carries on for a listener that comes back within the grace, as Safari's reopen does", async () => {
-    const { job: encode, finish } = job();
+  it("runs to the end once its last listener leaves, while no track is waiting for a slot", async () => {
+    // A paused player whose browser dropped the idle connection: on resume
+    // it asks for the rest, and a finished file answers at once.
+    const { job: encode, finish } = job(new Orphans(demand()));
     encode.join()();
-    await sleep(GRACE / 2);
-    const back = encode.join();
-    await sleep(GRACE * 2);
+    await sleep(50);
     expect(encode.abandoned.aborted).toBe(false);
     finish();
     await encode.finished;
-    back();
+    expect(encode.state).toBe("done");
   });
 
-  it("carries on while any listener is left", async () => {
-    const { job: encode, finish } = job();
-    const first = encode.join();
-    encode.join();
+  it("gives its slot up as soon as a track starts waiting for one, or at once if one already is", async () => {
+    const slots = demand();
+    const orphans = new Orphans(slots);
+    const { job: first } = job(orphans);
+    first.join()();
+    slots.wait();
+    expect(first.abandoned.aborted).toBe(true);
+    await expect(first.finished).rejects.toThrow("nobody was listening");
+    slots.given();
+
+    slots.wait();
+    const { job: second } = job(orphans);
+    const leave = second.join();
+    expect(second.abandoned.aborted).toBe(false);
+    leave();
+    expect(second.abandoned.aborted).toBe(true);
+  });
+
+  it("gives up one encode for each track waiting, the one nobody has listened to longest first", async () => {
+    const slots = demand();
+    const orphans = new Orphans(slots);
+    const [a, b, c] = [job(orphans), job(orphans), job(orphans)];
+    for (const { job: encode } of [a!, b!, c!]) encode.join()();
+
+    slots.wait();
+    expect([a!, b!, c!].map(({ job: encode }) => encode.abandoned.aborted)).toEqual([true, false, false]);
+    // The track is still waiting, for the slot a's ffmpeg hasn't let go of
+    // yet: nothing more goes for it. The queue hands that slot over as soon
+    // as ffmpeg exits, before the job itself has settled.
+    slots.wait();
+    slots.given();
+    expect(b!.job.abandoned.aborted).toBe(true);
+    slots.given();
+    await sleep(10);
+    expect(c!.job.abandoned.aborted).toBe(false);
+
+    slots.wait();
+    slots.given();
+    expect(c!.job.abandoned.aborted).toBe(true);
+    await Promise.allSettled([a!, b!, c!].map(({ job: encode }) => encode.finished));
+  });
+
+  it("keeps an encode someone still listens to, or came back to, as Safari's reopen does", async () => {
+    const slots = demand();
+    const orphans = new Orphans(slots);
+    const { job: shared, finish: finishShared } = job(orphans);
+    const first = shared.join();
+    shared.join();
     first();
     // Leaving twice counts once.
     first();
-    await sleep(GRACE * 2);
-    expect(encode.abandoned.aborted).toBe(false);
-    finish();
-    await encode.finished;
+    const { job: reopened, finish: finishReopened } = job(orphans);
+    reopened.join()();
+    reopened.join();
+
+    slots.wait();
+    expect(shared.abandoned.aborted).toBe(false);
+    expect(reopened.abandoned.aborted).toBe(false);
+    finishShared();
+    finishReopened();
+    await Promise.all([shared.finished, reopened.finished]);
   });
 
-  it("is never abandoned once it's done, or if nobody ever listened", async () => {
-    const { job: unheard, finish: finishUnheard } = job();
-    await sleep(GRACE * 2);
-    expect(unheard.abandoned.aborted).toBe(false);
-    finishUnheard();
+  it("abandons an encode still waiting for a slot as soon as its last listener leaves", async () => {
+    const { job: queued } = job(new Orphans(demand()), { queued: true });
+    queued.join()();
+    expect(queued.abandoned.aborted).toBe(true);
+    await expect(queued.finished).rejects.toThrow("nobody was listening");
+  });
 
-    const { job: encode, finish } = job();
-    const leave = encode.join();
-    finish();
-    await encode.finished;
+  it("is never abandoned once ffmpeg has exited, or if nobody ever listened", async () => {
+    const slots = demand();
+    const orphans = new Orphans(slots);
+    const { job: unheard, finish: finishUnheard } = job(orphans);
+    const { job: finishing, finish } = job(orphans);
+    const leave = finishing.join();
+    finishing.finishing();
     leave();
-    await sleep(GRACE * 2);
-    expect(encode.abandoned.aborted).toBe(false);
+
+    slots.wait();
+    slots.wait();
+    expect(unheard.abandoned.aborted).toBe(false);
+    expect(finishing.abandoned.aborted).toBe(false);
+    finishUnheard();
+    finish();
+    await Promise.all([unheard.finished, finishing.finished]);
   });
 
   it("isn't abandoned once ffmpeg has exited, so nothing encodes it again while its file is finished", async () => {
     // ffmpeg has written the whole file and exited, and the rename into
-    // place is held back: the window a last listener's grace can end in.
+    // place is held back: the window a track starting to wait can land in.
     const source = sineFlac(1, "short.flac");
     const cacheDir = path.join(dir, "streams");
     let release!: () => void;
@@ -292,15 +364,19 @@ describe("TranscodeJob listeners", () => {
       await held;
       return rename(...args);
     });
+    let full: { release(): void } | undefined;
+    let waiting: { granted: Promise<void>; release(): void } | undefined;
     try {
-      const first = await ensureVariant(HASH, source, "opus160", cacheDir, GRACE);
+      const first = await ensureVariant(HASH, source, "opus160", cacheDir);
       if (first.kind !== "growing") throw new Error("expected a fresh encode");
       const leave = first.job.join();
       while (renaming.mock.calls.length === 0) await sleep(5);
       leave();
-      await sleep(GRACE * 2);
+      full = fillMediaSlots();
+      waiting = queuePlayback();
+      await sleep(20);
 
-      const second = await ensureVariant(HASH, source, "opus160", cacheDir, GRACE);
+      const second = await ensureVariant(HASH, source, "opus160", cacheDir);
       expect(second.kind === "growing" && second.job === first.job).toBe(true);
       release();
       await first.job.finished;
@@ -308,34 +384,67 @@ describe("TranscodeJob listeners", () => {
     } finally {
       release();
       renaming.mockRestore();
+      full?.release();
+      await waiting?.granted;
+      waiting?.release();
     }
   });
 
-  it("kills ffmpeg, removes its temp file and frees its slot, and the next request encodes afresh", async () => {
+  it("kills ffmpeg, removes its temp file and gives its slot to the track waiting, and the next request encodes afresh", async () => {
     // Twenty minutes of audio: a few seconds of encoding, so it's still
     // going when its listener leaves.
     const source = sineFlac(1200, "long.flac");
     const cacheDir = path.join(dir, "streams");
     const shard = path.dirname(cachePath(HASH, "opus160", cacheDir));
-    const before = mediaSlotsInUse();
 
-    const variant = await ensureVariant(HASH, source, "opus160", cacheDir, GRACE);
+    const variant = await ensureVariant(HASH, source, "opus160", cacheDir);
     if (variant.kind !== "growing") throw new Error("expected a fresh encode");
     const leave = variant.job.join();
     await variant.job.started;
-    expect(mediaSlotsInUse()).toBe(before + 1);
     leave();
+    // Nobody waiting for a slot: it carries on.
+    await sleep(100);
+    expect(variant.job.abandoned.aborted).toBe(false);
 
-    await expect(variant.job.finished).rejects.toThrow("nobody was listening");
-    expect(mediaSlotsInUse()).toBe(before);
-    expect(existsSync(shard) ? readdirSync(shard) : []).toEqual([]);
+    const full = fillMediaSlots();
+    const next = queuePlayback();
+    try {
+      await expect(variant.job.finished).rejects.toThrow("nobody was listening");
+      await next.granted;
+      expect(existsSync(shard) ? readdirSync(shard) : []).toEqual([]);
+    } finally {
+      next.release();
+      full.release();
+    }
 
     // Not the dying job: a new one, which runs to the end and is cached.
     const short = sineFlac(1, "short.flac");
-    const again = await ensureVariant(HASH, short, "opus160", cacheDir, GRACE);
+    const again = await ensureVariant(HASH, short, "opus160", cacheDir);
     if (again.kind !== "growing") throw new Error("expected a fresh encode");
     expect(again.job).not.toBe(variant.job);
     await collect(readGrowing(again.job));
     expect(readdirSync(shard)).toEqual([path.basename(cachePath(HASH, "opus160", cacheDir))]);
+  });
+
+  it("takes a track skipped while it waited for a slot out of the queue", async () => {
+    const source = sineFlac(1, "short.flac");
+    const cacheDir = path.join(dir, "streams");
+    const full = fillMediaSlots();
+    try {
+      const variant = await ensureVariant(HASH, source, "opus160", cacheDir);
+      if (variant.kind !== "growing") throw new Error("expected a fresh encode");
+      const leave = variant.job.join();
+      await sleep(20);
+      expect(playbackWaiting()).toBe(1);
+      leave();
+      expect(playbackWaiting()).toBe(0);
+      await expect(variant.job.finished).rejects.toThrow("nobody was listening");
+    } finally {
+      full.release();
+    }
+    // Nothing started when the slots came free.
+    await sleep(50);
+    expect(mediaSlotsInUse()).toBe(0);
+    expect(readdirSync(path.dirname(cachePath(HASH, "opus160", cacheDir)))).toEqual([]);
   });
 });

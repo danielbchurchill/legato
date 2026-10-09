@@ -8,7 +8,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { buildTestApp } from "../auth/test-app.js";
 import { openDb } from "../db.js";
-import { mediaSlotsInUse } from "../media/queue.js";
+import { fillMediaSlots, queuePlayback } from "../media/test-slots.js";
 import { filesRoutes } from "../routes/files.js";
 import { backoffDelay, DrainPoll, TunnelClient, type TunnelState } from "./client.js";
 import { startFakeRelay, type FakeRelay } from "./fake-relay.js";
@@ -238,7 +238,7 @@ describe("TunnelClient", () => {
     expect(part.body.equals(source.subarray(100, 200))).toBe(true);
   });
 
-  it("gives a transcode's media-queue slot back when legato.fm cancels the stream", async () => {
+  it("gives a cancelled transcode's media-queue slot to the next track waiting for one", async () => {
     // Twenty minutes of audio: a few seconds of encoding, still going when
     // the device hangs up.
     const dir = mkdtempSync(path.join(tmpdir(), "legato-tunnel-cancel-"));
@@ -257,22 +257,30 @@ describe("TunnelClient", () => {
       .get(node.id, root.id, sourcePath, "cafe0123456789abcdef0123456789abcdef0123") as { id: number };
     const cacheDir = path.join(dir, "streams");
     const app = Fastify();
-    await app.register(filesRoutes(db, { cacheDir, abandonGraceMs: 50 }), { prefix: "/api/v1" });
+    await app.register(filesRoutes(db, { cacheDir }), { prefix: "/api/v1" });
     const origin = await listen(app);
 
     const fake = relay();
     const tunnel = client(fake.url, origin);
     await waitFor(tunnel, "connected");
-    const before = mediaSlotsInUse();
     void fake.request({ method: "GET", path: `/api/v1/files/${fileId}/stream?quality=opus160`, headers: {} }).catch(() => {});
     const shard = path.join(cacheDir, "opus160", "ca");
     while (!existsSync(shard) || readdirSync(shard).length === 0) await sleep(10);
-    expect(mediaSlotsInUse()).toBe(before + 1);
+    // The next track, waiting behind it for a slot.
+    const full = fillMediaSlots();
+    const next = queuePlayback();
+    cleanups.push(() => {
+      full.release();
+      next.release();
+    });
+    await sleep(50);
 
     fake.send({ type: "cancel", requestId: fake.lastRequestId });
+    let given = false;
+    void next.granted.then(() => (given = true));
     const deadline = Date.now() + 2_000;
-    while ((mediaSlotsInUse() > before || readdirSync(shard).length > 0) && Date.now() < deadline) await sleep(10);
-    expect(mediaSlotsInUse()).toBe(before);
+    while ((!given || readdirSync(shard).length > 0) && Date.now() < deadline) await sleep(10);
+    expect(given).toBe(true);
     // Nothing left that looks like a finished variant, nor a temp file.
     expect(readdirSync(shard)).toEqual([]);
   });
