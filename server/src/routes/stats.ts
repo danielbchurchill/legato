@@ -17,13 +17,19 @@ type TopRow = { id: number; title: string; playCount: number };
 // current-library aggregates, not play counts, and joining plays straight
 // through the edge that actually links a recording to its artist/release
 // avoids a second source of truth for that relationship.
+//
+// CROSS JOIN pins plays as the outer loop, each play then finding its
+// recording's few edges by edges_from_node_idx. Left to choose, SQLite walked
+// every edge and looked each one up in plays: about 2.4 s per call at 30,000
+// albums (3.2M edges) even with nothing played, which held up every /stats,
+// and the Library header reads its counts from /stats (#302).
 function topByEdge(db: Database, edgeType: "performed_by" | "appears_on"): TopRow | null {
   return (
     (db
       .prepare(
         `SELECT n.id AS id, n.title AS title, COUNT(*) AS playCount
          FROM plays p
-         JOIN edges e ON e.from_node = p.recording_node_id AND e.type = ?
+         CROSS JOIN edges e ON e.from_node = p.recording_node_id AND e.type = ?
          JOIN nodes n ON n.id = e.to_node
          GROUP BY e.to_node
          ORDER BY playCount DESC, n.id ASC
