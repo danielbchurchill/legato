@@ -87,7 +87,7 @@ export function enqueueArtistMemberLookupIfNeeded(db: Database, artistNodeId: nu
 //
 // Joins rather than IN (…): SQLite flattens them, so a check for one artist
 // (`WHERE id = ?`) reads that artist's own edges instead of building the
-// whole set first.
+// whole set first. A caller that reads a whole set uses withBound below.
 
 // The crawl's starting points: artists a recording names as its performer.
 // A producer, engineer or mixer is in the library too (#280), but doesn't
@@ -108,17 +108,49 @@ function memberHop(ids: string): string {
 /** Artists a member lookup runs for: the performers, and their direct
  *  members and groups. With The Beatles in the library, that's The Beatles
  *  and George Harrison, whose lookup is what finds the Traveling Wilburys. */
-export const MEMBER_LOOKUP_ARTISTS_SQL = `${PERFORMERS} UNION ${memberHop(PERFORMERS)}`;
+const memberLookupArtistsFrom = (performers: string) => `${performers} UNION ${memberHop(performers)}`;
+export const MEMBER_LOOKUP_ARTISTS_SQL = memberLookupArtistsFrom(PERFORMERS);
 
 /** Every artist inside the bound, which is who gets a photo and a
  *  description: the library's artists, the member-lookup artists above, and
  *  the artists their lookups found (the Wilburys). Nothing past that is
  *  created, so nothing past it is queued. */
-export const ARTISTS_IN_BOUND_SQL = `${LIBRARY_ARTISTS} UNION ${MEMBER_LOOKUP_ARTISTS_SQL}
-  UNION ${memberHop(MEMBER_LOOKUP_ARTISTS_SQL)}`;
+const artistsInBoundFrom = (memberLookupArtists: string) =>
+  `${LIBRARY_ARTISTS} UNION ${memberLookupArtists} UNION ${memberHop(memberLookupArtists)}`;
 
 export function isMemberLookupArtist(db: Database, artistNodeId: number): boolean {
   return db.prepare(`SELECT 1 FROM (${MEMBER_LOOKUP_ARTISTS_SQL}) WHERE id = ?`).get(artistNodeId) !== undefined;
+}
+
+/** Issue #321: reads the whole bound into temp.member_lookup_artists and
+ *  temp.artists_in_bound, runs `fn`, and drops them. Written out in full,
+ *  the two sets read the performers twelve times between them, and each
+ *  read walks every recording's edges. Here the performers are read once,
+ *  and each set is built from the one before it. At 30,000 albums, that
+ *  took the startup prune from 14 s to 3.7 s, and recompute's enqueue from
+ *  11.6 s to 2.5 s. A temp table writes only to this connection's own temp
+ *  database, so the reads take no write lock on the library. */
+export function withBound<T>(db: Database, fn: () => T): T {
+  try {
+    db.exec(`CREATE TEMP TABLE performers (id INTEGER PRIMARY KEY);
+             CREATE TEMP TABLE member_lookup_artists (id INTEGER PRIMARY KEY);
+             CREATE TEMP TABLE artists_in_bound (id INTEGER PRIMARY KEY);`);
+    db.exec(`INSERT OR IGNORE INTO temp.performers SELECT id FROM (${PERFORMERS})`);
+    db.exec(
+      `INSERT INTO temp.member_lookup_artists
+       SELECT id FROM (${memberLookupArtistsFrom("SELECT id FROM temp.performers")})`,
+    );
+    db.exec(
+      `INSERT INTO temp.artists_in_bound
+       SELECT id FROM (${artistsInBoundFrom("SELECT id FROM temp.member_lookup_artists")})`,
+    );
+    return fn();
+  } finally {
+    // IF EXISTS: a transaction rolled back by a failure has taken them already.
+    for (const table of ["performers", "member_lookup_artists", "artists_in_bound"]) {
+      db.exec(`DROP TABLE IF EXISTS temp.${table}`);
+    }
+  }
 }
 
 // One INSERT … SELECT per job type, with enqueueOnce's rule as its NOT
@@ -140,20 +172,15 @@ function insertOnce(db: Database, jobType: string, candidates: string): void {
  *  above three times per node, 540,000 lookups on the Pi.
  *
  *  An INSERT … SELECT holds the write lock while its SELECT runs, and on a
- *  30,000-album library reading the bound takes seconds. So each set is read
- *  once into a temp table first, which writes only to this connection's
- *  temp database, and the three inserts read from those. CROSS JOIN keeps
- *  the temp table as the outer loop: it has no statistics, and SQLite
- *  otherwise checked every artist node in the database against it. */
+ *  30,000-album library reading the bound takes seconds. So the bound is
+ *  read first (withBound), and the three inserts read from its temp tables.
+ *  CROSS JOIN keeps the temp table as the outer loop: it has no statistics,
+ *  and SQLite otherwise checked every artist node in the database against
+ *  it. */
 export function enqueueLookupsInBound(db: Database): void {
   if (!isEnrichmentEnabled(db)) return;
 
-  db.exec("CREATE TEMP TABLE IF NOT EXISTS artists_in_bound (id INTEGER PRIMARY KEY)");
-  db.exec("CREATE TEMP TABLE IF NOT EXISTS member_lookup_artists (id INTEGER PRIMARY KEY)");
-  try {
-    db.exec(`INSERT OR IGNORE INTO temp.artists_in_bound SELECT id FROM (${ARTISTS_IN_BOUND_SQL})`);
-    db.exec(`INSERT OR IGNORE INTO temp.member_lookup_artists SELECT id FROM (${MEMBER_LOOKUP_ARTISTS_SQL})`);
-
+  withBound(db, () => {
     insertOnce(
       db,
       "artist_image_lookup",
@@ -173,10 +200,7 @@ export function enqueueLookupsInBound(db: Database): void {
       "description_lookup",
       "SELECT id FROM nodes WHERE type = 'release' OR id IN (SELECT id FROM temp.artists_in_bound)",
     );
-  } finally {
-    db.exec("DROP TABLE temp.artists_in_bound");
-    db.exec("DROP TABLE temp.member_lookup_artists");
-  }
+  });
 }
 
 // Queued once a 'recording_lookup' job resolves a real MusicBrainz mbid —

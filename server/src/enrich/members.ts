@@ -1,6 +1,6 @@
 import type { Database } from "../sqlite.js";
 import type { MbArtistRelation } from "./mbClient.js";
-import { ARTISTS_IN_BOUND_SQL, MEMBER_LOOKUP_ARTISTS_SQL } from "./queue.js";
+import { withBound } from "./queue.js";
 
 // Mirrors match/edges.ts's findOrCreateNode and credits.ts's
 // findOrCreateCreditNode, scoped to 'artist' nodes — same case/whitespace-
@@ -167,44 +167,45 @@ export function pruneBeyondMemberBound(db: Database): MemberBoundPrune {
   db.exec("PRAGMA foreign_keys = OFF");
   try {
     db.transaction(() => {
-      db.exec(`CREATE TEMP TABLE member_lookup_artists (id INTEGER PRIMARY KEY);
-               CREATE TEMP TABLE artists_in_bound (id INTEGER PRIMARY KEY);
-               CREATE TEMP TABLE artists_past_bound (id INTEGER PRIMARY KEY);`);
-      db.exec(`INSERT INTO member_lookup_artists SELECT id FROM (${MEMBER_LOOKUP_ARTISTS_SQL})`);
-      db.exec(`INSERT INTO artists_in_bound SELECT id FROM (${ARTISTS_IN_BOUND_SQL})`);
-
-      // The bounded crawl only writes member_of edges from the lookups of
-      // member-lookup artists, so an edge with neither end among them was
-      // found by a lookup that shouldn't have run. Removing these leaves the
-      // bound itself unchanged: every edge it was read through touches one.
-      db.exec(
-        `DELETE FROM edges WHERE type = 'member_of' AND source = 'musicbrainz'
-           AND from_node NOT IN (SELECT id FROM member_lookup_artists)
-           AND to_node NOT IN (SELECT id FROM member_lookup_artists)`,
-      );
-      // Those lookups' edges are gone, so a done job would wrongly stop the
-      // lookup being queued if the artist comes inside the bound later.
-      db.exec(
-        `DELETE FROM enrich_jobs WHERE job_type = 'artist_member_lookup'
-           AND node_id NOT IN (SELECT id FROM member_lookup_artists)`,
-      );
-
-      db.exec(
-        `INSERT INTO artists_past_bound
-         SELECT id FROM nodes WHERE type = 'artist' AND id NOT IN (SELECT id FROM artists_in_bound)`,
-      );
-      for (const { table, column } of references) {
+      withBound(db, () => {
+        // The bounded crawl only writes member_of edges from the lookups of
+        // member-lookup artists, so an edge with neither end among them was
+        // found by a lookup that shouldn't have run. Removing these leaves
+        // the bound itself unchanged: every edge it was read through touches
+        // one.
         db.exec(
-          `DELETE FROM artists_past_bound WHERE id IN
-             (SELECT ${quote(column)} FROM ${quote(table)} WHERE NOT (${DERIVED_ROWS[table] ?? "0"}))`,
+          `DELETE FROM edges WHERE type = 'member_of' AND source = 'musicbrainz'
+             AND from_node NOT IN (SELECT id FROM temp.member_lookup_artists)
+             AND to_node NOT IN (SELECT id FROM temp.member_lookup_artists)`,
         );
-      }
-      for (const { table, column } of references) {
-        db.exec(`DELETE FROM ${quote(table)} WHERE ${quote(column)} IN (SELECT id FROM artists_past_bound)`);
-      }
-      db.exec("DELETE FROM nodes WHERE id IN (SELECT id FROM artists_past_bound)");
+        // Those lookups' edges are gone, so a done job would wrongly stop the
+        // lookup being queued if the artist comes inside the bound later.
+        db.exec(
+          `DELETE FROM enrich_jobs WHERE job_type = 'artist_member_lookup'
+             AND node_id NOT IN (SELECT id FROM temp.member_lookup_artists)`,
+        );
 
-      db.exec("DROP TABLE member_lookup_artists; DROP TABLE artists_in_bound; DROP TABLE artists_past_bound;");
+        db.exec("CREATE TEMP TABLE artists_past_bound (id INTEGER PRIMARY KEY)");
+        db.exec(
+          `INSERT INTO temp.artists_past_bound
+           SELECT id FROM nodes WHERE type = 'artist' AND id NOT IN (SELECT id FROM temp.artists_in_bound)`,
+        );
+        // Each of these reads a whole table, so they're skipped when no one
+        // is past the bound.
+        if (count(db, "SELECT EXISTS (SELECT 1 FROM temp.artists_past_bound) AS n") === 1) {
+          for (const { table, column } of references) {
+            db.exec(
+              `DELETE FROM temp.artists_past_bound WHERE id IN
+                 (SELECT ${quote(column)} FROM ${quote(table)} WHERE NOT (${DERIVED_ROWS[table] ?? "0"}))`,
+            );
+          }
+          for (const { table, column } of references) {
+            db.exec(`DELETE FROM ${quote(table)} WHERE ${quote(column)} IN (SELECT id FROM temp.artists_past_bound)`);
+          }
+          db.exec("DELETE FROM nodes WHERE id IN (SELECT id FROM temp.artists_past_bound)");
+        }
+        db.exec("DROP TABLE temp.artists_past_bound");
+      });
     })();
   } finally {
     db.exec("PRAGMA foreign_keys = ON");
