@@ -156,6 +156,9 @@ describe("relay HTTP forwarding", () => {
     for (const contentType of ["application/json", "text/plain", "application/octet-stream"]) {
       const over = await post(Buffer.alloc(REQUEST_BODY_LIMIT + 1, "a"), contentType);
       expect(over.status).toBe(413);
+      // Fastify's own refusal is sandboxed like everything else here.
+      expect(over.headers.get("content-security-policy")).toBe("sandbox");
+      expect(over.headers.get("x-content-type-options")).toBe("nosniff");
     }
     // Without a Content-Length to refuse up front, it's cut off once past.
     const streamed = new ReadableStream({
