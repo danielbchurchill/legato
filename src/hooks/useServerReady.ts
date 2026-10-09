@@ -150,6 +150,18 @@ function sameServerVersion(a: ServerVersion | null, b: ServerVersion): boolean {
   )
 }
 
+function sameOutage(a: Outage | null, b: Outage): boolean {
+  return (
+    a !== null &&
+    a.failure.kind === b.failure.kind &&
+    (a.failure.kind === 'bad-status' ? b.failure.kind === 'bad-status' && a.failure.status === b.failure.status : true) &&
+    a.lastSeenAt === b.lastSeenAt &&
+    a.networkChangedAt === b.networkChangedAt &&
+    a.deviceOnline === b.deviceOnline &&
+    a.triedAt === b.triedAt
+  )
+}
+
 function readServerName(body: unknown): string | null {
   const name = typeof body === 'object' && body !== null ? (body as Record<string, unknown>).name : null
   return typeof name === 'string' && name ? name : null
@@ -186,6 +198,11 @@ export function useServerReady(): ServerStatus {
     // answers.
     let failingSince: number | null = null
     let failedHow: CheckFailure | null = null
+    // What the state was last given, so a check that changes nothing sets
+    // nothing: during an outage that's a check a second, and each set would
+    // re-render the whole app under the state for no change.
+    let shown: Outage | null = null
+    let triedAt: number | null = null
     let down = false
     let downSince = 0
     const remembered = Date.parse(readLastSeen(SERVER_ORIGIN)?.at ?? '')
@@ -229,6 +246,8 @@ export function useServerReady(): ServerStatus {
         const recovered = failingSince !== null
         failingSince = null
         failedHow = null
+        shown = null
+        triedAt = null
         down = false
         everAnswered = true
         lastSeenAt = now
@@ -257,11 +276,14 @@ export function useServerReady(): ServerStatus {
       if (!down && now - failingSince >= limit) {
         down = true
         downSince = now
+        setReady(false)
       }
       if (!down) return
-      const facts = { failure: failedHow, lastSeenAt, networkChangedAt, deviceOnline: navigator.onLine }
-      setReady(false)
-      setOutage((prev) => ({ ...facts, triedAt: manual ? now : (prev?.triedAt ?? null) }))
+      if (manual) triedAt = now
+      const next: Outage = { failure: failedHow, lastSeenAt, networkChangedAt, deviceOnline: navigator.onLine, triedAt }
+      if (sameOutage(shown, next)) return
+      shown = next
+      setOutage(next)
     }
 
     const nextDelay = () => {

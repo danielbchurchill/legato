@@ -226,9 +226,10 @@ describe('useServerReady when the server goes away', () => {
   }
 
   async function mount() {
-    const result: { current: ServerStatus | null } = { current: null }
+    const result: { current: ServerStatus | null; renders: number } = { current: null, renders: 0 }
     function Harness() {
       result.current = useServerReady()
+      result.renders++
       return null
     }
     const container = document.createElement('div')
@@ -272,6 +273,21 @@ describe('useServerReady when the server goes away', () => {
     await advance(300 + HEALTH_TIMEOUT_MS)
 
     expect(result.current?.outage?.failure).toEqual({ kind: 'no-answer' })
+  })
+
+  // The coordinator's review of #346: a new outage object every second
+  // re-rendered the whole workspace under the state.
+  it("sets nothing when a check during an outage finds nothing new", async () => {
+    const result = await mount()
+    mode = 'refused'
+    await advance(3000 + 3000)
+    const outage = result.current?.outage
+    expect(outage).not.toBeNull()
+    const renders = result.renders
+
+    await advance(10_000) // ten more checks, all refused
+    expect(result.renders).toBe(renders)
+    expect(result.current?.outage).toBe(outage)
   })
 
   // A LAN host that's asleep: unanswered at first, then turned away at once

@@ -555,27 +555,33 @@ const EMBEDDED_START_GRACE_MS = 15_000
 
 const SERVER_PATH = pathFor(SERVER_ORIGIN, IS_TAURI && SERVER_ORIGIN === DEFAULT_SERVER_ORIGIN)
 
+const connectElsewhere = () => openConnectScreen('unreachable')
+
 // What the unreachable state says, worked out from what useServerReady saw.
-function unreachableView(connection: ServerStatus): UnreachableView | null {
-  const { outage } = connection
-  if (!outage) return null
-  const now = Date.now()
-  const reason = inferReason({ ...outage, path: SERVER_PATH }, now)
-  const copy = describeOutage(reason, {
-    path: SERVER_PATH,
-    name: connection.name,
-    host: new URL(SERVER_ORIGIN).host,
-    lastSeenAt: outage.lastSeenAt,
-    everConnected: connection.everConnected,
-    now,
-  })
-  return {
-    ...copy,
-    footer: outageFooter({ everConnected: connection.everConnected, triedAt: outage.triedAt }),
-    retrying: connection.retrying,
-    onRetry: connection.retry,
-    onConnectElsewhere: () => openConnectScreen('unreachable'),
-  }
+// Built again only when that changes, not on every failed check: the shell
+// reads it through context, and a new object a second would re-render the
+// whole workspace under the state.
+function useUnreachableView({ outage, name, everConnected, retrying, retry }: ServerStatus): UnreachableView | null {
+  return useMemo(() => {
+    if (!outage) return null
+    const now = Date.now()
+    const reason = inferReason({ ...outage, path: SERVER_PATH }, now)
+    const copy = describeOutage(reason, {
+      path: SERVER_PATH,
+      name,
+      host: new URL(SERVER_ORIGIN).host,
+      lastSeenAt: outage.lastSeenAt,
+      everConnected,
+      now,
+    })
+    return {
+      ...copy,
+      footer: outageFooter({ everConnected, triedAt: outage.triedAt }),
+      retrying,
+      onRetry: retry,
+      onConnectElsewhere: connectElsewhere,
+    }
+  }, [outage, name, everConnected, retrying, retry])
 }
 
 function useUnreachableSurface(view: UnreachableView | null): { surface: UnreachableSurface; claimed: boolean } {
@@ -616,8 +622,12 @@ export default function App() {
   const chosen = SERVER_ORIGIN !== DEFAULT_SERVER_ORIGIN
   const offerAnother = useAfter(OFFER_ANOTHER_SERVER_MS, !ready) || chosen || everConnected || LAUNCHED_OFFLINE
   const embeddedHadTime = useAfter(EMBEDDED_START_GRACE_MS, !everConnected)
-  const unreachable = unreachableView(connection)
+  const unreachable = useUnreachableView(connection)
   const { surface, claimed } = useUnreachableSurface(unreachable)
+  // One element for the life of the window, so a render of App (a try
+  // again, the connect screen opening) doesn't render the whole workspace
+  // again: React leaves an element it has already rendered alone.
+  const app = useMemo(() => <MainApp />, [])
 
   // Back goes to whatever was there before: the app, a sign-in screen, or
   // the wait for a server that isn't answering. It's drawn over that rather
@@ -660,7 +670,6 @@ export default function App() {
   // queue and the web player live in it, and anything buffered keeps
   // playing. The shell draws the unreachable state over itself; anything
   // else (the sign-in check, loading the library) gets the whole window.
-  const app = <MainApp />
   return (
     <UnreachableContext.Provider value={surface}>
       <ToastProvider>
