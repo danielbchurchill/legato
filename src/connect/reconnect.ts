@@ -34,8 +34,10 @@ export const SERVER_BACK_EVENT = 'legato:server-back'
  * answers as a process that restarted since its last answer. */
 export const SERVER_ANSWERED_EVENT = 'legato:server-answered'
 
-// How long the latest scan job gets to say whether it moved on. Not
-// knowing counts as yes.
+// How long each check before the server is announced back gets: the
+// session, and the latest scan job. The server is announced back anyway once
+// it runs out. A request that then finds the session gone comes back 401,
+// and useAuth checks again from there.
 export const BACK_CHECK_TIMEOUT_MS = 10_000
 
 let epoch = 0
@@ -43,6 +45,9 @@ let backs = 0
 let sessionCheck: (() => Promise<void>) | null = null
 let freshCheck: (() => Promise<void>) | null = null
 let outage = false
+// Goes up with every outage declared, so the end of one that another has
+// overtaken while its session check ran doesn't announce the server back.
+let outageGeneration = 0
 let failingSince: number | null = null
 let lastTroubleAt: number | null = null
 let readFailed = false
@@ -109,6 +114,7 @@ export function noteLatestScan(job: { id: number; status: string } | null): void
 /** For useServerReady, as it declares an outage. */
 export function noteOutage(): void {
   outage = true
+  outageGeneration += 1
 }
 
 /** True from a declared outage until the server's back and the session
@@ -155,8 +161,13 @@ async function scanMovedOn(): Promise<boolean> {
  * restarted. `restarted` is true when it answers as a different process
  * from before, or doesn't say. */
 export async function announceServerBack({ restarted }: { restarted: boolean }): Promise<void> {
-  await sessionCheck?.().catch(() => undefined)
+  const generation = outageGeneration
+  if (sessionCheck) await withTimeout(sessionCheck(), BACK_CHECK_TIMEOUT_MS, undefined)
+  if (generation !== outageGeneration) return
   const full = restarted || readFailed || (await scanMovedOn())
+  // Another outage began while this one's end was being checked: that one
+  // announces the server back when it's over.
+  if (generation !== outageGeneration) return
   outage = false
   backs += 1
   if (full) {

@@ -24,6 +24,7 @@ import {
   reconnectEpoch,
   SERVER_BACK_EVENT,
   serverBackEpoch,
+  BACK_CHECK_TIMEOUT_MS,
   useReconnectEpoch,
 } from './reconnect'
 
@@ -268,5 +269,61 @@ describe('what an outage reads again', () => {
     const epoch = reconnectEpoch()
     await outage(false)
     expect(reconnectEpoch()).toBe(epoch + 1)
+  })
+})
+
+// Finding 5: a second outage declared while the first one's end waited on
+// the session check.
+describe('a second outage during the session check', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it("doesn't announce the server back, and leaves the second outage standing", async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => [] }) as Response))
+    let finish: () => void = () => undefined
+    const withdraw = provideSessionCheck(() => new Promise<void>((resolve) => (finish = resolve)))
+    const back = vi.fn()
+    window.addEventListener(SERVER_BACK_EVENT, back)
+    const epoch = reconnectEpoch()
+
+    noteOutage()
+    const first = announceServerBack({ restarted: true })
+    noteOutage() // gone again before the session check came back
+    finish()
+    await first
+
+    expect(back).not.toHaveBeenCalled()
+    expect(reconnectEpoch()).toBe(epoch)
+    expect(inOutage()).toBe(true)
+
+    // The second one's end announces it.
+    const second = announceServerBack({ restarted: true })
+    finish()
+    await second
+    expect(back).toHaveBeenCalledTimes(1)
+    expect(reconnectEpoch()).toBe(epoch + 1)
+    expect(inOutage()).toBe(false)
+    window.removeEventListener(SERVER_BACK_EVENT, back)
+    withdraw()
+  })
+
+  it('stops waiting for a session check that never answers', async () => {
+    vi.useFakeTimers()
+    const withdraw = provideSessionCheck(() => new Promise<void>(() => undefined))
+    const back = vi.fn()
+    window.addEventListener(SERVER_BACK_EVENT, back)
+
+    noteOutage()
+    const announced = announceServerBack({ restarted: true })
+    await vi.advanceTimersByTimeAsync(BACK_CHECK_TIMEOUT_MS - 1)
+    expect(back).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await announced
+
+    expect(back).toHaveBeenCalledTimes(1)
+    window.removeEventListener(SERVER_BACK_EVENT, back)
+    withdraw()
   })
 })
