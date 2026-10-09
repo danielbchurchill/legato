@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { getUserBySessionToken, SESSION_COOKIE, sessionToken, type RelayUserRow } from "../accounts.js";
 import { checkClaimProof, PROOF_FAILURE_MESSAGES, type ClaimProofFailure } from "../linked-servers.js";
 import { claimServerCode, claimStatus, mintPairingCode, redeemPairingCode, type ClaimFailure } from "../pairing.js";
+import { clientAddress, type ExchangeLimiter } from "../rate-limit.js";
 import { signServerToken, type SigningKeys } from "../signing-keys.js";
 
 // Bridges an authenticated browser session to a headless home server that
@@ -38,8 +39,11 @@ const CLAIM_PROOF_STATUS: Record<ClaimProofFailure, number> = { malformed: 400, 
 
 export const SIGNING_UNAVAILABLE = "legato.fm can't link servers yet: this relay doesn't sign server tokens.";
 
-export function pairRoutes(db: Database, options: { signingKeys: SigningKeys | null; issuer: string | undefined }) {
-  const { signingKeys, issuer } = options;
+export function pairRoutes(
+  db: Database,
+  options: { signingKeys: SigningKeys | null; issuer: string | undefined; limiter: ExchangeLimiter },
+) {
+  const { signingKeys, issuer, limiter } = options;
   const ownOrigin = issuer ? new URL(issuer).origin : null;
 
   return async function routes(app: FastifyInstance) {
@@ -100,7 +104,8 @@ export function pairRoutes(db: Database, options: { signingKeys: SigningKeys | n
 
     // Polled by a home server while its /setup page is open (issue #237):
     // 404 until someone claims the code, then a `link` token for the
-    // claiming account and this server's id, once.
+    // claiming account and this server's id, once. Asking about codes
+    // nobody here knows is rate-limited (rate-limit.ts, issue #324).
     app.post<{ Body: Record<string, unknown> | null }>("/pair/exchange", async (request, reply) => {
       if (!signingKeys || !issuer) {
         reply.code(503);
@@ -112,8 +117,19 @@ export function pairRoutes(db: Database, options: { signingKeys: SigningKeys | n
         return { error: PROOF_FAILURE_MESSAGES[proof.reason], reason: proof.reason };
       }
 
+      const address = clientAddress(request.headers, request.ip);
+      const retryAfter = limiter.retryAfterSeconds(address, proof.code);
+      if (retryAfter > 0) {
+        reply.code(429).header("Retry-After", String(retryAfter));
+        return {
+          error: `Too many unknown setup codes from this address. Try again in ${retryAfter} seconds.`,
+          reason: "rate_limited",
+        };
+      }
+
       const result = redeemPairingCode(db, proof.code);
       if (!result.ok) {
+        if (result.reason === "not_found") limiter.recordUnknown(address, proof.code);
         reply.code(result.reason === "not_found" ? 404 : 410);
         return {
           error: `pairing code ${result.reason === "not_found" ? "not found" : result.reason}`,

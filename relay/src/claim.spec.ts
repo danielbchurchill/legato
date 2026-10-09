@@ -9,6 +9,7 @@ import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
 import { claimProofMessage, isLinkedServer, linkProofMessage, unlinkProofMessage, verifyServerSignature } from "./linked-servers.js";
 import { mintPairingCode, OPEN_CODES_PER_ACCOUNT, tunnelCredentialHolder } from "./pairing.js";
+import { FREE_CODES } from "./rate-limit.js";
 import { claimReturnPath } from "./routes/claim-page.js";
 import { parseSigningKeys, type SigningKeys } from "./signing-keys.js";
 
@@ -75,8 +76,11 @@ function setup(options: { signing?: boolean; github?: boolean } = {}) {
     app.inject({ method: "POST", url: "/pair/claim", headers: { cookie, ...headers }, payload: { code } });
   const status = async (cookie: string, code: string) =>
     ((await app.inject({ method: "GET", url: `/pair/claim?code=${code}`, headers: { cookie } })).json() as { status: string }).status;
-  const exchange = (body: Record<string, unknown>) => app.inject({ method: "POST", url: "/pair/exchange", payload: body });
-  const exchangeAs = (server: ServerKey, code: string) => exchange(claimProof(server, { issuer: ISSUER, code, nowSeconds: now() }));
+  // From the address Fly would report, or the inject's own loopback one.
+  const exchange = (body: Record<string, unknown>, address?: string) =>
+    app.inject({ method: "POST", url: "/pair/exchange", payload: body, headers: address ? { "fly-client-ip": address } : {} });
+  const exchangeAs = (server: ServerKey, code: string, address?: string) =>
+    exchange(claimProof(server, { issuer: ISSUER, code, nowSeconds: now() }), address);
   const report = (body: Record<string, unknown>) => app.inject({ method: "POST", url: "/linked-servers", payload: body });
   const credentials = () => db.prepare("SELECT relay_user_id, server_id FROM tunnel_credentials").all();
   const pairs = () => db.prepare("SELECT relay_user_id, server_id FROM linked_servers").all();
@@ -314,6 +318,64 @@ describe("POST /pair/claim", () => {
     const { cookie } = h.signIn();
     expect((await h.claim(cookie, "K7QM-4XRD")).statusCode).toBe(503);
     expect(h.db.prepare("SELECT COUNT(*) AS n FROM pairing_codes").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("guessing codes at POST /pair/exchange", () => {
+  const GUESSER = "203.0.113.9";
+  // Codes nobody claimed, in the setup code's own format.
+  const guess = (i: number) => `AAAA-${String(i).padStart(4, "0")}`;
+
+  it("locks out one address asking about too many codes nobody claimed, with Retry-After", async () => {
+    const h = setup();
+    const guesser = homeServer();
+    for (let i = 0; i <= FREE_CODES; i++) expect((await h.exchangeAs(guesser, guess(i), GUESSER)).statusCode).toBe(404);
+    // A fresh key buys nothing: it's the address that's locked out.
+    const limited = await h.exchangeAs(homeServer(), guess(FREE_CODES + 1), GUESSER);
+    expect(limited.statusCode).toBe(429);
+    expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
+    expect(limited.json()).toMatchObject({ reason: "rate_limited" });
+
+    // Someone else's server picks up its claim as usual.
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD");
+    expect((await h.exchangeAs(homeServer(), "K7QM-4XRD", "198.51.100.4")).statusCode).toBe(200);
+  });
+
+  it("never locks out a server asking about its own code until it's claimed", async () => {
+    const h = setup();
+    const server = homeServer();
+    for (let i = 0; i < 3 * FREE_CODES; i++) expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(404);
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD");
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(200);
+  });
+
+  it("still answers a server about its own code behind an address that's locked out", async () => {
+    const h = setup();
+    const server = homeServer();
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(404);
+    const guesser = homeServer();
+    for (let i = 0; i <= FREE_CODES; i++) await h.exchangeAs(guesser, guess(i), GUESSER);
+    expect((await h.exchangeAs(guesser, guess(FREE_CODES + 1), GUESSER)).statusCode).toBe(429);
+
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD");
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(200);
+  });
+
+  it("counts only codes nobody knows: not spent ones, and not bad proofs", async () => {
+    const h = setup();
+    const { user } = h.signIn();
+    const server = homeServer();
+    for (let i = 0; i <= FREE_CODES; i++) {
+      const { code } = mintPairingCode(h.db, user.id, () => `SPNT-${String(i).padStart(4, "0")}`);
+      h.db.prepare("UPDATE pairing_codes SET used_at = datetime('now') WHERE code = ?").run(code);
+      expect((await h.exchangeAs(server, code, GUESSER)).statusCode).toBe(410);
+      const stale = claimProof(server, { issuer: ISSUER, code: guess(i), nowSeconds: now() - 600 });
+      expect((await h.exchange(stale, GUESSER)).statusCode).toBe(401);
+    }
+    expect((await h.exchangeAs(server, guess(0), GUESSER)).statusCode).toBe(404);
   });
 });
 

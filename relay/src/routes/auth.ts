@@ -32,7 +32,7 @@ import {
   type NativeQuery,
 } from "../native-sign-in.js";
 import { isLinkedServer } from "../linked-servers.js";
-import { clientAddress, TokenLimiter } from "../rate-limit.js";
+import { clientAddress, ExchangeLimiter, TokenLimiter } from "../rate-limit.js";
 import { parseSigningKeys, SERVER_ID_PATTERN, signServerToken, type SigningKeys } from "../signing-keys.js";
 import type { TunnelRegistry } from "../tunnel-registry.js";
 import { claimPageRoutes, claimReturnPath } from "./claim-page.js";
@@ -337,6 +337,7 @@ export interface AuthRoutesOptions {
   tokenLimiter?: TokenLimiter;
   // POST /link/redeem's own brake (routes/link-page.ts, issue #325).
   linkLimiter?: TokenLimiter;
+  exchangeLimiter?: ExchangeLimiter;
   // Token signing keys (issue #114). Undefined reads RELAY_SIGNING_KEYS;
   // null is "signing off", which is what tests of the unconfigured path pass.
   signingKeys?: SigningKeys | null;
@@ -353,6 +354,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
   const config = options.config ?? ENV_CONFIG;
   const cookie = cookieAttributes(config.callbackBaseUrl);
   const limiter = options.tokenLimiter ?? new TokenLimiter();
+  const exchangeLimiter = options.exchangeLimiter ?? new ExchangeLimiter();
 
   return async function routes(app: FastifyInstance) {
     let signingKeys: SigningKeys | null = null;
@@ -373,7 +375,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     // token this service signed, with the keys resolved just above, and
     // redeeming a pairing code means signing one (issue #237).
     app.register(linkedServerRoutes(db, { signingKeys, issuer: config.callbackBaseUrl, tunnels: options.tunnels }));
-    app.register(pairRoutes(db, { signingKeys, issuer: config.callbackBaseUrl }));
+    app.register(pairRoutes(db, { signingKeys, issuer: config.callbackBaseUrl, limiter: exchangeLimiter }));
     app.register(
       claimPageRoutes(db, {
         providers: { google: isGoogleConfigured(config), github: isGithubConfigured(config) },
