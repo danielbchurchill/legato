@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { s256Challenge, sha256Hex } from "./native-sign-in.js";
 import { SERVER_ID_PATTERN } from "./signing-keys.js";
 import type { Database } from "./sqlite.js";
@@ -95,6 +95,14 @@ export function linkPath(request: LinkRequest): string {
   return `/link?${query}`;
 }
 
+// The return origin as relay.db keeps it. A home server's address is low
+// in entropy (a LAN IP and a port, say), so a plain hash of it could be
+// reversed by trying them all. An HMAC under a key derived from the signing
+// secret (signing-keys.ts), which isn't on the volume, can't be.
+function originMac(key: Buffer, origin: string): string {
+  return createHmac("sha256", key).update(origin).digest("hex");
+}
+
 // Indexed on expires_at (0008), so it never scans the live rows.
 function sweepLinkCodes(db: Database): void {
   db.prepare("DELETE FROM relay_link_codes WHERE expires_at <= datetime('now', ?)").run(LINK_CODE_SWEEP_SQL);
@@ -102,7 +110,8 @@ function sweepLinkCodes(db: Database): void {
 
 export type MintLinkCodeResult = { ok: true; code: string } | { ok: false; reason: "too_many" };
 
-export function mintLinkCode(db: Database, relayUserId: number, request: LinkRequest): MintLinkCodeResult {
+// originKey is the signing key's: SigningKeys.linkOriginKeys[0].
+export function mintLinkCode(db: Database, relayUserId: number, request: LinkRequest, originKey: Buffer): MintLinkCodeResult {
   return db.transaction((): MintLinkCodeResult => {
     sweepLinkCodes(db);
     const { open } = db
@@ -114,10 +123,11 @@ export function mintLinkCode(db: Database, relayUserId: number, request: LinkReq
     if (open >= OPEN_LINK_CODES_PER_ACCOUNT) return { ok: false, reason: "too_many" };
 
     const code = randomBytes(32).toString("base64url");
+    const mac = originMac(originKey, request.returnTo.origin);
     db.prepare(
-      `INSERT INTO relay_link_codes (code_hash, relay_user_id, server_id, code_challenge, return_origin_hash, expires_at)
+      `INSERT INTO relay_link_codes (code_hash, relay_user_id, server_id, code_challenge, return_origin_mac, expires_at)
        VALUES (?, ?, ?, ?, ?, datetime('now', ?))`,
-    ).run(sha256Hex(code), relayUserId, request.serverId, request.codeChallenge, sha256Hex(request.returnTo.origin), LINK_CODE_TTL_SQL);
+    ).run(sha256Hex(code), relayUserId, request.serverId, request.codeChallenge, mac, LINK_CODE_TTL_SQL);
     return { ok: true, code };
   })();
 }
@@ -165,10 +175,13 @@ export function parseLinkRedeem(body: { code?: unknown; code_verifier?: unknown 
 // else is checked (RFC 6749 §4.1.2), the same as redeemAuthCode: a wrong
 // guess burns it rather than leaving it open for a second try. origin is
 // the redeeming request's Origin header, which a browser always sends on a
-// cross-origin POST; it has to be where the code was sent.
+// cross-origin POST; it has to be where the code was sent. originKeys are
+// SigningKeys.linkOriginKeys, every one of them, so a code minted just
+// before a key rotation still redeems after it.
 export function redeemLinkCode(
   db: Database,
   input: LinkRedeemInput & { origin?: unknown },
+  originKeys: readonly Buffer[],
 ): LinkRedeemResult {
   const { code, codeVerifier, origin } = input;
   return db.transaction((): LinkRedeemResult => {
@@ -176,12 +189,12 @@ export function redeemLinkCode(
     const codeHash = sha256Hex(code);
     const row = db
       .prepare(
-        `SELECT relay_user_id, server_id, code_challenge, return_origin_hash, used_at,
+        `SELECT relay_user_id, server_id, code_challenge, return_origin_mac, used_at,
                 expires_at > datetime('now') AS live
          FROM relay_link_codes WHERE code_hash = ?`,
       )
       .get(codeHash) as
-      | { relay_user_id: number; server_id: string; code_challenge: string; return_origin_hash: string; used_at: string | null; live: number }
+      | { relay_user_id: number; server_id: string; code_challenge: string; return_origin_mac: string; used_at: string | null; live: number }
       | undefined;
 
     if (!row) return { ok: false, reason: "not_found" };
@@ -189,10 +202,16 @@ export function redeemLinkCode(
     db.prepare("UPDATE relay_link_codes SET used_at = datetime('now') WHERE code_hash = ?").run(codeHash);
     if (!row.live) return { ok: false, reason: "expired" };
 
-    if (typeof origin !== "string" || sha256Hex(origin) !== row.return_origin_hash) return { ok: false, reason: "mismatch" };
-    const expected = Buffer.from(row.code_challenge);
-    const actual = Buffer.from(s256Challenge(codeVerifier));
-    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return { ok: false, reason: "mismatch" };
+    if (typeof origin !== "string" || !originKeys.some((key) => sameText(originMac(key, origin), row.return_origin_mac))) {
+      return { ok: false, reason: "mismatch" };
+    }
+    if (!sameText(s256Challenge(codeVerifier), row.code_challenge)) return { ok: false, reason: "mismatch" };
     return { ok: true, relayUserId: row.relay_user_id, serverId: row.server_id };
   })();
+}
+
+function sameText(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
 }

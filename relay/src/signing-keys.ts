@@ -1,4 +1,4 @@
-import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, hkdfSync, randomBytes, sign, verify, type KeyObject } from "node:crypto";
 import type { RelayUserRow } from "./accounts.js";
 
 // legato.fm as the identity provider (issue #114): the keys this service
@@ -37,7 +37,20 @@ export type SigningKeys = {
   // Every published key by kid, for checking a token this service signed
   // when a home server hands one back (linked-servers.ts).
   verifying: ReadonlyMap<string, KeyObject>;
+  // HMAC keys for the return address a link code is bound to
+  // (link-codes.ts), one derived from each private key, the signing key's
+  // first. relay.db only ever holds that address as an HMAC under one of
+  // these, and they come from this secret, so a copy of the volume can't
+  // test guesses at it.
+  linkOriginKeys: Buffer[];
 };
+
+// HKDF (RFC 5869) over the private key, so the HMAC key is as secret as the
+// signing key without being it, and needs no secret of its own.
+function linkOriginKey(privateKey: KeyObject): Buffer {
+  const material = privateKey.export({ format: "der", type: "pkcs8" });
+  return Buffer.from(hkdfSync("sha256", material, Buffer.alloc(0), "legato.fm link return origin", 32));
+}
 
 // RFC 7638 thumbprint: SHA-256 over the required members in lexical
 // order. Derived from the key itself, so there's no kid to configure or
@@ -81,7 +94,7 @@ export function parseSigningKeys(raw: string | undefined): SigningKeys | null {
   });
   const published = keys.map(publicJwk);
   const verifying = new Map(keys.map((key, index) => [published[index]!.kid, createPublicKey(key)]));
-  return { signing: { kid: published[0]!.kid, privateKey: keys[0]! }, published, verifying };
+  return { signing: { kid: published[0]!.kid, privateKey: keys[0]! }, published, verifying, linkOriginKeys: keys.map(linkOriginKey) };
 }
 
 export type ServerTokenScope = "access" | "link";

@@ -337,7 +337,7 @@ export function linkPageRoutes(
         reply.code(400);
         return { error: "That link request isn't complete. Start again from your server's Settings.", reason: "bad_request" };
       }
-      const minted = mintLinkCode(db, user.id, link);
+      const minted = mintLinkCode(db, user.id, link, signingKeys.linkOriginKeys[0]!);
       if (!minted.ok) {
         reply.code(429);
         return {
@@ -387,7 +387,7 @@ export function linkPageRoutes(
         reply.code(503);
         return { error: "legato.fm can't link servers yet: this relay doesn't sign server tokens.", reason: "signing_not_configured" };
       }
-      const result = redeemLinkCode(db, { ...input, origin: request.headers.origin });
+      const result = redeemLinkCode(db, { ...input, origin: request.headers.origin }, signingKeys.linkOriginKeys);
       if (!result.ok) {
         if (result.reason === "not_found" || result.reason === "expired") limiter.recordFailure(address);
         reply.code(400);

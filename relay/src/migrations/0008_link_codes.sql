@@ -15,8 +15,12 @@
 -- The same shape as relay_auth_codes (0003), and for the same reasons: only
 -- the code's hash is stored, so a copy of relay.db can't finish anyone's
 -- link, and used_at spends a code on the first attempt, right verifier or
--- not, inside one transaction. The origin is only ever compared, so it's a
--- hash too: legato.fm keeps no record of a home server's local address.
+-- not, inside one transaction.
+--
+-- The origin is only ever compared, so it's kept as an HMAC, keyed from the
+-- signing secret, which is never on the volume (signing-keys.ts). A plain
+-- hash wouldn't do: a home server's address is a LAN IP and a port, few
+-- enough to try them all. So relay.db alone can't say where a server is.
 --
 -- A row is deleted ten minutes after it's minted, the retention
 -- site/privacy.html states, by the next mint or redeem after that:
@@ -27,7 +31,7 @@ CREATE TABLE relay_link_codes (
   relay_user_id INTEGER NOT NULL REFERENCES relay_users(id) ON DELETE CASCADE,
   server_id TEXT NOT NULL,
   code_challenge TEXT NOT NULL,
-  return_origin_hash TEXT NOT NULL,
+  return_origin_mac TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   expires_at TEXT NOT NULL,
   used_at TEXT

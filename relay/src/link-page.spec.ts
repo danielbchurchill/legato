@@ -1,4 +1,4 @@
-import { createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
+import { createHmac, createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { FastifyInstance } from "fastify";
 // The home server's real proof signer and token verifier, not copies: what
@@ -9,7 +9,7 @@ import { importEd25519Jwk, verifyLegatoToken } from "../../server/src/auth/legat
 import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
-import { OPEN_LINK_CODES_PER_ACCOUNT, parseReturnTo } from "./link-codes.js";
+import { mintLinkCode, OPEN_LINK_CODES_PER_ACCOUNT, parseLinkRequest, parseReturnTo, redeemLinkCode } from "./link-codes.js";
 import { s256Challenge, sha256Hex } from "./native-sign-in.js";
 import { tunnelCredentialHolder } from "./pairing.js";
 import { linkReturnPath } from "./routes/link-page.js";
@@ -308,6 +308,7 @@ describe("the link page", () => {
     expect(cleared).toMatch(/^relay_return_to=;/);
     expect(cleared).toContain("Expires=Thu, 01 Jan 1970");
   });
+
   it(`holds an account to ${OPEN_LINK_CODES_PER_ACCOUNT} links waiting to finish`, async () => {
     const h = setup();
     const { cookie } = h.signIn();
@@ -415,12 +416,34 @@ describe("redeeming a link code", () => {
     expect(res.headers["access-control-allow-credentials"]).toBeUndefined();
   });
 
-  it("stores hashes of the code and of the address it went to, never either one", async () => {
+  it("stores the code's hash and an HMAC of the address it went to, never either one", async () => {
     const h = setup();
     const { code } = await minted(h);
-    const rows = JSON.stringify(h.db.prepare("SELECT * FROM relay_link_codes").all());
-    expect(rows).not.toContain(code);
-    expect(rows).not.toContain("192.168.1.20");
+    const rows = h.db.prepare("SELECT * FROM relay_link_codes").all() as { return_origin_mac: string }[];
+    const stored = JSON.stringify(rows);
+    expect(stored).not.toContain(code);
+    expect(stored).not.toContain("192.168.1.20");
+    // Not a plain hash, which anyone with relay.db could match by trying
+    // every LAN address: it takes a key from the signing secret.
+    expect(stored).not.toContain(sha256Hex(HOME));
+    expect(rows[0]!.return_origin_mac).toBe(createHmac("sha256", h.keys.linkOriginKeys[0]!).update(HOME).digest("hex"));
+    expect(signingKeys().linkOriginKeys[0]!.equals(h.keys.linkOriginKeys[0]!)).toBe(false);
+  });
+
+  it("still redeems a code minted just before the signing key rotated", async () => {
+    const h = setup();
+    const { user } = h.signIn();
+    const next = signingKeys();
+    const mint = () => {
+      const { verifier, query } = h.start(homeServer().serverId);
+      const result = mintLinkCode(h.db, user.id, parseLinkRequest(query)!, h.keys.linkOriginKeys[0]!);
+      if (!result.ok) throw new Error("not minted");
+      return { code: result.code, codeVerifier: verifier, origin: HOME };
+    };
+    // The new key signs first; the old one is still published second.
+    expect(redeemLinkCode(h.db, mint(), [next.linkOriginKeys[0]!, h.keys.linkOriginKeys[0]!])).toMatchObject({ ok: true });
+    // Once it's gone, so is every code it was the key for.
+    expect(redeemLinkCode(h.db, mint(), next.linkOriginKeys)).toEqual({ ok: false, reason: "mismatch" });
   });
 
   it("sweeps every code ten minutes after it was minted, at the next mint or redeem", async () => {
