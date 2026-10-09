@@ -122,35 +122,75 @@ export function isMemberLookupArtist(db: Database, artistNodeId: number): boolea
   return db.prepare(`SELECT 1 FROM (${MEMBER_LOOKUP_ARTISTS_SQL}) WHERE id = ?`).get(artistNodeId) !== undefined;
 }
 
+const BOUND_TABLES = ["performers", "member_lookup_artists", "artists_in_bound"];
+
+/** Issue #321: the statements withBound reads the bound with, in order.
+ *  Written out in full, the two sets read the performers twelve times
+ *  between them, and each read walks every recording's edges. Here the
+ *  performers are read once, and each set is built from the one before it. */
+export const BOUND_SQL: readonly string[] = [
+  `INSERT OR IGNORE INTO temp.performers SELECT id FROM (${PERFORMERS})`,
+  `INSERT INTO temp.member_lookup_artists
+   SELECT id FROM (${memberLookupArtistsFrom("SELECT id FROM temp.performers")})`,
+  `INSERT INTO temp.artists_in_bound
+   SELECT id FROM (${artistsInBoundFrom("SELECT id FROM temp.member_lookup_artists")})`,
+];
+
+// The connections inside withBound now. A nested call would find the
+// caller's tables already there, and its cleanup would drop them.
+const readingBound = new WeakSet<Database>();
+
 /** Issue #321: reads the whole bound into temp.member_lookup_artists and
- *  temp.artists_in_bound, runs `fn`, and drops them. Written out in full,
- *  the two sets read the performers twelve times between them, and each
- *  read walks every recording's edges. Here the performers are read once,
- *  and each set is built from the one before it. At 30,000 albums, that
- *  took the startup prune from 14 s to 3.7 s, and recompute's enqueue from
- *  11.6 s to 2.5 s. A temp table writes only to this connection's own temp
- *  database, so the reads take no write lock on the library. */
+ *  temp.artists_in_bound, runs `fn`, and drops them. At 30,000 albums,
+ *  reading it this way took the startup prune from 14 s to 3.7 s, and
+ *  recompute's enqueue from 11.6 s to 2.5 s.
+ *
+ *  The three statements read one snapshot (readTransaction), so a write
+ *  committed between them can't leave the sets disagreeing. Outside a
+ *  transaction, which is the enqueue on recompute's Worker, that takes no
+ *  write lock: a temp table is this connection's own. Inside one, which is
+ *  the startup prune, it's a savepoint.
+ *
+ *  Not nestable: `fn` already has the tables, so a call from inside it
+ *  throws before touching them. */
 export function withBound<T>(db: Database, fn: () => T): T {
+  if (readingBound.has(db)) {
+    throw new Error("withBound: already reading the bound on this connection; read its temp tables instead of nesting");
+  }
+  readingBound.add(db);
+  let result: T;
   try {
-    db.exec(`CREATE TEMP TABLE performers (id INTEGER PRIMARY KEY);
-             CREATE TEMP TABLE member_lookup_artists (id INTEGER PRIMARY KEY);
-             CREATE TEMP TABLE artists_in_bound (id INTEGER PRIMARY KEY);`);
-    db.exec(`INSERT OR IGNORE INTO temp.performers SELECT id FROM (${PERFORMERS})`);
-    db.exec(
-      `INSERT INTO temp.member_lookup_artists
-       SELECT id FROM (${memberLookupArtistsFrom("SELECT id FROM temp.performers")})`,
-    );
-    db.exec(
-      `INSERT INTO temp.artists_in_bound
-       SELECT id FROM (${artistsInBoundFrom("SELECT id FROM temp.member_lookup_artists")})`,
-    );
-    return fn();
-  } finally {
-    // IF EXISTS: a transaction rolled back by a failure has taken them already.
-    for (const table of ["performers", "member_lookup_artists", "artists_in_bound"]) {
+    // Only a drop that failed below leaves one behind.
+    for (const table of BOUND_TABLES) db.exec(`DROP TABLE IF EXISTS temp.${table}`);
+    for (const table of BOUND_TABLES) db.exec(`CREATE TEMP TABLE ${table} (id INTEGER PRIMARY KEY)`);
+    db.readTransaction(() => {
+      for (const sql of BOUND_SQL) db.exec(sql);
+    })();
+    result = fn();
+  } catch (error) {
+    readingBound.delete(db);
+    // A drop that fails here isn't reported: this error says what went wrong.
+    dropBoundTables(db);
+    throw error;
+  }
+  readingBound.delete(db);
+  const dropFailure = dropBoundTables(db);
+  if (dropFailure) throw dropFailure.error;
+  return result;
+}
+
+// Each table on its own, so one that won't drop doesn't keep the others.
+// Inside the prune's transaction, this runs before its commit or rollback.
+function dropBoundTables(db: Database): { error: unknown } | undefined {
+  let failure: { error: unknown } | undefined;
+  for (const table of BOUND_TABLES) {
+    try {
       db.exec(`DROP TABLE IF EXISTS temp.${table}`);
+    } catch (error) {
+      failure ??= { error };
     }
   }
+  return failure;
 }
 
 // One INSERT … SELECT per job type, with enqueueOnce's rule as its NOT

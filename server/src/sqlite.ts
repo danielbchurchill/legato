@@ -80,6 +80,16 @@ export class Database {
     return this.#inner.transaction(fn).immediate;
   }
 
+  // Issue #321: the exception, for reads that have to agree with each other.
+  // A deferred transaction that only reads the library, and writes nothing
+  // but this connection's temp tables, never asks for the write lock, so it
+  // can't fail the way the comment above describes, and it doesn't hold up
+  // the other connection's writes. Every statement in it reads the same
+  // commit. Inside another transaction it's a savepoint, as above.
+  readTransaction<A extends unknown[], T>(fn: (...args: A) => T): (...args: A) => T {
+    return this.#inner.transaction(fn).deferred;
+  }
+
   close(): void {
     this.#inner.close();
   }
