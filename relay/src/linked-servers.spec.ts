@@ -149,6 +149,20 @@ describe("a link token from /auth/server-token mints a tunnel credential when it
     expect(credentials(h.db)).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
   });
 
+  // Issue #348: no claim in the token decides it, so a signer that never
+  // heard of tunnels still gets its servers a credential.
+  it("mints one for a link token with no tunnel claim", async () => {
+    const h = setup();
+    const { user } = h.signIn();
+    const server = homeServer();
+    const { token } = signServerToken(h.keys, { issuer: ISSUER, user, serverId: server.serverId, scope: "link" });
+    expect(JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString())).not.toHaveProperty("tunnel");
+    const res = await h.postLink(linkProof(server, token));
+    expect(res.statusCode).toBe(200);
+    const { tunnel } = res.json() as { tunnel: { credential: string } };
+    expect(tunnelCredentialHolder(h.db, tunnel.credential)).toEqual({ relayUserId: user.id, serverId: server.serverId });
+  });
+
   it("mints nothing for a token that's handed out and never reported, or for a report refused", async () => {
     const h = setup();
     const { user, headers } = h.signIn();

@@ -143,7 +143,7 @@ export function pairRoutes(
 
       const result = redeemPairingCode(db, proof.code, proof.serverId, (relayUserId) => {
         const user = db.prepare("SELECT * FROM relay_users WHERE id = ?").get(relayUserId) as RelayUserRow;
-        return signServerToken(signingKeys, { issuer, user, serverId: proof.serverId, scope: "link", tunnel: true }).token;
+        return signServerToken(signingKeys, { issuer, user, serverId: proof.serverId, scope: "link" }).token;
       });
       if (!result.ok) {
         reply.code(result.reason === "not_found" ? 404 : 410);
