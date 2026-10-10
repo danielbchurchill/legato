@@ -36,6 +36,9 @@ export interface Tunnel {
   // Cleared when the heartbeat pings, set again by the pong. Still clear
   // at the next beat means the connection is dead.
   alive: boolean;
+  // When this connection last asked for a replacement credential
+  // (routes/tunnel.ts), so asking again at once gets nothing.
+  rotateAskedAt?: Date;
 }
 
 // What handleFrame() made of a frame. "hostile" means the tunnel sent

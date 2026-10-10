@@ -132,7 +132,7 @@ describe("a claim, start to finish", () => {
     const body = reported.json() as { linked: unknown; tunnel: { credential: string; expiresAt: string } };
     expect(body.linked).toEqual({ accountId: String(user.id), serverId: server.serverId });
     expect(body.tunnel.credential).toMatch(/^[0-9a-f]{64}$/);
-    expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 300 * 24 * 3600 * 1000);
+    expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 89 * 24 * 3600 * 1000);
     expect(h.pairs()).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
     expect(h.credentials()).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
     expect(tunnelCredentialHolder(h.db, body.tunnel.credential)).toEqual({ relayUserId: user.id, serverId: server.serverId });

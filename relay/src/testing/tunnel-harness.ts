@@ -17,7 +17,10 @@ import { TunnelClient, type TunnelClientOptions, type TunnelState } from "../../
 export const TEST_BACKOFF = { baseMs: 20, capMs: 200 };
 
 export function startHomeServer(
-  options: { tunnelUrl: string; credential: string; targetBaseUrl: string } & Pick<TunnelClientOptions, "heartbeatMs" | "log">,
+  options: { tunnelUrl: string; credential: string; targetBaseUrl: string } & Pick<
+    TunnelClientOptions,
+    "heartbeatMs" | "log" | "onCredential"
+  >,
 ): TunnelClient {
   const client = new TunnelClient({
     url: options.tunnelUrl,
@@ -26,6 +29,7 @@ export function startHomeServer(
     backoff: TEST_BACKOFF,
     heartbeatMs: options.heartbeatMs,
     log: options.log,
+    onCredential: options.onCredential,
   });
   client.start();
   return client;

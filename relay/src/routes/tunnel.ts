@@ -1,11 +1,16 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
-import { signInWithTunnelCredential, tunnelCredentialHolder } from "../pairing.js";
+import { rotateTunnelCredential, signInWithTunnelCredential, tunnelCredentialHolder } from "../pairing.js";
 import { parseFrame, type TunnelFrame } from "../protocol.js";
 import type { Tunnel, TunnelRegistry } from "../tunnel-registry.js";
 
 const AUTH_TIMEOUT_MS = 5000;
+
+// How often one connection may ask for a replacement credential. A real
+// server asks about once a month; this only keeps one that asks in a loop
+// from taking the database's write lock for each.
+const ROTATE_ASK_INTERVAL_MS = 60_000;
 
 // How often the relay pings every tunnel, checks its credential again, and
 // notes that it's still there (migration 0007). A tunnel that misses one
@@ -35,6 +40,26 @@ function signIn(db: Database, frame: TunnelFrame): { serverId: string; credentia
   if (!credential || !holder) return { refused: INVALID_CREDENTIAL };
   if (!holder.serverId) return { refused: UNBOUND_CREDENTIAL };
   return { serverId: holder.serverId, credential };
+}
+
+// Rotation (issue #115, protocol.ts): the server asked, so a credential for
+// the same account and server goes down its tunnel, and the server moves
+// onto it with an auth frame. Nothing, when pairing.ts mints nothing.
+function sendReplacementCredential(db: Database, tunnel: Tunnel): void {
+  const minted = rotateTunnelCredential(db, tunnel.credential);
+  if (!minted) return;
+  tunnel.socket.send(JSON.stringify({ type: "credential", credential: minted.token, expiresAt: minted.expiresAt.toISOString() }));
+}
+
+// A signed-in tunnel moving onto another credential (issue #115). Only one
+// for the same server: anything else is refused like a credential that
+// failed to sign in, and the tunnel closes. The holder is checked before
+// signing in, because signing in retires the server's earlier credentials,
+// and a credential for some other server mustn't retire that server's.
+function moveOnto(db: Database, tunnel: Tunnel, frame: TunnelFrame): string | null {
+  const credential = frame.type === "auth" && typeof frame.secret === "string" ? frame.secret : undefined;
+  if (!credential || tunnelCredentialHolder(db, credential)?.serverId !== tunnel.serverId) return null;
+  return signInWithTunnelCredential(db, credential) ? credential : null;
 }
 
 // Writes when legato.fm last heard from each tunnel: its last frame or
@@ -125,6 +150,24 @@ export function tunnelRoutes(registry: TunnelRegistry, db: Database, options: { 
 
           tunnel.alive = true;
           tunnel.lastHeardAt = new Date();
+          if (frame.type === "auth") {
+            const moved = moveOnto(db, tunnel, frame);
+            if (!moved) {
+              registry.drop(tunnel.serverId, socket);
+              closing = true;
+              return refuse(socket, INVALID_CREDENTIAL);
+            }
+            tunnel.credential = moved;
+            socket.send(JSON.stringify({ type: "auth-ok" }));
+            return;
+          }
+          if (frame.type === "rotate") {
+            const now = new Date();
+            if (tunnel.rotateAskedAt && now.getTime() - tunnel.rotateAskedAt.getTime() < ROTATE_ASK_INTERVAL_MS) return;
+            tunnel.rotateAskedAt = now;
+            sendReplacementCredential(db, tunnel);
+            return;
+          }
           if (registry.handleFrame(socket, frame) === "hostile") close(4002, "sent a frame no Legato server sends");
         } catch (err) {
           app.log.warn(`tunnel: closed a connection whose frame couldn't be handled: ${err instanceof Error ? err.message : String(err)}`);
