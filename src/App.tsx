@@ -487,6 +487,7 @@ function Workspace({
             <ConnectionIndicator
               embedded={EMBEDDED_SERVER}
               currentFileId={playback.status.currentFileId}
+              streaming={playback.status.streaming}
               onOpenSettings={() => setLeftView({ kind: 'settings' })}
             />
           }

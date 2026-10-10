@@ -34,13 +34,15 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-function render(props: { embedded?: boolean; currentFileId?: number | null; onOpenSettings?: () => void } = {}) {
+function render(props: { embedded?: boolean; currentFileId?: number | null; streaming?: boolean; onOpenSettings?: () => void } = {}) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
   act(() => {
-    root.render(createElement(ConnectionIndicator, { embedded: false, currentFileId: null, onOpenSettings: () => undefined, ...props }))
+    root.render(
+      createElement(ConnectionIndicator, { embedded: false, currentFileId: null, streaming: false, onOpenSettings: () => undefined, ...props }),
+    )
   })
   const button = () => container.querySelector<HTMLButtonElement>('button')!
   const open = () => act(() => button().click())

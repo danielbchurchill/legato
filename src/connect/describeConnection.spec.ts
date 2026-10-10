@@ -35,10 +35,14 @@ describe('the quality', () => {
     expect(qualityLabel('aac256')).toBe('AAC 256 kbps')
   })
 
-  it('says the desktop app plays files rather than streaming them', () => {
+  it('says the desktop app plays files, and streams the original of one that isn\'t here', () => {
     expect(describeQuality('home', null)).toEqual({
       label: 'original',
       sentence: 'Plays files straight from your library, at their original quality.',
+    })
+    expect(describeQuality('home', null, true)).toEqual({
+      label: 'original',
+      sentence: "This track streams from the server at its original quality, because its file isn't on this computer.",
     })
   })
 

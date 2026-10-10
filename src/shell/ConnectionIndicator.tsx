@@ -38,16 +38,20 @@ type ConnectionIndicatorProps = {
   embedded: boolean
   /** The file playing now, if any. Its stream's quality is the one shown. */
   currentFileId: number | null
+  /** The desktop app is streaming the track playing, its file not being on
+   * this computer (#185). */
+  streaming: boolean
   onOpenSettings: () => void
 }
 
-export function ConnectionIndicator({ embedded, currentFileId, onOpenSettings }: ConnectionIndicatorProps) {
+export function ConnectionIndicator({ embedded, currentFileId, streaming, onOpenSettings }: ConnectionIndicatorProps) {
   const connection = useConnectionPath()
   const path = serverPathOf(connection, embedded)
   const stream = useSyncExternalStore(subscribeStreamQuality, streamQualitySnapshot)
   const quality = describeQuality(
     path,
-    // The desktop app plays files from disk (playback.rs), not a stream.
+    // The desktop app plays files from disk (playback.rs), or the original
+    // of one that isn't here, never a rung of the ladder.
     IS_TAURI
       ? null
       : {
@@ -56,6 +60,7 @@ export function ConnectionIndicator({ embedded, currentFileId, onOpenSettings }:
           preference: stream.preference,
           drops: stream.drops,
         },
+    streaming,
   )
   const label = `${PATH_LABEL[path]} · ${quality.label}`
   // The address is data worth showing where it's the server's own. The

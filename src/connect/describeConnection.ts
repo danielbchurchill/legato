@@ -78,9 +78,22 @@ export type StreamFacts = {
 }
 
 /** The stream quality as a short label and a sentence. `stream` is null in
- * the desktop app, which plays files from disk and streams nothing. */
-export function describeQuality(path: ServerPath, stream: StreamFacts | null): { label: string; sentence: string } {
-  if (!stream) return { label: 'original', sentence: 'Plays files straight from your library, at their original quality.' }
+ * the desktop app, which plays files from disk, and streams the original
+ * of one that isn't on this computer (#185): `nativeStreaming` says the
+ * track playing is one of those. */
+export function describeQuality(
+  path: ServerPath,
+  stream: StreamFacts | null,
+  nativeStreaming = false,
+): { label: string; sentence: string } {
+  if (!stream) {
+    return {
+      label: 'original',
+      sentence: nativeStreaming
+        ? "This track streams from the server at its original quality, because its file isn't on this computer."
+        : 'Plays files straight from your library, at their original quality.',
+    }
+  }
   const why =
     stream.drops > 0
       ? 'lowered after the connection dropped'
