@@ -419,6 +419,24 @@ describe("native sign-in (issue #215)", () => {
       expect((await app.inject({ method: "DELETE", url: "/auth/sessions/1" })).statusCode).toBe(401);
     });
 
+    // The review: OPTIONS /linked-servers/unlink matched the parametric
+    // /linked-servers/:serverId preflight, and said yes to a POST.
+    it("answers a preflight only for a method the route it matched serves", async () => {
+      const preflight = (url: string, method: string) =>
+        app.inject({ method: "OPTIONS", url, headers: { origin: "tauri://localhost", "access-control-request-method": method } });
+      for (const [url, method] of [
+        ["/linked-servers/unlink", "POST"],
+        ["/auth/sessions/abc", "POST"],
+        ["/linked-servers", "DELETE"],
+      ] as const) {
+        expect((await preflight(url, method)).headers["access-control-allow-origin"]).toBeUndefined();
+      }
+      const allowed = await preflight("/linked-servers/0123456789abcdef0123456789abcdef", "DELETE");
+      expect(allowed.headers["access-control-allow-origin"]).toBe("tauri://localhost");
+      expect(allowed.headers["access-control-allow-methods"]).toBe("DELETE");
+      expect((await preflight("/auth/token", "POST")).headers["access-control-allow-origin"]).toBe("tauri://localhost");
+    });
+
     it("allows DELETE from the desktop origins, for the routes Settings calls", async () => {
       for (const url of ["/auth/sessions/1", "/linked-servers/0123456789abcdef0123456789abcdef"]) {
         const pre = await app.inject({

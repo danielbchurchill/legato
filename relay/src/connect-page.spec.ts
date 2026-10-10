@@ -275,16 +275,19 @@ describe("a web session", () => {
     const other = homeServer();
     const account = h.signIn();
     h.link(account.user.id, mine);
-    const preflight = (url: string, origin: string) =>
-      h.app.inject({ method: "OPTIONS", url, headers: { origin, "access-control-request-method": "POST" } });
-    const allowed = async (url: string, origin = HOME) => (await preflight(url, origin)).headers["access-control-allow-origin"];
+    // Each preflight asks for the method the web client calls the route
+    // with: legato.fm answers only those (issue #115's review).
+    const preflight = (url: string, origin: string, method: string) =>
+      h.app.inject({ method: "OPTIONS", url, headers: { origin, "access-control-request-method": method } });
+    const allowed = async (url: string, origin = HOME, method = "POST") =>
+      (await preflight(url, origin, method)).headers["access-control-allow-origin"];
 
     expect(await allowed("/auth/relay-ticket")).toBeUndefined();
     expect(await allowed(`/relay/${mine.serverId}/api/v1/stats`)).toBeUndefined();
 
     const { token } = await h.webSession(mine, account);
     expect(await allowed("/auth/relay-ticket")).toBe(HOME);
-    expect(await allowed("/linked-servers")).toBe(HOME);
+    expect(await allowed("/linked-servers", HOME, "GET")).toBe(HOME);
     expect(await allowed(`/relay/${mine.serverId}/api/v1/stats`)).toBe(HOME);
     // Not for another server's relay route, nor another page.
     expect(await allowed(`/relay/${other.serverId}/api/v1/stats`)).toBeUndefined();

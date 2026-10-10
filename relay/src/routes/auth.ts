@@ -307,26 +307,31 @@ function successPage(displayName: string | null): string {
 </html>`;
 }
 
-// The endpoints a desktop webview calls directly. Its origin is
-// tauri://localhost (Linux, macOS), http(s)://tauri.localhost (Windows),
-// or a loopback Vite in development, all cross-origin to auth.legato.fm.
-// No Access-Control-Allow-Credentials: these callers send a bearer token
-// and nothing else, so a cookie never rides along cross-site.
-// GET /linked-servers is the connect screen's "your servers" (issue #117),
-// and POST /auth/relay-ticket is how a device gets through /relay/<id>/
-// (issue #365). routes/relay.ts answers /relay/* for the same origins. The
-// account's sessions and servers, and what Settings does to them, are
-// issue #115's.
-const CORS_ROUTES = new Set([
-  "/auth/token",
-  "/auth/me",
-  "/auth/logout",
-  "/auth/server-token",
-  "/auth/relay-ticket",
-  "/auth/sessions",
-  "/auth/sessions/:id",
-  "/linked-servers",
-  "/linked-servers/:serverId",
+// The endpoints a desktop webview calls directly, and the methods it calls
+// each with. Its origin is tauri://localhost (Linux, macOS),
+// http(s)://tauri.localhost (Windows), or a loopback Vite in development,
+// all cross-origin to auth.legato.fm. No Access-Control-Allow-Credentials:
+// these callers send a bearer token and nothing else, so a cookie never
+// rides along cross-site. GET /linked-servers is the connect screen's
+// "your servers" (issue #117), and POST /auth/relay-ticket is how a device
+// gets through /relay/<id>/ (issue #365). routes/relay.ts answers /relay/*
+// for the same origins. The account's sessions and servers, and what
+// Settings does to them, are issue #115's.
+//
+// A preflight goes to whichever OPTIONS route its path matches, which for
+// /linked-servers/unlink is /linked-servers/:serverId's. So a preflight is
+// answered only for a method the matched route is listed with here: the
+// unlink's POST isn't one of them.
+const CORS_ROUTES = new Map<string, string[]>([
+  ["/auth/token", ["POST"]],
+  ["/auth/me", ["GET"]],
+  ["/auth/logout", ["POST"]],
+  ["/auth/server-token", ["POST"]],
+  ["/auth/relay-ticket", ["POST"]],
+  ["/auth/sessions", ["GET"]],
+  ["/auth/sessions/:id", ["DELETE"]],
+  ["/linked-servers", ["GET"]],
+  ["/linked-servers/:serverId", ["DELETE"]],
 ]);
 const LOOPBACK_DEV_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/;
 
@@ -354,12 +359,20 @@ export function isLegatoClientOrigin(
   return hasWebSession(db, originMacs(signingKeys.linkOriginKeys, origin), serverId);
 }
 
-function applyCors(request: FastifyRequest, reply: FastifyReply, db: Database, signingKeys: SigningKeys | null): void {
+function applyCors(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  methods: string[],
+  db: Database,
+  signingKeys: SigningKeys | null,
+): void {
   reply.header("Vary", "Origin");
   const origin = request.headers.origin;
   if (!isLegatoClientOrigin(db, signingKeys, origin)) return;
+  const asked = request.headers["access-control-request-method"];
+  if (request.method === "OPTIONS" && !methods.includes(String(asked).toUpperCase())) return;
   reply.header("Access-Control-Allow-Origin", origin);
-  reply.header("Access-Control-Allow-Methods", "GET, POST, DELETE");
+  reply.header("Access-Control-Allow-Methods", methods.join(", "));
   reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
   reply.header("Access-Control-Max-Age", "600");
 }
@@ -416,7 +429,8 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     const signingKeys = options.signingKeys ?? null;
 
     app.addHook("onRequest", async (request, reply) => {
-      if (CORS_ROUTES.has(request.routeOptions.url ?? "")) applyCors(request, reply, db, signingKeys);
+      const methods = CORS_ROUTES.get(request.routeOptions.url ?? "");
+      if (methods) applyCors(request, reply, methods, db, signingKeys);
     });
     // Here rather than in app.ts because recording a link means checking a
     // token this service signed, with the keys resolved just above, and
@@ -445,7 +459,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
         limiter: options.connectLimiter,
       }),
     );
-    for (const url of CORS_ROUTES) {
+    for (const url of CORS_ROUTES.keys()) {
       app.options(url, async (_request, reply) => reply.code(204).send());
     }
 
