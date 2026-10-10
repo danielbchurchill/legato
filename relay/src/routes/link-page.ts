@@ -43,7 +43,7 @@ const WORDMARK = readFileSync(path.join(import.meta.dirname, "..", "assets", "wo
   '<svg class="wordmark" role="img" aria-label="legato" ',
 );
 
-type Providers = { google: boolean; github: boolean };
+export type Providers = { google: boolean; github: boolean };
 
 export type LinkView =
   | { kind: "bad_request" }
@@ -51,20 +51,22 @@ export type LinkView =
   | { kind: "signed_out"; request: LinkRequest; providers: Providers }
   | { kind: "ready"; request: LinkRequest; user: RelayUserRow };
 
-function escapeHtml(s: string): string {
+export function escapeHtml(s: string): string {
   const escapes: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
   return s.replace(/[&<>"']/g, (c) => escapes[c]!);
 }
 
-function account(user: RelayUserRow): string {
+export function account(user: RelayUserRow): string {
   const name = escapeHtml(user.display_name ?? user.email ?? "your account");
   return user.email && user.display_name ? `${name} (${escapeHtml(user.email)})` : name;
 }
 
 const PROVIDER_NAMES: Record<keyof Providers, string> = { google: "Google", github: "GitHub" };
 
-function signInButtons(request: LinkRequest, providers: Providers): string {
-  const returnTo = encodeURIComponent(linkPath(request));
+// Sign-in buttons that come back to `returnPath` on this service (routes/
+// auth.ts checks it is one of these pages).
+export function signInButtons(returnPath: string, providers: Providers): string {
+  const returnTo = encodeURIComponent(returnPath);
   const buttons = (["github", "google"] as const)
     .filter((provider) => providers[provider])
     .map(
@@ -99,7 +101,7 @@ function content(view: LinkView): { title: string; body: string } {
         title: "Link your Legato server",
         body: `${addressBlock(view.request)}
     <p>Sign in to legato.fm to link the Legato server at this address to your account.</p>
-    ${signInButtons(view.request, view.providers)}`,
+    ${signInButtons(linkPath(view.request), view.providers)}`,
       };
     case "ready":
       return {
@@ -108,7 +110,7 @@ function content(view: LinkView): { title: string; body: string } {
     <p>Link the Legato server at this address to ${account(view.user)}?</p>
     <p class="quiet">That account can then open its library through legato.fm. Only link a server you own.</p>
     <div class="actions">
-      <button class="button primary" type="button" data-action="link">link this server</button>
+      <button class="button primary" type="button" data-action="confirm">link this server</button>
       <button class="button secondary" type="button" data-action="cancel">cancel</button>
     </div>
     <p class="quiet" role="status" data-status hidden></p>
@@ -120,11 +122,30 @@ function content(view: LinkView): { title: string; body: string } {
 export function linkPage(view: LinkView, nonce: string): string {
   const { title, body } = content(view);
   // Only the ready view acts, and only with what this service checked.
-  const request =
+  const action =
     view.kind === "ready"
-      ? { server: view.request.serverId, return_to: view.request.returnTo.href, code_challenge: view.request.codeChallenge }
+      ? {
+          post: "/link",
+          request: { server: view.request.serverId, return_to: view.request.returnTo.href, code_challenge: view.request.codeChallenge },
+          cancel: cancelUrl(view.request),
+        }
       : null;
-  const cancel = view.kind === "ready" ? cancelUrl(view.request) : null;
+  return actionPage({ view: view.kind, title, body, action }, nonce);
+}
+
+// The page /link and /connect (routes/connect-page.ts, issue #365) share: the
+// wordmark, a title, the body, and for a view that acts, a confirm button
+// that posts `request` to `post` and goes where the answer says, a cancel
+// that goes back with nothing, and a sign-out.
+export type ActionPage = {
+  view: string;
+  title: string;
+  body: string;
+  action: { post: string; request: Record<string, string>; cancel: string } | null;
+};
+
+export function actionPage(page: ActionPage, nonce: string): string {
+  const { view, title, body, action } = page;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -203,22 +224,21 @@ export function linkPage(view: LinkView, nonce: string): string {
     :focus-visible { outline: 3px solid color-mix(in srgb, var(--ink-3) 50%, transparent); outline-offset: 2px; }
   </style>
 </head>
-<body data-view="${view.kind}">
+<body data-view="${view}">
   ${WORDMARK}
   <h1>${escapeHtml(title)}</h1>
   ${body}
   <script nonce="${nonce}">
-    const request = ${JSON.stringify(request).replace(/</g, "\\u003c")};
-    const cancel = ${JSON.stringify(cancel).replace(/</g, "\\u003c")};
+    const action = ${JSON.stringify(action).replace(/</g, "\\u003c")};
     const status = document.querySelector("[data-status]");
 
-    document.querySelector('[data-action="link"]')?.addEventListener("click", async (event) => {
+    document.querySelector('[data-action="confirm"]')?.addEventListener("click", async (event) => {
       const button = event.currentTarget;
       button.disabled = true;
-      const res = await fetch("/link", {
+      const res = await fetch(action.post, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
+        body: JSON.stringify(action.request),
       }).catch(() => null);
       const answer = res ? await res.json().catch(() => ({})) : {};
       if (res?.ok && answer.redirect) return location.assign(answer.redirect);
@@ -228,7 +248,7 @@ export function linkPage(view: LinkView, nonce: string): string {
     });
 
     // Back to the server with no code, saying it was cancelled.
-    document.querySelector('[data-action="cancel"]')?.addEventListener("click", () => location.assign(cancel));
+    document.querySelector('[data-action="cancel"]')?.addEventListener("click", () => location.assign(action.cancel));
 
     document.querySelector('[data-action="sign-out"]')?.addEventListener("click", async () => {
       await fetch("/auth/logout", { method: "POST" }).catch(() => null);
@@ -256,7 +276,7 @@ export function linkReturnPath(candidate: unknown): string | null {
 }
 
 // Every view of the page goes out with these.
-function pageHeaders(reply: FastifyReply, nonce: string): void {
+export function pageHeaders(reply: FastifyReply, nonce: string): void {
   reply
     .type("text/html")
     .header("Cache-Control", "no-store")
@@ -273,7 +293,7 @@ function pageHeaders(reply: FastifyReply, nonce: string): void {
 // origin that is, without credentials: the code and verifier are what
 // authorize it. So any origin may ask, and the route itself checks that the
 // asking origin is the one the code was sent to.
-function allowAnyOrigin(request: FastifyRequest, reply: FastifyReply): void {
+export function allowAnyOrigin(request: FastifyRequest, reply: FastifyReply): void {
   reply.header("Vary", "Origin");
   const origin = request.headers.origin;
   if (!origin) return;

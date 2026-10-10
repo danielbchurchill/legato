@@ -103,15 +103,39 @@ function originMac(key: Buffer, origin: string): string {
   return createHmac("sha256", key).update(origin).digest("hex");
 }
 
+// An origin's HMAC under every origin key, the signing key's first: what a
+// web session keeps (migration 0011) and what the relay's CORS looks an
+// Origin up by, so a session issued just before a key rotation still
+// counts after it.
+export function originMacs(keys: readonly Buffer[], origin: string): string[] {
+  return keys.map((key) => originMac(key, origin));
+}
+
 // Indexed on expires_at (0008), so it never scans the live rows.
 function sweepLinkCodes(db: Database): void {
   db.prepare("DELETE FROM relay_link_codes WHERE expires_at <= datetime('now', ?)").run(LINK_CODE_SWEEP_SQL);
 }
 
-export type MintLinkCodeResult = { ok: true; code: string } | { ok: false; reason: "too_many" };
+export type MintLinkCodeResult = { ok: true; code: string } | { ok: false; reason: "too_many" | "used" };
+
+// A link code (#325), or a connect code (#365): a web client's sign-in,
+// routes/connect-page.ts. The same row and the same round trip; kind keeps
+// one from ever being spent as the other.
+export type CodeKind = "link" | "connect";
 
 // originKey is the signing key's: SigningKeys.linkOriginKeys[0].
-export function mintLinkCode(db: Database, relayUserId: number, request: LinkRequest, originKey: Buffer): MintLinkCodeResult {
+//
+// A connect code is minted once per statement its server signed: the
+// statement names the attempt's PKCE challenge, so a second code for the
+// same server and challenge is refused as used. The statement lasts
+// minutes, inside the ten minutes a row is kept.
+export function mintLinkCode(
+  db: Database,
+  relayUserId: number,
+  request: Pick<LinkRequest, "serverId" | "returnTo" | "codeChallenge">,
+  originKey: Buffer,
+  kind: CodeKind = "link",
+): MintLinkCodeResult {
   return db.transaction((): MintLinkCodeResult => {
     sweepLinkCodes(db);
     const { open } = db
@@ -121,13 +145,19 @@ export function mintLinkCode(db: Database, relayUserId: number, request: LinkReq
       )
       .get(relayUserId) as { open: number };
     if (open >= OPEN_LINK_CODES_PER_ACCOUNT) return { ok: false, reason: "too_many" };
+    if (kind === "connect") {
+      const minted = db
+        .prepare("SELECT 1 AS found FROM relay_link_codes WHERE kind = 'connect' AND server_id = ? AND code_challenge = ?")
+        .get(request.serverId, request.codeChallenge);
+      if (minted) return { ok: false, reason: "used" };
+    }
 
     const code = randomBytes(32).toString("base64url");
     const mac = originMac(originKey, request.returnTo.origin);
     db.prepare(
-      `INSERT INTO relay_link_codes (code_hash, relay_user_id, server_id, code_challenge, return_origin_mac, expires_at)
-       VALUES (?, ?, ?, ?, ?, datetime('now', ?))`,
-    ).run(sha256Hex(code), relayUserId, request.serverId, request.codeChallenge, mac, LINK_CODE_TTL_SQL);
+      `INSERT INTO relay_link_codes (code_hash, relay_user_id, server_id, code_challenge, return_origin_mac, expires_at, kind)
+       VALUES (?, ?, ?, ?, ?, datetime('now', ?), ?)`,
+    ).run(sha256Hex(code), relayUserId, request.serverId, request.codeChallenge, mac, LINK_CODE_TTL_SQL, kind);
     return { ok: true, code };
   })();
 }
@@ -182,6 +212,7 @@ export function redeemLinkCode(
   db: Database,
   input: LinkRedeemInput & { origin?: unknown },
   originKeys: readonly Buffer[],
+  kind: CodeKind = "link",
 ): LinkRedeemResult {
   const { code, codeVerifier, origin } = input;
   return db.transaction((): LinkRedeemResult => {
@@ -191,9 +222,9 @@ export function redeemLinkCode(
       .prepare(
         `SELECT relay_user_id, server_id, code_challenge, return_origin_mac, used_at,
                 expires_at > datetime('now') AS live
-         FROM relay_link_codes WHERE code_hash = ?`,
+         FROM relay_link_codes WHERE code_hash = ? AND kind = ?`,
       )
-      .get(codeHash) as
+      .get(codeHash, kind) as
       | { relay_user_id: number; server_id: string; code_challenge: string; return_origin_mac: string; used_at: string | null; live: number }
       | undefined;
 
