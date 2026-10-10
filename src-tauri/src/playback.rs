@@ -1620,4 +1620,38 @@ mod tests {
 
     sink.stop();
   }
+
+  // The same, for #185: a track whose file isn't on this machine, played
+  // from a real Legato server's stream through the real output device.
+  // Not run by default either: set LEGATO_TEST_STREAM_URL to a track's
+  // GET /api/v1/files/:id/stream?quality=original&t=<media ticket>, a track
+  // at least 40 s long.
+  #[test]
+  #[ignore]
+  fn real_stream_smoke_test() {
+    let url = std::env::var("LEGATO_TEST_STREAM_URL").expect("set LEGATO_TEST_STREAM_URL to a server's stream URL");
+    let missing = std::env::temp_dir().join(format!("legato-not-mounted-{}/01.flac", std::process::id()));
+
+    let opened = open_source(&streamed(&missing, &url)).expect("stream the track");
+    assert!(opened.streaming);
+
+    let stream = DeviceSinkBuilder::open_default_sink().expect("open audio device");
+    let sink = Player::connect_new(stream.mixer());
+    sink.set_volume(0.2);
+    sink.append(opened.source.amplify_decibel(-6.0));
+
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(sink.get_pos().as_millis() > 0, "playback should have advanced: {:?}", sink.get_pos());
+
+    sink.try_seek(Duration::from_secs(30)).expect("seek forward");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(sink.get_pos().as_secs() >= 30, "seek should have jumped forward: {:?}", sink.get_pos());
+
+    sink.try_seek(Duration::from_secs(5)).expect("seek back");
+    std::thread::sleep(Duration::from_millis(300));
+    let back = sink.get_pos();
+    assert!(back.as_secs() >= 5 && back.as_secs() < 30, "seek should have jumped back: {back:?}");
+
+    sink.stop();
+  }
 }
