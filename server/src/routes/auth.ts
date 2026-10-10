@@ -12,7 +12,7 @@ import {
 import { USER_AGENT } from "../enrich/mbClient.js";
 import { ServerClaims, type ClaimCheck } from "../auth/claim.js";
 import { SESSION_COOKIE, bearerToken } from "../auth/gate.js";
-import { legatoIdentity } from "../auth/legatoIdentity.js";
+import { legatoIdentity, type LegatoIdentity } from "../auth/legatoIdentity.js";
 import { linkLegatoAccount } from "../auth/legatoLink.js";
 import { linkedAccountId, unlinkAccount } from "../auth/legatoUsers.js";
 import { createOwner, ownerExists, passwordProblem, verifyOwnerPassword } from "../auth/owner.js";
@@ -272,12 +272,16 @@ const SETUP_CODE_HELP =
 // auth.legato.fm (site/public/_redirects). Any other LEGATO_ID_ORIGIN, a
 // relay on this machine say, serves the page itself. Null when legato.fm
 // is off, and then there's no QR.
+//
+// It names this server as well as the code (issue #324). legato.fm keeps
+// the claim for this server's id, and only this server's signature can pick
+// it up, so a code someone guessed is no use to them.
 const CLAIM_URL_BASE = "https://legato.fm/claim";
 
-function claimUrl(origin: string | null, code: string): string | null {
-  if (!origin) return null;
-  const base = origin === DEFAULT_LEGATO_ID_ORIGIN ? CLAIM_URL_BASE : `${origin}/claim`;
-  return `${base}?code=${encodeURIComponent(code)}`;
+function claimUrl(identity: LegatoIdentity, code: string): string | null {
+  if (!identity.origin) return null;
+  const base = identity.origin === DEFAULT_LEGATO_ID_ORIGIN ? CLAIM_URL_BASE : `${identity.origin}/claim`;
+  return `${base}?code=${encodeURIComponent(code)}&server=${identity.serverId()}`;
 }
 
 const CLAIM_CHECK_MESSAGES: Record<Exclude<ClaimCheck, "ok">, string> = {
@@ -400,7 +404,7 @@ export function authRoutes(
         code,
         expiresAt: new Date(expiresAt).toISOString(),
         expiresInMs: setupCodes.remainingMs(),
-        claimUrl: claimUrl(legatoIdentity(db).origin, code),
+        claimUrl: claimUrl(legatoIdentity(db), code),
         claim,
       };
     });

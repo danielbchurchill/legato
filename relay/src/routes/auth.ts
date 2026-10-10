@@ -32,7 +32,7 @@ import {
   type NativeQuery,
 } from "../native-sign-in.js";
 import { isLinkedServer } from "../linked-servers.js";
-import { clientAddress, TokenLimiter } from "../rate-limit.js";
+import { clientAddress, ExchangeLimiter, TokenLimiter } from "../rate-limit.js";
 import { parseSigningKeys, SERVER_ID_PATTERN, signServerToken, type SigningKeys } from "../signing-keys.js";
 import type { TunnelRegistry } from "../tunnel-registry.js";
 import { claimPageRoutes, claimReturnPath } from "./claim-page.js";
@@ -281,11 +281,19 @@ function escapeHtml(s: string): string {
 // A bare confirmation page: the relay has no frontend of its own, so the
 // sign-in button that got here (in whatever client — desktop app, phone)
 // opens this flow in a new window/tab and re-checks GET /auth/me itself.
+// Its one style is in a <style> of its own, which app.ts's default policy
+// names by hash (issue #324).
+export const SUCCESS_PAGE_STYLE =
+  "body{margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f1214;color:#c9c9c9;font-family:system-ui,sans-serif;font-size:14px}";
+
 function successPage(displayName: string | null): string {
   const name = displayName ? escapeHtml(displayName) : "your account";
   return `<!doctype html>
 <html>
-  <body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f1214;color:#c9c9c9;font-family:system-ui,sans-serif;font-size:14px;">
+  <head>
+    <style>${SUCCESS_PAGE_STYLE}</style>
+  </head>
+  <body>
     <p>Signed in as ${name}. You can close this window.</p>
   </body>
 </html>`;
@@ -337,6 +345,7 @@ export interface AuthRoutesOptions {
   tokenLimiter?: TokenLimiter;
   // POST /link/redeem's own brake (routes/link-page.ts, issue #325).
   linkLimiter?: TokenLimiter;
+  exchangeLimiter?: ExchangeLimiter;
   // Token signing keys (issue #114). Undefined reads RELAY_SIGNING_KEYS;
   // null is "signing off", which is what tests of the unconfigured path pass.
   signingKeys?: SigningKeys | null;
@@ -353,6 +362,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
   const config = options.config ?? ENV_CONFIG;
   const cookie = cookieAttributes(config.callbackBaseUrl);
   const limiter = options.tokenLimiter ?? new TokenLimiter();
+  const exchangeLimiter = options.exchangeLimiter ?? new ExchangeLimiter();
 
   return async function routes(app: FastifyInstance) {
     let signingKeys: SigningKeys | null = null;
@@ -373,7 +383,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     // token this service signed, with the keys resolved just above, and
     // redeeming a pairing code means signing one (issue #237).
     app.register(linkedServerRoutes(db, { signingKeys, issuer: config.callbackBaseUrl, tunnels: options.tunnels }));
-    app.register(pairRoutes(db, { signingKeys, issuer: config.callbackBaseUrl }));
+    app.register(pairRoutes(db, { signingKeys, issuer: config.callbackBaseUrl, limiter: exchangeLimiter }));
     app.register(
       claimPageRoutes(db, {
         providers: { google: isGoogleConfigured(config), github: isGithubConfigured(config) },

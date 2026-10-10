@@ -47,13 +47,15 @@ function claimCaption(claim: ClaimView | null): string | null {
     case 'claimed':
       return null
     case 'waiting':
-      return claim.unreachable
-        ? "To claim this server for a legato.fm account, scan this with your phone. This server can't reach legato.fm right now, so a claim won't show up here until it can."
-        : 'Optional: scan this with your phone to claim this server for your legato.fm account, so you can reach it from anywhere. You choose whether to link that account when you create the owner.'
+      if (claim.unreachable)
+        return "To claim this server for a legato.fm account, scan this with your phone. This server can't reach legato.fm right now, so a claim won't show up here until it can."
+      if (claim.busy)
+        return 'To claim this server for a legato.fm account, scan this with your phone. legato.fm is busy, so a claim may take a minute to show up here. This server keeps trying.'
+      return 'Optional: scan this with your phone to claim this server for your legato.fm account, so you can reach it from anywhere. You choose whether to link that account when you create the owner.'
     case 'lapsed':
       return `The claim for ${accountLabel(claim.account)} lapsed before the owner was created, so nothing was linked. To claim again, scan the new code.`
     case 'used':
-      return 'Someone used the last code to claim a different server on legato.fm, so this server made a new one. To claim this server, scan this.'
+      return 'A claim of the last code ran out on legato.fm before it reached this server, so nothing was linked and this server made a new code. To claim this server, scan this.'
     case 'expired':
       return 'A claim of this code expired on legato.fm before this page picked it up. To claim this server, scan it again.'
     case 'refused':

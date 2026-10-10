@@ -108,8 +108,8 @@ export class SetupCodes {
 
   /**
    * Retires the live code now and issues the next one, as if it had
-   * expired: someone used it to claim a different server on legato.fm
-   * (issue #237), so it shouldn't stay on screen.
+   * expired: a claim of it is spent on legato.fm (issue #237), so it
+   * shouldn't stay on screen.
    */
   replace(): IssuedCode {
     if (this.#issued) this.#issued = { ...this.#issued, expiresAt: this.#now() };

@@ -20,6 +20,19 @@ import type { SetupCodes } from "./setupCode.js";
 // and the requests stop with it. Nothing asks once an owner exists: that
 // route refuses then, and the page is gone.
 //
+// When legato.fm says to wait (a 429: something on this network asked about
+// too many codes nobody claimed, relay/src/rate-limit.ts), it isn't a
+// refusal. This server stops asking about the code it was told to wait on,
+// logs it once, and /setup says legato.fm is busy and it'll keep trying. It
+// takes legato.fm's word for a minute at most. legato.fm answers a code
+// claimed for this server whatever its limiter says, so all the wait holds
+// up is a claim made meanwhile, and waiting longer would let one run out
+// unseen. Nor does a wait on one code hold up the others: the code before
+// it, in its two minutes of grace, is still asked about every five seconds.
+//
+// When to ask is kept by a monotonic clock. A Pi has no clock of its own
+// until NTP sets it, and a step back mustn't stop it asking.
+//
 // What a claim holds, and what it leaves behind. The link token lasts ten
 // minutes, and lives only in this object: a restart forgets it. legato.fm
 // mints the tunnel credential only when this server reports the link it
@@ -35,14 +48,18 @@ const PREVIOUS_CODE_GRACE_MS = 2 * 60_000;
 // report made at owner creation never carries a token about to run out on
 // legato.fm's clock.
 const LAPSE_MARGIN_MS = 30_000;
+// How long to hold a code back after a 429: what legato.fm says, up to a
+// minute, and a minute when it doesn't say.
+const HOLD_MAX_MS = 60_000;
 
 // email is masked (maskEmail): /setup has no sign-in, so anyone on the
 // network who can see the code can read it. Enough for someone to
 // recognise their own account.
 export type ClaimAccount = { id: string; name: string | null; email: string | null };
 
+// busy: legato.fm asked this server to wait before asking again.
 export type ClaimView =
-  | { state: "waiting"; unreachable: boolean }
+  | { state: "waiting"; unreachable: boolean; busy: boolean }
   | { state: "claimed"; account: ClaimAccount; expiresInMs: number }
   | { state: "lapsed"; account: ClaimAccount }
   | { state: "used" }
@@ -63,15 +80,21 @@ export function maskEmail(email: string | null): string | null {
 
 export class ServerClaims {
   private pending: { linkToken: string; account: ClaimAccount; lapsesAt: number } | null = null;
-  // Codes this server redeemed itself. legato.fm says "used" for them from
-  // then on, which means nothing here, so they aren't asked about again.
+  // Codes this server redeemed itself, which aren't asked about again:
+  // legato.fm would only hand back the same token, or say "used" once the
+  // claim ran out.
   private readonly spent = new Set<string>();
   // The last thing worth telling /setup while nothing is pending.
   private notice: Notice | null = null;
   private unreachable = false;
+  // The live code's last answer was a 429.
+  private busy = false;
+  // Codes legato.fm said to wait on, and until when, on the monotonic clock.
+  private readonly heldUntil = new Map<string, number>();
   private lastPollAt = Number.NEGATIVE_INFINITY;
   private inFlight: Promise<void> | null = null;
   private readonly now: () => number;
+  private readonly clock: () => number;
   private readonly log: (level: "info" | "warn", message: string) => void;
 
   constructor(
@@ -80,11 +103,15 @@ export class ServerClaims {
       // A getter: index.ts installs the server's identity after the routes
       // that hold this are registered.
       identity: () => LegatoIdentity;
+      // The wall clock, which a link token's expiry is on.
       now?: () => number;
+      // The monotonic one, for when to ask.
+      clock?: () => number;
       log?: (level: "info" | "warn", message: string) => void;
     },
   ) {
     this.now = options.now ?? Date.now;
+    this.clock = options.clock ?? (() => performance.now());
     this.log = options.log ?? (() => {});
   }
 
@@ -95,7 +122,7 @@ export class ServerClaims {
   /** A /setup page checking in: may start one request to legato.fm. */
   checkIn(): ClaimView {
     this.lapse();
-    const now = this.now();
+    const now = this.clock();
     if (this.enabled && !this.pending && !this.inFlight && now - this.lastPollAt >= POLL_INTERVAL_MS) {
       this.lastPollAt = now;
       this.inFlight = this.poll().finally(() => {
@@ -115,7 +142,9 @@ export class ServerClaims {
     if (this.pending) {
       return { state: "claimed", account: this.pending.account, expiresInMs: Math.max(this.pending.lapsesAt - this.now(), 0) };
     }
-    return this.notice ?? { state: "waiting", unreachable: this.unreachable };
+    // Busy is what's true now. A notice left from before it isn't news.
+    if (this.busy) return { state: "waiting", unreachable: this.unreachable, busy: true };
+    return this.notice ?? { state: "waiting", unreachable: this.unreachable, busy: false };
   }
 
   /**
@@ -158,11 +187,14 @@ export class ServerClaims {
     const identity = this.options.identity();
     const { setupCodes } = this.options;
     const [live, ...previous] = setupCodes.claimable(PREVIOUS_CODE_GRACE_MS);
-    for (const code of [live!, ...previous]) {
-      if (this.spent.has(code)) continue;
+    const codes = [live!, ...previous];
+    for (const code of this.heldUntil.keys()) if (!codes.includes(code)) this.heldUntil.delete(code);
+    for (const code of codes) {
+      if (this.spent.has(code) || this.clock() < (this.heldUntil.get(code) ?? Number.NEGATIVE_INFINITY)) continue;
       const result = await identity.exchangeClaim(code);
       if (result.ok) {
         this.spent.add(code);
+        this.busy = false;
         return this.accept(identity, result.linkToken);
       }
       if (result.reason === "unreachable") {
@@ -172,6 +204,23 @@ export class ServerClaims {
         return;
       }
       this.unreachable = false;
+      if (result.status === 429) {
+        const waitMs = Math.min((result.retryAfterSeconds ?? Number.POSITIVE_INFINITY) * 1000, HOLD_MAX_MS);
+        this.heldUntil.set(code, this.clock() + waitMs);
+        if (code === live) {
+          if (!this.busy) {
+            this.log(
+              "info",
+              `legato.fm: busy, so checking for a claim again in ${Math.ceil(waitMs / 1000)} s ` +
+                "(something on this network asked about too many codes nobody claimed)",
+            );
+          }
+          this.busy = true;
+        }
+        continue;
+      }
+      this.heldUntil.delete(code);
+      if (code === live) this.busy = false;
       if (result.status === 404) {
         if (code === live && this.notice?.state === "refused") this.notice = null;
         continue;
@@ -179,8 +228,15 @@ export class ServerClaims {
       // Only the live code's answers are worth showing: the page has
       // already moved on from the one before it.
       if (code !== live) continue;
+      // legato.fm keeps a claim for this server alone and answers it again
+      // while it lasts, so "used" means this server redeemed it, the answer
+      // never got here, and the claim ran out before it asked again.
       if (result.legatoReason === "used") {
-        this.log("warn", "legato.fm: this setup code was already used to claim a different server, so it's been replaced");
+        this.log(
+          "warn",
+          "legato.fm: the answer to a claim of this setup code never got here, and the claim has run out, " +
+            "so nothing was linked; the code's been replaced",
+        );
         this.notice = { state: "used" };
         setupCodes.replace();
       } else if (result.legatoReason === "expired") {

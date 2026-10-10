@@ -1,4 +1,4 @@
-import { createPublicKey, generateKeyPairSync, sign } from "node:crypto";
+import { createHash, createPublicKey, generateKeyPairSync, sign } from "node:crypto";
 import { afterEach, describe, expect, it } from "bun:test";
 import type { FastifyInstance } from "fastify";
 // The home server's real signers, as in linked-servers.spec.ts: what a
@@ -8,14 +8,16 @@ import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
 import { claimProofMessage, isLinkedServer, linkProofMessage, unlinkProofMessage, verifyServerSignature } from "./linked-servers.js";
-import { mintPairingCode, OPEN_CODES_PER_ACCOUNT, tunnelCredentialHolder } from "./pairing.js";
+import { OPEN_CODES_PER_ACCOUNT, tunnelCredentialHolder } from "./pairing.js";
+import { ASKS_PER_WINDOW, FREE_CODES } from "./rate-limit.js";
 import { claimReturnPath } from "./routes/claim-page.js";
 import { parseSigningKeys, type SigningKeys } from "./signing-keys.js";
 
 // Issue #237: claiming a headless server from its /setup page. An account
-// claims the code the server shows; the server redeems it with a signed
-// proof and gets a `link` token; the server's signed link report records
-// the pair and mints the tunnel credential, bound to its id.
+// claims the code the server shows, for the server the QR names (issue
+// #324); that server redeems it with a signed proof and gets a `link`
+// token; the server's signed link report records the pair and mints the
+// tunnel credential, bound to its id.
 
 const ISSUER = "http://relay.test";
 
@@ -31,6 +33,12 @@ function homeServer(): ServerKey {
 }
 
 const now = () => Math.floor(Date.now() / 1000);
+
+// The server whose QR the tests' claims come from, unless one says otherwise.
+const SERVER = homeServer();
+
+// Which view of itself the claim page drew.
+const view = (html: string) => /<body data-view="([a-z_]+)"/.exec(html)?.[1];
 
 const apps: FastifyInstance[] = [];
 afterEach(async () => {
@@ -71,17 +79,31 @@ function setup(options: { signing?: boolean; github?: boolean } = {}) {
     return { user, cookie: `relay_session=${createSession(db, user.id).token}` };
   };
 
-  const claim = (cookie: string, code: unknown, headers: Record<string, string> = {}) =>
-    app.inject({ method: "POST", url: "/pair/claim", headers: { cookie, ...headers }, payload: { code } });
+  const claim = (cookie: string, code: unknown, server: ServerKey | unknown = SERVER, headers: Record<string, string> = {}) =>
+    app.inject({
+      method: "POST",
+      url: "/pair/claim",
+      headers: { cookie, ...headers },
+      payload: { code, server: (server as ServerKey | undefined)?.serverId ?? server },
+    });
   const status = async (cookie: string, code: string) =>
     ((await app.inject({ method: "GET", url: `/pair/claim?code=${code}`, headers: { cookie } })).json() as { status: string }).status;
-  const exchange = (body: Record<string, unknown>) => app.inject({ method: "POST", url: "/pair/exchange", payload: body });
-  const exchangeAs = (server: ServerKey, code: string) => exchange(claimProof(server, { issuer: ISSUER, code, nowSeconds: now() }));
+  // From this socket address, or the inject's own loopback one. Off Fly,
+  // as here, a Fly-Client-IP header counts for nothing (rate-limit.ts).
+  const exchange = (body: Record<string, unknown>, address?: string, headers: Record<string, string> = {}) =>
+    app.inject({ method: "POST", url: "/pair/exchange", payload: body, headers, ...(address ? { remoteAddress: address } : {}) });
+  const exchangeAs = (server: ServerKey, code: string, address?: string) =>
+    exchange(claimProof(server, { issuer: ISSUER, code, nowSeconds: now() }), address);
   const report = (body: Record<string, unknown>) => app.inject({ method: "POST", url: "/linked-servers", payload: body });
   const credentials = () => db.prepare("SELECT relay_user_id, server_id FROM tunnel_credentials").all();
   const pairs = () => db.prepare("SELECT relay_user_id, server_id FROM linked_servers").all();
-  const page = (code: string, cookie?: string) =>
-    app.inject({ method: "GET", url: `/claim?code=${code}`, headers: cookie ? { cookie } : {} });
+  // null: a QR from a server that predates the server id.
+  const page = (code: string, cookie?: string, server: string | null = SERVER.serverId) =>
+    app.inject({
+      method: "GET",
+      url: `/claim?code=${code}${server === null ? "" : `&server=${server}`}`,
+      headers: cookie ? { cookie } : {},
+    });
 
   return { db, app, signIn, claim, status, exchange, exchangeAs, report, credentials, pairs, page };
 }
@@ -92,7 +114,7 @@ describe("a claim, start to finish", () => {
     const { user, cookie } = h.signIn();
     const server = homeServer();
 
-    const claimed = await h.claim(cookie, "k7qm 4xrd");
+    const claimed = await h.claim(cookie, "k7qm 4xrd", server);
     expect(claimed.statusCode).toBe(200);
     expect(claimed.json()).toMatchObject({ claimed: { code: "K7QM-4XRD" }, already: false });
     expect(await h.status(cookie, "K7QM-4XRD")).toBe("pending");
@@ -120,11 +142,34 @@ describe("a claim, start to finish", () => {
     expect(h.credentials()).toHaveLength(1);
   });
 
+  // Issue #324: the answer to the server's exchange can be lost on the way
+  // back, and the code is spent by then.
+  it("hands the server the same token if it asks again, and the link still mints one credential", async () => {
+    const h = setup();
+    const { user, cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD");
+    const lost = (await h.exchangeAs(SERVER, "K7QM-4XRD")).json();
+    const { linkToken, expiresAt } = lost as { linkToken: string; expiresAt: string };
+    const { exp } = JSON.parse(Buffer.from(linkToken.split(".")[1]!, "base64url").toString()) as { exp: number };
+    expect(expiresAt).toBe(new Date(exp * 1000).toISOString());
+
+    const retried = await h.exchangeAs(SERVER, "K7QM-4XRD");
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json()).toEqual(lost);
+    expect(await h.status(cookie, "K7QM-4XRD")).toBe("picked_up");
+    // Other servers still hear nothing about it.
+    expect((await h.exchangeAs(homeServer(), "K7QM-4XRD")).statusCode).toBe(404);
+
+    expect((await h.report(linkProof(SERVER, linkToken))).statusCode).toBe(200);
+    expect((await h.report(linkProof(SERVER, linkToken))).json()).toMatchObject({ reason: "used" });
+    expect(h.credentials()).toEqual([{ relay_user_id: user.id, server_id: SERVER.serverId }]);
+  });
+
   it("leaves no credential and no pair when the server never reports the link", async () => {
     const h = setup();
     const { cookie } = h.signIn();
     await h.claim(cookie, "K7QM-4XRD");
-    expect((await h.exchangeAs(homeServer(), "K7QM-4XRD")).statusCode).toBe(200);
+    expect((await h.exchangeAs(SERVER, "K7QM-4XRD")).statusCode).toBe(200);
 
     // Declined at /setup, lapsed, or forgotten in a restart: the server
     // just doesn't report. All three look like this from here.
@@ -152,30 +197,65 @@ describe("a claim, start to finish", () => {
 });
 
 describe("the exchange proof", () => {
-  it("binds what's redeemed to the key that redeemed it, so a different server can't use the link token", async () => {
+  it("answers any server but the one the claim is for as if nobody had claimed the code, and doesn't spend it", async () => {
+    const h = setup();
+    const { user, cookie } = h.signIn();
+    const real = homeServer();
+    await h.claim(cookie, "K7QM-4XRD", real);
+
+    // Something that guessed the code, or read it off the screen, with a
+    // key of its own: the same answer as for a code nobody claimed.
+    const nobodys = await h.exchangeAs(homeServer(), "AAAA-BBBB");
+    for (const hostile of [homeServer(), homeServer()]) {
+      const res = await h.exchangeAs(hostile, "K7QM-4XRD");
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual(nobodys.json());
+    }
+    expect(await h.status(cookie, "K7QM-4XRD")).toBe("pending");
+
+    // The server the QR named still picks it up, for its own id.
+    const picked = await h.exchangeAs(real, "K7QM-4XRD");
+    expect(picked.statusCode).toBe(200);
+    const { linkToken } = picked.json() as { linkToken: string };
+    const claims = JSON.parse(Buffer.from(linkToken.split(".")[1]!, "base64url").toString()) as { sub: string; aud: string };
+    expect(claims).toMatchObject({ sub: String(user.id), aud: real.serverId });
+    // And once it's spent, other servers still hear nothing about it.
+    expect((await h.exchangeAs(homeServer(), "K7QM-4XRD")).json()).toEqual(nobodys.json());
+  });
+
+  // POST /pair/start minted codes like that until #353, and claims made
+  // before #324 are the same.
+  it("lets no server redeem a code that isn't bound to one", async () => {
+    const h = setup();
+    const { user } = h.signIn();
+    h.db
+      .prepare("INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES ('NSRV-0000', ?, datetime('now', '+5 minutes'))")
+      .run(user.id);
+    const nobodys = await h.exchangeAs(homeServer(), "AAAA-BBBB");
+    for (const server of [SERVER, homeServer(), homeServer()]) {
+      const res = await h.exchangeAs(server, "NSRV-0000");
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual(nobodys.json());
+    }
+    expect(h.db.prepare("SELECT server_id, used_at FROM pairing_codes WHERE code = 'NSRV-0000'").get()).toEqual({
+      server_id: null,
+      used_at: null,
+    });
+  });
+
+  it("is gone with POST /pair/start: no route mints a code nobody's server showed", async () => {
     const h = setup();
     const { cookie } = h.signIn();
-    const real = homeServer();
-    const hostile = homeServer();
-    await h.claim(cookie, "K7QM-4XRD");
-
-    // Something else that read the code off the screen redeems it first,
-    // with its own key. What it gets is a token for its own id.
-    const stolen = await h.exchangeAs(hostile, "K7QM-4XRD");
-    const { linkToken } = stolen.json() as { linkToken: string };
-    // The real server can't report that token as its own...
-    expect((await h.report(linkProof(real, linkToken))).json()).toMatchObject({ reason: "wrong_key" });
-    // ...and its own exchange says the code was already used.
-    expect((await h.exchangeAs(real, "K7QM-4XRD")).json()).toMatchObject({ reason: "used" });
-    expect(h.pairs().map((pair) => (pair as { server_id: string }).server_id)).not.toContain(real.serverId);
+    expect((await h.app.inject({ method: "POST", url: "/pair/start", headers: { cookie } })).statusCode).toBe(404);
+    expect(h.db.prepare("SELECT COUNT(*) AS n FROM pairing_codes").get()).toEqual({ n: 0 });
   });
 
   it("refuses a signature by another key, over another code, or for another service", async () => {
     const h = setup();
     const { cookie } = h.signIn();
-    await h.claim(cookie, "K7QM-4XRD");
     const server = homeServer();
     const other = homeServer();
+    await h.claim(cookie, "K7QM-4XRD", server);
 
     const borrowed = { ...claimProof(other, { issuer: ISSUER, code: "K7QM-4XRD", nowSeconds: now() }), publicKey: server.publicKey };
     expect((await h.exchange(borrowed)).json()).toMatchObject({ reason: "bad_signature" });
@@ -229,13 +309,43 @@ describe("POST /pair/claim", () => {
     expect((await h.claim("", "K7QM-4XRD")).statusCode).toBe(401);
   });
 
-  it("is the same claim when the same account claims again", async () => {
+  it("is the same claim when the same account claims again, for whichever server it names last", async () => {
     const h = setup();
     const { cookie } = h.signIn();
     await h.claim(cookie, "K7QM-4XRD");
     const again = await h.claim(cookie, "K7QM-4XRD");
     expect(again.statusCode).toBe(200);
     expect(again.json()).toMatchObject({ already: true });
+
+    const other = homeServer();
+    expect((await h.claim(cookie, "K7QM-4XRD", other)).json()).toMatchObject({ already: true });
+    expect((await h.exchangeAs(SERVER, "K7QM-4XRD")).statusCode).toBe(404);
+    expect((await h.exchangeAs(other, "K7QM-4XRD")).statusCode).toBe(200);
+  });
+
+  it("asks for the server to be updated when the claim doesn't say which server, and stores nothing", async () => {
+    const h = setup();
+    const { cookie } = h.signIn();
+    const unnamed = await h.app.inject({ method: "POST", url: "/pair/claim", headers: { cookie }, payload: { code: "K7QM-4XRD" } });
+    for (const res of [unnamed, await h.claim(cookie, "K7QM-4XRD", null), await h.claim(cookie, "K7QM-4XRD", "")]) {
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ reason: "outdated_server" });
+    }
+    expect(h.db.prepare("SELECT COUNT(*) AS n FROM pairing_codes").get()).toEqual({ n: 0 });
+  });
+
+  // GET /claim calls the same link a bad one, rather than asking for an
+  // update that wouldn't help.
+  it("calls a server id that can't be one a broken link, as the claim page does, and stores nothing", async () => {
+    const h = setup();
+    const { cookie } = h.signIn();
+    for (const id of ["not-a-server-id", 42, SERVER.serverId.toUpperCase(), `${SERVER.serverId}0`]) {
+      const res = await h.claim(cookie, "K7QM-4XRD", id);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ reason: "bad_code" });
+      if (typeof id === "string") expect(view((await h.page("K7QM-4XRD", cookie, id)).body)).toBe("bad_code");
+    }
+    expect(h.db.prepare("SELECT COUNT(*) AS n FROM pairing_codes").get()).toEqual({ n: 0 });
   });
 
   it("refuses a second account, without touching the first one's claim", async () => {
@@ -250,20 +360,9 @@ describe("POST /pair/claim", () => {
     expect(await h.status(second.cookie, "K7QM-4XRD")).toBe("taken");
     expect(await h.status(first.cookie, "K7QM-4XRD")).toBe("pending");
 
-    const { linkToken } = (await h.exchangeAs(homeServer(), "K7QM-4XRD")).json() as { linkToken: string };
+    const { linkToken } = (await h.exchangeAs(SERVER, "K7QM-4XRD")).json() as { linkToken: string };
     const claims = JSON.parse(Buffer.from(linkToken.split(".")[1]!, "base64url").toString()) as { sub: string };
     expect(claims.sub).toBe(String(first.user.id));
-  });
-
-  it("refuses a code that clashes with another account's live pairing code, and never overwrites it", async () => {
-    const h = setup();
-    const minter = h.signIn("minter");
-    const claimer = h.signIn("claimer");
-    const { code } = mintPairingCode(h.db, minter.user.id, () => "K7QM-4XRD");
-    expect(code).toBe("K7QM-4XRD");
-
-    expect((await h.claim(claimer.cookie, code)).json()).toMatchObject({ reason: "taken" });
-    expect(h.db.prepare("SELECT relay_user_id FROM pairing_codes WHERE code = ?").get(code)).toEqual({ relay_user_id: minter.user.id });
   });
 
   it("says a spent code is used, and takes over an expired one nobody spent", async () => {
@@ -305,8 +404,8 @@ describe("POST /pair/claim", () => {
   it("refuses a page on another origin", async () => {
     const h = setup();
     const { cookie } = h.signIn();
-    expect((await h.claim(cookie, "K7QM-4XRD", { origin: "https://legato.fm" })).json()).toMatchObject({ reason: "cross_origin" });
-    expect((await h.claim(cookie, "K7QM-4XRD", { origin: ISSUER })).statusCode).toBe(200);
+    expect((await h.claim(cookie, "K7QM-4XRD", SERVER, { origin: "https://legato.fm" })).json()).toMatchObject({ reason: "cross_origin" });
+    expect((await h.claim(cookie, "K7QM-4XRD", SERVER, { origin: ISSUER })).statusCode).toBe(200);
   });
 
   it("won't take a code while this relay can't sign tokens", async () => {
@@ -314,6 +413,143 @@ describe("POST /pair/claim", () => {
     const { cookie } = h.signIn();
     expect((await h.claim(cookie, "K7QM-4XRD")).statusCode).toBe(503);
     expect(h.db.prepare("SELECT COUNT(*) AS n FROM pairing_codes").get()).toEqual({ n: 0 });
+  });
+});
+
+describe("guessing codes at POST /pair/exchange", () => {
+  const GUESSER = "203.0.113.9";
+  // Codes nobody claimed, in the setup code's own format.
+  const guess = (i: number) => `AAAA-${String(i).padStart(4, "0")}`;
+
+  it("locks out one address asking about too many codes nobody claimed, with Retry-After", async () => {
+    const h = setup();
+    const guesser = homeServer();
+    for (let i = 0; i <= FREE_CODES; i++) expect((await h.exchangeAs(guesser, guess(i), GUESSER)).statusCode).toBe(404);
+    // A fresh key buys nothing: it's the address that's locked out.
+    const limited = await h.exchangeAs(homeServer(), guess(FREE_CODES + 1), GUESSER);
+    expect(limited.statusCode).toBe(429);
+    expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
+    expect(limited.json()).toMatchObject({ reason: "rate_limited" });
+
+    // Someone else's server picks up its claim as usual.
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD");
+    expect((await h.exchangeAs(SERVER, "K7QM-4XRD", "198.51.100.4")).statusCode).toBe(200);
+  });
+
+  it("counts a code claimed for another server as one nobody claimed", async () => {
+    const h = setup();
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD");
+    const guesser = homeServer();
+    expect((await h.exchangeAs(guesser, "K7QM-4XRD", GUESSER)).statusCode).toBe(404);
+    for (let i = 1; i <= FREE_CODES; i++) expect((await h.exchangeAs(guesser, guess(i), GUESSER)).statusCode).toBe(404);
+    expect((await h.exchangeAs(guesser, guess(FREE_CODES + 1), GUESSER)).statusCode).toBe(429);
+  });
+
+  // A 404 says the same whoever signed the proof, so the relay doesn't
+  // check: a code nobody claimed for this server costs a lookup, not a
+  // signature check. A code claimed for it is always checked.
+  it("answers a code nobody claimed for the server asking without checking the signature", async () => {
+    const h = setup();
+    const guesser = homeServer();
+    const forged = (code: string, server = guesser) => ({
+      ...claimProof(server, { issuer: ISSUER, code, nowSeconds: now() }),
+      signature: "x",
+    });
+    expect((await h.exchange(forged("AAAA-BBBB"), "198.51.100.4")).json()).toMatchObject({ reason: "not_found" });
+    for (let i = 0; i <= FREE_CODES; i++) await h.exchange(forged(guess(i)), GUESSER);
+    expect((await h.exchange(forged(guess(FREE_CODES + 1)), GUESSER)).statusCode).toBe(429);
+
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD");
+    const res = await h.exchange(forged("K7QM-4XRD", SERVER), GUESSER);
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ reason: "bad_signature" });
+  });
+
+  // Issue #324, review: the limiter used to run before the lookup, so this
+  // claim got a 429 until it expired.
+  it("answers a claim from an address that's locked out, for a code that address never asked about", async () => {
+    const h = setup();
+    const server = homeServer();
+    expect((await h.exchangeAs(server, "AAAA-AAAA", GUESSER)).statusCode).toBe(404);
+    // Something else behind the same NAT or /64 asks about too many codes.
+    const guesser = homeServer();
+    for (let i = 0; i <= FREE_CODES; i++) await h.exchangeAs(guesser, guess(i), GUESSER);
+
+    // The server's code changes during the lockout. The new one is new to
+    // the relay, so asking about it waits.
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(429);
+    // Until someone claims it for this server.
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD", server);
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(200);
+  });
+
+  it(`answers a claim from an address past its ${ASKS_PER_WINDOW} asks a minute`, async () => {
+    const h = setup();
+    const server = homeServer();
+    const looper = homeServer();
+    for (let i = 0; i < ASKS_PER_WINDOW; i++) await h.exchangeAs(looper, guess(i % 3), GUESSER);
+    expect((await h.exchangeAs(looper, guess(0), GUESSER)).statusCode).toBe(429);
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(429);
+
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD", server);
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(200);
+  });
+
+  it("takes no notice of a Fly-Client-IP header off Fly", async () => {
+    const h = setup();
+    const guesser = homeServer();
+    for (let i = 0; i <= FREE_CODES; i++) {
+      await h.exchange(claimProof(guesser, { issuer: ISSUER, code: guess(i), nowSeconds: now() }), GUESSER, {
+        "fly-client-ip": `198.51.100.${i}`,
+      });
+    }
+    const next = claimProof(guesser, { issuer: ISSUER, code: guess(FREE_CODES + 1), nowSeconds: now() });
+    expect((await h.exchange(next, GUESSER, { "fly-client-ip": "198.51.100.200" })).statusCode).toBe(429);
+  });
+
+  it("never locks out a server asking about its own code until it's claimed", async () => {
+    const h = setup();
+    const server = homeServer();
+    for (let i = 0; i < 3 * FREE_CODES; i++) expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(404);
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD", server);
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(200);
+  });
+
+  it("still answers a server about its own code behind an address that's locked out", async () => {
+    const h = setup();
+    const server = homeServer();
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(404);
+    const guesser = homeServer();
+    for (let i = 0; i <= FREE_CODES; i++) await h.exchangeAs(guesser, guess(i), GUESSER);
+    expect((await h.exchangeAs(guesser, guess(FREE_CODES + 1), GUESSER)).statusCode).toBe(429);
+
+    const { cookie } = h.signIn();
+    await h.claim(cookie, "K7QM-4XRD", server);
+    expect((await h.exchangeAs(server, "K7QM-4XRD", GUESSER)).statusCode).toBe(200);
+  });
+
+  it("counts only codes nobody knows: not spent ones, and not bad proofs", async () => {
+    const h = setup();
+    const { user } = h.signIn();
+    const server = homeServer();
+    for (let i = 0; i <= FREE_CODES; i++) {
+      const code = `SPNT-${String(i).padStart(4, "0")}`;
+      h.db
+        .prepare(
+          "INSERT INTO pairing_codes (code, relay_user_id, server_id, expires_at, used_at) VALUES (?, ?, ?, datetime('now', '+5 minutes'), datetime('now'))",
+        )
+        .run(code, user.id, server.serverId);
+      expect((await h.exchangeAs(server, code, GUESSER)).statusCode).toBe(410);
+      const stale = claimProof(server, { issuer: ISSUER, code: guess(i), nowSeconds: now() - 600 });
+      expect((await h.exchange(stale, GUESSER)).statusCode).toBe(401);
+    }
+    expect((await h.exchangeAs(server, guess(0), GUESSER)).statusCode).toBe(404);
   });
 });
 
@@ -329,18 +565,17 @@ describe("GET /pair/claim", () => {
 });
 
 describe("the claim page", () => {
-  const view = (html: string) => /<body data-view="([a-z_]+)"/.exec(html)?.[1];
-
-  it("asks a signed-out visitor to sign in, and comes back to the same code", async () => {
+  it("asks a signed-out visitor to sign in, and comes back to the same code and server", async () => {
     const h = setup({ github: true });
+    const back = `/claim?code=K7QM-4XRD&server=${SERVER.serverId}`;
     const res = await h.page("k7qm4xrd");
     expect(res.statusCode).toBe(200);
     expect(view(res.body)).toBe("signed_out");
     expect(res.body).toContain("K7QM-4XRD");
-    expect(res.body).toContain(`href="/auth/github?return_to=${encodeURIComponent("/claim?code=K7QM-4XRD")}"`);
+    expect(res.body).toContain(`href="/auth/github?return_to=${encodeURIComponent(back)}"`);
     expect(res.body).not.toContain("/auth/google?");
 
-    const start = await h.app.inject({ method: "GET", url: `/auth/github?return_to=${encodeURIComponent("/claim?code=K7QM-4XRD")}` });
+    const start = await h.app.inject({ method: "GET", url: `/auth/github?return_to=${encodeURIComponent(back)}` });
     const cookies = start.cookies.map((c) => `${c.name}=${c.value}`).join("; ");
     const state = new URL(start.headers.location as string).searchParams.get("state");
     const callback = await h.app.inject({
@@ -349,22 +584,51 @@ describe("the claim page", () => {
       headers: { cookie: cookies },
     });
     expect(callback.statusCode).toBe(302);
-    expect(callback.headers.location).toBe("/claim?code=K7QM-4XRD");
+    expect(callback.headers.location).toBe(back);
     expect(callback.cookies.find((c) => c.name === "relay_session")?.value).toBeTruthy();
   });
 
   it("only ever goes back to the claim page", () => {
-    expect(claimReturnPath("/claim?code=k7qm4xrd")).toBe("/claim?code=K7QM-4XRD");
+    const id = SERVER.serverId;
+    expect(claimReturnPath(`/claim?code=k7qm4xrd&server=${id}`)).toBe(`/claim?code=K7QM-4XRD&server=${id}`);
     for (const bad of [
-      "//evil.example/claim?code=K7QM-4XRD",
-      "https://evil.example/claim?code=K7QM-4XRD",
-      "/claimx?code=K7QM-4XRD",
-      "/claim?code=nope",
+      `//evil.example/claim?code=K7QM-4XRD&server=${id}`,
+      `https://evil.example/claim?code=K7QM-4XRD&server=${id}`,
+      `/claimx?code=K7QM-4XRD&server=${id}`,
+      `/claim?code=nope&server=${id}`,
+      "/claim?code=K7QM-4XRD&server=%22%3E%3Cscript%3E",
       "/auth/me",
       undefined,
     ]) {
       expect(claimReturnPath(bad)).toBeNull();
     }
+  });
+
+  // Issue #324, review: someone mid-sign-in when the relay deploys carries
+  // the return path the relay before it wrote, with no server id.
+  it("takes a sign-in that started before server ids back to the page that asks for an update", async () => {
+    expect(claimReturnPath("/claim?code=k7qm4xrd")).toBe("/claim?code=K7QM-4XRD");
+    expect(claimReturnPath("/claim?code=k7qm4xrd&server=")).toBe("/claim?code=K7QM-4XRD");
+
+    // The state cookie from a sign-in start, and the return cookie the
+    // relay before server ids set beside it.
+    const h = setup({ github: true });
+    const start = await h.app.inject({ method: "GET", url: "/auth/github" });
+    const state = new URL(start.headers.location as string).searchParams.get("state");
+    const cookies = [
+      ...start.cookies.filter((c) => c.name !== "relay_return_to").map((c) => `${c.name}=${c.value}`),
+      `relay_return_to=${encodeURIComponent("/claim?code=K7QM-4XRD")}`,
+    ];
+    const callback = await h.app.inject({
+      method: "GET",
+      url: `/auth/github/callback?code=x&state=${state}`,
+      headers: { cookie: cookies.join("; ") },
+    });
+    expect(callback.statusCode).toBe(302);
+    expect(callback.headers.location).toBe("/claim?code=K7QM-4XRD");
+    const session = callback.cookies.find((c) => c.name === "relay_session")!.value;
+    const page = await h.app.inject({ method: "GET", url: "/claim?code=K7QM-4XRD", headers: { cookie: `relay_session=${session}` } });
+    expect(view(page.body)).toBe("outdated_server");
   });
 
   it("shows each state of the account's claim", async () => {
@@ -376,7 +640,7 @@ describe("the claim page", () => {
     await h.claim(mine.cookie, "K7QM-4XRD");
     expect(view((await h.page("K7QM-4XRD", mine.cookie)).body)).toBe("pending");
     expect(view((await h.page("K7QM-4XRD", theirs.cookie)).body)).toBe("taken");
-    await h.exchangeAs(homeServer(), "K7QM-4XRD");
+    await h.exchangeAs(SERVER, "K7QM-4XRD");
     expect(view((await h.page("K7QM-4XRD", mine.cookie)).body)).toBe("picked_up");
     expect(view((await h.page("K7QM-4XRD", theirs.cookie)).body)).toBe("used");
 
@@ -387,9 +651,59 @@ describe("the claim page", () => {
 
   it("says when the code can't be one, and when claiming isn't available", async () => {
     expect(view((await setup().page("hello")).body)).toBe("bad_code");
+    expect(view((await setup().page("K7QM-4XRD", undefined, "not-a-server-id")).body)).toBe("bad_code");
     const off = await setup({ signing: false }).page("K7QM-4XRD");
     expect(off.statusCode).toBe(503);
     expect(view(off.body)).toBe("unavailable");
+  });
+
+  it("asks to update a server whose QR doesn't say which server it is, before anything else", async () => {
+    const h = setup();
+    const { cookie } = h.signIn();
+    for (const res of [await h.page("K7QM-4XRD", undefined, null), await h.page("K7QM-4XRD", cookie, null)]) {
+      expect(res.statusCode).toBe(400);
+      expect(view(res.body)).toBe("outdated_server");
+      expect(res.body).toContain("Update Legato on the server");
+      expect(res.body).not.toContain("<button");
+    }
+  });
+
+  it("sends a policy that runs only its own script and style, and talks only to this service", async () => {
+    const h = setup();
+    const { cookie } = h.signIn();
+    const pages = [
+      await h.page("K7QM-4XRD"),
+      await h.page("K7QM-4XRD", cookie),
+      await h.page("hello"),
+      await h.page("K7QM-4XRD", cookie, null),
+      await setup({ signing: false }).page("K7QM-4XRD"),
+    ];
+    expect(pages.map((res) => res.statusCode)).toEqual([200, 200, 400, 400, 503]);
+    for (const res of pages) {
+      const policy = res.headers["content-security-policy"] as string;
+      const directives = new Map(
+        policy
+          .split(";")
+          .map((d) => d.trim().split(/\s+/))
+          .map(([name, ...sources]) => [name, sources]),
+      );
+      const hashOf = (tag: string) => {
+        const inline = res.body.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "g")) ?? [];
+        expect(inline).toHaveLength(1);
+        const text = inline[0]!.slice(tag.length + 2, -(tag.length + 3));
+        return `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
+      };
+      expect(directives.get("default-src")).toEqual(["'none'"]);
+      expect(directives.get("script-src")).toEqual([hashOf("script")]);
+      expect(directives.get("style-src")).toEqual([hashOf("style")]);
+      expect(directives.get("connect-src")).toEqual(["'self'"]);
+      expect(policy).not.toContain("unsafe");
+      // Nothing inline the hashes don't cover.
+      expect(res.body).not.toMatch(/\s(on[a-z]+|style)=/);
+    }
+    // The script reads the code and server off the page rather than having
+    // them written in.
+    expect(pages[1]!.body).toContain(`<body data-view="ready" data-code="K7QM-4XRD" data-server="${SERVER.serverId}">`);
   });
 
   it("escapes the account's name", async () => {
@@ -407,7 +721,7 @@ describe("an account deleted mid-claim", () => {
     const { user, cookie } = h.signIn();
     await h.claim(cookie, "K7QM-4XRD");
     h.db.prepare("DELETE FROM relay_users WHERE id = ?").run(user.id);
-    expect((await h.exchangeAs(homeServer(), "K7QM-4XRD")).statusCode).toBe(404);
-    expect(isLinkedServer(h.db, user.id, homeServer().serverId)).toBe(false);
+    expect((await h.exchangeAs(SERVER, "K7QM-4XRD")).statusCode).toBe(404);
+    expect(isLinkedServer(h.db, user.id, SERVER.serverId)).toBe(false);
   });
 });

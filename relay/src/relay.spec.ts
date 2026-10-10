@@ -366,11 +366,13 @@ describe("relay HTTP forwarding", () => {
     const { httpUrl, tunnelUrl } = await listenApp(app);
     const { serverId, cookieHeader } = await linkedAndConnected(tunnelUrl, (req, res) => res.end(String(req.headers["x-legato-tunnel"])));
 
-    // Behind Fly's proxy, its header names the device (rate-limit.ts).
-    const viaFly = await fetch(`${httpUrl}/relay/${serverId}/x`, {
-      headers: { cookie: cookieHeader, "fly-client-ip": "203.0.113.9", "x-legato-tunnel": "127.0.0.1" },
+    // The socket's peer, whatever the device says. Off Fly, as here, that
+    // includes a Fly-Client-IP header, which only Fly's proxy may write
+    // (rate-limit.ts's clientAddress, whose spec covers the header on Fly).
+    const forged = await fetch(`${httpUrl}/relay/${serverId}/x`, {
+      headers: { cookie: cookieHeader, "fly-client-ip": "203.0.113.9", "x-legato-tunnel": "127.0.0.2" },
     });
-    expect(await viaFly.text()).toBe("203.0.113.9");
+    expect(await forged.text()).toBe("127.0.0.1");
     const direct = await fetch(`${httpUrl}/relay/${serverId}/x`, { headers: { cookie: cookieHeader, "x-legato-tunnel": "10.0.0.1" } });
     expect(await direct.text()).toBe("127.0.0.1");
   });

@@ -88,7 +88,7 @@ describe("SetupCodes", () => {
     expect(store.check("AAAA-AAAA")).toBe("wrong");
   });
 
-  // Issue #237: a code someone used to claim a different server.
+  // Issue #237: a code whose claim is spent on legato.fm.
   it("replaces the live code on demand, as if it had expired", () => {
     const { issued, store } = onFakeClock(["AAAA-AAAA", "BBBB-BBBB"]);
     store.current();

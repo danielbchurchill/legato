@@ -3,13 +3,18 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { getUserBySessionToken, sessionToken, type RelayUserRow } from "../accounts.js";
 import { normalizeCode } from "../claimCode.js";
+import { hashSource } from "../csp.js";
 import { claimStatus } from "../pairing.js";
+import { SERVER_ID_PATTERN } from "../signing-keys.js";
 import type { Database } from "../sqlite.js";
 import { CLAIM_FAILURE_MESSAGES } from "./pair.js";
 
 // legato.fm/claim (issue #237): where the QR code on a headless server's
 // /setup page goes. legato.fm itself is a static site, so its /claim
 // redirects here with the query string intact (site/public/_redirects).
+// The QR carries the server's id as well as its code (issue #324), and a
+// claim is for that server only (pairing.ts). A QR without one is from a
+// server too old to claim, and the page says to update it.
 //
 // One page, drawn on this service from the session and the code's row in
 // pairing_codes, so a reload always shows where things stand. The script
@@ -34,9 +39,10 @@ type Providers = { google: boolean; github: boolean };
 
 export type ClaimView =
   | { kind: "bad_code" }
+  | { kind: "outdated_server" }
   | { kind: "unavailable" }
-  | { kind: "signed_out"; code: string; providers: Providers }
-  | { kind: "ready" | "pending" | "picked_up" | "expired" | "taken" | "used"; code: string; user: RelayUserRow };
+  | { kind: "signed_out"; code: string; server: string; providers: Providers }
+  | { kind: "ready" | "pending" | "picked_up" | "expired" | "taken" | "used"; code: string; server: string; user: RelayUserRow };
 
 function escapeHtml(s: string): string {
   const escapes: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -54,8 +60,14 @@ function account(user: RelayUserRow): string {
 
 const PROVIDER_NAMES: Record<keyof Providers, string> = { google: "Google", github: "GitHub" };
 
-function signInButtons(code: string, providers: Providers): string {
-  const returnTo = encodeURIComponent(`/claim?code=${code}`);
+// This page, for a code and the server showing it. Both are checked before
+// they get here, so neither needs escaping.
+function claimPath(code: string, server: string): string {
+  return `/claim?code=${code}&server=${server}`;
+}
+
+function signInButtons(code: string, server: string, providers: Providers): string {
+  const returnTo = encodeURIComponent(claimPath(code, server));
   const buttons = (["github", "google"] as const)
     .filter((provider) => providers[provider])
     .map(
@@ -76,7 +88,13 @@ function codeBlock(code: string): string {
 function content(view: ClaimView): { title: string; body: string } {
   switch (view.kind) {
     case "bad_code":
-      return { title: "That isn't a setup code", body: `<p>${CLAIM_FAILURE_MESSAGES.bad_code}</p>` };
+      return { title: "That isn't a setup link", body: `<p>${CLAIM_FAILURE_MESSAGES.bad_code}</p>` };
+    case "outdated_server":
+      return {
+        title: "Update this server first",
+        body: `<p>${CLAIM_FAILURE_MESSAGES.outdated_server}</p>
+    <p class="quiet">It works without legato.fm in the meantime: create its owner on its /setup page.</p>`,
+      };
     case "unavailable":
       return {
         title: "Claiming isn't available yet",
@@ -87,7 +105,7 @@ function content(view: ClaimView): { title: string; body: string } {
         title: "Claim this server",
         body: `${codeBlock(view.code)}
     <p>Sign in to legato.fm to claim the Legato server showing this code for your account, so you can reach it from anywhere.</p>
-    ${signInButtons(view.code, view.providers)}`,
+    ${signInButtons(view.code, view.server, view.providers)}`,
       };
     case "ready":
       return {
@@ -127,17 +145,11 @@ function content(view: ClaimView): { title: string; body: string } {
   }
 }
 
-export function claimPage(view: ClaimView): string {
-  const { title, body } = content(view);
-  const code = "code" in view ? view.code : null;
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="dark light" />
-  <title>${escapeHtml(title)} · legato.fm</title>
-  <style>
+// The page's one style and one script, apart from the page so its policy
+// can name them by hash (issue #324). The script reads the code and the
+// server off the body rather than having them written in, so both are the
+// same on every page and the policy is too.
+const STYLE = `
     :root {
       color-scheme: dark;
       --canvas: #0f1214;
@@ -206,14 +218,11 @@ export function claimPage(view: ClaimView): string {
     .link { height: auto; padding: 0; background: none; color: var(--ink-2); }
     .link:hover { color: var(--ink); }
     :focus-visible { outline: 3px solid color-mix(in srgb, var(--ink-3) 50%, transparent); outline-offset: 2px; }
-  </style>
-</head>
-<body data-view="${view.kind}">
-  ${WORDMARK}
-  <h1>${escapeHtml(title)}</h1>
-  ${body}
-  <script>
-    const code = ${JSON.stringify(code)};
+  `;
+
+const SCRIPT = `
+    const code = document.body.dataset.code ?? null;
+    const server = document.body.dataset.server ?? null;
     const view = document.body.dataset.view;
     const status = document.querySelector("[data-status]");
 
@@ -223,7 +232,7 @@ export function claimPage(view: ClaimView): string {
       const res = await fetch("/pair/claim", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, server }),
       }).catch(() => null);
       if (res?.ok) return location.reload();
       const answer = res ? await res.json().catch(() => ({})) : {};
@@ -247,14 +256,50 @@ export function claimPage(view: ClaimView): string {
         if (answer && answer.status !== "pending") location.reload();
       }, 3000);
     }
-  </script>
+  `;
+
+// Nothing on the page runs, loads or styles but those two, and its script
+// only talks to this service. Where it can be framed, where a form could
+// submit and what its base URL is don't fall back to default-src, so they're
+// shut by name.
+export const CLAIM_PAGE_CSP = [
+  "default-src 'none'",
+  `script-src ${hashSource(SCRIPT)}`,
+  `style-src ${hashSource(STYLE)}`,
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+export function claimPage(view: ClaimView): string {
+  const { title, body } = content(view);
+  const claim = "code" in view ? ` data-code="${escapeHtml(view.code)}" data-server="${escapeHtml(view.server)}"` : "";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>${escapeHtml(title)} · legato.fm</title>
+  <style>${STYLE}</style>
+</head>
+<body data-view="${view.kind}"${claim}>
+  ${WORDMARK}
+  <h1>${escapeHtml(title)}</h1>
+  ${body}
+  <script>${SCRIPT}</script>
 </body>
 </html>`;
 }
 
 // Where a browser sign-in started from the claim page goes back to
-// afterwards (routes/auth.ts). Only ever this page and a code, rebuilt from
-// the parts, so the parameter can't send anyone anywhere else.
+// afterwards (routes/auth.ts). Only ever this page, a code and a server id,
+// rebuilt from the parts, so the parameter can't send anyone anywhere else.
+// One with a code and no server id at all is from a sign-in that started
+// before this relay knew about server ids (#324). It goes back to the page
+// too, which asks for the server to be updated, rather than to the generic
+// "signed in" page that would leave its claim nowhere.
 export function claimReturnPath(candidate: unknown): string | null {
   if (typeof candidate !== "string") return null;
   let url: URL;
@@ -265,17 +310,27 @@ export function claimReturnPath(candidate: unknown): string | null {
   }
   if (url.origin !== "http://relay.invalid" || url.pathname !== "/claim") return null;
   const code = normalizeCode(url.searchParams.get("code"));
-  return code ? `/claim?code=${code}` : null;
+  const server = url.searchParams.get("server");
+  if (!code) return null;
+  if (!server) return `/claim?code=${code}`;
+  return SERVER_ID_PATTERN.test(server) ? claimPath(code, server) : null;
 }
 
 export function claimPageRoutes(db: Database, options: { providers: Providers; signingAvailable: boolean }) {
   return async function routes(app: FastifyInstance) {
-    app.get<{ Querystring: { code?: string } }>("/claim", async (request, reply) => {
-      reply.type("text/html").header("Cache-Control", "no-store");
+    app.get<{ Querystring: { code?: string; server?: string } }>("/claim", async (request, reply) => {
+      reply.type("text/html").header("Cache-Control", "no-store").header("Content-Security-Policy", CLAIM_PAGE_CSP);
       const code = normalizeCode(request.query.code);
-      if (!code) {
+      // A link with a server id that isn't one is as broken as a bad code;
+      // one with none is from a server that predates the id.
+      const { server } = request.query;
+      if (!code || (server && !SERVER_ID_PATTERN.test(server))) {
         reply.code(400);
         return claimPage({ kind: "bad_code" });
+      }
+      if (!server) {
+        reply.code(400);
+        return claimPage({ kind: "outdated_server" });
       }
       if (!options.signingAvailable) {
         reply.code(503);
@@ -283,9 +338,9 @@ export function claimPageRoutes(db: Database, options: { providers: Providers; s
       }
       const token = sessionToken(request);
       const user = token ? getUserBySessionToken(db, token) : null;
-      if (!user) return claimPage({ kind: "signed_out", code, providers: options.providers });
+      if (!user) return claimPage({ kind: "signed_out", code, server, providers: options.providers });
       const status = claimStatus(db, user.id, code);
-      return claimPage({ kind: status === "none" ? "ready" : status, code, user });
+      return claimPage({ kind: status === "none" ? "ready" : status, code, server, user });
     });
   };
 }

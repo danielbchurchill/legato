@@ -12,9 +12,11 @@ import { API_BASE } from '../config/serverHost'
  * claim stands. */
 
 // The server's ClaimView. email is masked by the server (r•••@example.com).
+// busy (issue #324): legato.fm asked the server to wait before asking again.
+// A server from before then doesn't send it.
 export type ClaimAccount = { id: string; name: string | null; email: string | null }
 export type ClaimView =
-  | { state: 'waiting'; unreachable: boolean }
+  | { state: 'waiting'; unreachable: boolean; busy?: boolean }
   | { state: 'claimed'; account: ClaimAccount; expiresInMs: number }
   | { state: 'lapsed'; account: ClaimAccount }
   | { state: 'used' }

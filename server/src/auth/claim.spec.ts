@@ -31,11 +31,21 @@ type Call = { url: string; body: Record<string, unknown> | null };
 function fakeRelay(nowSeconds: () => number) {
   const key = makeTestKey();
   const claimed = new Map<string, { sub: string; name: string; email: string }>();
+  // What legato.fm answered for a code it redeemed: asked again while the
+  // claim lasts, it answers the same (relay/src/pairing.ts).
+  const answered = new Map<string, { linkToken: string; expiresAt: string }>();
+  // Redeemed, and the claim has run out since.
   const used = new Set<string>();
   const expired = new Set<string>();
   const calls: Call[] = [];
   let down = false;
   let refuseLinks = false;
+  let loseNextAnswer = false;
+  // Retry-After for a 429 from /pair/exchange: a number, "none" for a 429
+  // without one, or null for no 429 at all. Only for the codes in limitedCodes,
+  // if that's set. Like legato.fm, it answers a claimed code all the same.
+  let limited: number | "none" | null = null;
+  let limitedCodes: string[] | null = null;
 
   const impl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -45,12 +55,21 @@ function fakeRelay(nowSeconds: () => number) {
     if (url.endsWith("/.well-known/jwks.json")) return Response.json({ keys: [key.jwk] });
     if (url.endsWith("/pair/exchange")) {
       const code = body!.code as string;
+      const claimedHere = claimed.has(code) || answered.has(code) || used.has(code) || expired.has(code);
+      if (limited !== null && !claimedHere && (limitedCodes === null || limitedCodes.includes(code))) {
+        const headers: Record<string, string> = limited === "none" ? {} : { "Retry-After": String(limited) };
+        return Response.json(
+          { error: "Too many unknown setup codes from this address.", reason: "rate_limited" },
+          { status: 429, headers },
+        );
+      }
       if (used.has(code)) return Response.json({ error: "pairing code used", reason: "used" }, { status: 410 });
       if (expired.has(code)) return Response.json({ error: "pairing code expired", reason: "expired" }, { status: 410 });
+      const again = answered.get(code);
+      if (again) return Response.json(again);
       const claim = claimed.get(code);
       if (!claim) return Response.json({ error: "pairing code not found", reason: "not_found" }, { status: 404 });
       claimed.delete(code);
-      used.add(code);
       const aud = serverIdForPublicKey(body!.publicKey as string);
       const claims = {
         ...testClaims(aud, nowSeconds()),
@@ -60,7 +79,14 @@ function fakeRelay(nowSeconds: () => number) {
         name: claim.name,
         email: claim.email,
       };
-      return Response.json({ linkToken: signTestToken(key, claims), expiresAt: "" });
+      const answer = { linkToken: signTestToken(key, claims), expiresAt: "" };
+      answered.set(code, answer);
+      // Redeemed here, and lost on the way back.
+      if (loseNextAnswer) {
+        loseNextAnswer = false;
+        throw new Error("connection reset");
+      }
+      return Response.json(answer);
     }
     if (url.endsWith("/linked-servers")) {
       if (refuseLinks) return Response.json({ error: "That proof has already been used.", reason: "used" }, { status: 409 });
@@ -83,6 +109,13 @@ function fakeRelay(nowSeconds: () => number) {
     refuseLinks: () => {
       refuseLinks = true;
     },
+    loseNextAnswer: () => {
+      loseNextAnswer = true;
+    },
+    limit: (retryAfter: number | "none" | null, codes: string[] | null = null) => {
+      limited = retryAfter;
+      limitedCodes = codes;
+    },
   };
 }
 
@@ -93,8 +126,12 @@ afterEach(async () => {
 
 async function setup(options: { db?: Database; origin?: string | null; relay?: ReturnType<typeof fakeRelay>; codes?: string[] } = {}) {
   const db = options.db ?? openDb(":memory:");
+  // The wall clock, and the monotonic one that says when to ask. They move
+  // together unless a spec steps the wall clock on its own.
   let nowMs = START_MS;
+  let clockMs = 0;
   const now = () => nowMs;
+  const clock = () => clockMs;
   const relay = options.relay ?? fakeRelay(() => Math.floor(nowMs / 1000));
   const logs: string[] = [];
   const log = (_level: "info" | "warn", message: string) => void logs.push(message);
@@ -107,7 +144,7 @@ async function setup(options: { db?: Database; origin?: string | null; relay?: R
   installLegatoIdentity(db, identity);
   const codes = options.codes ?? ["AAAA-AAAA", "BBBB-BBBB", "CCCC-CCCC", "DDDD-DDDD"];
   const setupCodes = new SetupCodes({ now, generate: () => codes.shift()! });
-  const claims = new ServerClaims({ setupCodes, identity: () => identity, now, log });
+  const claims = new ServerClaims({ setupCodes, identity: () => identity, now, clock, log });
 
   const app = Fastify();
   await app.register(cookie);
@@ -148,6 +185,10 @@ async function setup(options: { db?: Database; origin?: string | null; relay?: R
     createOwner,
     linkedAccount,
     advance: (ms: number) => {
+      nowMs += ms;
+      clockMs += ms;
+    },
+    stepWallClock: (ms: number) => {
       nowMs += ms;
     },
   };
@@ -234,17 +275,150 @@ describe("when the server asks legato.fm", () => {
     const h = await setup();
     h.relay.goDown();
     for (let i = 0; i < 3; i++) {
-      expect(await h.view()).toEqual({ state: "waiting", unreachable: true });
+      expect(await h.view()).toEqual({ state: "waiting", unreachable: true, busy: false });
       h.advance(5_000);
     }
     expect(h.logs.filter((line) => line.includes("couldn't reach"))).toHaveLength(1);
   });
 });
 
+// Issue #324: legato.fm answers 429 when something on this server's network
+// has asked about too many codes nobody claimed.
+describe("when legato.fm says to wait", () => {
+  it("waits as long as it says, says on /setup that legato.fm is busy, and logs it once", async () => {
+    const h = await setup();
+    h.relay.limit(30);
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: true });
+    expect(h.relay.exchanges()).toHaveLength(1);
+
+    // Check-ins every five seconds, and no asking until the thirty are up.
+    for (let t = 5_000; t < 30_000; t += 5_000) {
+      h.advance(5_000);
+      await h.checkIn();
+    }
+    expect(h.relay.exchanges()).toHaveLength(1);
+    h.advance(5_000);
+    expect(await h.view()).toMatchObject({ busy: true });
+    expect(h.relay.exchanges()).toHaveLength(2);
+
+    // Still a 429: still busy, and no second log line.
+    h.advance(30_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(3);
+    expect(h.logs.filter((line) => line.includes("busy"))).toEqual([
+      "legato.fm: busy, so checking for a claim again in 30 s (something on this network asked about too many codes nobody claimed)",
+    ]);
+    expect(h.logs.filter((line) => line.includes("refused"))).toEqual([]);
+
+    // Over: a claim made meanwhile is picked up as usual.
+    h.relay.limit(null);
+    h.relay.claim("AAAA-AAAA");
+    h.advance(30_000);
+    expect(await h.view()).toMatchObject({ state: "claimed", account: { name: "Rowan" } });
+  });
+
+  it("never shows a 429 as a refusal, and stops saying busy once legato.fm answers", async () => {
+    const h = await setup();
+    h.relay.limit(10);
+    expect((await h.view()).state).toBe("waiting");
+    h.relay.limit(null);
+    h.advance(10_000);
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: false });
+  });
+
+  it("waits a minute when it isn't told how long, and never more than that", async () => {
+    const h = await setup();
+    h.relay.limit("none");
+    await h.checkIn();
+    h.advance(55_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(1);
+    h.advance(5_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(2);
+
+    h.relay.limit(15 * 60);
+    h.advance(60_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(3);
+    h.advance(60_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(4);
+  });
+
+  // Issue #324, review: legato.fm answers a code claimed for this server
+  // whatever its limiter says, so a minute is all a claim made meanwhile
+  // waits. Waiting out a fifteen-minute lockout would outlast the claim.
+  it("picks up a claim made while it waits, within a minute", async () => {
+    const h = await setup();
+    h.relay.limit(15 * 60);
+    expect(await h.view()).toMatchObject({ busy: true });
+    h.advance(10_000);
+    h.relay.claim("AAAA-AAAA");
+    h.advance(45_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(1);
+    h.advance(5_000);
+    expect(await h.view()).toMatchObject({ state: "claimed", account: { name: "Rowan" } });
+  });
+
+  // Issue #324, review: a 429 on the new code used to stop the poll before
+  // it asked about the old one, and the claim of it was lost.
+  it("keeps asking about the code it just replaced while it waits on the new one", async () => {
+    const h = await setup();
+    await h.checkIn();
+    h.advance(10 * 60_000);
+    // The new code is new to legato.fm, which holds it back for 15 minutes.
+    h.relay.limit(15 * 60, ["BBBB-BBBB"]);
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: true });
+    expect(h.relay.exchanges().map((call) => call.body!.code)).toEqual(["AAAA-AAAA", "BBBB-BBBB", "AAAA-AAAA"]);
+
+    // A phone that scanned the old code claims it 30 seconds later.
+    h.advance(30_000);
+    h.relay.claim("AAAA-AAAA");
+    h.advance(5_000);
+    expect(await h.view()).toMatchObject({ state: "claimed", account: { name: "Rowan" } });
+    // The new code was held back all along.
+    expect(h.relay.exchanges().filter((call) => call.body!.code === "BBBB-BBBB")).toHaveLength(1);
+  });
+
+  // Issue #324, review: a Pi has no clock until NTP sets it, and a step back
+  // used to stop it asking for as long as the step.
+  it("keeps time by a clock the wall clock can't move", async () => {
+    const h = await setup();
+    h.relay.limit(30);
+    await h.checkIn();
+    h.stepWallClock(-60 * 60_000);
+    h.advance(30_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(2);
+    h.stepWallClock(-60 * 60_000);
+    h.advance(5_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(2);
+    h.relay.limit(null);
+    h.advance(25_000);
+    await h.checkIn();
+    expect(h.relay.exchanges()).toHaveLength(3);
+  });
+
+  // Issue #324, review: /setup used to show a notice left from before.
+  it("says it's busy rather than what happened to an earlier claim", async () => {
+    const h = await setup();
+    h.relay.expire("AAAA-AAAA");
+    expect(await h.view()).toEqual({ state: "expired" });
+    h.relay.limit(30);
+    h.advance(5_000);
+    // An expired code would be answered as one anyway; this is a new one.
+    h.setupCodes.replace();
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: true });
+  });
+});
+
 describe("a claim", () => {
   it("shows whose account it is, with the email masked", async () => {
     const h = await setup();
-    expect(await h.view()).toEqual({ state: "waiting", unreachable: false });
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: false, busy: false });
     h.relay.claim("AAAA-AAAA");
     h.advance(5_000);
     const claim = await h.view();
@@ -287,7 +461,7 @@ describe("a claim", () => {
     expect(h.linkedAccount()).toBeNull();
     expect(h.relay.reports()).toEqual([]);
     expect(readTunnelCredential(h.db, TEST_ISSUER)).toBeNull();
-    expect(h.claims.view()).toEqual({ state: "waiting", unreachable: false });
+    expect(h.claims.view()).toEqual({ state: "waiting", unreachable: false, busy: false });
   });
 
   it("refuses an account id that isn't the claim's, and creates and links nobody", async () => {
@@ -343,7 +517,7 @@ describe("a claim", () => {
 
     // The same database, a new process: a new claims object and code store.
     const restarted = await setup({ db: h.db, relay: h.relay, codes: ["EEEE-EEEE"] });
-    expect(await restarted.view()).toEqual({ state: "waiting", unreachable: false });
+    expect(await restarted.view()).toEqual({ state: "waiting", unreachable: false, busy: false });
     expect(readTunnelCredential(h.db, TEST_ISSUER)).toBeNull();
     expect((await restarted.createOwner({ linkAccountId: "7" })).json().reason).toBe("claim_no_claim");
     expect(h.relay.reports()).toEqual([]);
@@ -364,18 +538,40 @@ describe("a claim", () => {
   });
 });
 
-describe("a code someone else got to first", () => {
-  it("is replaced when legato.fm says it was used, and /setup says why", async () => {
+// Issue #324: legato.fm keeps a claim for the server its QR names, so only
+// this server can spend it, and it answers this server again while the
+// claim lasts.
+describe("a claim whose answer was lost", () => {
+  it("is picked up the next time the server asks, with the same token", async () => {
+    const h = await setup();
+    h.relay.claim("AAAA-AAAA");
+    h.relay.loseNextAnswer();
+    expect(await h.view()).toEqual({ state: "waiting", unreachable: true, busy: false });
+    h.advance(5_000);
+    expect(await h.view()).toMatchObject({ state: "claimed", account: { id: "7", name: "Rowan" } });
+    expect(h.relay.exchanges().map((call) => call.body!.code)).toEqual(["AAAA-AAAA", "AAAA-AAAA"]);
+
+    const res = await h.createOwner({ linkAccountId: "7" });
+    expect(res.json().legato).toEqual({ linked: { accountId: "7", email: "rowan@example.com", name: "Rowan" } });
+  });
+
+  it("gets a new code once the claim has run out, and never says it was another server's", async () => {
     const h = await setup();
     h.relay.use("AAAA-AAAA");
     expect(await h.view()).toEqual({ state: "used" });
     expect(h.setupCodes.current().code).toBe("BBBB-BBBB");
     const body = (await h.checkIn()).json();
     expect(body.code).toBe("BBBB-BBBB");
-    expect(body.claimUrl).toBe(`${TEST_ISSUER}/claim?code=BBBB-BBBB`);
+    expect(body.claimUrl).toBe(`${TEST_ISSUER}/claim?code=BBBB-BBBB&server=${h.identity.serverId()}`);
+    expect(h.logs).toContain(
+      "legato.fm: the answer to a claim of this setup code never got here, and the claim has run out, so nothing was linked; the code's been replaced",
+    );
+    expect(h.logs.join("\n")).not.toContain("different server");
   });
+});
 
-  it("says a claim of the code expired before this page picked it up", async () => {
+describe("a claim that ran out before anything asked", () => {
+  it("says so on /setup", async () => {
     const h = await setup();
     h.relay.expire("AAAA-AAAA");
     expect(await h.view()).toEqual({ state: "expired" });
@@ -386,7 +582,28 @@ describe("the claim URL", () => {
   it("is legato.fm/claim for legato.fm itself", async () => {
     const h = await setup({ origin: "https://auth.legato.fm" });
     h.relay.goDown();
-    expect((await h.checkIn()).json().claimUrl).toBe("https://legato.fm/claim?code=AAAA-AAAA");
+    expect((await h.checkIn()).json().claimUrl).toBe(`https://legato.fm/claim?code=AAAA-AAAA&server=${h.identity.serverId()}`);
+  });
+
+  // Issue #324: legato.fm keeps the claim for the server the QR names, so
+  // only this server can pick it up.
+  it("names this server, by the id its key makes", async () => {
+    const h = await setup();
+    const url = new URL((await h.checkIn()).json().claimUrl);
+    expect(url.searchParams.get("server")).toBe(h.identity.serverId());
+    expect(url.searchParams.get("server")).toMatch(/^[0-9a-f]{32}$/);
+    expect(serverIdForPublicKey(h.relay.exchanges()[0]!.body!.publicKey as string)).toBe(h.identity.serverId());
+  });
+});
+
+// Issue #324, review: /setup checks in every three seconds, and the id never
+// changes once the server has started.
+describe("the server id", () => {
+  it("is read once, not on every check-in", async () => {
+    const h = await setup();
+    const id = h.identity.serverId();
+    h.db.prepare("UPDATE server_identity SET server_id = ? WHERE id = 1").run("f".repeat(32));
+    expect(new URL((await h.checkIn()).json().claimUrl).searchParams.get("server")).toBe(id);
   });
 });
 

@@ -255,7 +255,7 @@ export function acceptUnlinkProof(
 
 export type ClaimProofFailure = "malformed" | "bad_signature" | "stale";
 
-export type ClaimProof = { ok: true; code: string; serverId: string } | { ok: false; reason: ClaimProofFailure };
+export type ClaimProof = { code: string; serverId: string; publicKey: string; signature: string; issuedAt: number };
 
 // A server redeeming a pairing code at /pair/exchange (issue #237). Holding
 // a code doesn't prove you're the server showing it: the code is on a
@@ -267,19 +267,24 @@ export type ClaimProof = { ok: true; code: string; serverId: string } | { ok: fa
 // unlink proof. A copy replayed in that window can spend the code, but all
 // it gets back is a link token for this server's id, which is only good in a
 // report this server's key signs.
-export function checkClaimProof(
-  issuer: string,
+//
+// Reading a proof checks only its shape and time, which cost nothing: what
+// code, and which server it says it's from. Whether that server signed it
+// is claimProofSigned's question, and routes/pair.ts asks it only about a
+// code claimed for that server (issue #324).
+export function readClaimProof(
   body: Record<string, unknown> | null | undefined,
   nowSeconds = Math.floor(Date.now() / 1000),
-): ClaimProof {
+): { ok: true; proof: ClaimProof } | { ok: false; reason: Exclude<ClaimProofFailure, "bad_signature"> } {
   const code = normalizeCode(body?.code);
   const { publicKey, signature, issuedAt } = body ?? {};
   if (!code || typeof publicKey !== "string" || typeof signature !== "string") return { ok: false, reason: "malformed" };
   if (typeof issuedAt !== "number" || !Number.isSafeInteger(issuedAt)) return { ok: false, reason: "malformed" };
   if (Math.abs(nowSeconds - issuedAt) > UNLINK_PROOF_WINDOW_SECONDS) return { ok: false, reason: "stale" };
-  const serverId = serverIdForPublicKey(publicKey);
-  if (!verifyServerSignature(publicKey, claimProofMessage({ issuer, serverId, code, issuedAt }), signature)) {
-    return { ok: false, reason: "bad_signature" };
-  }
-  return { ok: true, code, serverId };
+  return { ok: true, proof: { code, serverId: serverIdForPublicKey(publicKey), publicKey, signature, issuedAt } };
+}
+
+export function claimProofSigned(issuer: string, proof: ClaimProof): boolean {
+  const { code, serverId, publicKey, signature, issuedAt } = proof;
+  return verifyServerSignature(publicKey, claimProofMessage({ issuer, serverId, code, issuedAt }), signature);
 }

@@ -16,6 +16,10 @@ try {
 
 export const PORT = Number(process.env.RELAY_PORT ?? 8901);
 
+// Fly sets FLY_APP_NAME on every machine it runs. Only there does its proxy
+// stand in front of this service and write Fly-Client-IP (rate-limit.ts).
+export const ON_FLY = Boolean(process.env.FLY_APP_NAME);
+
 // Only matters when running this service outside whatever container/host
 // sets its own persistent volume path — real deployment default
 // resolution is that host's job, the same platform split as server/'s

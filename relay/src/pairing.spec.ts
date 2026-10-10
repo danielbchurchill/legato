@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "./sqlite.js";
 import { upsertUser } from "./accounts.js";
 import { openDb } from "./db.js";
-import { mintPairingCode, mintTunnelCredential, redeemPairingCode, tunnelCredentialHolder } from "./pairing.js";
+import { claimServerCode, mintTunnelCredential, redeemPairingCode, tunnelCredentialHolder } from "./pairing.js";
 
 let db: Database;
 let userId: number;
@@ -15,26 +15,6 @@ beforeEach(() => {
     displayName: null,
     avatarUrl: null,
   }).id;
-});
-
-describe("mintPairingCode", () => {
-  it("mints a code tied to the given account, expiring in the future", () => {
-    const { code, expiresAt } = mintPairingCode(db, userId);
-
-    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
-    expect(expiresAt.getTime()).toBeGreaterThan(Date.now());
-
-    const row = db.prepare("SELECT relay_user_id, used_at FROM pairing_codes WHERE code = ?").get(code) as {
-      relay_user_id: number;
-      used_at: string | null;
-    };
-    expect(row.relay_user_id).toBe(userId);
-    expect(row.used_at).toBeNull();
-  });
-
-  it("produces a different code on every call", () => {
-    expect(mintPairingCode(db, userId).code).not.toBe(mintPairingCode(db, userId).code);
-  });
 });
 
 describe("mintTunnelCredential", () => {
@@ -72,55 +52,93 @@ describe("tunnelCredentialHolder", () => {
 });
 
 describe("redeemPairingCode", () => {
+  const SERVER_ID = "0123456789abcdef0123456789abcdef";
+  const OTHER_SERVER_ID = "fedcba9876543210fedcba9876543210";
+
+  // Stands in for signing the link token: a new one on every call.
+  let signed = 0;
+  beforeEach(() => {
+    signed = 0;
+  });
+  const issue = (relayUserId: number) => `token-${relayUserId}-${++signed}`;
+  const redeem = (code: string, serverId = SERVER_ID) => redeemPairingCode(db, code, serverId, issue);
+
+  // A code the account claimed for SERVER_ID, as the claim page does.
+  function claimed(code = "K7QM-4XRD"): string {
+    const result = claimServerCode(db, userId, code, SERVER_ID);
+    if (!result.ok) throw new Error(result.reason);
+    return result.code;
+  }
+
   // Issue #237: the credential comes with the link the server reports
   // afterwards (linked-servers.ts), so redeeming mints none.
-  it("marks the code used and says whose it was, minting no credential", () => {
-    const { code } = mintPairingCode(db, userId);
+  it("marks the code used, keeps the token it signed for whoever claimed it, and mints no credential", () => {
+    const code = claimed();
 
-    const result = redeemPairingCode(db, code);
+    const result = redeem(code);
 
-    expect(result).toEqual({ ok: true, relayUserId: userId });
+    expect(result).toEqual({ ok: true, relayUserId: userId, linkToken: `token-${userId}-1`, again: false });
+    expect(db.prepare("SELECT link_token FROM pairing_codes WHERE code = ?").get(code)).toEqual({ link_token: `token-${userId}-1` });
     const row = db.prepare("SELECT used_at FROM pairing_codes WHERE code = ?").get(code) as { used_at: string | null };
     expect(row.used_at).not.toBeNull();
     expect(db.prepare("SELECT COUNT(*) AS n FROM tunnel_credentials").get()).toEqual({ n: 0 });
   });
 
   it("accepts the code the way a person types it", () => {
-    const { code } = mintPairingCode(db, userId);
+    const code = claimed("K0QM-4X1D");
     // Lowercase, no dash, and every 0 and 1 typed as the letter it looks like.
     const typed = code.replace("-", "").toLowerCase().replace(/0/g, "o").replace(/1/g, "l");
 
-    expect(redeemPairingCode(db, typed).ok).toBe(true);
+    expect(redeem(typed).ok).toBe(true);
   });
 
-  it("draws again when a new code clashes with a stored one", () => {
+  // Issue #324: a code claimed for one server is nobody's to any other.
+  it("answers any other server, about any code not bound to it, as if there were no such code, and spends nothing", () => {
+    const live = claimed("K7QM-4XRD");
+    const spent = claimed("SPNT-0000");
+    redeem(spent);
     db.prepare(
-      "INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES ('K7QM-4XRD', ?, datetime('now', '+10 minutes'))",
-    ).run(userId);
-    const draws = ["K7QM-4XRD", "K7QM-4XRD", "AAAA-BBBB"];
-    const { code } = mintPairingCode(db, userId, () => draws.shift()!);
-    expect(code).toBe("AAAA-BBBB");
+      "INSERT INTO pairing_codes (code, relay_user_id, server_id, expires_at) VALUES ('EXPD-0000', ?, ?, datetime('now', '-1 minute'))",
+    ).run(userId, SERVER_ID);
+    // A row from before #324, or one POST /pair/start minted before #353.
+    const unbound = "NSRV-0000";
+    db.prepare("INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES (?, ?, datetime('now', '+5 minutes'))").run(
+      unbound,
+      userId,
+    );
+
+    for (const code of [live, spent, "EXPD-0000"]) {
+      expect(redeem(code, OTHER_SERVER_ID)).toEqual({ ok: false, reason: "not_found" });
+    }
+    expect(redeem(unbound)).toEqual({ ok: false, reason: "not_found" });
+    const unspent = db.prepare("SELECT code FROM pairing_codes WHERE used_at IS NULL ORDER BY code").all();
+    expect(unspent).toEqual([{ code: "EXPD-0000" }, { code: live }, { code: unbound }].sort((a, b) => a.code.localeCompare(b.code)));
+    expect(redeem(live).ok).toBe(true);
   });
 
   it("rejects a code that was never issued", () => {
-    const result = redeemPairingCode(db, "not-a-real-code");
+    const result = redeem("not-a-real-code");
     expect(result).toEqual({ ok: false, reason: "not_found" });
   });
 
-  it("rejects a code that's already been redeemed", () => {
-    const { code } = mintPairingCode(db, userId);
-    redeemPairingCode(db, code);
+  // Issue #324: the server's first answer may never have reached it.
+  it("answers the server again with the same token while the claim lasts, and says used after", () => {
+    const code = claimed();
+    redeem(code);
+    expect(redeem(code)).toEqual({ ok: true, relayUserId: userId, linkToken: `token-${userId}-1`, again: true });
+    expect(signed).toBe(1);
+    expect(redeem(code, OTHER_SERVER_ID)).toEqual({ ok: false, reason: "not_found" });
 
-    const result = redeemPairingCode(db, code);
-    expect(result).toEqual({ ok: false, reason: "used" });
+    db.prepare("UPDATE pairing_codes SET expires_at = datetime('now', '-1 second') WHERE code = ?").run(code);
+    expect(redeem(code)).toEqual({ ok: false, reason: "used" });
   });
 
   it("rejects an expired code", () => {
     db.prepare(
-      "INSERT INTO pairing_codes (code, relay_user_id, expires_at) VALUES (?, ?, datetime('now', '-1 minute'))",
-    ).run("EXPD-0000", userId);
+      "INSERT INTO pairing_codes (code, relay_user_id, server_id, expires_at) VALUES (?, ?, ?, datetime('now', '-1 minute'))",
+    ).run("EXPD-0000", userId, SERVER_ID);
 
-    const result = redeemPairingCode(db, "EXPD-0000");
+    const result = redeem("EXPD-0000");
     expect(result).toEqual({ ok: false, reason: "expired" });
   });
 });

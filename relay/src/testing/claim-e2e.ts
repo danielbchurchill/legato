@@ -3,6 +3,8 @@
 // picking the claim up while its /setup page checks in, the owner created
 // with the claiming account linked, and a legato.fm `access` token opening
 // the library. No real provider, and nothing sent to auth.legato.fm.
+// Since #324 the QR names the server too, and no other server can redeem
+// its claim.
 //
 // Starts a relay on RELAY_PORT (stubbed GitHub exchange, throwaway
 // RELAY_DATA_DIR, signing key from RELAY_SIGNING_KEYS) and drives a home
@@ -85,13 +87,22 @@ const setup = async () => (await (await fetch(`${API}/auth/setup`)).json()) as S
 await sleep(6_000);
 check(asked() === 0, "nothing asks the relay before a /setup page checks in");
 const shown = await setup();
-check(shown.claimUrl === `${RELAY}/claim?code=${shown.code}`, `the QR opens this relay's claim page (${shown.claimUrl})`);
+check(
+  shown.claimUrl === `${RELAY}/claim?code=${shown.code}&server=${serverId}`,
+  `the QR opens this relay's claim page, for this server (${shown.claimUrl})`,
+);
 await sleep(7_000);
 check(asked() === 1, `one check-in, one exchange, then silence (${asked()})`);
 step("fresh server", `id ${serverId}, code ${shown.code}; 0 exchanges before /setup checked in, 1 after, none once it stopped`);
 
-// 2. The phone: open the claim page, sign in, come back, claim.
-const claimPath = `/claim?code=${encodeURIComponent(shown.code.toLowerCase().replace("-", ""))}`;
+// 2. The phone: open the claim page, sign in, come back, claim. A QR from
+// a server that predates #324 names no server, and gets asked to update.
+const outdated = await fetch(`${RELAY}/claim?code=${shown.code}`);
+check(
+  outdated.status === 400 && (await outdated.text()).includes('data-view="outdated_server"'),
+  "a QR without the server's id asks for the server to be updated",
+);
+const claimPath = `/claim?code=${encodeURIComponent(shown.code.toLowerCase().replace("-", ""))}&server=${serverId}`;
 const signedOut = await (await fetch(`${RELAY}${claimPath}`)).text();
 check(signedOut.includes('data-view="signed_out"'), "a signed-out visitor is asked to sign in");
 const start = await fetch(`${RELAY}/auth/github?return_to=${encodeURIComponent(claimPath)}`, { redirect: "manual" });
@@ -105,7 +116,7 @@ const callback = await fetch(`${RELAY}/auth/github/callback?code=provider-code&s
   headers: { cookie: startCookies },
 });
 check(
-  callback.headers.get("location") === `/claim?code=${shown.code}`,
+  callback.headers.get("location") === `/claim?code=${shown.code}&server=${serverId}`,
   `sign-in comes back to the claim page (${callback.headers.get("location")})`,
 );
 const session = callback.headers
@@ -113,12 +124,20 @@ const session = callback.headers
   .find((c) => c.startsWith("relay_session="))!
   .split(";")[0]!;
 const page = async (cookie = session) =>
-  /data-view="([a-z_]+)"/.exec(await (await fetch(`${RELAY}/claim?code=${shown.code}`, { headers: { cookie } })).text())?.[1];
+  /data-view="([a-z_]+)"/.exec(
+    await (await fetch(`${RELAY}/claim?code=${shown.code}&server=${serverId}`, { headers: { cookie } })).text(),
+  )?.[1];
 check((await page()) === "ready", "signed in, the page offers the claim");
-const claimed = await fetch(`${RELAY}/pair/claim`, {
+const unnamed = await fetch(`${RELAY}/pair/claim`, {
   method: "POST",
   headers: { cookie: session, origin: RELAY, "Content-Type": "application/json" },
   body: JSON.stringify({ code: shown.code }),
+});
+check(unnamed.status === 400, `a claim that doesn't name the server is refused (${unnamed.status})`);
+const claimed = await fetch(`${RELAY}/pair/claim`, {
+  method: "POST",
+  headers: { cookie: session, origin: RELAY, "Content-Type": "application/json" },
+  body: JSON.stringify({ code: shown.code, server: serverId }),
 });
 check(claimed.ok, `the account claims the code (${claimed.status})`);
 check((await page()) === "pending", "the page waits for the server");
@@ -136,10 +155,31 @@ const otherCookie = `relay_session=${createSession(db, other.id).token}`;
 const taken = await fetch(`${RELAY}/pair/claim`, {
   method: "POST",
   headers: { cookie: otherCookie, origin: RELAY, "Content-Type": "application/json" },
-  body: JSON.stringify({ code: shown.code }),
+  body: JSON.stringify({ code: shown.code, server: serverId }),
 });
 check(taken.status === 409 && (await page(otherCookie)) === "taken", "a second account is told it's already claimed");
 step("a second account", `POST /pair/claim ${taken.status}, page "${await page(otherCookie)}"`);
+
+// A server that isn't the one the QR named, with the right code: what a
+// guess would look like if it came up. The same answer as a code nobody
+// claimed, and the claim stays this server's.
+const hostileKey = generateKeyPairSync("ed25519").privateKey;
+const hostilePublic = (createPublicKey(hostileKey).export({ format: "jwk" }) as { x: string }).x;
+const hostile = { serverId: serverIdForPublicKey(hostilePublic), publicKey: hostilePublic, privateKey: hostileKey };
+const exchangeAs = (code: string) =>
+  fetch(`${RELAY}/pair/exchange`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(claimProof(hostile, { issuer: RELAY, code, nowSeconds: Math.floor(Date.now() / 1000) })),
+  });
+const guessed = await exchangeAs(shown.code);
+const nobodys = await exchangeAs(shown.code === "AAAA-AAAA" ? "BBBB-BBBB" : "AAAA-AAAA");
+const guessedBody = await guessed.text();
+check(
+  guessed.status === 404 && guessedBody === (await nobodys.text()) && (await page()) === "pending",
+  `another server can't redeem the claim, and learns nothing from trying (${guessed.status} ${guessedBody})`,
+);
+step("another server with the right code", `${guessed.status} ${guessedBody}, page still "${await page()}"`);
 
 // 4. The /setup page checks in until the server has picked the claim up.
 let view = shown.claim;
@@ -156,16 +196,9 @@ check(
 );
 step("picked up while /setup checked in", `${view.account!.name} (${view.account!.email}), ${asked()} exchange(s) in all`);
 
-// 5. A code redeemed by a different key gets nothing that's this server's.
-const hostileKey = generateKeyPairSync("ed25519").privateKey;
-const hostilePublic = (createPublicKey(hostileKey).export({ format: "jwk" }) as { x: string }).x;
-const hostile = { serverId: serverIdForPublicKey(hostilePublic), publicKey: hostilePublic, privateKey: hostileKey };
-const replay = await fetch(`${RELAY}/pair/exchange`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(claimProof(hostile, { issuer: RELAY, code: shown.code, nowSeconds: Math.floor(Date.now() / 1000) })),
-});
-check(replay.status === 410, "the spent code can't be redeemed again, by anyone");
+// 5. Spent, the code is still nothing to any other server.
+const replay = await exchangeAs(shown.code);
+check(replay.status === 404, "the spent code is still nothing to another server");
 step("a second redemption", `${replay.status} ${((await replay.json()) as { reason: string }).reason}`);
 
 // 6. Create the owner, choosing to link the account /setup showed.

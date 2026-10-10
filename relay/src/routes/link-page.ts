@@ -290,8 +290,8 @@ export function linkPageRoutes(
   const { signingKeys, issuer } = options;
   const ownOrigin = issuer ? new URL(issuer).origin : null;
   // Its own, so wrong link codes never slow anyone's sign-in at /auth/token,
-  // and per address only (see /link/redeem below).
-  const limiter = options.limiter ?? new TokenLimiter(Date.now, { global: false });
+  // and per address only, as every TokenLimiter is (see /link/redeem below).
+  const limiter = options.limiter ?? new TokenLimiter();
 
   return async function routes(app: FastifyInstance) {
     app.get<{ Querystring: LinkQuery }>("/link", async (request, reply) => {
