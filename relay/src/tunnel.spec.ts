@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, setSystemTime } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
@@ -452,6 +452,37 @@ describe("tunnel lifecycle", () => {
       expect(frames.at(-1)).toMatchObject({ type: "auth-error" });
       // Signing in with theirs would have retired the older one.
       expect(credentials(theirs.serverId)).toEqual([older.credential, theirs.credential]);
+    });
+
+    // The review: every auth frame on a signed-in tunnel ran a lookup and a
+    // transaction with a DELETE, as often as a client cared to send one.
+    it("ignores an auth frame that doesn't move the tunnel, and lets it move once a minute", async () => {
+      const { tunnelUrl } = await relay();
+      const account = signIn(db);
+      const { serverId, credential, key } = linkServer(db, account.userId);
+      const second = linkServer(db, account.userId, key).credential;
+      const third = linkServer(db, account.userId, key).credential;
+      const { socket, frames } = await signedInSocket(tunnelUrl, credential);
+      const lookups = spyOn(db, "prepare");
+      const signInLookups = () => lookups.mock.calls.filter(([sql]) => sql.includes("SELECT rowid, relay_user_id, server_id")).length;
+
+      try {
+        for (let i = 0; i < 20; i++) socket.send(JSON.stringify({ type: "auth", secret: credential }));
+        await sleep(100);
+        expect(frames.filter((frame) => frame.type === "auth-ok")).toHaveLength(1);
+        expect(signInLookups()).toBe(0);
+
+        socket.send(JSON.stringify({ type: "auth", secret: second }));
+        await until(() => frames.filter((frame) => frame.type === "auth-ok").length === 2);
+        // Straight after, a move to the third is too soon, and changes nothing.
+        socket.send(JSON.stringify({ type: "auth", secret: third }));
+        await sleep(100);
+        expect(frames.filter((frame) => frame.type === "auth-ok")).toHaveLength(2);
+        expect(signInLookups()).toBe(1);
+        expect(credentials(serverId)).toEqual([second, third]);
+      } finally {
+        lookups.mockRestore();
+      }
     });
 
     // A tunnel that drops partway through: whichever side of the drop the

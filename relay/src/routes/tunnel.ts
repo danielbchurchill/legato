@@ -8,10 +8,13 @@ import type { Tunnel, TunnelRegistry } from "../tunnel-registry.js";
 
 const AUTH_TIMEOUT_MS = 5000;
 
-// How often one connection may ask for a replacement credential. A real
-// server asks about once a month; this only keeps one that asks in a loop
-// from taking the database's write lock for each.
+// How often one connection may ask for a replacement credential, and how
+// often it may move onto one. A real server does each about once a month;
+// this only keeps one that does either in a loop from taking the
+// database's write lock for each.
 const ROTATE_ASK_INTERVAL_MS = 60_000;
+
+const tooSoon = (last: Date | undefined, now: Date) => last !== undefined && now.getTime() - last.getTime() < ROTATE_ASK_INTERVAL_MS;
 
 // How often the relay pings every tunnel, checks its credential again, and
 // notes that it's still there (migration 0007). A tunnel that misses one
@@ -169,8 +172,13 @@ export function tunnelRoutes(registry: TunnelRegistry, db: Database, options: { 
 
           tunnel.alive = true;
           tunnel.lastHeardAt = new Date();
+          // Only a move to a different credential, and not straight after
+          // the last: anything else is ignored before it costs a lookup.
           if (frame.type === "auth") {
             const credential = typeof frame.secret === "string" ? frame.secret : "";
+            const now = new Date();
+            if (credential === tunnel.credential || tooSoon(tunnel.movedAt, now)) return;
+            tunnel.movedAt = now;
             if (!moveOnto(db, tunnel, credential)) {
               registry.drop(tunnel.serverId, socket);
               closing = true;
@@ -182,7 +190,7 @@ export function tunnelRoutes(registry: TunnelRegistry, db: Database, options: { 
           }
           if (frame.type === "rotate") {
             const now = new Date();
-            if (tunnel.rotateAskedAt && now.getTime() - tunnel.rotateAskedAt.getTime() < ROTATE_ASK_INTERVAL_MS) return;
+            if (tooSoon(tunnel.rotateAskedAt, now)) return;
             tunnel.rotateAskedAt = now;
             sendReplacementCredential(app, db, options.issuer, tunnel, frame);
             return;
