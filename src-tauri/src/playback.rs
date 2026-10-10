@@ -380,7 +380,19 @@ fn open_source(path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError>
   // buffer, because decode's reads are still synchronous with the
   // network. This background-prefetches instead.
   let reader = NetworkAheadReader::new(file).map_err(|e| classify_open_error(path, &e))?;
-  Decoder::new(reader).map_err(|e| PlaybackError::Undecodable { path: path.to_string(), detail: e.to_string() })
+  decode(reader, path)
+}
+
+// With the length, symphonia seeks by byte offset in either direction.
+// Without it, it treats the source as forward-only: a seek back failed with
+// RandomAccessNotSupported, and the scrubber only ever moved forward.
+fn decode(reader: NetworkAheadReader, path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError> {
+  let len = reader.shared.len;
+  Decoder::builder()
+    .with_data(reader)
+    .with_byte_len(len)
+    .build()
+    .map_err(|e| PlaybackError::Undecodable { path: path.to_string(), detail: e.to_string() })
 }
 
 // Pure gapless-repeat scheduling core — given how many tracks have
@@ -979,6 +991,41 @@ mod tests {
     let err = open_source(path.to_str().unwrap()).err().unwrap();
 
     assert!(matches!(err, PlaybackError::Undecodable { .. }), "got {err:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  // A 16-bit stereo PCM WAV of `seconds` of silence: the smallest real audio
+  // file symphonia decodes, written without an encoder.
+  fn wav_bytes(seconds: u32) -> Vec<u8> {
+    let (rate, channels, bytes_per_sample) = (44_100u32, 2u16, 2u16);
+    let data_len = rate * seconds * u32::from(channels * bytes_per_sample);
+    let mut wav = Vec::with_capacity(44 + data_len as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&rate.to_le_bytes());
+    wav.extend_from_slice(&(rate * u32::from(channels * bytes_per_sample)).to_le_bytes());
+    wav.extend_from_slice(&(channels * bytes_per_sample).to_le_bytes());
+    wav.extend_from_slice(&(bytes_per_sample * 8).to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.resize(44 + data_len as usize, 0);
+    wav
+  }
+
+  #[test]
+  fn open_source_seeks_back_as_well_as_forward() {
+    let dir = scratch_dir("seek");
+    let path = dir.join("01.wav");
+    std::fs::write(&path, wav_bytes(10)).unwrap();
+
+    let mut source = open_source(path.to_str().unwrap()).unwrap();
+
+    source.try_seek(Duration::from_secs(8)).expect("seek forward");
+    source.try_seek(Duration::from_secs(2)).expect("seek back");
     std::fs::remove_dir_all(&dir).unwrap();
   }
 
