@@ -23,7 +23,9 @@ While walking through it, also confirm on the real NAS, and fix the text if
 it's wrong: the relative ./data bind mount resolves inside the project folder;
 "Action → View Result" exists in Task Scheduler; the Image tab offers an
 update for a :latest image; Project → Action → Stop, edit the YAML, Action →
-Build recreates the container with the edited file. Record the NAS model and DSM version in the PR.
+Build recreates the container with the edited file; network_mode: host builds,
+the server answers on the NAS's port 8899, and the desktop app lists it under
+"on this network" with its LEGATO_SERVER_NAME. Record the NAS model and DSM version in the PR.
 -->
 
 # Installing Legato on a Synology NAS
@@ -205,6 +207,29 @@ Signed in, open Legato's library settings and add a folder. The picker shows the
 > **[Screenshot 11: `11-add-music.png`]** The add-folder picker with `/music` listed.
 
 To add a second share later, add another line under `volumes:` (`- /volume2/more-music:/more-music:ro`), give the Legato user Read only on that share as in step 4, and rebuild the project (**Action → Stop**, then **Action → Build**). The new folder then shows up in the picker.
+
+## Appearing on the connect screen
+
+Legato's desktop app lists the servers it finds under **on this network** on its connect screen, so nobody has to type the NAS's address. The server announces itself over mDNS, but on Container Manager's default bridge network that announcement stays on Docker's internal network, where other devices can't hear it. With the project as written in step 6, you connect by address.
+
+Container Manager accepts host networking in a project's compose file, which puts the container on the NAS's own network. **Project → legato → Action → Stop**, then in the YAML replace the `ports:` block with `network_mode: host`, and give the server a name:
+
+```yaml
+    container_name: legato
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PUID: "1027"
+      PGID: "100"
+      LEGATO_SERVER_NAME: "DiskStation"
+```
+
+then **Action → Build**. Host networking changes two things:
+
+- **There's no `ports:` mapping.** The server listens on the NAS's own network, so there's nothing to publish.
+- **`LEGATO_PORT` takes the place of the left-hand port number.** The server listens on 8899 on the NAS itself. If that's taken, add `LEGATO_PORT: "8900"` under `environment:` and use that port everywhere this guide says 8899.
+
+`LEGATO_SERVER_NAME` is the name the apps show for this server, whichever network it's on. Without it, they show the container's hostname: a random id on the bridge network, or the NAS's own name with host networking.
 
 ## Updating
 

@@ -13,6 +13,9 @@ services:
       # both numbers. The server runs as this user, never as root.
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
+      # The name Legato's apps show for this server. Without it, they show
+      # the container's hostname: a random id on Docker's default network.
+      # LEGATO_SERVER_NAME: "Living room"
     ports:
       - "${LEGATO_HOST_PORT:-8899}:8899"
     volumes:

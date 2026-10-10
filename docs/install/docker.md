@@ -45,6 +45,29 @@ Legato can only see folders mounted into its container, so the folder picker lis
 
 then `docker compose up -d` to recreate the container. The new folder shows up in the picker straight away; add it there like the first one.
 
+## Appearing on the connect screen
+
+Legato's desktop app lists the servers it finds under **on this network** on its connect screen, so nobody has to type an address. The server announces itself over mDNS, but on Docker's default bridge network that announcement stays on Docker's internal network, where other devices can't hear it. With the compose file as it comes, the server works, but you connect to it by address.
+
+To be listed, the container needs the host's network. In `docker-compose.yml`, replace the `ports:` block with `network_mode: host`:
+
+```yaml
+    network_mode: host
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      LEGATO_SERVER_NAME: "Living room"
+```
+
+then `docker compose up -d` to recreate the container. Host networking changes two things:
+
+- **There's no `ports:` mapping.** The server listens on the host's own network, so Docker has nothing to publish.
+- **`LEGATO_PORT` takes the place of `LEGATO_HOST_PORT`.** The server listens on 8899 on the host itself. If that's taken, set `LEGATO_PORT: "8900"` under `environment:`. `LEGATO_HOST_PORT` no longer does anything.
+
+Host networking needs Docker Engine on Linux: a NAS, a Raspberry Pi, any Linux machine. Docker Desktop (on macOS, Windows or Linux) runs containers inside a virtual machine, so even with host networking the container isn't on your network and the connect screen can't find it. Connect by address there.
+
+Name the server with `LEGATO_SERVER_NAME`, whichever network it's on. The compose file has the line, commented out. Without it, the apps show the container's hostname: a random id like `15f18b3fbcac` on the bridge network, or the host's own name with host networking.
+
 ## Tag write-back needs a read-write library
 
 The library is mounted `:ro`, so Legato can't change a single byte of your music, even by mistake. Scanning, playback, enrichment and the hygiene worklist all work read-only. Only the tag write-back feature writes to files: it saves corrected tags back into your FLACs. With the `:ro` mount, a write-back fails with a read-only filesystem error and leaves the file untouched.
