@@ -333,6 +333,12 @@ const CORS_ROUTES = new Map<string, string[]>([
   ["/linked-servers", ["GET"]],
   ["/linked-servers/:serverId", ["DELETE"]],
 ]);
+
+// Loopback origins are allowed in production too, on purpose:
+// `npx tauri dev`'s webview is on http://localhost:5173 and talks to
+// auth.legato.fm. That lets any page on any local port make these calls,
+// but every one of them still needs the account's bearer token, which a
+// page on another local port doesn't have.
 const LOOPBACK_DEV_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/;
 
 export function isAllowedAppOrigin(origin: string | undefined): boolean {
