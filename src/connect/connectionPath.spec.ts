@@ -49,6 +49,16 @@ describe('connection path', () => {
     storage.setItem('legato:server-choice', 'https://music.example.com')
     expect((await load()).getConnectionPath()).toBe('custom')
 
+    // Daniel's Mac reaches the Pi at its Tailscale address.
+    storage.setItem('legato:server-choice', 'http://100.101.102.103:8899')
+    expect((await load()).getConnectionPath()).toBe('home')
+
+    storage.setItem('legato:server-choice', 'http://musicbox:8899')
+    expect((await load()).getConnectionPath()).toBe('home')
+
+    storage.setItem('legato:server-choice', 'https://musicbox.tail1234.ts.net')
+    expect((await load()).getConnectionPath()).toBe('home')
+
     storage.setItem('legato:server-choice', `https://auth.legato.fm/relay/${ID}`)
     const relayed = await load()
     expect(relayed.SERVER_ORIGIN).toBe(`https://auth.legato.fm/relay/${ID}`)

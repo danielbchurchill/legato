@@ -30,7 +30,7 @@ export function pathSentence(path: ServerPath, name: string | null): string {
     case 'relay':
       return `Connected to ${server} over the internet, through legato.fm's relay.`
     case 'custom':
-      return `Connected to ${server} directly, at an address that works away from home too, such as a Tailscale address or a domain.`
+      return `Connected to ${server} directly, at an address that works away from home too, such as a domain.`
   }
 }
 

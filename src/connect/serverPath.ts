@@ -16,11 +16,12 @@ export type ServerPath =
   | 'embedded'
   /** Something else on this computer: a server run by hand, a dev setup. */
   | 'this-device'
-  /** An address that only works on the local network (address.ts). */
+  /** The home network, or what stands in for it (isHomeHost below): a LAN
+   * address, a dotless name, or a Tailscale address. */
   | 'home'
   /** legato.fm's relay, down the server's tunnel (relay/src/routes/relay.ts). */
   | 'relay'
-  /** Anything else: a Tailscale address, a domain. */
+  /** Anything else: a domain, a public address. */
   | 'custom'
 
 // The relay's route to one server. Everything under /relay/<server id>
@@ -46,6 +47,32 @@ export function relayedServerId(base: string, relayOrigin: string = RELAY_ORIGIN
   }
 }
 
+// Tailscale gives every device an address in 100.64.0.0/10.
+const TAILSCALE_V4 = /^100\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/
+
+/** True for a host the connection path counts as the home network: what
+ * isLanHost says (an address that only works on the local network), plus
+ * two kinds that reach a server at home from wherever this device is.
+ *   - A name with no dot (`musicbox`): a LAN's own DNS, or Tailscale's
+ *     MagicDNS, almost always for a server at home.
+ *   - Tailscale: an address in 100.64.0.0/10, or a `*.ts.net` name. A
+ *     tailnet is how people reach their own server at home, so it streams
+ *     the original, as the LAN does (quality.ts).
+ * Not isLanHost itself: its other caller, knownServers.ts, means an
+ * address that only works at home, which a tailnet's doesn't. */
+export function isHomeHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '').toLowerCase()
+  if (isLanHost(h)) return true
+  if (h.endsWith('.ts.net')) return true
+  const tailscale = TAILSCALE_V4.exec(h)
+  if (tailscale) {
+    const second = Number(tailscale[1])
+    return second >= 64 && second <= 127
+  }
+  // A dotless name. An IPv6 address has colons and no dots, so it's left out.
+  return h !== '' && !h.includes('.') && !h.includes(':')
+}
+
 /** Which path `base` is. `embedded` says the desktop app started the
  * server at that base itself. The relay comes first, since a dev relay on
  * this computer is still the relay. */
@@ -53,7 +80,7 @@ export function pathFor(base: string, embedded: boolean, relayOrigin: string = R
   if (relayedServerId(base, relayOrigin) !== null) return 'relay'
   const host = new URL(base).hostname
   if (isLoopbackHost(host)) return embedded ? 'embedded' : 'this-device'
-  return isLanHost(host) ? 'home' : 'custom'
+  return isHomeHost(host) ? 'home' : 'custom'
 }
 
 /** The store's path for a ServerPath. */

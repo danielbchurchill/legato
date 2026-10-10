@@ -21,7 +21,9 @@ describe('the path', () => {
     }
     expect(pathSentence('home', 'musicbox')).toBe('Connected to musicbox directly, on your home network.')
     expect(pathSentence('relay', null)).toBe("Connected to your server over the internet, through legato.fm's relay.")
-    expect(pathSentence('custom', 'musicbox')).toContain('Tailscale')
+    expect(pathSentence('custom', 'musicbox')).toBe(
+      'Connected to musicbox directly, at an address that works away from home too, such as a domain.',
+    )
   })
 })
 

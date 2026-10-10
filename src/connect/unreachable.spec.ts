@@ -165,6 +165,18 @@ describe('describeOutage', () => {
     expect(describeOutage('network-changed', ctx).why).toContain('only works on your home network')
     expect(describeOutage('network-changed', { ...ctx, path: 'custom' }).hint).toContain('Tailscale')
   })
+
+  // #118 counts these as the home network, but they work from anywhere
+  // Tailscale or the name resolves, so a change of network doesn't explain
+  // them away.
+  it("doesn't say a Tailscale address or a dotless name only works at home", () => {
+    for (const host of ['100.101.102.103:8899', 'musicbox.tail1234.ts.net', 'musicbox:8899']) {
+      const copy = describeOutage('network-changed', { ...ctx, host, name: null })
+      expect(copy.why).not.toContain('only works on your home network')
+      expect(copy.hint).toContain('Tailscale')
+    }
+    expect(describeOutage('network-changed', { ...ctx, host: '[fd12:3456::1]:8899' }).why).toContain('only works on your home network')
+  })
 })
 
 describe('outageFooter', () => {

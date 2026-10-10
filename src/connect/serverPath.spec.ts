@@ -1,7 +1,8 @@
 // Issue #118: the path a client takes to its server, read off the base its
 // requests go to.
 import { describe, expect, it } from 'vitest'
-import { connectionPathOf, pathFor, relayBase, relayedServerId, serverPathOf } from './serverPath'
+import { connectionPathOf, isHomeHost, pathFor, relayBase, relayedServerId, serverPathOf } from './serverPath'
+import { isLanHost } from './address'
 import { clearServerChoice, readServerChoice, storeServerChoice } from './serverChoice'
 
 const RELAY = 'https://auth.legato.fm'
@@ -30,8 +31,34 @@ describe('pathFor', () => {
     expect(pathFor('http://192.168.1.20:8899', false, RELAY)).toBe('home')
     expect(pathFor('http://musicbox.local:8899', false, RELAY)).toBe('home')
     expect(pathFor('http://[fd12:3456::1]:8899', false, RELAY)).toBe('home')
-    expect(pathFor('http://100.101.102.103:8899', false, RELAY)).toBe('custom')
     expect(pathFor('https://music.example.com', false, RELAY)).toBe('custom')
+    expect(pathFor('http://203.0.113.7:8899', false, RELAY)).toBe('custom')
+  })
+
+  // What reaches a server at home from anywhere counts as home, so it
+  // streams the original (quality.ts).
+  it('counts a dotless name as the home network', () => {
+    expect(pathFor('http://musicbox:8899', false, RELAY)).toBe('home')
+    expect(pathFor('http://MusicBox:8899', false, RELAY)).toBe('home')
+  })
+
+  it('counts a Tailscale address as the home network', () => {
+    expect(pathFor('http://100.64.0.1:8899', false, RELAY)).toBe('home')
+    expect(pathFor('http://100.101.102.103:8899', false, RELAY)).toBe('home')
+    expect(pathFor('http://100.127.255.254:8899', false, RELAY)).toBe('home')
+    // Tailscale's IPv6 range is unique-local, which was home already.
+    expect(pathFor('http://[fd7a:115c:a1e0::1]:8899', false, RELAY)).toBe('home')
+    // Either side of 100.64.0.0/10 is an ordinary public address.
+    expect(pathFor('http://100.63.255.255:8899', false, RELAY)).toBe('custom')
+    expect(pathFor('http://100.128.0.1:8899', false, RELAY)).toBe('custom')
+  })
+
+  it('counts a Tailscale MagicDNS name as the home network', () => {
+    expect(pathFor('http://musicbox.tail1234.ts.net:8899', false, RELAY)).toBe('home')
+    expect(pathFor('https://musicbox.tail1234.ts.net', false, RELAY)).toBe('home')
+    // Only the real suffix.
+    expect(pathFor('https://musicbox.ts.network', false, RELAY)).toBe('custom')
+    expect(pathFor('https://notts.net', false, RELAY)).toBe('custom')
   })
 
   it("only calls a loopback server the desktop app's own when the app started it", () => {
@@ -67,6 +94,21 @@ describe('relay routes', () => {
     expect(relayedServerId(`${RELAY}/relay/${ID}?x=1`, RELAY)).toBeNull()
     expect(relayedServerId(`${RELAY}/relay/%E0%A4%A`, RELAY)).toBeNull()
     expect(relayedServerId('not a url', RELAY)).toBeNull()
+  })
+})
+
+describe('isHomeHost', () => {
+  it("leaves isLanHost alone: knownServers.ts still remembers only an address that works nowhere else", () => {
+    for (const host of ['musicbox', '100.101.102.103', 'musicbox.tail1234.ts.net']) {
+      expect(isHomeHost(host)).toBe(true)
+      expect(isLanHost(host)).toBe(false)
+    }
+  })
+
+  it("doesn't take an IPv6 address for a dotless name", () => {
+    expect(isHomeHost('[2001:db8::1]')).toBe(false)
+    expect(isHomeHost('2001:db8::1')).toBe(false)
+    expect(isHomeHost('')).toBe(false)
   })
 })
 

@@ -1,3 +1,4 @@
+import { isLanHost } from './address'
 import { formatSince } from './lastSeen'
 import type { ServerPath } from './serverPath'
 
@@ -7,8 +8,10 @@ import type { ServerPath } from './serverPath'
  * can see for itself:
  *
  *   - the path it was using (serverPath.ts): this computer, the home
- *     network, or anywhere else (a Tailscale address, a domain behind a
- *     proxy);
+ *     network, or anywhere else (a domain behind a proxy). The home network
+ *     takes in a Tailscale address and a dotless name there, so where the
+ *     words depend on whether the address works away from home, they ask
+ *     the address itself;
  *   - how the health check failed: turned away at once, no answer at all,
  *     or an answer that wasn't Legato's;
  *   - when the server last answered, and whether this device's network
@@ -112,7 +115,9 @@ export function describeOutage(
     case 'device-offline':
       return { title, why: "This device isn't connected to a network.", hint: null }
     case 'network-changed':
-      return ctx.path === 'home'
+      // Only an address that works nowhere else is lost to a change of
+      // network. A tailnet's works anywhere Tailscale is connected.
+      return ctx.path === 'home' && isLanHost(new URL(`http://${ctx.host}`).hostname)
         ? {
             title,
             why: `This device changed networks after it last reached ${label}${seen ? ` at ${seen}` : ''}, and that address only works on your home network.`,
