@@ -20,7 +20,10 @@ type Lists = { sessions: AccountSession[]; servers: AccountServer[] }
 /* Issue #115: where the desktop app's legato.fm account is signed in, and
  * the servers it has linked, in Settings' legato.fm account group. Any other
  * session can be signed out here; this device's own signs out with the
- * account row's `sign out`. Removing a server takes the account's link to it
+ * account row's `sign out`. Signing out ends the session on legato.fm, not
+ * what that device already holds: a server access token (ten minutes,
+ * relay/src/signing-keys.ts) and any server session made with one (twelve
+ * hours, server/src/auth/sessions.ts). The note under the list says so. Removing a server takes the account's link to it
  * and its tunnel credential: the server shows it's disconnected from
  * legato.fm, and its owner links it again from its own Settings.
  *
@@ -111,6 +114,11 @@ export function LegatoAccountDevices({ token, onSignedOut }: { token: string; on
             />
           ))}
         </ul>
+        {lists.sessions.some((session) => !session.current) && (
+          <p className="mt-[var(--spacing-sm)] text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+            A device you sign out can still open your servers for up to 10 minutes, and keeps any it already has open for up to 12 hours.
+          </p>
+        )}
       </SettingsRow>
 
       <SettingsRow label="Servers" align="start">

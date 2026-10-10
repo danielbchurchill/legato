@@ -143,6 +143,23 @@ describe('the account in Settings', () => {
     expect(calls.filter((call) => call.url.endsWith('/auth/sessions') && call.method === 'GET')).toHaveLength(2)
   })
 
+  // Issue #115's review: signing a session out on legato.fm doesn't reach
+  // tokens that device already fetched, or server sessions made from them.
+  it('says beside sign out what a signed-out device keeps, and only when there is another device to sign out', async () => {
+    relaySays(LISTS)
+    const container = await render()
+    expect(container.textContent).toContain(
+      'A device you sign out can still open your servers for up to 10 minutes, and keeps any it already has open for up to 12 hours.',
+    )
+  })
+
+  it('leaves that out when this device is the only one signed in', async () => {
+    const [own] = (await LISTS['GET /auth/sessions']().json()).sessions
+    relaySays({ ...LISTS, 'GET /auth/sessions': () => Response.json({ sessions: [own] }) })
+    const container = await render()
+    expect(container.textContent).not.toContain('A device you sign out')
+  })
+
   it('asks before removing a server, and says what that does', async () => {
     const calls = relaySays({ ...LISTS, [`DELETE /linked-servers/${SERVER_A}`]: () => Response.json({ unlinked: true }) })
     await render()
