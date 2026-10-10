@@ -42,6 +42,7 @@ import { LAUNCHED_OFFLINE } from './pwa/register'
 import { ConnectScreen } from './connect/ConnectScreen'
 import { useLegatoRenewal, useRelayTicketRenewal } from './connect/hooks'
 import { useLegatoLinkReturn } from './connect/useLegatoLinkReturn'
+import { useLegatoConnectReturn } from './connect/useLegatoConnectReturn'
 import { OPEN_CONNECT_EVENT, openConnectScreen, type ConnectReason } from './connect/openConnect'
 import { ServerUnreachableOverShell, ServerUnreachableWindow, type UnreachableView } from './connect/ServerUnreachable'
 import { describeOutage, inferReason, outageFooter } from './connect/unreachable'
@@ -691,6 +692,7 @@ export default function App() {
   const { ready, everConnected, server } = connection
   const path = serverPathOf(useConnectionPath(), EMBEDDED_SERVER)
   const connect = useConnectScreen()
+  useLegatoConnectReturn()
   const { resolvedTheme } = useTheme()
   const chosen = SERVER_ORIGIN !== DEFAULT_SERVER_ORIGIN
   const offerAnother = useAfter(OFFER_ANOTHER_SERVER_MS, !ready) || chosen || everConnected || LAUNCHED_OFFLINE

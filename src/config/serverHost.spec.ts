@@ -78,3 +78,23 @@ describe('resolveServerOrigin with the relay pinned off', () => {
     expect(resolveServerOrigin(served, {}, relayed, pin())).toBe('http://musicbox:8899')
   })
 })
+
+// Issue #365: a page a server served may take its own server's route
+// through legato.fm's relay, and nothing else.
+describe('a page a server served, through the relay', () => {
+  const ID = '0123456789abcdef0123456789abcdef'
+  const page = { servedByServer: true, origin: 'http://192.168.1.20:8899', serverId: ID }
+  const relayed = (id: string) => `https://auth.legato.fm/relay/${id}`
+
+  it("takes its own server's relay route when it was picked", () => {
+    expect(resolveServerOrigin(page, {}, relayed(ID))).toBe(relayed(ID))
+  })
+
+  it("stays on its own origin for any other pick, another server's relay route, or with the relay pinned off", () => {
+    expect(resolveServerOrigin(page, {}, 'http://192.168.1.30:8899')).toBe(page.origin)
+    expect(resolveServerOrigin(page, {}, relayed('f'.repeat(32)))).toBe(page.origin)
+    expect(resolveServerOrigin({ ...page, serverId: null }, {}, relayed(ID))).toBe(page.origin)
+    const pin = { relayOrigin: 'https://auth.legato.fm', homeOrigin: () => null }
+    expect(resolveServerOrigin(page, {}, relayed(ID), pin)).toBe(page.origin)
+  })
+})
