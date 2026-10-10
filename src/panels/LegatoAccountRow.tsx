@@ -281,7 +281,9 @@ function ServerLink({ relayUser }: { relayUser: RelayUser | null }) {
         : otherIssuer
           ? `It uses legato.fm at ${hostOf(issuer)}, and this app signs in at ${hostOf(RELAY_ORIGIN)}, so it can't link it from here.`
           : IS_TAURI && !relayUser
-            ? 'Sign in to legato.fm to link it.'
+            ? status.linked
+              ? 'Sign in to legato.fm to link it again.'
+              : 'Sign in to legato.fm to link it.'
             : null
   const canLink = issuer !== null && owner && !otherIssuer && (!IS_TAURI || relayUser !== null)
   // Linking from the desktop app as a different legato.fm account than the
@@ -298,7 +300,9 @@ function ServerLink({ relayUser }: { relayUser: RelayUser | null }) {
     const result = await linkWithLegato(status.serverId)
     setBusy(false)
     if (!result.ok) return setNotice(describeLinkFailure(result.failure))
-    setNotice(`Linked to ${result.linked.name ?? result.linked.email ?? 'your legato.fm account'}.`)
+    // Says whose account, since it stays after this app signs out (#361).
+    const who = result.linked.name ?? result.linked.email
+    setNotice(who ? `Linked this server to ${who} on legato.fm.` : 'Linked this server to your legato.fm account.')
     reload()
   }
 

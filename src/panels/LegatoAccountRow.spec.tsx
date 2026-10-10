@@ -6,8 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 /* Issue #325's review: the link button in Settings' legato.fm account group,
  * in the desktop app and the web client. */
 
-const { runtime, fetchRelayMe, linkWithLegato, startBrowserLink } = vi.hoisted(() => ({
+const { runtime, relaySession, fetchRelayMe, linkWithLegato, startBrowserLink } = vi.hoisted(() => ({
   runtime: { IS_TAURI: true },
+  relaySession: { current: null as { token: string; expiresAt: string } | null },
   fetchRelayMe: vi.fn(),
   linkWithLegato: vi.fn(),
   startBrowserLink: vi.fn(),
@@ -24,7 +25,7 @@ vi.mock('../auth/relaySession', () => ({
   RelaySignInError: class extends Error {},
   clearRelaySession: vi.fn(),
   fetchRelayMe,
-  readRelaySession: () => ({ token: 'relay-session', expiresAt: '2026-11-08T00:00:00.000Z' }),
+  readRelaySession: () => relaySession.current,
   relaySignOut: vi.fn(),
   signInWithRelay: vi.fn(),
 }))
@@ -70,6 +71,7 @@ beforeEach(() => {
     vi.fn(() => ({ matches: false, addEventListener: () => undefined, removeEventListener: () => undefined })),
   )
   runtime.IS_TAURI = true
+  relaySession.current = { token: 'relay-session', expiresAt: '2026-11-08T00:00:00.000Z' }
   fetchRelayMe.mockReset().mockResolvedValue({ user: ROWAN, configured: { google: true, github: true } })
   linkWithLegato.mockReset().mockResolvedValue({ ok: true, linked: { accountId: '7', email: 'rowan@example.com', name: 'Rowan' } })
   startBrowserLink.mockReset()
@@ -92,7 +94,7 @@ describe('linking this server from Settings', () => {
 
     await act(async () => button('link instead').click())
     expect(linkWithLegato).toHaveBeenCalledWith(SERVER_ID)
-    expect(document.body.textContent).toContain('Linked to Rowan.')
+    expect(document.body.textContent).toContain('Linked this server to Rowan on legato.fm.')
   })
 
   it("links again without asking when it's the account already linked", async () => {
@@ -125,5 +127,58 @@ describe('linking this server from Settings', () => {
     expect(button('linking…').disabled).toBe(true)
     await act(async () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true })))
     expect(button('link to legato.fm').disabled).toBe(false)
+  })
+})
+
+describe('a linked server while the app is signed out of legato.fm (#361)', () => {
+  beforeEach(() => {
+    relaySession.current = null
+    fetchRelayMe.mockResolvedValue({ user: null, configured: { google: true, github: true } })
+  })
+
+  it('says the server is linked, and that signing in is how to link it again', async () => {
+    serverSays({ linked: true, linkedAccountId: '7' })
+    const container = await render()
+    expect(container.textContent).toContain('This server is linked to legato.fm. Sign in to legato.fm to link it again.')
+    expect(() => button('link again')).toThrow()
+  })
+
+  it("still says signing in is how to link a server that isn't linked yet", async () => {
+    serverSays({})
+    const container = await render()
+    expect(container.textContent).toContain("This server isn't linked to a legato.fm account yet. Sign in to legato.fm to link it.")
+  })
+
+  it('in the web client, which has no legato.fm sign-in, offers to link it again', async () => {
+    runtime.IS_TAURI = false
+    serverSays({ linked: true, linkedAccountId: '7' })
+    const container = await render()
+    expect(container.textContent).toContain('This server is linked to legato.fm.')
+    expect(container.textContent).not.toContain('Sign in to legato.fm')
+    expect(button('link again').disabled).toBe(false)
+  })
+
+  it('keeps saying whose account a link from this visit went to, once the app signs out', async () => {
+    relaySession.current = { token: 'relay-session', expiresAt: '2026-11-08T00:00:00.000Z' }
+    fetchRelayMe.mockResolvedValue({ user: ROWAN, configured: { google: true, github: true } })
+    serverSays({ linked: true, linkedAccountId: '7' })
+    const container = await render()
+    await act(async () => button('link again').click())
+    expect(container.textContent).toContain('Linked this server to Rowan on legato.fm.')
+
+    await act(async () => button('sign out').click())
+    expect(container.textContent).toContain('This server is linked to legato.fm. Sign in to legato.fm to link it again.')
+    expect(container.textContent).toContain('Linked this server to Rowan on legato.fm.')
+  })
+
+  it('names the account by its email when legato.fm has no name for it', async () => {
+    relaySession.current = { token: 'relay-session', expiresAt: '2026-11-08T00:00:00.000Z' }
+    fetchRelayMe.mockResolvedValue({ user: ROWAN, configured: { google: true, github: true } })
+    linkWithLegato.mockResolvedValue({ ok: true, linked: { accountId: '7', email: 'rowan@example.com', name: null } })
+    serverSays({ linked: true, linkedAccountId: '7' })
+    const container = await render()
+    await act(async () => button('link again').click())
+    await act(async () => button('sign out').click())
+    expect(container.textContent).toContain('Linked this server to rowan@example.com on legato.fm.')
   })
 })
