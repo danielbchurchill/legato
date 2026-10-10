@@ -4,7 +4,7 @@ import { useLoadingWait } from './useLoadingWait'
 import type { SortDir } from './types'
 
 // One fetch covers this many rows. DOM virtualization (AlbumsGrid,
-// TracksTable) only solves half of "smooth at 30k albums" — it keeps the
+// ArtistsGrid, TracksTable) only solves half of "smooth at 30k albums" — it keeps the
 // node count down, but a single GET /library/albums for the whole table
 // would still ship and JSON-parse 30k rows before the first frame. This
 // hook is the other half: it sizes the scrollable area from `total` (known
@@ -58,19 +58,32 @@ export type LibraryPage<Row> = {
   ensureRange: (startIndex: number, endIndex: number) => void
 }
 
-/** `entity` is a URL segment (`library/albums` or `library/tracks`), not a
- * free string, so a typo here fails at compile time rather than as a 404
- * nobody notices until the view stays empty. */
+/** `entity` is a URL segment (`library/albums`, `library/artists` or
+ * `library/tracks`), not a free string, so a typo here fails at compile time
+ * rather than as a 404 nobody notices until the view stays empty.
+ *
+ * `revision` is a count that goes up when the server's library has changed
+ * (LibraryView's useLibraryChanges). Each step fetches page 0 and the range
+ * on screen again, and keeps showing the rows it has until theirs land, so
+ * the grid neither blanks nor jumps back to the top. */
 export function useLibraryPage<Row>(
-  entity: 'library/albums' | 'library/tracks',
+  entity: 'library/albums' | 'library/artists' | 'library/tracks',
   query: string,
   sort: string,
   dir: SortDir,
+  revision = 0,
 ): LibraryPage<Row> {
   const [rows, setRows] = useState<(Row | undefined)[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const loadedPages = useRef<Set<number>>(new Set())
+  // The range the grid last asked for, which a refresh fetches again.
+  const shownRange = useRef<[number, number]>([0, 0])
+  // The total the rows were last merged at, null before any. A page that
+  // lands with another total drops every other page (mergePage).
+  const mergedTotal = useRef<number | null>(null)
+  // Goes up when that happens, to fetch the range on screen again.
+  const [dropped, setDropped] = useState(0)
   // Bumped on every filter/sort change so a page fetch that was already in
   // flight when the user typed the next character lands as a no-op instead
   // of splicing stale rows into the new result set.
@@ -79,6 +92,8 @@ export function useLibraryPage<Row>(
   useEffect(() => {
     generation.current += 1
     loadedPages.current = new Set()
+    shownRange.current = [0, 0]
+    mergedTotal.current = null
     // A new query drops the old pages together with the generation bump above, so no stale page lands in the new result.
     // oxlint-disable-next-line react/set-state-in-effect
     setRows([])
@@ -97,9 +112,21 @@ export function useLibraryPage<Row>(
       if (query) params.set('q', query)
 
       fetch(`${API}/${entity}?${params}`)
-        .then((r) => r.json())
+        .then((r) => {
+          // An error's body has no items or total to splice in.
+          if (!r.ok) throw new Error(`${entity} answered ${r.status}`)
+          return r.json()
+        })
         .then((data: { items: Row[]; total: number }) => {
           if (gen !== generation.current) return
+          // The total moved, so this page is now the only one in the rows,
+          // and the rest have to count as unfetched or no scroll would ask
+          // for them again.
+          if (mergedTotal.current != null && mergedTotal.current !== data.total) {
+            loadedPages.current = new Set([pageIndex])
+            setDropped((n) => n + 1)
+          }
+          mergedTotal.current = data.total
           setTotal(data.total)
           setRows((prev) => mergePage(prev, data.total, offset, data.items))
           if (pageIndex === 0) setLoading(false)
@@ -128,12 +155,33 @@ export function useLibraryPage<Row>(
 
   const ensureRange = useCallback(
     (startIndex: number, endIndex: number) => {
+      shownRange.current = [startIndex, endIndex]
       const firstPage = Math.floor(startIndex / PAGE_SIZE)
       const lastPage = Math.floor(Math.max(startIndex, endIndex) / PAGE_SIZE)
       for (let page = firstPage; page <= lastPage; page++) loadPage(page)
     },
     [loadPage],
   )
+
+  // A page that dropped the others (above) leaves skeletons where they were,
+  // so the range on screen is fetched again.
+  useEffect(() => {
+    if (dropped > 0) ensureRange(...shownRange.current)
+  }, [dropped, ensureRange])
+
+  // A page from before the change lands as a no-op (the generation), and
+  // every page counts as unfetched again, so one scrolled back to later is
+  // fetched afresh. If the total moved, the first page to land drops the
+  // rest (mergePage), and the range on screen is fetched again (above).
+  const fetchedRevision = useRef(revision)
+  useEffect(() => {
+    if (revision === fetchedRevision.current) return
+    fetchedRevision.current = revision
+    generation.current += 1
+    loadedPages.current = new Set()
+    loadPage(0)
+    ensureRange(...shownRange.current)
+  }, [revision, loadPage, ensureRange])
 
   const wait = useLoadingWait(loading)
 

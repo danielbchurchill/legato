@@ -42,6 +42,8 @@ export function computeAlbumAggregates(
   // Brown" produces two. First-seen wins, and since match/edges.ts inserts
   // in credit order that is the primary performer: an album stays filed
   // under JPEGMAFIA rather than under whoever the mode happened to favour.
+  // recomputeEntities passes only the credits the map counts, in edge id
+  // order (see there), so a recording missing from them has no vote.
   const artistByRecording = new Map<number, number>();
   for (const e of performedBy) {
     if (!artistByRecording.has(e.fromNode)) artistByRecording.set(e.fromNode, e.toNode);
@@ -180,8 +182,23 @@ export function recomputeEntities(db: Database): void {
   const appearsOn = db
     .prepare("SELECT from_node AS fromNode, to_node AS toNode FROM edges WHERE type = 'appears_on'")
     .all() as EdgeRef[];
+  // An album's artist is the one the map clusters it under
+  // (src/canvas/clusters.ts), which is also how the Library's Artists tab
+  // decides who has records of their own (#302). So a track counts its
+  // first performed_by credit by edge id that is an artist node, past a
+  // 'credit' node credited ahead of it, and only a track the map draws,
+  // one with a file, has a vote: the recordings a collapse leaves behind
+  // keep their edges and could otherwise outvote the tracks that are there.
   const performedBy = db
-    .prepare("SELECT from_node AS fromNode, to_node AS toNode FROM edges WHERE type = 'performed_by'")
+    .prepare(
+      `SELECT e.from_node AS fromNode, e.to_node AS toNode
+       FROM edges e
+       JOIN nodes r ON r.id = e.from_node AND r.type = 'recording'
+       JOIN nodes a ON a.id = e.to_node AND a.type = 'artist'
+       WHERE e.type = 'performed_by'
+         AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = e.from_node)
+       ORDER BY e.id`,
+    )
     .all() as EdgeRef[];
   // Album primary-artist selection (computeAlbumAggregates) deliberately
   // stays performed_by-only — a featured guest on a couple of tracks
@@ -209,6 +226,15 @@ export function recomputeEntities(db: Database): void {
 
   const albums = computeAlbumAggregates(appearsOn, performedBy, recordingDurationMs, recordingYear);
   const artists = computeArtistAggregates(appearsOn, performerEdges);
+
+  // The map clusters release nodes only, so the row a hand-drawn appears_on
+  // gives any other node has no artist either. Decided here, once per
+  // recompute, rather than checked by every read of the Artists tab and
+  // /stats: that join cost each of them about 16 ms at 30,000 albums.
+  const releaseIds = new Set(
+    (db.prepare("SELECT id FROM nodes WHERE type = 'release'").all() as { id: number }[]).map((r) => r.id),
+  );
+  for (const album of albums) if (!releaseIds.has(album.nodeId)) album.primaryArtistNodeId = null;
 
   const upsertAlbum = db.prepare(
     `INSERT INTO albums (node_id, primary_artist_node_id, track_count, total_duration_ms, year_min, year_max)

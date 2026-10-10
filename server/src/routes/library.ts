@@ -1,15 +1,16 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { resolveCoverForNode } from "../cover/extract.js";
+import { libraryRevision } from "../libraryRevision.js";
 
-// The library view's two layouts (issue #126 — see DESIGN.md "Library
-// view"): a paginated, sortable, searchable read model over the same
-// albums/tracks the graph already draws. GET /nodes exists for the canvas
-// and returns the *whole* graph in one shot (fine for a force layout that
-// needs every node up front) — the library view instead has to stay smooth
-// scrolling through 30k albums, so it gets its own limit/offset routes
-// rather than asking the client to paginate a 30k-row array it already
-// downloaded whole.
+// The library view's layouts (issue #126 — see DESIGN.md "The library"): a
+// paginated, sortable, searchable read model over the same albums, artists
+// and tracks the graph already draws. GET /nodes exists for the canvas and
+// returns the graph in one shot, up to 5,000 nodes (fine for a force layout
+// that needs every node up front) — the library view instead has to stay
+// smooth scrolling through 30k albums, and has to see all of them, so it
+// gets its own limit/offset routes rather than asking the client to
+// paginate an array it already downloaded whole.
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
@@ -64,6 +65,24 @@ const TRACK_SORTS = {
 } as const;
 export type TrackSort = keyof typeof TRACK_SORTS;
 
+// As an artist list reads: without regard to case or accents, so "alt-J"
+// and "Ólafur Arnalds" sort among the A's and O's, not after "Zappa".
+// SQLite's NOCASE folds ASCII case only, and bun:sqlite has no ICU
+// collation, so the list is sorted here rather than in SQL. It's one row per
+// artist with records of their own, a few thousand at most. The albums and
+// tracks sorts compare titles as stored.
+const nameCollator = new Intl.Collator(undefined, { sensitivity: "base" });
+const ARTIST_SORTS = {
+  name: (a: ArtistRow, b: ArtistRow) => nameCollator.compare(a.name, b.name),
+} as const;
+export type ArtistSort = keyof typeof ARTIST_SORTS;
+
+// `sort in SORTS` is true of "constructor" and every other key a plain
+// object inherits, which then reached the SQL as `undefined`.
+function pickSort<Sort extends string>(sorts: Record<Sort, unknown>, raw: string | undefined, fallback: Sort): Sort {
+  return raw != null && Object.hasOwn(sorts, raw) ? (raw as Sort) : fallback;
+}
+
 type LibraryQuery = {
   q?: string;
   sort?: string;
@@ -95,6 +114,76 @@ export type TrackRow = {
   format: string | null;
   dateAdded: string;
 };
+
+export type ArtistRow = {
+  id: number;
+  name: string;
+  releases: number;
+};
+
+// The artists the library lists (#276): an artist with records of its own,
+// meaning the primary artist of at least one album. That's
+// entities/aggregate.ts's rule for an album's artist, which is the rule the
+// map clusters records by (src/canvas/clusters.ts): each track with a file
+// goes to its first performed_by credit that is an artist, and a record to
+// whoever most of its tracks went to, ties to the lower id. So every artist
+// listed here has records beside it on the map. An artist who is only ever featured, or credited after
+// someone else, has no record of its own and is left out: they'd fill the
+// grid with names that lead nowhere.
+//
+// One definition, read twice: the Artists tab pages through it below, and
+// GET /stats counts it for the Library header, so the two can't disagree.
+// Both used to read the map's graph, which stops at 5,000 nodes (#302).
+const LIBRARY_ARTISTS = `
+  SELECT a.id AS id, a.title AS name, COUNT(*) AS releases
+  FROM albums al
+  JOIN nodes a ON a.id = al.primary_artist_node_id
+  WHERE a.type = 'artist'
+  GROUP BY al.primary_artist_node_id`;
+
+// The whole list, sorted, once per revision of the library and per sort,
+// for each database. Ties go to the lower id either way, so paging never
+// reshuffles equal names.
+//
+// The Artists tab asks for 3,000 artists as 20 pages of 150, and each page
+// used to rerun the GROUP BY and sort every artist, on the request loop, to
+// keep one slice. Now the first page of a revision does that and the rest
+// are slices. What the list reads (the albums table and the artists' names)
+// is only written by a recompute, which bumps the revision when it's done
+// (libraryRevision.ts), so a list is never kept past a change.
+const sortedArtists = new WeakMap<Database, { revision: number; lists: Map<string, ArtistRow[]> }>();
+
+function libraryArtists(db: Database, sort: ArtistSort, dir: "asc" | "desc"): ArtistRow[] {
+  const revision = libraryRevision();
+  let cache = sortedArtists.get(db);
+  if (cache?.revision !== revision) {
+    cache = { revision, lists: new Map() };
+    sortedArtists.set(db, cache);
+  }
+  const key = `${sort} ${dir}`;
+  let list = cache.lists.get(key);
+  if (!list) {
+    list = db.prepare(LIBRARY_ARTISTS).all() as ArtistRow[];
+    const compare = ARTIST_SORTS[sort];
+    list.sort((a, b) => (dir === "desc" ? compare(b, a) : compare(a, b)) || a.id - b.id);
+    cache.lists.set(key, list);
+  }
+  return list;
+}
+
+// The tab's first page in the default order sorts the same list, so the
+// header and the tab share one read per revision.
+export function countLibraryArtists(db: Database): number {
+  return libraryArtists(db, "name", "asc").length;
+}
+
+function listArtists(
+  db: Database,
+  { sort, dir, limit, offset }: { sort: ArtistSort; dir: "asc" | "desc"; limit: number; offset: number },
+): { items: ArtistRow[]; total: number } {
+  const all = libraryArtists(db, sort, dir);
+  return { items: all.slice(offset, offset + limit), total: all.length };
+}
 
 function listAlbums(
   db: Database,
@@ -244,10 +333,20 @@ function listTracks(
 export function libraryRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get<{ Querystring: LibraryQuery }>("/library/albums", async (request) => {
-      const sort = (request.query.sort ?? "title") as AlbumSort;
       return listAlbums(db, {
         q: request.query.q?.trim() || null,
-        sort: sort in ALBUM_SORTS ? sort : "title",
+        sort: pickSort(ALBUM_SORTS, request.query.sort, "title"),
+        dir: request.query.dir === "desc" ? "desc" : "asc",
+        limit: clampLimit(request.query.limit),
+        offset: clampOffset(request.query.offset),
+      });
+    });
+
+    // No search: since v2 the library has no filter, and an artist is found
+    // through the search palette like anything else.
+    app.get<{ Querystring: LibraryQuery }>("/library/artists", async (request) => {
+      return listArtists(db, {
+        sort: pickSort(ARTIST_SORTS, request.query.sort, "name"),
         dir: request.query.dir === "desc" ? "desc" : "asc",
         limit: clampLimit(request.query.limit),
         offset: clampOffset(request.query.offset),
@@ -255,10 +354,9 @@ export function libraryRoutes(db: Database) {
     });
 
     app.get<{ Querystring: LibraryQuery }>("/library/tracks", async (request) => {
-      const sort = (request.query.sort ?? "title") as TrackSort;
       return listTracks(db, {
         q: request.query.q?.trim() || null,
-        sort: sort in TRACK_SORTS ? sort : "title",
+        sort: pickSort(TRACK_SORTS, request.query.sort, "title"),
         dir: request.query.dir === "desc" ? "desc" : "asc",
         limit: clampLimit(request.query.limit),
         offset: clampOffset(request.query.offset),

@@ -43,10 +43,14 @@ export function computeClusters(nodes: readonly ClusterNode[], edges: readonly C
   }
 
   // Records: a majority vote of their tracks' artists, ties to the lower
-  // artist id so the answer doesn't depend on edge order.
+  // artist id so the answer doesn't depend on edge order. Only a track votes:
+  // an artist is in its own cluster too, and a hand-drawn appears_on from
+  // one would otherwise count. The server files albums by this same rule
+  // (entities/aggregate.ts), and the Library's Artists tab lists from that.
   const votes = new Map<number, Map<number, number>>()
   for (const edge of edges) {
     if (edge.type !== 'appears_on' || typeOf.get(edge.to_node) !== 'release') continue
+    if (typeOf.get(edge.from_node) !== 'recording') continue
     const artist = clusterOf.get(edge.from_node)
     if (artist == null) continue
     const tally = votes.get(edge.to_node) ?? new Map<number, number>()

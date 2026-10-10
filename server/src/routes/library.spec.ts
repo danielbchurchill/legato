@@ -1,8 +1,11 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { libraryRoutes } from "./library.js";
+import { statsRoutes } from "./stats.js";
+import { recomputeEntities } from "../entities/aggregate.js";
+import { libraryChanged } from "../libraryRevision.js";
 
 let db: Database;
 let app: FastifyInstance;
@@ -11,6 +14,7 @@ beforeEach(async () => {
   db = openDb(":memory:");
   app = Fastify();
   await app.register(libraryRoutes(db), { prefix: "/api/v1" });
+  await app.register(statsRoutes(db), { prefix: "/api/v1" });
 });
 
 function makeNode(type: string, title: string, createdAt = "2020-01-01 00:00:00"): number {
@@ -66,6 +70,11 @@ async function getAlbums(query = "") {
 
 async function getTracks(query = "") {
   const res = await app.inject({ method: "GET", url: `/api/v1/library/tracks${query}` });
+  return res.json();
+}
+
+async function getArtists(query = "") {
+  const res = await app.inject({ method: "GET", url: `/api/v1/library/artists${query}` });
   return res.json();
 }
 
@@ -234,6 +243,224 @@ describe("GET /library/tracks", () => {
     const { items } = await getTracks();
     expect(items[0].artistName).toBe("First Credit");
   });
+});
+
+// The listing rule from #276, now on the server (#302). The records are built
+// as a scan leaves them, edges first, and entities/aggregate.ts decides each
+// album's artist, so the spec covers the rule rather than albums rows typed
+// in to agree with it.
+describe("GET /library/artists", () => {
+  // A track on `album`, credited to `performers` in order, with `featured`
+  // as featured_artist edges.
+  function track(album: number, performers: number[], featured: number[] = []): number {
+    const id = makeRecording("Track");
+    for (const artist of performers) edge(id, artist, "performed_by");
+    for (const artist of featured) edge(id, artist, "featured_artist");
+    edge(id, album, "appears_on");
+    return id;
+  }
+
+  async function names(query = "") {
+    return (await getArtists(query)).items.map((a: { name: string }) => a.name);
+  }
+
+  it("lists an artist with records of its own, and leaves out one who is only featured", async () => {
+    const lead = makeNode("artist", "Lead");
+    const guest = makeNode("artist", "Guest");
+    const record = makeNode("release", "Lead's Record");
+    track(record, [lead]);
+    track(record, [lead], [guest]);
+    recomputeEntities(db);
+
+    // The guest is a real artist entity, just not one the library lists.
+    expect(db.prepare("SELECT node_id FROM artists ORDER BY node_id").all()).toEqual([{ node_id: lead }, { node_id: guest }]);
+    expect(await getArtists()).toEqual({ items: [{ id: lead, name: "Lead", releases: 1 }], total: 1 });
+  });
+
+  it("leaves out an artist credited second on every track they're on", async () => {
+    const lead = makeNode("artist", "JPEGMAFIA");
+    const second = makeNode("artist", "Danny Brown");
+    const record = makeNode("release", "Scaring the Hoes");
+    track(record, [lead, second]);
+    track(record, [lead, second]);
+    recomputeEntities(db);
+
+    expect(await names()).toEqual(["JPEGMAFIA"]);
+  });
+
+  it("files a record under whoever most of its tracks are by, so one track of their own isn't a record of their own", async () => {
+    const most = makeNode("artist", "Most");
+    const one = makeNode("artist", "One Track");
+    const compilation = makeNode("release", "Compilation");
+    track(compilation, [most]);
+    track(compilation, [most]);
+    track(compilation, [one]);
+    recomputeEntities(db);
+
+    expect(await names()).toEqual(["Most"]);
+  });
+
+  it("lists an artist with a record of their own however often they're featured elsewhere, counting only their own", async () => {
+    const lead = makeNode("artist", "Lead");
+    const both = makeNode("artist", "Both");
+    const leadRecord = makeNode("release", "Lead's Record");
+    const leadSecond = makeNode("release", "Lead's Second");
+    const ownRecord = makeNode("release", "Both's Record");
+    track(leadRecord, [lead], [both]);
+    track(leadSecond, [lead, both]);
+    track(ownRecord, [both]);
+    recomputeEntities(db);
+
+    expect((await getArtists()).items).toEqual([
+      { id: both, name: "Both", releases: 1 },
+      { id: lead, name: "Lead", releases: 2 },
+    ]);
+  });
+
+  it("sorts by name without regard to case, either way, ties by id", async () => {
+    const zappa = makeNode("artist", "Zappa");
+    const altJ = makeNode("artist", "alt-J");
+    const twin = makeNode("artist", "Alt-J");
+    const beck = makeNode("artist", "Beck");
+    for (const artist of [zappa, altJ, twin, beck]) makeAlbum(`Record by ${artist}`, { artistId: artist });
+
+    expect(await names()).toEqual(["alt-J", "Alt-J", "Beck", "Zappa"]);
+    expect(await names("?dir=desc")).toEqual(["Zappa", "Beck", "alt-J", "Alt-J"]);
+  });
+
+  it("sorts accented names with their letters, either way", async () => {
+    for (const name of ["Zappa", "Ólafur Arnalds", "Émilie Simon", "Ásgeir", "Æ", "Beck", "Oasis"]) {
+      makeAlbum(`Record by ${name}`, { artistId: makeNode("artist", name) });
+    }
+
+    const asc = ["Æ", "Ásgeir", "Beck", "Émilie Simon", "Oasis", "Ólafur Arnalds", "Zappa"];
+    expect(await names()).toEqual(asc);
+    expect(await names("?dir=desc")).toEqual([...asc].reverse());
+  });
+
+  it("pages with limit and offset, with the whole count as the total", async () => {
+    for (let i = 0; i < 5; i++) makeAlbum(`Album ${i}`, { artistId: makeNode("artist", `Artist ${i}`) });
+
+    const page1 = await getArtists("?limit=2&offset=0");
+    const page3 = await getArtists("?limit=2&offset=4");
+    expect(page1).toMatchObject({ total: 5 });
+    expect(page1.items.map((a: { name: string }) => a.name)).toEqual(["Artist 0", "Artist 1"]);
+    expect(page3.items.map((a: { name: string }) => a.name)).toEqual(["Artist 4"]);
+  });
+
+  // The map's rule, src/canvas/clusters.ts, from here to the next case: a
+  // track goes to its first credit that is an artist, and only the tracks
+  // the map draws, the ones with a file, have a say in a record.
+  it("files a record under the first artist its tracks credit, past a credit node credited ahead of them", async () => {
+    const producer = makeNode("credit", "A Producer");
+    const artist = makeNode("artist", "The Artist");
+    const record = makeNode("release", "Record");
+    track(record, [producer, artist]);
+    track(record, [producer, artist]);
+    recomputeEntities(db);
+
+    expect(await getArtists()).toEqual({ items: [{ id: artist, name: "The Artist", releases: 1 }], total: 1 });
+    const stats = (await app.inject({ method: "GET", url: "/api/v1/stats" })).json();
+    expect(stats.artists).toBe(1);
+  });
+
+  it("gives a record's vote only to tracks with a file, as the map draws only those", async () => {
+    const kept = makeNode("artist", "Kept");
+    const orphaned = makeNode("artist", "Orphaned");
+    const record = makeNode("release", "Record");
+    track(record, [kept]);
+    // Two recordings a collapse left behind: their files moved to other
+    // nodes, and their edges stayed.
+    for (let i = 0; i < 2; i++) {
+      const left = makeNode("recording", "Left Behind");
+      db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(left);
+      edge(left, orphaned, "performed_by");
+      edge(left, record, "appears_on");
+    }
+    recomputeEntities(db);
+
+    expect(await names()).toEqual(["Kept"]);
+  });
+
+  it("still counts a track whose file has gone missing, which the map still draws", async () => {
+    const present = makeNode("artist", "Present");
+    const missing = makeNode("artist", "Missing");
+    const record = makeNode("release", "Record");
+    track(record, [present]);
+    for (let i = 0; i < 2; i++) {
+      const id = track(record, [missing]);
+      db.prepare("UPDATE files SET missing_since = datetime('now') WHERE recording_node_id = ?").run(id);
+    }
+    recomputeEntities(db);
+
+    expect(await names()).toEqual(["Missing"]);
+  });
+
+  it("leaves out a record's artist that isn't an artist node, and a record with no artist", async () => {
+    makeAlbum("Untagged");
+    makeAlbum("Odd", { artistId: makeNode("credit", "A Producer") });
+
+    expect(await getArtists()).toEqual({ items: [], total: 0 });
+  });
+
+  it("is the count GET /stats gives the Library header", async () => {
+    const lead = makeNode("artist", "Lead");
+    const guest = makeNode("artist", "Guest");
+    const other = makeNode("artist", "Other");
+    track(makeNode("release", "One"), [lead], [guest]);
+    track(makeNode("release", "Two"), [other]);
+    recomputeEntities(db);
+
+    const stats = (await app.inject({ method: "GET", url: "/api/v1/stats" })).json();
+    expect(stats.artists).toBe(2);
+    expect(stats.artists).toBe((await getArtists()).total);
+  });
+
+  // A recompute is the only thing that changes the list, and it bumps the
+  // revision when it's done (libraryRevision.ts).
+  it("reads and sorts the list once per revision, for /stats and every page, until the library changes", async () => {
+    libraryChanged();
+    for (let i = 0; i < 5; i++) makeAlbum(`Album ${i}`, { artistId: makeNode("artist", `Artist ${i}`) });
+    const prepare = spyOn(db, "prepare");
+    const reads = () => prepare.mock.calls.filter(([sql]) => sql.includes("GROUP BY al.primary_artist_node_id")).length;
+
+    await app.inject({ method: "GET", url: "/api/v1/stats" });
+    for (let offset = 0; offset < 5; offset += 2) await getArtists(`?limit=2&offset=${offset}`);
+    expect(reads()).toBe(1);
+    await getArtists("?dir=desc");
+    expect(reads()).toBe(2);
+
+    makeAlbum("Album 5", { artistId: makeNode("artist", "Artist 5") });
+    expect((await getArtists()).total).toBe(5);
+    libraryChanged();
+    expect((await getArtists()).total).toBe(6);
+    expect((await app.inject({ method: "GET", url: "/api/v1/stats" })).json().artists).toBe(6);
+    expect(reads()).toBe(3);
+    prepare.mockRestore();
+  });
+});
+
+// A sort key a plain object inherits isn't a sort: `sort in SORTS` let
+// "constructor" through, and the route answered 500 with the SQL error.
+describe("a sort key every object inherits", () => {
+  for (const [route, fallback] of [
+    ["albums", "title"],
+    ["artists", "name"],
+    ["tracks", "title"],
+  ] as const) {
+    it(`falls back to the default sort on /library/${route}`, async () => {
+      const artist = makeNode("artist", "Beck");
+      makeAlbum("Odelay", { artistId: artist });
+      makeRecording("Devils Haircut");
+
+      const expected = (await app.inject({ method: "GET", url: `/api/v1/library/${route}?sort=${fallback}` })).json();
+      for (const key of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+        const res = await app.inject({ method: "GET", url: `/api/v1/library/${route}?sort=${key}` });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual(expected);
+      }
+    });
+  }
 });
 
 // #263 split the tracks query so the count and the ordering join only what

@@ -1,12 +1,12 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
 import { CoverArt } from '../ui/CoverArt'
 import { PlayCircle } from '../ui/PlayCircle'
 import { Button } from '../ui/Button'
 import { formatCount } from '../ui/format'
 import { API_BASE as API } from '../config/serverHost'
 import { useLibraryPage } from './useLibraryPage'
-import { CellSkeleton, GridSkeleton } from './LibrarySkeleton'
+import { CoverGrid } from './CoverGrid'
+import { GridSkeleton } from './LibrarySkeleton'
 import { LibraryEmpty } from './LibraryEmpty'
 import { readPx } from './tokens'
 import type { AlbumRow, AlbumSort, SortDir } from './types'
@@ -14,20 +14,8 @@ import type { AlbumRow, AlbumSort, SortDir } from './types'
 /* Albums, as LibraryStageV2 draws them: a "Recently added" shelf, then every
  * album as a cover grid. The shelf sits 28px under the header with its
  * covers 12px under its heading; "All albums" is 32px under the shelf and
- * the grid 14px under that.
- *
- * The grid is repeat(auto-fill, minmax(--library-cell-min, 1fr)) with
- * --library-column-gap and --library-row-gap between cells, worked out here
- * rather than left to CSS grid because it's virtualised: a library can hold
- * tens of thousands of albums, and only the rows on screen are rendered, a
- * page of 150 fetched at a time (useLibraryPage). The rows share the
- * library's one scroll area with the header and the shelf above them, so
- * the virtualiser is told how far down that scroll area the grid starts. */
-
-/* Under a grid cover: the frame's 10px gap, then a text-body title line (20)
- * and a text-small "Artist · Year" line (16). The cover's own width, this,
- * and the row gap make one virtualised row. */
-const TEXT_BLOCK = 10 + 20 + 16
+ * the grid 14px under that. The grid is virtualised and paged
+ * (CoverGrid, useLibraryPage), as the artists grid is. */
 
 type AlbumsGridProps = {
   scrollRef: RefObject<HTMLDivElement | null>
@@ -161,61 +149,8 @@ function RecentlyAdded({
   )
 }
 
-type Geometry = { columns: number; cell: number; rowGap: number; offset: number }
-
 export function AlbumsGrid({ scrollRef, sort, dir, onOpen, onPlay, onShowRecent }: AlbumsGridProps) {
-  const gridRef = useRef<HTMLDivElement>(null)
-  const [geometry, setGeometry] = useState<Geometry | null>(null)
   const { rows, total, loading, waitVisible, ensureRange } = useLibraryPage<AlbumRow>('library/albums', '', sort, dir)
-
-  // Columns from the grid's width, the same answer auto-fill gives the
-  // skeleton and the artists grid, and the grid's distance from the top of
-  // the scroll area for the virtualiser.
-  useLayoutEffect(() => {
-    const grid = gridRef.current
-    if (!grid) return
-    const measure = () => {
-      const min = readPx(grid, '--library-cell-min')
-      const columnGap = readPx(grid, '--library-column-gap')
-      const rowGap = readPx(grid, '--library-row-gap')
-      if (min == null || columnGap == null || rowGap == null) return
-      const width = grid.clientWidth
-      const columns = Math.max(1, Math.floor((width + columnGap) / (min + columnGap)))
-      const cell = (width - columnGap * (columns - 1)) / columns
-      const offset = grid.offsetTop
-      setGeometry((g) =>
-        g && g.columns === columns && g.cell === cell && g.rowGap === rowGap && g.offset === offset ? g : { columns, cell, rowGap, offset },
-      )
-    }
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(grid)
-    if (grid.parentElement) observer.observe(grid.parentElement)
-    return () => observer.disconnect()
-  }, [loading, total])
-
-  const columns = geometry?.columns ?? 1
-  const rowHeight = geometry ? geometry.cell + TEXT_BLOCK + geometry.rowGap : 0
-  const virtualizer = useVirtualizer({
-    // Nothing until the geometry is known: a row height of zero would
-    // put every row on screen at once.
-    count: geometry ? Math.ceil(total / columns) : 0,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => rowHeight,
-    overscan: 2,
-    scrollMargin: geometry?.offset ?? 0,
-  })
-  useEffect(() => {
-    virtualizer.measure()
-  }, [rowHeight, virtualizer])
-
-  const items = virtualizer.getVirtualItems()
-  const firstIndex = items[0]?.index
-  const lastIndex = items[items.length - 1]?.index
-  useEffect(() => {
-    if (firstIndex == null || lastIndex == null) return
-    ensureRange(firstIndex * columns, Math.min(total - 1, (lastIndex + 1) * columns - 1))
-  }, [firstIndex, lastIndex, columns, total, ensureRange])
 
   if (loading) return waitVisible ? <GridSkeleton label="Loading albums" /> : null
   if (total === 0) return <LibraryEmpty title="No albums yet" body="Tracks without an album tag are listed under tracks." />
@@ -227,32 +162,13 @@ export function AlbumsGrid({ scrollRef, sort, dir, onOpen, onPlay, onShowRecent 
         <h2 className="text-heading text-[var(--color-ink)]">{sort === 'dateAdded' && dir === 'desc' ? 'Newest first' : 'All albums'}</h2>
         <span className="mono text-mono text-[var(--color-ink-2)]">{formatCount(total)}</span>
       </div>
-      <div ref={gridRef} className="relative mt-[14px] w-full" style={{ height: virtualizer.getTotalSize() }}>
-        {items.map((item) => {
-          const start = item.index * columns
-          return (
-            <div
-              key={item.key}
-              className="absolute top-0 left-0 grid w-full gap-x-[var(--library-column-gap)]"
-              style={{
-                transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`,
-                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-              }}
-            >
-              {Array.from({ length: columns }, (_, col) => {
-                const index = start + col
-                if (index >= total) return null
-                const album = rows[index]
-                return album ? (
-                  <AlbumCell key={album.id} album={album} onOpen={onOpen} onPlay={onPlay} />
-                ) : (
-                  <CellSkeleton key={`pending-${index}`} />
-                )
-              })}
-            </div>
-          )
-        })}
-      </div>
+      <CoverGrid
+        scrollRef={scrollRef}
+        rows={rows}
+        total={total}
+        ensureRange={ensureRange}
+        renderCell={(album) => <AlbumCell album={album} onOpen={onOpen} onPlay={onPlay} />}
+      />
     </>
   )
 }

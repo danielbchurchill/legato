@@ -3,6 +3,7 @@ import { coverTargetNode, recordCover, resolveCover } from "../cover/extract.js"
 import { storeCover } from "../cover/store.js";
 import { computeFingerprint } from "../match/fingerprint.js";
 import { broadcast } from "../ws.js";
+import { libraryChanged } from "../libraryRevision.js";
 import { ACOUSTID_API_KEY } from "../config.js";
 import { lookupFingerprint } from "./acoustid.js";
 import { looksLikeMultipleArtists, pickArtistMatch } from "./artistName.js";
@@ -148,6 +149,9 @@ export function applyMatch(db: Database, nodeId: number, mbid: string, confidenc
     db.prepare(
       "UPDATE files SET recording_node_id = ?, match_source = 'mbid', match_confidence = ? WHERE recording_node_id = ?",
     ).run(canonical.id, confidence, nodeId);
+    // Two recordings became one, so GET /stats counts one track fewer
+    // (libraryRevision.ts). Sent by runDueJobs, below, not here.
+    foldsUnsent = true;
   } else {
     db.prepare("UPDATE nodes SET mbid = ?, updated_at = datetime('now') WHERE id = ?").run(mbid, nodeId);
     db.prepare("UPDATE files SET match_source = 'mbid', match_confidence = ? WHERE recording_node_id = ?").run(
@@ -738,6 +742,24 @@ async function processJob(db: Database, job: EnrichJob): Promise<void> {
 
 let running = false;
 
+// A match that folds one recording into another changes the track count GET
+// /stats gives the Library header (libraryRevision.ts); one that merges
+// nothing changes nothing the header or the Artists tab reads. In a drain a
+// fold can be one job in three, every few seconds, and a library:changed
+// for each would have an open Library view fetch as often. So a drain sends
+// its folds as one library:changed when it ends, or once a minute while it
+// lasts. A fold from the hygiene routes goes out at the next poll, within 5 s.
+const FOLDS_SENT_EVERY_MS = 60_000;
+let foldsUnsent = false;
+let foldsSentAt = 0;
+
+function sendFolds({ waitForMinute }: { waitForMinute: boolean }): void {
+  if (!foldsUnsent || (waitForMinute && Date.now() - foldsSentAt < FOLDS_SENT_EVERY_MS)) return;
+  foldsUnsent = false;
+  foldsSentAt = Date.now();
+  libraryChanged();
+}
+
 // Drains every currently-due job, one at a time (mbClient's own throttle
 // enforces the 1req/sec spacing). Safe to call repeatedly/concurrently —
 // the `running` guard means overlapping calls (e.g. a poller tick landing
@@ -750,8 +772,10 @@ export async function runDueJobs(db: Database): Promise<void> {
       const job = getNextDueJob(db);
       if (!job) break;
       await processJob(db, job);
+      sendFolds({ waitForMinute: true });
     }
   } finally {
     running = false;
+    sendFolds({ waitForMinute: false });
   }
 }

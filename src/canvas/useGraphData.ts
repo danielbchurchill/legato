@@ -1,12 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useWsEvent } from '../hooks/useWs'
+import { useCallback, useEffect, useState } from 'react'
+import { useCoalescedWsEvent } from '../hooks/useCoalescedWsEvent'
 import { API_BASE as API } from '../config/serverHost'
-
-/* How long to wait for a burst of enrichment events to stop before refetching
- * the graph. Longer than the enrichment queue's own ~1/sec spacing, so a
- * drain of many nodes collapses into one refetch at the end rather than one
- * per node. */
-const REFETCH_COALESCE_MS = 1500
 
 export type GraphNode = {
   id: number
@@ -75,18 +69,16 @@ export function useGraphData() {
   //
   // Coalesced, because these arrive one per finished job: a queue draining
   // twenty artists at roughly one per second would otherwise mean twenty full
-  // graph refetches. One, shortly after the burst stops, is enough.
-  const refetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useWsEvent(['enrich:applied', 'scan:done'], () => {
-    if (refetchTimerRef.current != null) clearTimeout(refetchTimerRef.current)
-    refetchTimerRef.current = setTimeout(() => {
-      refetchTimerRef.current = null
-      void refetch()
-    }, REFETCH_COALESCE_MS)
+  // graph refetches. One, shortly after the burst stops, is enough, or every
+  // 10 s while it doesn't (useCoalescedWsEvent).
+  //
+  // Not on a description: the graph carries none, and the description job
+  // runs for every artist and record, 33,000 of them at 30,000 albums. With
+  // the 10 s bound that would be a refetch every 10 s for the hours the
+  // drain takes, of an /edges that's 137 MB at that size (#302).
+  useCoalescedWsEvent(['enrich:applied', 'scan:done'], () => void refetch(), {
+    accept: (payload) => (payload as { kind?: string } | undefined)?.kind !== 'description',
   })
-  useEffect(() => () => {
-    if (refetchTimerRef.current != null) clearTimeout(refetchTimerRef.current)
-  }, [])
 
   return { nodes, edges, loading, refetch }
 }

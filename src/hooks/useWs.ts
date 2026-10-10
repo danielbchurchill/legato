@@ -16,6 +16,9 @@ export function useWsEvent(eventNames: string[], onEvent: (payload?: unknown) =>
   const namesKey = eventNames.join(',')
 
   useEffect(() => {
+    // Nothing to listen for, so no socket (healthData.ts's useFetched with
+    // no events).
+    if (!namesKey) return
     const names = namesKey.split(',')
     // The upgrade request can't carry a header, so the media ticket rides
     // in the URL (issue #112).

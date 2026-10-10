@@ -32,6 +32,7 @@ mock.module("./acoustid.js", () => ({ lookupFingerprint: mock() }));
 const { runDueJobs, applyMatch, tryFingerprintMatch } = await import("./worker.js");
 const { deriveLocalEdges } = await import("../match/edges.js");
 const { recompute } = await import("../recompute.js");
+const { libraryRevision } = await import("../libraryRevision.js");
 
 let db: Database;
 
@@ -178,6 +179,28 @@ describe("runDueJobs", () => {
       n: number;
     };
     expect(remaining.n).toBe(0);
+  });
+
+  // #302: a match that folds a recording into one that already has the mbid
+  // changes how many tracks GET /stats counts; one that only records the
+  // mbid changes nothing the Library header or the Artists tab reads.
+  it("bumps the library revision once for the folds a drain made, when it ends, and not for a match that folds nothing", async () => {
+    const canonical = insertNode("Come Together", "The Beatles", 258506);
+    db.prepare("UPDATE nodes SET mbid = 'mb-1' WHERE id = ?").run(canonical);
+    const duplicates = [insertNode("Come Together", "The Beatles", 258506), insertNode("Come Together", "The Beatles", 258506)];
+    const other = insertNode("Something", "The Beatles", 182000);
+
+    const before = libraryRevision();
+    applyMatch(db, other, "mb-2", 0.95);
+    await runDueJobs(db);
+    expect(libraryRevision()).toBe(before);
+
+    for (const duplicate of duplicates) applyMatch(db, duplicate, "mb-1", 0.95);
+    expect(libraryRevision()).toBe(before);
+    await runDueJobs(db);
+    expect(libraryRevision()).toBe(before + 1);
+    await runDueJobs(db);
+    expect(libraryRevision()).toBe(before + 1);
   });
 
   it("skips the search entirely for a malformed tag and never calls MusicBrainz", async () => {

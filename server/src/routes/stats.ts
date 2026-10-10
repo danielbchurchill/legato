@@ -1,5 +1,6 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
+import { countLibraryArtists } from "./library.js";
 
 type CountsRow = {
   artists: number;
@@ -17,13 +18,19 @@ type TopRow = { id: number; title: string; playCount: number };
 // current-library aggregates, not play counts, and joining plays straight
 // through the edge that actually links a recording to its artist/release
 // avoids a second source of truth for that relationship.
+//
+// CROSS JOIN pins plays as the outer loop, each play then finding its
+// recording's few edges by edges_from_node_idx. Left to choose, SQLite walked
+// every edge and looked each one up in plays: about 2.4 s per call at 30,000
+// albums (3.2M edges) even with nothing played, which held up every /stats,
+// and the Library header reads its counts from /stats (#302).
 function topByEdge(db: Database, edgeType: "performed_by" | "appears_on"): TopRow | null {
   return (
     (db
       .prepare(
         `SELECT n.id AS id, n.title AS title, COUNT(*) AS playCount
          FROM plays p
-         JOIN edges e ON e.from_node = p.recording_node_id AND e.type = ?
+         CROSS JOIN edges e ON e.from_node = p.recording_node_id AND e.type = ?
          JOIN nodes n ON n.id = e.to_node
          GROUP BY e.to_node
          ORDER BY playCount DESC, n.id ASC
@@ -54,7 +61,6 @@ export function statsRoutes(db: Database) {
       const counts = db
         .prepare(
           `SELECT
-             (SELECT COUNT(*) FROM artists) AS artists,
              (SELECT COUNT(*) FROM albums) AS albums,
              -- Tracks, not files: one recording can have a file on two
              -- records (the same "Yellow Submarine" on Revolver and on
@@ -65,9 +71,14 @@ export function statsRoutes(db: Database) {
              (SELECT COALESCE(SUM(file_size), 0) FROM files WHERE missing_since IS NULL) AS totalBytes,
              (SELECT COALESCE(SUM(duration_ms), 0) FROM files WHERE missing_since IS NULL) AS totalDurationMs`,
         )
-        .get() as CountsRow;
+        .get() as Omit<CountsRow, "artists">;
 
       return {
+        // The artists the library lists, not every artists row: that table
+        // also holds featured-only artists, which the Artists tab leaves out.
+        // The Library header reads its counts from here (#302), so they
+        // have to be the tab's.
+        artists: countLibraryArtists(db),
         ...counts,
         topArtist: topByEdge(db, "performed_by"),
         topAlbum: topByEdge(db, "appears_on"),
