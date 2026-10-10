@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "./sqlite.js";
 import { upsertUser } from "./accounts.js";
 import { openDb } from "./db.js";
-import { getRelayUserIdByCredential, mintPairingCode, mintTunnelCredential, redeemPairingCode } from "./pairing.js";
+import { mintPairingCode, mintTunnelCredential, redeemPairingCode, tunnelCredentialHolder } from "./pairing.js";
 
 let db: Database;
 let userId: number;
@@ -48,21 +48,26 @@ describe("mintTunnelCredential", () => {
   });
 });
 
-describe("getRelayUserIdByCredential", () => {
-  it("resolves a real credential back to its owning account", () => {
+describe("tunnelCredentialHolder", () => {
+  it("resolves a real credential back to its account and the server it was minted for", () => {
+    const { token } = mintTunnelCredential(db, userId, "0123456789abcdef0123456789abcdef");
+    expect(tunnelCredentialHolder(db, token)).toEqual({ relayUserId: userId, serverId: "0123456789abcdef0123456789abcdef" });
+  });
+
+  it("says when a credential from before migration 0006 names no server", () => {
     const { token } = mintTunnelCredential(db, userId);
-    expect(getRelayUserIdByCredential(db, token)).toBe(userId);
+    expect(tunnelCredentialHolder(db, token)).toEqual({ relayUserId: userId, serverId: null });
   });
 
   it("returns null for a credential that was never issued", () => {
-    expect(getRelayUserIdByCredential(db, "not-a-real-credential")).toBeNull();
+    expect(tunnelCredentialHolder(db, "not-a-real-credential")).toBeNull();
   });
 
   it("returns null for an expired credential", () => {
     db.prepare(
       "INSERT INTO tunnel_credentials (token, relay_user_id, expires_at) VALUES (?, ?, datetime('now', '-1 minute'))",
     ).run("expired-token", userId);
-    expect(getRelayUserIdByCredential(db, "expired-token")).toBeNull();
+    expect(tunnelCredentialHolder(db, "expired-token")).toBeNull();
   });
 });
 

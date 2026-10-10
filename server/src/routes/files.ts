@@ -68,6 +68,15 @@ export function filesRoutes(
         try {
           let variant = await ensureVariant(file.file_hash, file.file_path, quality, cacheDir);
           if (variant.kind === "growing") {
+            // This request listens to the encode until its response is
+            // over or its client hangs up, waiting for a seek included.
+            // An encode nobody listens to gives its slot up to a track
+            // someone is waiting for (stream/cache.ts). A client
+            // that hung up while the encode was being set up has already
+            // closed, and would never leave.
+            const leave = variant.job.join();
+            reply.raw.once("close", leave);
+            if (reply.raw.destroyed) leave();
             // A first byte (or an early failure) before any header goes
             // out, so a source ffmpeg can't read is still a clean 502.
             await variant.job.started;

@@ -28,9 +28,14 @@ export interface AuthErrorFrame {
 
 // Sent by the relay down the tunnel when a mobile client's HTTP request
 // arrives. `path` includes the query string. `body` is only present when
-// the inbound request actually carried one (base64-encoded, buffered whole —
-// unlike responses, request bodies aren't chunked in this prototype since
-// none of the target test scenarios need an upload path; see relay/routes/relay.ts).
+// the inbound request actually carried one (base64-encoded, buffered whole
+// up to REQUEST_BODY_LIMIT in routes/relay.ts).
+//
+// `clientAddress` is the device's address as legato.fm saw it, so the home
+// server's sign-in limits and logs tell one device from another rather
+// than seeing every tunneled request come from its own loopback (server/
+// src/auth/clientAddress.ts). A relay from before it sends none, and the
+// server then counts the request as from "the tunnel".
 export interface RequestFrame {
   type: "request";
   requestId: string;
@@ -38,6 +43,18 @@ export interface RequestFrame {
   path: string;
   headers: Record<string, string>;
   body?: string;
+  clientAddress?: string;
+}
+
+// Sent by the relay when the device a request came from hangs up before
+// its answer is over, or when the relay gives up on an answer it can't pass
+// on. The home server stops working on it: it aborts its own request, which
+// ends a file read, and a transcode with no one left to read it stops
+// (server/src/stream/cache.ts). Nothing answers it, and a home server from
+// before it ignores it.
+export interface CancelFrame {
+  type: "cancel";
+  requestId: string;
 }
 
 export interface ResponseStartFrame {
@@ -72,6 +89,7 @@ export type TunnelFrame =
   | AuthOkFrame
   | AuthErrorFrame
   | RequestFrame
+  | CancelFrame
   | ResponseStartFrame
   | ResponseChunkFrame
   | ResponseEndFrame

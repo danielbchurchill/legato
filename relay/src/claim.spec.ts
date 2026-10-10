@@ -8,7 +8,7 @@ import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
 import { claimProofMessage, isLinkedServer, linkProofMessage, unlinkProofMessage, verifyServerSignature } from "./linked-servers.js";
-import { getRelayUserIdByCredential, mintPairingCode, OPEN_CODES_PER_ACCOUNT } from "./pairing.js";
+import { mintPairingCode, OPEN_CODES_PER_ACCOUNT, tunnelCredentialHolder } from "./pairing.js";
 import { claimReturnPath } from "./routes/claim-page.js";
 import { parseSigningKeys, type SigningKeys } from "./signing-keys.js";
 
@@ -113,7 +113,7 @@ describe("a claim, start to finish", () => {
     expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 300 * 24 * 3600 * 1000);
     expect(h.pairs()).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
     expect(h.credentials()).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
-    expect(getRelayUserIdByCredential(h.db, body.tunnel.credential)).toBe(user.id);
+    expect(tunnelCredentialHolder(h.db, body.tunnel.credential)).toEqual({ relayUserId: user.id, serverId: server.serverId });
 
     // The same report again is a spent proof, and mints nothing more.
     expect((await h.report(linkProof(server, linkToken))).json()).toMatchObject({ reason: "used" });

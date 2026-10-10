@@ -39,13 +39,25 @@ export function createMediaQueue(limit: number) {
     return playbackWaiters.shift() ?? backgroundWaiters.shift();
   }
 
+  // Called whenever a playback task starts waiting for a slot: an encode
+  // nobody is listening to any more gives its slot up then (stream/
+  // cache.ts).
+  const playbackWaitListeners = new Set<() => void>();
+
   // Resolves once a concurrency slot is free, with a release() the caller
   // must call exactly once when its own child process is actually done —
   // not necessarily when the async function that requested the slot
   // returns (a route that spawns and hands back a stream returns well
   // before that stream finishes).
-  function acquireMediaSlot(priority: MediaPriority): Promise<() => void> {
-    return new Promise((resolve) => {
+  //
+  // A `signal` that aborts while the task is still waiting takes it out of
+  // the queue, and rejects with the signal's reason.
+  function acquireMediaSlot(priority: MediaPriority, signal?: AbortSignal): Promise<() => void> {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
       let released = false;
       const release = () => {
         if (released) return; // safe to call more than once (e.g. both a
@@ -64,16 +76,28 @@ export function createMediaQueue(limit: number) {
         return;
       }
 
-      const grant = () => resolve(release);
-      (priority === "playback" ? playbackWaiters : backgroundWaiters).push(grant);
+      const waiters = priority === "playback" ? playbackWaiters : backgroundWaiters;
+      const giveUp = () => {
+        const at = waiters.indexOf(grant);
+        if (at < 0) return;
+        waiters.splice(at, 1);
+        reject(signal!.reason);
+      };
+      const grant = () => {
+        signal?.removeEventListener("abort", giveUp);
+        resolve(release);
+      };
+      waiters.push(grant);
+      signal?.addEventListener("abort", giveUp, { once: true });
+      if (priority === "playback") for (const listener of [...playbackWaitListeners]) listener();
     });
   }
 
   // The common case: a plain async function whose whole lifetime — spawn
   // through exit — is the thing being rate-limited. Every shared-queue
   // caller goes through this rather than acquireMediaSlot directly.
-  async function runMediaTask<T>(priority: MediaPriority, task: () => Promise<T>): Promise<T> {
-    const release = await acquireMediaSlot(priority);
+  async function runMediaTask<T>(priority: MediaPriority, task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const release = await acquireMediaSlot(priority, signal);
     try {
       return await task();
     } finally {
@@ -81,9 +105,24 @@ export function createMediaQueue(limit: number) {
     }
   }
 
-  return { acquireMediaSlot, runMediaTask };
+  // How many slots are taken right now: for specs that check a slot was
+  // given back.
+  const inUse = () => active;
+
+  // How many playback tasks are waiting for a slot, and a way to hear as
+  // soon as another one starts to.
+  const playbackWaiting = () => playbackWaiters.length;
+  function onPlaybackWaiting(listener: () => void): () => void {
+    playbackWaitListeners.add(listener);
+    return () => playbackWaitListeners.delete(listener);
+  }
+
+  return { acquireMediaSlot, runMediaTask, inUse, playbackWaiting, onPlaybackWaiting };
 }
 
 const sharedMediaQueue = createMediaQueue(MEDIA_CONCURRENCY_LIMIT);
 
 export const runMediaTask = sharedMediaQueue.runMediaTask;
+export const mediaSlotsInUse = sharedMediaQueue.inUse;
+export const playbackWaiting = sharedMediaQueue.playbackWaiting;
+export const onPlaybackWaiting = sharedMediaQueue.onPlaybackWaiting;

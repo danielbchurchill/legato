@@ -10,6 +10,7 @@ import {
 } from "../linked-servers.js";
 import { SERVER_ID_PATTERN, type SigningKeys } from "../signing-keys.js";
 import type { Database } from "../sqlite.js";
+import type { TunnelRegistry } from "../tunnel-registry.js";
 
 // Recording and removing (account, server) pairs (issue #231). See
 // linked-servers.ts for what a pair is and what the proofs prove.
@@ -29,8 +30,11 @@ const PROOF_FAILURE_STATUS: Record<ProofFailure, number> = {
   no_account: 410,
 };
 
-export function linkedServerRoutes(db: Database, options: { signingKeys: SigningKeys | null; issuer: string | undefined }) {
-  const { signingKeys, issuer } = options;
+export function linkedServerRoutes(
+  db: Database,
+  options: { signingKeys: SigningKeys | null; issuer: string | undefined; tunnels: TunnelRegistry | undefined },
+) {
+  const { signingKeys, issuer, tunnels } = options;
 
   return async function routes(app: FastifyInstance) {
     app.post<{ Body: Record<string, unknown> | null }>("/linked-servers", async (request, reply) => {
@@ -65,6 +69,11 @@ export function linkedServerRoutes(db: Database, options: { signingKeys: Signing
 
     // The connect screen's "your servers" (issue #117). The desktop app's
     // webview calls it cross-origin, so it's on routes/auth.ts's CORS list.
+    //
+    // Each server's tunnel (issue #310): connected, and since when, or not,
+    // with when legato.fm last heard from it (null if it never has). A
+    // connected server is one this account can reach through the relay
+    // (routes/relay.ts lets an account reach exactly the servers it linked).
     app.get("/linked-servers", async (request, reply) => {
       const token = sessionToken(request);
       const user = token ? getUserBySessionToken(db, token) : null;
@@ -73,7 +82,16 @@ export function linkedServerRoutes(db: Database, options: { signingKeys: Signing
         return { error: "Sign in to legato.fm first.", reason: "signed_out" };
       }
       return {
-        servers: listLinkedServers(db, user.id).map(({ serverId, linkedAt }) => ({ serverId, linkedAt: linkedAt.toISOString() })),
+        servers: listLinkedServers(db, user.id).map(({ serverId, linkedAt, tunnelLastSeenAt }) => {
+          const live = tunnels?.get(serverId);
+          return {
+            serverId,
+            linkedAt: linkedAt.toISOString(),
+            tunnel: live
+              ? { connected: true, connectedAt: live.connectedAt.toISOString() }
+              : { connected: false, lastSeenAt: tunnelLastSeenAt?.toISOString() ?? null },
+          };
+        }),
       };
     });
 

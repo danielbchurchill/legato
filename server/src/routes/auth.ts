@@ -16,10 +16,13 @@ import { legatoIdentity } from "../auth/legatoIdentity.js";
 import { linkLegatoAccount } from "../auth/legatoLink.js";
 import { linkedAccountId, unlinkAccount } from "../auth/legatoUsers.js";
 import { createOwner, ownerExists, passwordProblem, verifyOwnerPassword } from "../auth/owner.js";
+import { clientAddress } from "../auth/clientAddress.js";
 import { SignInLimiter } from "../auth/rateLimit.js";
 import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type SetupCodes } from "../auth/setupCode.js";
 import { createSession, deleteSession, spendAccessToken, type SessionUser } from "../auth/sessions.js";
 import { IDENTITY_NONCE_PATTERN, identityProof, loadServerKey } from "../auth/serverKey.js";
+import { forgetTunnelCredential } from "../auth/tunnelCredential.js";
+import { syncRelayTunnelOnceAnswered } from "../tunnel/relayTunnel.js";
 
 // Sign-in for this server (issue #112): the local owner's password, plus
 // the Google/GitHub accounts provisioned before the owner existed. The
@@ -293,7 +296,7 @@ export function authRoutes(
   const setupCodes = options.setupCodes ?? serverSetupCodes;
 
   function tooManyAttempts(request: FastifyRequest, reply: FastifyReply) {
-    const retryAfter = limiter.retryAfterSeconds(request.ip);
+    const retryAfter = limiter.retryAfterSeconds(clientAddress(request));
     if (retryAfter === 0) return null;
     reply.code(429).header("Retry-After", String(retryAfter));
     return { error: "Too many attempts. Wait a moment, then try again.", reason: "rate_limited", retryAfter };
@@ -422,7 +425,7 @@ export function authRoutes(
           if (limited) return limited;
           const check = setupCodes.check(request.body?.setupCode);
           if (check !== "ok") {
-            limiter.recordFailure(request.ip);
+            limiter.recordFailure(clientAddress(request));
             reply.code(403);
             return check === "expired"
               ? {
@@ -431,7 +434,7 @@ export function authRoutes(
                 }
               : { error: `That setup code doesn't match. ${SETUP_CODE_HELP}`, reason: "bad_setup_code" };
           }
-          limiter.recordSuccess(request.ip);
+          limiter.recordSuccess(clientAddress(request));
         }
 
         const linkAccountId = request.body?.linkAccountId;
@@ -460,7 +463,10 @@ export function authRoutes(
             ? await linkLegatoAccount(db, owner.id, linkToken)
             : { ok: false as const, error: CLAIM_CHECK_MESSAGES.lapsed, reason: "claim_lapsed" };
           legato = outcome.ok ? { linked: outcome.linked } : { linked: null, error: outcome.error, reason: outcome.reason };
-          if (outcome.ok) request.log.info("auth: owner linked the legato.fm account that claimed this server");
+          if (outcome.ok) {
+            request.log.info("auth: owner linked the legato.fm account that claimed this server");
+            syncRelayTunnelOnceAnswered(db, reply);
+          }
         }
         claims.drop();
         reply.code(201);
@@ -478,11 +484,11 @@ export function authRoutes(
       const password = request.body?.password;
       const owner = typeof password === "string" && !passwordProblem(password) ? await verifyOwnerPassword(db, password) : null;
       if (!owner) {
-        limiter.recordFailure(request.ip);
+        limiter.recordFailure(clientAddress(request));
         reply.code(401);
         return { error: "That password doesn't match this server's owner.", reason: "bad_password" };
       }
-      limiter.recordSuccess(request.ip);
+      limiter.recordSuccess(clientAddress(request));
       return issueSession(db, reply, owner);
     });
 
@@ -531,12 +537,17 @@ export function authRoutes(
         return legatoReason === undefined ? { error, reason } : { error, reason, legatoReason };
       }
       request.log.info("auth: owner linked a legato.fm account");
+      syncRelayTunnelOnceAnswered(db, reply);
       return { linked: outcome.linked };
     });
 
     // Unlinking the last account also stops the daily key refresh, so the
     // server goes back to never contacting legato.fm. The cached keys stay;
-    // they're public and harmless, and a relink can use them.
+    // they're public and harmless, and a relink can use them. The tunnel
+    // credential doesn't (issue #310): it's forgotten, and the tunnel it
+    // kept open closes, once this answer has gone. An unlink made from a
+    // phone through legato.fm comes down that very tunnel, and closing it
+    // first would turn an unlink that happened into a 502.
     //
     // legato.fm is told (issue #231), but the unlink here happens first and
     // doesn't depend on it: the owner wants out, and may be offline. If
@@ -553,7 +564,9 @@ export function authRoutes(
       const identity = legatoIdentity(db);
       const accountId = linkedAccountId(db, request.authUser.id);
       unlinkAccount(db, request.authUser.id);
+      if (accountId) forgetTunnelCredential(db, accountId);
       identity.syncSchedule();
+      syncRelayTunnelOnceAnswered(db, reply);
       const legatoNotified = accountId && identity.enabled ? (await identity.recordUnlink(accountId)).ok : null;
       return { ok: true, legatoNotified };
     });

@@ -33,6 +33,7 @@ import {
 import { isLinkedServer } from "../linked-servers.js";
 import { clientAddress, TokenLimiter } from "../rate-limit.js";
 import { parseSigningKeys, SERVER_ID_PATTERN, signServerToken, type SigningKeys } from "../signing-keys.js";
+import type { TunnelRegistry } from "../tunnel-registry.js";
 import { claimPageRoutes, claimReturnPath } from "./claim-page.js";
 import { linkedServerRoutes } from "./linked-servers.js";
 import { pairRoutes } from "./pair.js";
@@ -328,6 +329,9 @@ export interface AuthRoutesOptions {
   // Token signing keys (issue #114). Undefined reads RELAY_SIGNING_KEYS;
   // null is "signing off", which is what tests of the unconfigured path pass.
   signingKeys?: SigningKeys | null;
+  // The live tunnels, for the tunnel state GET /linked-servers reports
+  // (issue #310). buildApp passes its own.
+  tunnels?: TunnelRegistry;
 }
 
 const SIGNING_NOT_CONFIGURED =
@@ -357,7 +361,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     // Here rather than in app.ts because recording a link means checking a
     // token this service signed, with the keys resolved just above, and
     // redeeming a pairing code means signing one (issue #237).
-    app.register(linkedServerRoutes(db, { signingKeys, issuer: config.callbackBaseUrl }));
+    app.register(linkedServerRoutes(db, { signingKeys, issuer: config.callbackBaseUrl, tunnels: options.tunnels }));
     app.register(pairRoutes(db, { signingKeys, issuer: config.callbackBaseUrl }));
     app.register(
       claimPageRoutes(db, {

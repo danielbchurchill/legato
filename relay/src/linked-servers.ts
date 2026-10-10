@@ -100,12 +100,24 @@ function recordLinkedServer(db: Database, relayUserId: number, serverId: string,
 
 // The account's own pairs, oldest first: the connect screen's "your servers"
 // (issue #117). Only what the account itself made, and nothing a server
-// reported beyond its id.
-export function listLinkedServers(db: Database, relayUserId: number): { serverId: string; linkedAt: Date }[] {
+// reported beyond its id. lastSeenAt is when legato.fm last heard from the
+// server's tunnel (issue #310, migration 0007), null if it never has.
+export function listLinkedServers(
+  db: Database,
+  relayUserId: number,
+): { serverId: string; linkedAt: Date; tunnelLastSeenAt: Date | null }[] {
   const rows = db
-    .prepare("SELECT server_id, linked_at FROM linked_servers WHERE relay_user_id = ? ORDER BY linked_at, server_id")
-    .all(relayUserId) as { server_id: string; linked_at: string }[];
-  return rows.map((row) => ({ serverId: row.server_id, linkedAt: parseSqliteDatetime(row.linked_at) }));
+    .prepare(
+      `SELECT linked_servers.server_id, linked_at, last_seen_at FROM linked_servers
+       LEFT JOIN server_tunnels ON server_tunnels.server_id = linked_servers.server_id
+       WHERE relay_user_id = ? ORDER BY linked_at, linked_servers.server_id`,
+    )
+    .all(relayUserId) as { server_id: string; linked_at: string; last_seen_at: string | null }[];
+  return rows.map((row) => ({
+    serverId: row.server_id,
+    linkedAt: parseSqliteDatetime(row.linked_at),
+    tunnelLastSeenAt: row.last_seen_at ? parseSqliteDatetime(row.last_seen_at) : null,
+  }));
 }
 
 export function removeLinkedServer(db: Database, relayUserId: number, serverId: string): boolean {

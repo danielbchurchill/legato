@@ -14,6 +14,10 @@ export function anyLinkedAccount(db: Database): boolean {
   return db.prepare("SELECT 1 FROM users WHERE legato_account_id IS NOT NULL LIMIT 1").get() !== undefined;
 }
 
+export function isLinkedAccount(db: Database, accountId: string): boolean {
+  return db.prepare("SELECT 1 FROM users WHERE legato_account_id = ?").get(accountId) !== undefined;
+}
+
 export function linkedAccountId(db: Database, userId: number): string | null {
   const row = db.prepare("SELECT legato_account_id FROM users WHERE id = ?").get(userId) as
     | { legato_account_id: string | null }

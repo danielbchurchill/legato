@@ -1,35 +1,66 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "../sqlite.js";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { getUserBySessionToken, SESSION_COOKIE } from "../accounts.js";
 import { sanitizeHeaders } from "../headers.js";
+import { clientAddress } from "../rate-limit.js";
+import { isLinkedServer } from "../linked-servers.js";
 import type { RequestFrame } from "../protocol.js";
+import { SERVER_ID_PATTERN } from "../signing-keys.js";
 import type { TunnelRegistry } from "../tunnel-registry.js";
 
-// ADDRESSING: which tenant's tunnel does a /relay/* request go to?
+// ADDRESSING: which tunnel does a /relay/* request go to?
 //
-// No account identifier ever appears in the URL. A caller hitting
-// /relay/* is expected to already be signed into a relay account the
-// same way as everything under /auth and /pair — the relay_session
-// cookie set by routes/auth.ts's OAuth callback. That session already
-// names a relay_user_id, so "route this request to MY paired home
-// server" is exactly registry.getTunnel(that relay_user_id): no separate
-// lookup, no id to leak into logs/URLs/browser history, and no
-// authorization check to get right because there's no id in the request
-// for a caller to substitute someone else's account into.
+// The server's id is the first path segment: /relay/<server id>/api/v1/…
+// reaches that server's /api/v1/…. An account can link several servers
+// (issue #310), each with a tunnel of its own (tunnel-registry.ts), so the
+// account alone can't say which one is meant.
 //
-// The alternative considered was an explicit account/device id in the
-// path or a header (`/relay/:accountId/*`), rejected because it turns
-// "does this request reach the right tunnel" into "does this request
-// reach a tunnel this caller is *authorized* to reach" — an extra check
-// that's trivial to get right today and easy to get wrong later. The
-// session-derived approach makes it a non-question instead. It also
-// composes for free with a future "more than one paired home server per
-// account": getTunnel would just take a second argument then (which
-// paired server) — today it's a 1:1 account:tunnel map, see
-// tunnel-registry.ts.
+// Who may use it: a caller signed in to a relay account the same way as
+// everything under /auth and /pair, with the relay_session cookie
+// routes/auth.ts sets, whose account has linked that server
+// (linked_servers, migration 0005). That's the same pair POST
+// /auth/server-token checks before it signs an `access` token for a
+// server, so the relay carries requests exactly where legato.fm already
+// vouches for the account. An id the account hasn't linked is a 404 whether
+// or not that server is connected: the answer says nothing about servers
+// that aren't the caller's.
+//
+// Cookies stay on this side. legato.fm's own cookies (the relay session
+// among them) are never sent down a tunnel, and a home server's Set-Cookie
+// never comes back up one: every server shares this one origin, so a
+// cookie one server set here would be sent to all the others, and could
+// replace the caller's legato.fm session. Home servers don't need either:
+// clients send them a bearer token, and a media ticket in the URL
+// (server/src/auth/gate.ts).
+//
+// No script runs on this origin. A server's responses are served from
+// legato.fm's own origin, where a same-origin request carries the
+// relay_session cookie: a page a home server sent here could call POST
+// /auth/server-token or DELETE /linked-servers as whoever opened it. So
+// every /relay/* response, the relay's own refusals included, carries
+// `Content-Security-Policy: sandbox`, which opens a document in an opaque
+// origin with no script and no forms, and `X-Content-Type-Options:
+// nosniff`, so a body is only ever what its Content-Type says. A server's
+// own policy is kept beside it, and can only narrow it. fetch(), <img> and
+// <audio> don't read either header, so clients are unaffected. Giving each
+// server an origin of its own would make the sandbox unnecessary.
+// The largest request body the relay carries to a home server. A body is
+// held whole in memory and goes down the tunnel as one base64 frame, so it
+// can't be unlimited. The biggest one any Legato client sends is a first
+// map settle (PUT /layout/settled), which the server itself caps at 4 MiB;
+// a playlist import stays under the server's 1 MiB default.
+export const REQUEST_BODY_LIMIT = 4 * 1024 * 1024;
+
 export function relayRoutes(registry: TunnelRegistry, db: Database) {
   return async function routes(app: FastifyInstance) {
+    // On the raw response, so it holds for replies Fastify sends (a 401,
+    // a 413) and for the hijacked ones below alike.
+    app.addHook("onRequest", async (_request, reply) => {
+      reply.raw.setHeader("content-security-policy", SANDBOX);
+      reply.raw.setHeader("x-content-type-options", "nosniff");
+    });
+
     // Scoped to this plugin only — not the root app — so /auth/* and
     // /pair/* keep Fastify's normal JSON body parsing. Every byte of
     // every /relay/* request body just needs to reach the home server
@@ -44,21 +75,18 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
     // object by Fastify's default parser and then dropped entirely by
     // the `instanceof Buffer` check below, forwarding an empty body to
     // the home server instead of the real one.
-    const rawBody = (
-      _req: unknown,
-      payload: NodeJS.ReadableStream,
-      done: (err: Error | null, body?: Buffer) => void,
-    ) => {
-      const chunks: Buffer[] = [];
-      payload.on("data", (chunk: Buffer) => chunks.push(chunk));
-      payload.on("end", () => done(null, Buffer.concat(chunks)));
-      payload.on("error", (err: Error) => done(err, undefined));
-    };
-    app.addContentTypeParser("*", rawBody);
-    app.addContentTypeParser("application/json", rawBody);
-    app.addContentTypeParser("text/plain", rawBody);
+    //
+    // parseAs "buffer" is what makes Fastify hold a body to bodyLimit and
+    // answer 413 past it; a parser that reads the stream itself is never
+    // held to any limit.
+    const rawBody = { parseAs: "buffer" as const, bodyLimit: REQUEST_BODY_LIMIT };
+    const passThrough = (_req: unknown, body: Buffer | string, done: (err: Error | null, body?: Buffer | string) => void) =>
+      done(null, body);
+    app.addContentTypeParser("*", rawBody, passThrough);
+    app.addContentTypeParser("application/json", rawBody, passThrough);
+    app.addContentTypeParser("text/plain", rawBody, passThrough);
 
-    app.all("/relay/*", async (request, reply) => {
+    const forward = async (request: FastifyRequest<{ Params: { serverId: string } }>, reply: FastifyReply) => {
       const token = request.cookies[SESSION_COOKIE];
       const user = token ? getUserBySessionToken(db, token) : null;
       if (!user) {
@@ -66,23 +94,32 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
         return;
       }
 
-      const tunnel = registry.getTunnel(user.id);
+      const { serverId } = request.params;
+      if (!SERVER_ID_PATTERN.test(serverId) || !isLinkedServer(db, user.id, serverId)) {
+        reply.code(404).send({ error: "no server with that id is linked to this account" });
+        return;
+      }
+
+      const tunnel = registry.get(serverId);
       if (!tunnel) {
-        reply.code(503).send({ error: "no home server tunnel connected for this account" });
+        reply.code(503).send({ error: "that server isn't connected to legato.fm right now" });
         return;
       }
 
       const requestId = randomUUID();
-      const targetPath = request.url.slice("/relay".length) || "/";
+      const targetPath = pathOnServer(request.url);
       const bodyBuffer = request.body instanceof Buffer ? request.body : undefined;
+      const headers = sanitizeHeaders(request.headers);
+      delete headers.cookie;
 
       const frame: RequestFrame = {
         type: "request",
         requestId,
         method: request.method,
         path: targetPath,
-        headers: sanitizeHeaders(request.headers),
+        headers,
         ...(bodyBuffer && bodyBuffer.length > 0 ? { body: bodyBuffer.toString("base64") } : {}),
+        clientAddress: clientAddress(request.headers, request.ip),
       };
 
       // Fastify would otherwise manage (and buffer) the reply itself; hijack
@@ -92,9 +129,13 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
       reply.hijack();
 
       await new Promise<void>((resolve) => {
-        registry.registerPending(requestId, user.id, {
-          onStart: (status, headers) => {
-            reply.raw.writeHead(status, headers);
+        registry.registerPending(requestId, tunnel.socket, request.method, {
+          // Flushed at once, so the device has the status while the body
+          // is still on its way, and so a failure after it can only break
+          // the connection off (onError).
+          onStart: (status, responseHeaders) => {
+            reply.raw.writeHead(status, forDevice(responseHeaders));
+            reply.raw.flushHeaders();
           },
           onChunk: (buf) => {
             reply.raw.write(buf);
@@ -103,12 +144,15 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
             reply.raw.end();
             resolve();
           },
+          // Once the status has gone out, a failure breaks the connection
+          // off rather than ending the body cleanly: a cut-short stream
+          // must not look like a whole one.
           onError: (message) => {
             if (!reply.raw.headersSent) {
               reply.raw.writeHead(502, { "content-type": "application/json" });
               reply.raw.end(JSON.stringify({ error: message }));
             } else {
-              reply.raw.end();
+              reply.raw.destroy();
             }
             resolve();
           },
@@ -128,8 +172,66 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
           if (!reply.raw.writableEnded) registry.cancelPending(requestId);
         });
 
-        registry.sendRequest(tunnel, frame);
+        registry.sendRequest(tunnel.socket, frame);
       });
-    });
+    };
+
+    app.all("/relay/:serverId", forward);
+    app.all("/relay/:serverId/*", forward);
   };
+}
+
+// The path the device asked for past /relay/<id>, with its query, exactly
+// as it sent it: cut at the end of the raw id segment. The decoded id
+// can't be used to measure it, since a percent-encoded id is longer on
+// the wire than once decoded.
+const AFTER_ID = /^\/[^/?]*\/[^/?]*(.*)$/s;
+
+function pathOnServer(url: string): string {
+  const rest = AFTER_ID.exec(url)?.[1] ?? "";
+  return rest.startsWith("/") ? rest : `/${rest}`;
+}
+
+const SANDBOX = "sandbox";
+
+// The only headers a home server's answer takes to the device: what its
+// own routes send through the relay. The body's type, length and range
+// (routes/files.ts), caching (covers, the stream cache, the web client),
+// the Vary @fastify/cors adds, a cover's source, and the sign-in
+// limiter's Retry-After. A header a server route starts sending later
+// needs adding here.
+//
+// Everything else stays on the server's side, because the answer lands on
+// legato.fm's origin. Set-Cookie and Clear-Site-Data would change
+// legato.fm's own cookies and storage, the relay session among them. A
+// Location or Refresh would make auth.legato.fm an open redirect, and a
+// Legato server never redirects anywhere through the relay: its only
+// redirects are to Google and GitHub for its own sign-in. And CORS headers
+// would let a server decide who may read legato.fm's answers.
+const DEVICE_HEADERS = new Set([
+  "content-type",
+  "content-length",
+  "content-range",
+  "accept-ranges",
+  "cache-control",
+  "etag",
+  "vary",
+  "x-cover-source",
+  "retry-after",
+  "content-security-policy",
+]);
+
+// A home server's response headers as they go to the device: only those
+// above, and the sandbox kept whatever the server sent. writeHead()'s
+// headers win over setHeader()'s, so a server's own policy goes out next
+// to the sandbox (both are enforced). The relay's X-Content-Type-Options
+// is the only one.
+function forDevice(headers: Record<string, string>): Record<string, string | string[]> {
+  const result: Record<string, string | string[]> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const key = name.toLowerCase();
+    if (!DEVICE_HEADERS.has(key)) continue;
+    result[key] = key === "content-security-policy" ? [value, SANDBOX] : value;
+  }
+  return result;
 }

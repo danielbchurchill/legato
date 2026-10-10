@@ -132,6 +132,51 @@ describe("createMediaQueue", () => {
     await expect(queue.runMediaTask("playback", async () => "ok")).resolves.toBe("ok");
   });
 
+  it("takes a task out of the queue when its signal aborts while it waits", async () => {
+    const queue = createMediaQueue(1);
+    const held = deferred();
+    void queue.runMediaTask("playback", () => held.promise);
+    const giveUp = new AbortController();
+    let ran = false;
+    const waiting = queue.runMediaTask(
+      "playback",
+      async () => {
+        ran = true;
+      },
+      giveUp.signal,
+    );
+    expect(queue.playbackWaiting()).toBe(1);
+    giveUp.abort(new Error("nobody's listening"));
+    await expect(waiting).rejects.toThrow("nobody's listening");
+    expect(queue.playbackWaiting()).toBe(0);
+
+    // The slot goes to the next task, not the one that gave up.
+    held.resolve();
+    await expect(queue.runMediaTask("playback", async () => "next")).resolves.toBe("next");
+    expect(ran).toBe(false);
+    expect(queue.inUse()).toBe(0);
+    // Already aborted: never waits at all.
+    await expect(queue.runMediaTask("playback", async () => "never", giveUp.signal)).rejects.toThrow("nobody's listening");
+  });
+
+  it("says when a playback task starts waiting, and never for background work", async () => {
+    const queue = createMediaQueue(1);
+    const held = deferred();
+    void queue.runMediaTask("background", () => held.promise);
+    const heard: number[] = [];
+    const off = queue.onPlaybackWaiting(() => heard.push(queue.playbackWaiting()));
+
+    void queue.runMediaTask("background", async () => {});
+    expect(heard).toEqual([]);
+    void queue.runMediaTask("playback", async () => {});
+    void queue.runMediaTask("playback", async () => {});
+    expect(heard).toEqual([1, 2]);
+    off();
+    void queue.runMediaTask("playback", async () => {});
+    expect(heard).toEqual([1, 2]);
+    held.resolve();
+  });
+
   it("acquireMediaSlot's release() is safe to call more than once", async () => {
     const queue = createMediaQueue(1);
     const release = await queue.acquireMediaSlot("playback");
