@@ -40,7 +40,9 @@ export type FakeRelay = {
 // frame with a credential frame, or with nothing when it returns null.
 // "drop" cuts the connection off instead. `then: "drop"` sends the
 // credential, then cuts the connection off when the server tries to move
-// onto it, before the move counts.
+// onto it, before the move counts. `ignoreMoves` leaves a signed-in
+// tunnel's move unanswered, the way the relay does one too soon after the
+// last.
 export type FakeRotation = { credential: string; expiresAt: string; then?: "drop" } | "drop" | null;
 
 export function startFakeRelay(options: {
@@ -48,6 +50,7 @@ export function startFakeRelay(options: {
   port?: number;
   replace?: boolean;
   rotate?: () => FakeRotation;
+  ignoreMoves?: boolean;
 }): FakeRelay {
   const signedIn: ServerWebSocket<SocketData>[] = [];
   let dropNextMove = false;
@@ -74,6 +77,7 @@ export function startFakeRelay(options: {
             dropNextMove = false;
             return ws.terminate();
           }
+          if (options.ignoreMoves && signedIn.includes(ws)) return;
           relay.auths.push(frame.secret);
           relay.userAgents.push(ws.data.userAgent);
           if (options.accept(frame.secret)) {

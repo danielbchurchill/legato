@@ -3,7 +3,7 @@ import { openDb } from "../db.js";
 import { installLegatoIdentity, LegatoIdentity } from "../auth/legatoIdentity.js";
 import { fakeLegatoFetch, makeTestKey, signTestToken, testClaims, type LegatoReport } from "../auth/legato-test-keys.js";
 import { buildTestApp, createOwnerForTest } from "../auth/test-app.js";
-import { readTunnelCredential, storeTunnelCredential } from "../auth/tunnelCredential.js";
+import { previousTunnelCredential, readTunnelCredential, storeTunnelCredential } from "../auth/tunnelCredential.js";
 import type { Database } from "../sqlite.js";
 import type { TunnelState } from "./client.js";
 import { startFakeRelay, type FakeRotation } from "./fake-relay.js";
@@ -31,9 +31,15 @@ async function setup(
     slowAnswerTo?: string;
     rotate?: () => FakeRotation;
     rotateCheckMs?: number;
+    ignoreMoves?: boolean;
   } = {},
 ) {
-  const fake = startFakeRelay({ accept: (credential) => credential.startsWith("live-"), replace: options.replace, rotate: options.rotate });
+  const fake = startFakeRelay({
+    accept: (credential) => credential.startsWith("live-"),
+    replace: options.replace,
+    rotate: options.rotate,
+    ignoreMoves: options.ignoreMoves,
+  });
   cleanups.push(() => fake.stop());
   const db = openDb(":memory:");
   const key = makeTestKey();
@@ -491,15 +497,10 @@ describe("RelayTunnel rotation", () => {
     h.tunnel.sync();
     await until(() => h.tunnel.state, "connected");
 
-    const locked = spyOn(h.db, "transaction").mockImplementation(() => {
-      throw new Error("database is locked");
-    });
-    try {
-      h.fake.send({ type: "credential", credential: "live-2", expiresAt: inDays(90) });
-      await sleep(100);
-    } finally {
-      locked.mockRestore();
-    }
+    // The recompute Worker holding the write lock past busy_timeout.
+    h.db.exec("CREATE TRIGGER locked BEFORE UPDATE ON tunnel_credential BEGIN SELECT RAISE(ABORT, 'database is locked'); END");
+    h.fake.send({ type: "credential", credential: "live-2", expiresAt: inDays(90) });
+    await sleep(100);
     expect(h.fake.auths).toEqual(["live-1"]);
     expect(stored(h.db, h.fake.origin)).toBe("live-1");
     expect(h.tunnel.state).toBe("connected");
@@ -508,16 +509,78 @@ describe("RelayTunnel rotation", () => {
     ]);
   });
 
-  it("is refused like any other credential when the replacement was revoked before the tunnel moved onto it", async () => {
-    const h = await setup();
+  // The review: the replacement was stored over the only credential before
+  // legato.fm had accepted it, so a refusal left the server with nothing
+  // that worked. A restored legato.fm database, or a link racing the
+  // rotation, is refused like this.
+  it("goes back to the credential it replaced when legato.fm refuses the new one, and stays connected", async () => {
+    const h = await setup({ rotate: () => ({ credential: "revoked-2", expiresAt: inDays(90) }) });
+    const expiresAt = inDays(30);
     h.link("42");
-    h.store("42", "live-1");
+    h.store("42", "live-1", expiresAt);
     h.tunnel.sync();
+    while (h.fake.auths.length < 3) await sleep(10);
     await until(() => h.tunnel.state, "connected");
 
-    h.fake.send({ type: "credential", credential: "revoked-2", expiresAt: inDays(90) });
+    expect(h.fake.auths).toEqual(["live-1", "revoked-2", "live-1"]);
+    expect(readTunnelCredential(h.db, h.fake.origin)).toEqual({ origin: h.fake.origin, accountId: "42", credential: "live-1", expiresAt });
+    expect(previousTunnelCredential(h.db, h.fake.origin)).toBeNull();
+    expect(h.tunnel.status).toBe("connected");
+    expect(h.lines.map((line) => line.message)).toContainEqual(expect.stringContaining("went back to the one before it"));
+  });
+
+  it("keeps the credential it replaced until legato.fm accepts the new one, through a restart", async () => {
+    const h = await setup({ ignoreMoves: true, rotate: () => ({ credential: "live-2", expiresAt: inDays(90) }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(30));
+    h.tunnel.sync();
+    while (h.fake.rotates < 1) await sleep(10);
+    while (stored(h.db, h.fake.origin) !== "live-2") await sleep(10);
+
+    // Stored, moved onto, and not answered yet: the old one is still kept.
+    expect(previousTunnelCredential(h.db, h.fake.origin)?.credential).toBe("live-1");
+    // A restart signs in with the new one, and legato.fm's answer is what lets the old one go.
+    h.tunnel.stop();
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+    expect(h.fake.auths).toEqual(["live-1", "live-2"]);
+    expect(previousTunnelCredential(h.db, h.fake.origin)).toBeNull();
+  });
+
+  it("goes back after a restart too, when legato.fm refuses a replacement it never accepted", async () => {
+    // What a rotation leaves when the server restarts before legato.fm answers.
+    const h = await setup();
+    h.link("42");
+    h.store("42", "revoked-2", inDays(90));
+    h.db.prepare("UPDATE tunnel_credential SET previous_credential = 'live-1', previous_expires_at = ?").run(inDays(30));
+    h.tunnel.sync();
+    while (h.fake.auths.length < 2) await sleep(10);
+    await until(() => h.tunnel.state, "connected");
+    expect(h.fake.auths).toEqual(["revoked-2", "live-1"]);
+    expect(stored(h.db, h.fake.origin)).toBe("live-1");
+  });
+
+  it("is refused like any other credential once legato.fm has accepted it", async () => {
+    const h = await setup({ rotate: () => ({ credential: "live-2", expiresAt: inDays(90) }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(30));
+    h.tunnel.sync();
+    while (previousTunnelCredential(h.db, h.fake.origin) || stored(h.db, h.fake.origin) !== "live-2") await sleep(10);
+
+    // Revoked on legato.fm, which retired live-1 when live-2 was first used.
+    h.fake.send({ type: "auth-error", message: "this tunnel credential was revoked or has expired" });
     await until(() => h.tunnel.state, "refused");
-    expect(h.tunnel.status).toBe("refused");
+    expect(h.fake.auths).toEqual(["live-1", "live-2"]);
+  });
+
+  it("forgets the credential a rotation replaced when a link stores another", async () => {
+    const h = await setup({ ignoreMoves: true, rotate: () => ({ credential: "live-2", expiresAt: inDays(90) }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(30));
+    h.tunnel.sync();
+    while (stored(h.db, h.fake.origin) !== "live-2") await sleep(10);
+    h.store("42", "live-from-link");
+    expect(previousTunnelCredential(h.db, h.fake.origin)).toBeNull();
   });
 });
 

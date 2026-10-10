@@ -3,9 +3,12 @@ import { legatoIdentity } from "../auth/legatoIdentity.js";
 import { isLinkedAccount } from "../auth/legatoUsers.js";
 import { loadServerKey, rotateProof } from "../auth/serverKey.js";
 import {
+  forgetPreviousTunnelCredential,
   forgetTunnelCredential,
+  previousTunnelCredential,
   readTunnelCredential,
-  storeTunnelCredential,
+  replaceTunnelCredential,
+  restorePreviousTunnelCredential,
   type StoredTunnelCredential,
 } from "../auth/tunnelCredential.js";
 import type { Database } from "../sqlite.js";
@@ -36,9 +39,12 @@ import { TunnelClient, type TunnelClientOptions, type TunnelState } from "./clie
 // is signed with this server's identity key (auth/serverKey.ts,
 // rotateProof), so a copy of the credential can't renew itself. The
 // replacement is stored over the one it replaces, for the same account,
-// and the client moves its tunnel onto it (tunnel/client.ts). A legato.fm
-// from before rotation never answers, and the credential runs out as it
-// always did.
+// and the client moves its tunnel onto it (tunnel/client.ts). The one it
+// replaced is kept (migration 0044) until legato.fm accepts the new one,
+// and goes back in if legato.fm refuses it, so the server is never left
+// holding only a credential legato.fm doesn't know. A legato.fm from
+// before rotation never answers, and the credential runs out as it always
+// did.
 
 const DAY_MS = 24 * 60 * 60_000;
 const ROTATE_WHEN_LEFT_MS = 60 * DAY_MS;
@@ -130,13 +136,18 @@ export class RelayTunnel {
       );
       return;
     }
+    // A replacement stored before a restart that legato.fm never answered.
+    const previous = previousTunnelCredential(this.db, identity.origin);
     const client = new TunnelClient({
       ...this.options.client,
       url: tunnelUrl(identity.origin),
       credential: stored.credential,
+      fallback: previous && Date.parse(previous.expiresAt) > Date.now() ? previous.credential : undefined,
       target: `http://127.0.0.1:${this.options.port}`,
       log: this.log,
       onCredential: (replacement) => this.storeReplacement(stored, replacement),
+      onReplacementAccepted: (credential) => this.forgetPrevious(credential),
+      onReplacementRefused: (credential) => this.restorePrevious(credential),
     });
     this.client = client;
     client.onState((state) => {
@@ -182,14 +193,11 @@ export class RelayTunnel {
   // (the recompute Worker holding the write lock past busy_timeout) is
   // dropped, and the tunnel stays on the credential it has.
   private storeReplacement(stored: StoredTunnelCredential, replacement: { credential: string; expiresAt: string }): boolean {
+    const current = this.credential;
+    if (!current) return false;
     try {
-      const kept = this.db.transaction(() => {
-        const current = readTunnelCredential(this.db, stored.origin);
-        if (current?.credential !== this.credential || current.accountId !== stored.accountId) return false;
-        storeTunnelCredential(this.db, { origin: stored.origin, accountId: stored.accountId, ...replacement });
-        return true;
-      })();
-      if (!kept) return false;
+      if (!replaceTunnelCredential(this.db, { origin: stored.origin, accountId: stored.accountId, credential: current }, replacement))
+        return false;
     } catch (err) {
       this.log(
         "warn",
@@ -200,6 +208,41 @@ export class RelayTunnel {
     this.credential = replacement.credential;
     this.expiresAt = Date.parse(replacement.expiresAt);
     this.log("info", `legato.fm: replaced this server's tunnel credential; the new one is good until ${replacement.expiresAt}`);
+    return true;
+  }
+
+  // legato.fm accepted the replacement and retired the one before it. A
+  // write that fails leaves the old one kept, which the next acceptance,
+  // at the next sign-in, clears.
+  private forgetPrevious(credential: string): void {
+    try {
+      forgetPreviousTunnelCredential(this.db, credential);
+    } catch (err) {
+      this.log(
+        "warn",
+        `legato.fm: couldn't forget this server's old tunnel credential (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+  }
+
+  // legato.fm refused a replacement it never accepted, so the one before it
+  // goes back in, and the client signs in with that. False when it can't
+  // be put back, and the refusal stands.
+  private restorePrevious(refused: string): boolean {
+    let restored: { credential: string; expiresAt: string } | null;
+    try {
+      restored = restorePreviousTunnelCredential(this.db, refused);
+    } catch (err) {
+      this.log(
+        "warn",
+        `legato.fm: couldn't go back to this server's old tunnel credential (${err instanceof Error ? err.message : String(err)})`,
+      );
+      return false;
+    }
+    if (!restored) return false;
+    this.credential = restored.credential;
+    this.expiresAt = Date.parse(restored.expiresAt);
+    this.log("warn", "legato.fm refused this server's new tunnel credential, so this server went back to the one before it");
     return true;
   }
 }

@@ -41,7 +41,9 @@ import type { RequestFrame, TunnelFrame } from "../../../relay/src/protocol.js";
 // stores it, and only once it's stored does the tunnel move onto it, with
 // an auth frame on the same connection: that's what retires the old one on
 // legato.fm. Nothing reconnects, so a stream playing through the tunnel
-// plays on.
+// plays on. The old one is kept as `fallback` until legato.fm accepts the
+// new one with auth-ok, here or at the next sign-in. If legato.fm refuses
+// the new one instead, the tunnel goes back to the old one at once.
 
 export const TUNNEL_HEADER = "x-legato-tunnel";
 
@@ -102,14 +104,21 @@ export type TunnelClientOptions = {
   refusedRetryMs?: number;
   /** How long a closing socket has to send what's queued on it. */
   closeWaitMs?: number;
-  /** Stores a replacement credential from legato.fm. True once it's stored; only then does the tunnel move onto it. */
+  /** Stores a replacement credential from legato.fm, keeping the one it replaces. True once it's stored; only then does the tunnel move onto it. */
   onCredential?: (replacement: { credential: string; expiresAt: string }) => boolean;
+  /** The credential a stored replacement replaced, while legato.fm hasn't accepted the replacement yet. */
+  fallback?: string;
+  /** legato.fm accepted the replacement it signs in with now, so the fallback can go. */
+  onReplacementAccepted?: (credential: string) => void;
+  /** legato.fm refused a replacement it never accepted: puts the fallback back. True once it's back; the tunnel then signs in with it. */
+  onReplacementRefused?: (credential: string) => boolean;
   random?: () => number;
   now?: () => number;
 };
 
 export class TunnelClient {
   private secret: string;
+  private fallback: string | null;
   private readonly options: TunnelClientOptions;
   private readonly target: URL;
   private readonly log: (level: "info" | "warn", message: string) => void;
@@ -135,6 +144,7 @@ export class TunnelClient {
   constructor(options: TunnelClientOptions) {
     this.options = options;
     this.secret = options.credential;
+    this.fallback = options.fallback ?? null;
     this.target = new URL(options.target);
     this.log = options.log ?? (() => {});
   }
@@ -149,7 +159,7 @@ export class TunnelClient {
     return () => this.listeners.delete(listener);
   }
 
-  /** What it signs in with: the one it started with, or the last replacement it stored. */
+  /** What it signs in with: the one it started with, the last replacement it stored, or the one that replaced when legato.fm refused it. */
   get credential(): string {
     return this.secret;
   }
@@ -223,13 +233,17 @@ export class TunnelClient {
       this.alive = true;
       try {
         const frame = parseFrame(event.data);
-        // auth-ok only means something once, while signing in.
-        if (frame?.type === "auth-ok" && this.current === "connecting") {
-          clearTimeout(authTimer);
-          this.connected(socket);
+        // auth-ok signs the tunnel in, and later says a move onto a
+        // replacement was accepted.
+        if (frame?.type === "auth-ok") {
+          if (this.current === "connecting") {
+            clearTimeout(authTimer);
+            this.connected(socket);
+          }
+          if (this.current === "connected") this.replacementAccepted();
         } else if (frame?.type === "auth-error") {
           clearTimeout(authTimer);
-          this.refused(String(frame.message));
+          if (!this.fellBack()) this.refused(String(frame.message));
         } else if (frame?.type === "request" && this.current === "connected") {
           this.forward(socket, drain, frame);
         } else if (frame?.type === "cancel" && typeof frame.requestId === "string") {
@@ -394,8 +408,32 @@ export class TunnelClient {
       return;
     }
     if (!this.options.onCredential?.({ credential, expiresAt: new Date(expires).toISOString() })) return;
+    // A fallback already kept stays: it's the last one legato.fm accepted.
+    this.fallback ??= this.secret;
     this.secret = credential;
     socket.send(JSON.stringify({ type: "auth", secret: credential }));
+  }
+
+  private replacementAccepted(): void {
+    if (!this.fallback) return;
+    this.fallback = null;
+    this.options.onReplacementAccepted?.(this.secret);
+  }
+
+  // legato.fm refused a replacement it never accepted: its database was
+  // restored from before the rotation, say. The credential it replaced
+  // still works there, so it goes back in, and the tunnel signs in with it
+  // again at once, rather than waiting an hour as a refusal does. False
+  // when there's nothing to go back to, and it's a refusal like any other.
+  private fellBack(): boolean {
+    const fallback = this.fallback;
+    if (!fallback || this.current === "stopped") return false;
+    this.fallback = null;
+    if (!this.options.onReplacementRefused?.(this.secret)) return false;
+    this.secret = fallback;
+    this.teardown();
+    this.connect();
+    return true;
   }
 
   // One request from the relay, replayed against this server. Never
