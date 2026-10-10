@@ -9,6 +9,7 @@ import { recomputeSimilarityFeatures } from "./similarity/similarity.js";
 import { recomputeArticles } from "./articles/recompute.js";
 import { writeInChunks } from "./writeInChunks.js";
 import { libraryChanged } from "./libraryRevision.js";
+import { refreshPlannerStatistics, reloadPlannerStatistics } from "./db.js";
 
 // B-1: three sessions in a row hit the same bug shape and each got its own
 // one-off backfill script — scanFile()'s unchanged-mtime/size short-circuit
@@ -74,6 +75,16 @@ export function recompute(db: Database): void {
   // every recompute costs three statements rather than a network request.
   // Issue #269: only for artists inside the membership crawl's bound.
   enqueueLookupsInBound(db);
+
+  // Issue #354: last, once everything above has written what it changed.
+  // A first scan takes edges from nothing to over a million rows, and a
+  // statistic from before that plans as if the library were empty. On the
+  // worker, the request loop's writes wait while this holds the write lock.
+  // At 30,000 albums the longest wait was 46 ms, on the run that gathered
+  // everything, and under a millisecond on the runs after.
+  // runRecompute() then has the request loop's connection read what this
+  // wrote.
+  refreshPlannerStatistics(db);
 }
 
 // Issue #281: recompute() is synchronous, as bun:sqlite is, and it used to
@@ -141,8 +152,17 @@ function runRecompute(db: Database): Promise<void> {
       if (settled) return;
       settled = true;
       worker.terminate();
-      if (error) reject(error);
-      else resolve();
+      if (error) return reject(error);
+      // Issue #354: the statistics recompute() gathered, read into this
+      // connection now, while nothing else writes: the worker closed its
+      // connection before it reported, and the next run starts only once
+      // this one has settled. If something outside the server does hold the
+      // lock, this connection keeps the statistics it had until the next
+      // run or start, which is no reason to call the run a failure.
+      try {
+        reloadPlannerStatistics(db);
+      } catch {}
+      resolve();
     };
     worker.onmessage = (event: MessageEvent<RecomputeResult>) =>
       settle(event.data.ok ? undefined : new Error(event.data.message));

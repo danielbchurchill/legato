@@ -113,6 +113,20 @@ describe("recompute — B-1", () => {
 });
 
 // Issue #269.
+// Issue #354.
+describe("recompute — planner statistics", () => {
+  it("ends with statistics for the rows it wrote", () => {
+    for (let i = 0; i < 20; i++) insertFile({ artist: `Artist ${i}`, album: `Album ${i % 4}` });
+
+    recompute(db);
+
+    const { n: edges } = db.prepare("SELECT COUNT(*) AS n FROM edges").get() as { n: number };
+    const { stat } = db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'edges_from_node_idx'").get() as { stat: string };
+    expect(edges).toBeGreaterThan(0);
+    expect(stat.split(" ")[0]).toBe(String(edges));
+  });
+});
+
 describe("recompute — the membership bound", () => {
   function artist(title: string): number {
     return (
@@ -274,5 +288,36 @@ describe("recomputeOffThread", () => {
     fileDb.exec("ALTER TABLE articles_away RENAME TO articles");
     await recomputeOffThread(fileDb);
     expect(count("SELECT COUNT(*) AS n FROM articles")).toBeGreaterThan(0);
+  });
+
+  // Issue #354: statistics the worker gathers reach this connection only if
+  // it reads them again, since ANALYZE leaves the schema as it was. Two plays
+  // and the run's edges: SQLite, planning without statistics, starts from
+  // edges; with them, from the two plays.
+  it("leaves this connection planning with the statistics the run gathered", async () => {
+    const file = fileDb.prepare("SELECT id, recording_node_id AS recording FROM files LIMIT 1").get() as {
+      id: number;
+      recording: number;
+    };
+    const play = fileDb.prepare(
+      "INSERT INTO plays (recording_node_id, file_id, started_at, ms_played) VALUES (?, ?, datetime('now'), 200000)",
+    );
+    play.run(file.recording, file.id);
+    play.run(file.recording, file.id);
+    const firstLoop = () =>
+      (
+        fileDb
+          .prepare(
+            `EXPLAIN QUERY PLAN SELECT e.to_node, COUNT(*) FROM plays p
+             JOIN edges e ON e.from_node = p.recording_node_id AND e.type = 'appears_on'
+             GROUP BY e.to_node`,
+          )
+          .all() as { detail: string }[]
+      )[0].detail;
+    expect(firstLoop()).toStartWith("SCAN e ");
+
+    await recomputeOffThread(fileDb);
+
+    expect(firstLoop()).toStartWith("SCAN p ");
   });
 });
