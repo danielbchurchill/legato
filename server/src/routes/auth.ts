@@ -8,19 +8,20 @@ import {
   GITHUB_CLIENT_SECRET,
   AUTH_CALLBACK_BASE_URL,
   DEFAULT_LEGATO_ID_ORIGIN,
+  SERVER_NAME,
 } from "../config.js";
 import { USER_AGENT } from "../enrich/mbClient.js";
 import { ServerClaims, type ClaimCheck } from "../auth/claim.js";
 import { SESSION_COOKIE, bearerToken } from "../auth/gate.js";
 import { legatoIdentity, type LegatoIdentity } from "../auth/legatoIdentity.js";
 import { linkLegatoAccount } from "../auth/legatoLink.js";
-import { linkedAccountId, unlinkAccount } from "../auth/legatoUsers.js";
+import { anyLinkedAccount, linkedAccountId, unlinkAccount } from "../auth/legatoUsers.js";
 import { createOwner, ownerExists, passwordProblem, verifyOwnerPassword } from "../auth/owner.js";
 import { clientAddress } from "../auth/clientAddress.js";
 import { SignInLimiter } from "../auth/rateLimit.js";
 import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type SetupCodes } from "../auth/setupCode.js";
 import { createSession, deleteSession, spendAccessToken, type SessionUser } from "../auth/sessions.js";
-import { IDENTITY_NONCE_PATTERN, identityProof, loadServerKey } from "../auth/serverKey.js";
+import { IDENTITY_NONCE_PATTERN, identityProof, loadServerKey, webClientStatement } from "../auth/serverKey.js";
 import { forgetTunnelCredential } from "../auth/tunnelCredential.js";
 import { syncRelayTunnelOnceAnswered } from "../tunnel/relayTunnel.js";
 
@@ -257,6 +258,17 @@ function issueSession(db: Database, reply: FastifyReply, user: SessionUser) {
 
 // A signed-in Google/GitHub user from before 0029 already proved who they
 // are to this server, so they can create the owner without the setup code.
+// A page's Origin against the Host it asked: the same scheme-less address
+// when the page is this server's own (a browser always sends Origin on a
+// POST, and only a page on this host can make one look like this host).
+function sameOriginAsHost(origin: string, host: string | undefined): boolean {
+  try {
+    return Boolean(host) && new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
 function setupCodeRequired(request: FastifyRequest): boolean {
   return !isLocalRequest(request) && request.authUser?.role !== "legacy";
 }
@@ -578,6 +590,40 @@ export function authRoutes(
       syncRelayTunnelOnceAnswered(db, reply);
       const legatoNotified = accountId && identity.enabled ? (await identity.recordUnlink(accountId)).ok : null;
       return { ok: true, legatoNotified };
+    });
+
+    // Issue #365: this server vouches for a page it served, so that page can
+    // sign in to legato.fm and reach this server through its relay when
+    // it's away from home (auth/serverKey.ts, webClientStatement). Only the
+    // owner, and only from the page itself: the Origin has to be this
+    // request's own Host, so no other page can get one, and a request the
+    // tunnel brought (whose Host is this server's loopback) never does.
+    app.post<{ Body: { codeChallenge?: unknown } | null }>("/auth/legato/web-client", async (request, reply) => {
+      if (request.authUser?.role !== "owner") {
+        reply.code(403);
+        return { error: "Only this server's owner can sign in to legato.fm from here.", reason: "owner_only" };
+      }
+      const origin = request.headers.origin;
+      if (!origin || !sameOriginAsHost(origin, request.headers.host) || clientAddress(request).startsWith("tunnel")) {
+        reply.code(403);
+        return { error: "Only a page this server served can ask for that, from its own address.", reason: "cross_origin" };
+      }
+      const codeChallenge = request.body?.codeChallenge;
+      if (typeof codeChallenge !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(codeChallenge)) {
+        reply.code(400);
+        return { error: "Send the PKCE challenge (43 base64url characters) as `codeChallenge`.", reason: "bad_challenge" };
+      }
+      const identity = legatoIdentity(db);
+      if (!identity.enabled || !anyLinkedAccount(db)) {
+        reply.code(409);
+        return { error: "Link this server to legato.fm in Settings first.", reason: "not_linked" };
+      }
+      return webClientStatement(loadServerKey(db), {
+        origin: new URL(origin).origin,
+        codeChallenge,
+        name: SERVER_NAME,
+        nowSeconds: Math.floor(Date.now() / 1000),
+      });
     });
 
     // Issue #117: a client signed in to legato.fm swaps an `access` token for

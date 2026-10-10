@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
-import { directorySource, SERVED_BY_SERVER_MARKER, webClientRoutes } from "./web-client.js";
+import { directorySource, SERVED_BY_SERVER_MARKER, serverIdMarker, webClientRoutes } from "./web-client.js";
 
 let distDir: string;
 let app: FastifyInstance;
@@ -39,6 +39,17 @@ describe("web client routes", () => {
     expect(res.headers["cache-control"]).toBe("no-cache");
     expect(res.body).toContain(`${SERVED_BY_SERVER_MARKER}</head>`);
     expect(res.body).toContain('<div id="root">');
+  });
+
+  // Issue #365: which server it is, beside the marker, when the server says.
+  it("names the server that served it, when told its id", async () => {
+    const named = Fastify();
+    await named.register(webClientRoutes(directorySource(distDir), { serverId: "0123456789abcdef0123456789abcdef" }));
+    const res = await named.inject({ method: "GET", url: "/" });
+    expect(res.body).toContain(`${SERVED_BY_SERVER_MARKER}${serverIdMarker("0123456789abcdef0123456789abcdef")}</head>`);
+    expect(serverIdMarker("0123456789abcdef0123456789abcdef")).toBe('<meta name="legato-server-id" content="0123456789abcdef0123456789abcdef">');
+    await named.close();
+    expect((await app.inject({ method: "GET", url: "/" })).body).not.toContain("legato-server-id");
   });
 
   it("marks /index.html requested by name too", async () => {

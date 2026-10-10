@@ -24,6 +24,13 @@ const API_PREFIXES = ["/api", "/covers"];
 // app.legato.fm, where the page's origin is *not* a Legato server.
 export const SERVED_BY_SERVER_MARKER = '<meta name="legato-server" content="same-origin">';
 
+// Beside it, which server this is (issue #365), so a page this server
+// served can tell, as it loads, that a route through legato.fm's relay it
+// was pointed at leads back here. Its id is public (GET /auth/status).
+export function serverIdMarker(serverId: string): string {
+  return `<meta name="legato-server-id" content="${serverId}">`;
+}
+
 // Vite fingerprints everything it emits under assets/ (index-<hash>.js), so
 // a file there never changes under the same name. Everything else —
 // index.html above all, plus unhashed public/ files like favicon.png — has
@@ -115,17 +122,16 @@ async function sendFile(reply: FastifyReply, filePath: string, pathname: string)
   return reply.send(Buffer.from(await file.arrayBuffer()));
 }
 
-async function sendShell(reply: FastifyReply, indexPath: string) {
+async function sendShell(reply: FastifyReply, indexPath: string, serverId: string | undefined) {
   const html = await Bun.file(indexPath).text();
-  const marked = html.includes("</head>")
-    ? html.replace("</head>", `${SERVED_BY_SERVER_MARKER}</head>`)
-    : SERVED_BY_SERVER_MARKER + html;
+  const markers = SERVED_BY_SERVER_MARKER + (serverId ? serverIdMarker(serverId) : "");
+  const marked = html.includes("</head>") ? html.replace("</head>", `${markers}</head>`) : markers + html;
   reply.type("text/html; charset=utf-8");
   reply.header("Cache-Control", REVALIDATE);
   return reply.send(marked);
 }
 
-export function webClientRoutes(source: WebClientSource | null = resolveWebClientSource()) {
+export function webClientRoutes(source: WebClientSource | null = resolveWebClientSource(), options: { serverId?: string } = {}) {
   return async function routes(app: FastifyInstance) {
     app.log.info(
       source
@@ -150,7 +156,7 @@ export function webClientRoutes(source: WebClientSource | null = resolveWebClien
       const indexPath = source.resolve("/index.html");
       if (!indexPath) return reply.callNotFound();
       if (pathname !== "/index.html" && !wantsPage(request, pathname)) return reply.callNotFound();
-      return sendShell(reply, indexPath);
+      return sendShell(reply, indexPath, options.serverId);
     });
   };
 }
