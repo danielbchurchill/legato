@@ -22,7 +22,7 @@ import { isLocalRequest, maySeeSetupCode, setupCodes as serverSetupCodes, type S
 import { createSession, deleteSession, spendAccessToken, type SessionUser } from "../auth/sessions.js";
 import { IDENTITY_NONCE_PATTERN, identityProof, loadServerKey } from "../auth/serverKey.js";
 import { forgetTunnelCredential } from "../auth/tunnelCredential.js";
-import { syncRelayTunnelOnceAnswered } from "../tunnel/relayTunnel.js";
+import { relayTunnelStatus, syncRelayTunnelOnceAnswered } from "../tunnel/relayTunnel.js";
 
 // Sign-in for this server (issue #112): the local owner's password, plus
 // the Google/GitHub accounts provisioned before the owner existed. The
@@ -353,12 +353,17 @@ export function authRoutes(
         // linkedAccountId is the owner's own linked legato.fm account (issue
         // #325), so the desktop app can tell before linking again whether
         // that would replace a different account. Only the owner gets it.
+        // tunnel is the owner's too (issue #115): its state, so Settings can
+        // say when legato.fm refused this server's credential or it ran
+        // out, and linking again is the way back (tunnel/relayTunnel.ts).
         legato: {
           serverId: legatoIdentity(db).serverId(),
           publicKey: loadServerKey(db).publicKey,
           issuer: legatoIdentity(db).origin,
           linked: request.authUser ? linkedAccountId(db, request.authUser.id) !== null : null,
-          ...(request.authUser?.role === "owner" ? { linkedAccountId: linkedAccountId(db, request.authUser.id) } : {}),
+          ...(request.authUser?.role === "owner"
+            ? { linkedAccountId: linkedAccountId(db, request.authUser.id), tunnel: relayTunnelStatus(db) }
+            : {}),
         },
       };
     });

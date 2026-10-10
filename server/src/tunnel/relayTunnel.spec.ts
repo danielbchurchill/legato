@@ -497,6 +497,25 @@ describe("RelayTunnel rotation", () => {
 });
 
 describe("RelayTunnel status", () => {
+  // Issue #115: a server whose credential legato.fm revoked says so in its
+  // owner's Settings, where linking again is the way back.
+  it("tells the owner, and only the owner, that legato.fm refused the tunnel", async () => {
+    const h = await setup();
+    h.link("42");
+    h.store("42", "live-1");
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+    const status = async (headers: Record<string, string>) =>
+      (await h.app.inject({ method: "GET", url: "/api/v1/auth/status", headers })).json().legato;
+    expect((await status({ authorization: `Bearer ${h.owner.token}` })).tunnel).toBe("connected");
+
+    // Revoked on legato.fm: the next answer is a refusal.
+    h.fake.send({ type: "auth-error", message: "this tunnel credential was revoked or has expired" });
+    await until(() => h.tunnel.state, "refused");
+    expect((await status({ authorization: `Bearer ${h.owner.token}` })).tunnel).toBe("refused");
+    expect(await status({})).not.toHaveProperty("tunnel");
+  });
+
   it("says expired for a stored credential that ran out, and stopped once there's none", async () => {
     const h = await setup();
     h.link("42");

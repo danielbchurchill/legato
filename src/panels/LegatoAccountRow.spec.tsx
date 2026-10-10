@@ -105,6 +105,23 @@ describe('linking this server from Settings', () => {
     expect(document.body.textContent).not.toContain('link a different account')
   })
 
+  // Issue #115: the account removed the server on legato.fm, or its
+  // credential ran out, and a new link is the way back.
+  it('says the server was disconnected from legato.fm, and offers to link it again', async () => {
+    serverSays({ linked: true, linkedAccountId: '7', tunnel: 'refused' })
+    const container = await render()
+    expect(container.textContent).toContain('Disconnected from legato.fm. Link it again to reach it through legato.fm.')
+    await act(async () => button('link again').click())
+    expect(linkWithLegato).toHaveBeenCalledWith(SERVER_ID)
+  })
+
+  it('says nothing about a tunnel that is only reconnecting', async () => {
+    serverSays({ linked: true, linkedAccountId: '7', tunnel: 'waiting' })
+    const container = await render()
+    expect(container.textContent).toContain('This server is linked to legato.fm.')
+    expect(container.textContent).not.toContain('Disconnected')
+  })
+
   it('says why instead of offering a link the desktop app would get refused', async () => {
     serverSays({ issuer: 'https://id.example.net' })
     const container = await render()

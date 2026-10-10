@@ -5,6 +5,9 @@ import { renewLegatoSession } from '../connect/legatoSignIn'
 import { provideSessionCheck } from '../connect/reconnect'
 import { AUTH_REQUIRED_EVENT, clearSession, readSession, storeSession } from './session'
 
+// server/src/tunnel/relayTunnel.ts's RelayTunnelStatus.
+export type TunnelStatus = 'connecting' | 'connected' | 'waiting' | 'refused' | 'stopped' | 'expired'
+
 export type AuthStatus = {
   ownerExists: boolean
   setupCodeRequired: boolean
@@ -12,8 +15,15 @@ export type AuthStatus = {
   oauth: { google: boolean; github: boolean }
   // issuer is null when legato.fm is off on the server; linked is about the
   // signed-in user's own row (server/src/routes/auth.ts), and only the owner
-  // is told linkedAccountId, the legato.fm account that row is linked to.
-  legato?: { serverId: string; issuer?: string | null; linked?: boolean | null; linkedAccountId?: string | null } | null
+  // is told linkedAccountId, the legato.fm account that row is linked to,
+  // and tunnel, the state of the server's tunnel to legato.fm (#115).
+  legato?: {
+    serverId: string
+    issuer?: string | null
+    linked?: boolean | null
+    linkedAccountId?: string | null
+    tunnel?: TunnelStatus | null
+  } | null
 }
 
 export type AuthState =
