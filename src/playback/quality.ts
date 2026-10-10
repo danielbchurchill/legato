@@ -194,7 +194,10 @@ function streamOf(src: string): string {
  *
  * A network error leaves the element dead, so play() on it would fail. The
  * same source is reloaded paused at the same position, so pressing play
- * picks up where it stopped. A reload that fails too (still offline) isn't
+ * picks up where it stopped. That's the last spot it played to: by the
+ * time the error fires, the element may have reset its clock to 0 (#369).
+ * A stall followed by the error counts as one drop, unless the track
+ * played again in between. A reload that fails too (still offline) isn't
  * a second drop. It's loaded again as soon as the server answers again
  * (#119's SERVER_ANSWERED_EVENT), which a two-second restart does without
  * ever becoming an outage. During a declared outage it waits for
@@ -238,6 +241,13 @@ export function watchForDrops(
   let retry: { stream: string; at: number } | null = null
   // The element said its data stopped coming, and nothing has come since.
   let stalled = false
+  // The spot the stream now in the element last played to. By the time a
+  // network error fires, the element can read currentTime 0 (#369: Chrome
+  // does, after a stall), so this is where it stopped.
+  let playedTo = 0
+  // The stream was dropped for a stall and hasn't played since: an error
+  // that follows is the same drop, not a second one.
+  let droppedForStall = false
 
   const clearStall = () => {
     if (stallTimer !== null) clearTimeout(stallTimer)
@@ -249,6 +259,11 @@ export function watchForDrops(
     noteDrop()
     audio.pause()
     onDrop()
+  }
+
+  const dropForStall = () => {
+    droppedForStall = true
+    drop()
   }
 
   const failedHere = () => retry !== null && retry.stream === streamOf(audio.src)
@@ -272,9 +287,11 @@ export function watchForDrops(
     if (code !== MEDIA_ERR_NETWORK && code !== MEDIA_ERR_SRC_NOT_SUPPORTED) return
     // A reload that failed too, the server still gone: not a second drop.
     if (failedHere()) return
-    if (code === MEDIA_ERR_NETWORK && audio.currentTime > 0) {
-      markForRetry(audio.currentTime)
-      drop()
+    const at = audio.currentTime > 0 ? audio.currentTime : playedTo
+    if (code === MEDIA_ERR_NETWORK && at > 0) {
+      markForRetry(at)
+      // A stall already paused it, reported it and stepped the ladder down.
+      if (!droppedForStall) drop()
       reload()
       return
     }
@@ -293,7 +310,16 @@ export function watchForDrops(
   const onWaiting = () => {
     if (audio.paused || audio.seeking || audio.currentTime <= 0) return
     clearStall()
-    stallTimer = setTimeout(drop, STALL_LIMIT_MS)
+    stallTimer = setTimeout(dropForStall, STALL_LIMIT_MS)
+  }
+
+  const onTimeUpdate = () => {
+    // A failed load taking the clock back to 0 isn't a spot it played to.
+    if (!audio.error) playedTo = audio.currentTime
+  }
+
+  const onPlaying = () => {
+    droppedForStall = false
   }
 
   const onStalled = () => {
@@ -306,6 +332,8 @@ export function watchForDrops(
 
   const onLoadStart = () => {
     loadStartedAt = Date.now()
+    playedTo = 0
+    droppedForStall = false
   }
 
   const onLoaded = () => {
@@ -351,6 +379,8 @@ export function watchForDrops(
   const settled = ['playing', 'pause', 'seeking', 'emptied', 'ended'] as const
   audio.addEventListener('error', onError)
   audio.addEventListener('waiting', onWaiting)
+  audio.addEventListener('timeupdate', onTimeUpdate)
+  audio.addEventListener('playing', onPlaying)
   audio.addEventListener('stalled', onStalled)
   audio.addEventListener('progress', onProgress)
   audio.addEventListener('loadstart', onLoadStart)
@@ -365,6 +395,8 @@ export function watchForDrops(
     clearStall()
     audio.removeEventListener('error', onError)
     audio.removeEventListener('waiting', onWaiting)
+    audio.removeEventListener('timeupdate', onTimeUpdate)
+    audio.removeEventListener('playing', onPlaying)
     audio.removeEventListener('stalled', onStalled)
     audio.removeEventListener('progress', onProgress)
     audio.removeEventListener('loadstart', onLoadStart)
