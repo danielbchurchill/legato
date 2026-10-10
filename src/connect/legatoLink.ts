@@ -20,8 +20,9 @@ import { RELAY_ORIGIN } from '../config/relayHost'
 
 export type LinkedAccount = { accountId: string; email: string | null; name: string | null }
 
-/** Fired when a link finishes outside Settings (the web client's return from
- * legato.fm), so a Settings panel that's open shows it. */
+/** Fired when a link finishes, so a Settings panel that's open shows it:
+ * the web client's return from legato.fm, and the desktop app's link from
+ * Settings, whose account's server list shows the server again (#115). */
 export const LINK_CHANGED_EVENT = 'legato:link-changed'
 
 export type LinkFailure =

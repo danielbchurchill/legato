@@ -53,7 +53,9 @@ function serverSays(legato: Record<string, unknown>) {
 // mounted keeps its timers and listeners: the confirm dialog's exit fade
 // (useMountFade) then unmounts its portal after the clear took it away, and
 // React's NotFoundError lands in whichever test runs next (#362 fixed the
-// same in the link-return spec).
+// same in the link-return spec). A signed-in row also lists the account's
+// sessions and servers (#115), whose fetches would otherwise answer into
+// nodes that are gone.
 const roots: Root[] = []
 
 async function render() {

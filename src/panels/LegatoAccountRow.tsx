@@ -11,6 +11,7 @@ import { useAccount } from '../auth/accountContext'
 import type { AuthStatus, TunnelStatus } from '../auth/useAuth'
 import { describeLinkFailure, LINK_CHANGED_EVENT, linkWithLegato } from '../connect/legatoLink'
 import { startBrowserLink } from '../connect/legatoLinkReturn'
+import { LegatoAccountDevices } from './LegatoAccountDevices'
 import { SettingsGroup } from './SettingsPrimitives'
 import {
   clearRelaySession,
@@ -44,7 +45,9 @@ type RowState =
  *
  * Under it, in the desktop app and the web client alike, whether this server
  * is linked to legato.fm and the way for its owner to link it (issue #325,
- * ServerLink below). */
+ * ServerLink below). Then, in the desktop app once it's signed in, where the
+ * account is signed in and which servers it has linked (issue #115,
+ * LegatoAccountDevices.tsx). */
 export function LegatoAccountRow() {
   const [state, setState] = useState<RowState>({ kind: 'loading' })
   const [error, setError] = useState<string | null>(null)
@@ -107,6 +110,14 @@ export function LegatoAccountRow() {
     await relaySignOut()
     setState({ kind: 'signed-out', configured: null, notice: null })
   }
+
+  // The session was signed out elsewhere, from another device's list say.
+  const sessionEnded = useCallback((notice: string) => {
+    clearRelaySession()
+    setState({ kind: 'signed-out', configured: null, notice })
+  }, [])
+
+  const relayToken = state.kind === 'signed-in' ? (readRelaySession()?.token ?? null) : null
 
   return (
     <SettingsGroup title="legato.fm account">
@@ -178,6 +189,8 @@ export function LegatoAccountRow() {
       {error && <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{error}</p>}
 
       <ServerLink relayUser={state.kind === 'signed-in' ? state.user : null} />
+
+      {relayToken && <LegatoAccountDevices token={relayToken} onSignedOut={sessionEnded} />}
     </SettingsGroup>
   )
 }
@@ -191,8 +204,8 @@ type LinkStatus = {
 }
 
 /** This server's id, which legato.fm it trusts, and whether the signed-in
- * user is linked there; again whenever a link finishes elsewhere. */
-function useLinkStatus(): { status: LinkStatus | null | 'unavailable'; reload: () => void } {
+ * user is linked there; again whenever a link finishes (LINK_CHANGED_EVENT). */
+function useLinkStatus(): LinkStatus | null | 'unavailable' {
   const [status, setStatus] = useState<LinkStatus | null | 'unavailable'>(null)
   const reload = useCallback(() => {
     fetch(`${API_BASE}/auth/status`)
@@ -217,7 +230,7 @@ function useLinkStatus(): { status: LinkStatus | null | 'unavailable'; reload: (
     window.addEventListener(LINK_CHANGED_EVENT, reload)
     return () => window.removeEventListener(LINK_CHANGED_EVENT, reload)
   }, [reload])
-  return { status, reload }
+  return status
 }
 
 function sameOrigin(a: string, b: string): boolean {
@@ -249,7 +262,7 @@ function accountName(user: RelayUser): string {
  * it goes to legato.fm's /link page and comes back (legatoLinkReturn.ts). */
 function ServerLink({ relayUser }: { relayUser: RelayUser | null }) {
   const account = useAccount()
-  const { status, reload } = useLinkStatus()
+  const status = useLinkStatus()
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [confirmingReplace, setConfirmingReplace] = useState(false)
@@ -318,7 +331,7 @@ function ServerLink({ relayUser }: { relayUser: RelayUser | null }) {
     // Says whose account, since it stays after this app signs out (#361).
     const who = result.linked.name ?? result.linked.email
     setNotice(who ? `Linked this server to ${who} on legato.fm.` : 'Linked this server to your legato.fm account.')
-    reload()
+    window.dispatchEvent(new Event(LINK_CHANGED_EVENT))
   }
 
   return (
