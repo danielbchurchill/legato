@@ -44,7 +44,7 @@ The shell floats 12px in from every edge: a 56px rail, a 320px left panel beside
 - **Rail:** Collections (favourites, playlists, import), Library health (database inspector, tag manager, maintenance worklists), then Settings and the avatar. Seven destinations became three; map settings moved onto the map.
 - **Capsule:** the map/library switch and the way into search (⌘K/Ctrl-K from anywhere, or `/`).
 - **Right panel:** now playing (up next, lyrics, details) or node details. It replaces the full-screen inspector modal, so the map stays visible. One right panel at a time; Escape closes it, then clears the selection, then closes the left panel.
-- **Player:** replaces the 514×121 dock. It takes a wash of the playing cover's colour from its left edge. The waveform is the server's existing loudness envelope (`/files/:id/peaks`), and a seeded shape stands in until it arrives. With nothing loaded, it's an idle pill with "Shuffle library", which queues up to 500 random tracks from the library.
+- **Player:** replaces the 514×121 dock. It takes a wash of the playing cover's colour from its left edge. The waveform is the server's existing loudness envelope (`/files/:id/peaks`), and a seeded shape stands in until it arrives. With nothing loaded, it's an idle pill with "Shuffle library", which queues up to 500 random tracks from the library. The pill sits where the bar would, inside its width.
 
 #### The player as it narrows
 
@@ -65,6 +65,37 @@ The order keeps what controls playback longest and drops what's said or reachabl
 Only a browser goes narrower than 958px with both panels open. There, the bar holds at 134px and its margins close up. Under 910px it floats over the panels' inner edges, staying inside the window, rather than letting play/pause shrink away. The alternatives were closing a panel for the user, or stopping the right panel above the player again, which #288 removed.
 
 The handoff puts the compact switch at 600px. Its 56 bars at their 1px minimum with 2px gaps only fit from 614, and between the two the waveform ran 6px into the duration, so compact starts at 614. `src/shell/layout.ts` works every threshold out from the parts' sizes (`playerContentWidth`).
+
+#### The idle pill as it narrows
+
+With nothing loaded, the idle pill takes the bar's place. It centres where the bar would (`playerCx`) and is never wider than the bar would be, so it follows the same free space and the same 134px floor (#308). It hugs its content, on one line, and its parts give way in this order:
+
+| Bar under | What goes | Window under, both panels open |
+|---|---|---|
+| 328px | The space keycap. The button's tooltip says space instead | 1152px |
+| 272px | "Nothing playing". The button alone says it | 1096px |
+| 156px | The button's label. Its icon stays in a round pill, named in the tooltip and for screen readers | 980px |
+
+The button stays one element at every width, so a keyboard user's focus stays on it as the pill narrows. Its tooltip, "Shuffle library" with space, shows once the keycap has gone. Beside the keycap it would only repeat the pill.
+
+At the desktop app's narrowest window with both panels open, the bar would be 276px, and the pill shows "Nothing playing" and the button inside it, clear of both panels. Before #308 the pill was a fixed 324px on the free space's centre: at 1100 it touched the left panel, and in a narrower browser window it overlapped both.
+
+#### The capsule as it narrows
+
+The capsule is as wide as the free space less 48px, up to 520. Its parts give way the same way, at the capsule width where each stops fitting (#308):
+
+| Capsule under | What goes | Window under, both panels open |
+|---|---|---|
+| 511px | The placeholder shortens to "Search" | 1335px |
+| 364px | The keycap. ⌘K/Ctrl-K and `/` still open search | 1188px |
+| 303px | "Search". The magnifier stays | 1127px |
+| 247px | The switch's "map" and "library". Their icons stay, and each label moves into its tab's tooltip and stays for screen readers | 1071px |
+
+The switch and the search button never go. With the switch's icons and the magnifier the capsule needs 135px, and it stops narrowing there. Under 959px with both panels open its margins close up, and under 911px it floats over the panels' inner edges, inside the window, as the bar does. At 1100 with both panels open it's 276px, the labelled switch and the magnifier. The search palette opens over the capsule wherever it sits, and moves off it only as far as the window makes it.
+
+The words go before the switch's labels because a magnifier needs no caption, and the map and library icons are Legato's own. The keycap is counted at its "Ctrl K" width, the wider of the two, so the thresholds are the same on every platform and a Mac's "⌘K" has some slack.
+
+Unlike the bar's, most of the capsule's and the pill's widths are text, so they're measured rather than added up: in Chromium, with the self-hosted fonts, rounded up to the next pixel (`src/shell/capsuleGeometry.ts`, `src/shell/playerGeometry.ts`). Changing a label or a font means measuring again. Another engine, or a fallback font before Rubik loads, can draw a label a little wider, so every set of parts with text in it keeps 3px to spare. Both pills also clip to their own width, as the bar does, so anything wider still is cut off at the edge rather than spilling out. The padding, gaps and icons around the text are the shared controls' own (Tabs, Button and Kbd). `src/shell/controlGeometry.ts` copies them for the arithmetic, and the shell's specs check each copy against the class it's drawn with.
 
 ### The map
 

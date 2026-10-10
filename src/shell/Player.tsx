@@ -16,6 +16,10 @@ import { API_BASE as API } from '../config/serverHost'
 import { Surface } from './Surface'
 import { useShellLayout } from './layout'
 import {
+  IDLE_GAP,
+  IDLE_HEIGHT,
+  IDLE_PADDING,
+  IDLE_PADDING_TEXT,
   PLAYER_BAR_GAP,
   PLAYER_BAR_MIN_WIDTH,
   PLAYER_COLUMN_GAP,
@@ -45,7 +49,8 @@ import {
  *
  * With nothing loaded, the bar gives way to a small idle pill with one way
  * back in (Shuffle library). It never shows every control disabled — that
- * read as broken chrome (#50). */
+ * read as broken chrome (#50). The pill sits where the bar would, inside
+ * its width, and gives way in its own order (#308). */
 
 const REPEAT_LABEL: Record<RepeatMode, string> = {
   off: 'Repeat off',
@@ -413,21 +418,47 @@ export function Player({
 }
 
 /* Nothing loaded: one sentence and one way in. The space keycap says the
- * same thing the button does — space starts it from anywhere. */
+ * same thing the button does — space starts it from anywhere. As the bar's
+ * width narrows, the keycap goes, then the sentence, then the button's label.
+ * Once the keycap's gone, the button's tooltip says space instead, and once
+ * its label's gone, the tooltip names it too.
+ *
+ * The pill is as wide as its content, on one line, and never wider than the
+ * bar would be. It clips there, as the bar does, so text an engine draws
+ * wider than Chromium measured it is cut off rather than spilling out. */
 export function IdlePlayer({ onShuffleLibrary, busy }: { onShuffleLibrary: () => void; busy: boolean }) {
   const layout = useShellLayout()
+  const parts = layout.idleParts
   return (
     <Surface
       role="region"
       aria-label="Player"
-      className="absolute bottom-[var(--inset)] z-20 flex h-[52px] -translate-x-1/2 items-center gap-[12px] rounded-full pr-[8px] pl-[16px]"
-      style={{ left: layout.cx }}
+      className="absolute bottom-[var(--inset)] z-20 flex w-max -translate-x-1/2 items-center justify-center overflow-hidden rounded-full"
+      style={{
+        left: layout.playerCx,
+        maxWidth: layout.playerWidth,
+        height: IDLE_HEIGHT,
+        minWidth: IDLE_HEIGHT,
+        gap: IDLE_GAP,
+        paddingLeft: parts.sentence ? IDLE_PADDING_TEXT : IDLE_PADDING,
+        paddingRight: IDLE_PADDING,
+      }}
     >
-      <span className="text-[length:var(--text-secondary)] text-[var(--color-ink-2)]">Nothing playing</span>
-      <Button variant="primary" icon="arrow-swap" onClick={onShuffleLibrary} disabled={busy}>
-        Shuffle library
-      </Button>
-      <Kbd>space</Kbd>
+      {parts.sentence && (
+        <span className="shrink-0 text-[length:var(--text-secondary)] whitespace-nowrap text-[var(--color-ink-2)]">Nothing playing</span>
+      )}
+      {/* One button at every width, in the same place, so a keyboard user's
+       * focus stays on it as the pill narrows. */}
+      <Tooltip label="Shuffle library" shortcut="space" placement="top" disabled={parts.shortcut}>
+        {parts.buttonLabel ? (
+          <Button variant="primary" icon="arrow-swap" onClick={onShuffleLibrary} disabled={busy}>
+            Shuffle library
+          </Button>
+        ) : (
+          <Button variant="primary" icon="arrow-swap" onClick={onShuffleLibrary} disabled={busy} aria-label="Shuffle library" />
+        )}
+      </Tooltip>
+      {parts.shortcut && <Kbd>space</Kbd>}
     </Surface>
   )
 }

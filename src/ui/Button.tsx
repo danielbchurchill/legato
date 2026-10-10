@@ -15,7 +15,8 @@ import { Icon, type IconName } from './Icon'
  *    secondary; kept so older call sites keep a meaningful name.
  *
  * Pills at 32px (28 inside a dense row, 36 for a hero action), 13/500, with an optional 16px icon —
- * filled, since an outline glyph on the gradient reads as a hole. */
+ * filled, since an outline glyph on the gradient reads as a hole. An icon
+ * with no label is a circle, named by aria-label. */
 
 type ButtonVariant = 'primary' | 'secondary' | 'link' | 'destructive'
 type ButtonSize = 'sm' | 'md' | 'lg'
@@ -33,20 +34,31 @@ const SIZE_CLASSES: Record<ButtonSize, string> = {
   lg: 'h-[36px]',
 }
 
+/* A button always has a name: a label, or else an icon and an aria-label.
+ * So neither an empty pill nor an unnamed icon compiles, the way IconButton
+ * requires its `label`. */
 type ButtonProps = {
   variant?: ButtonVariant
   size?: ButtonSize
-  /** Leading glyph, drawn filled at 16px. */
-  icon?: IconName
   type?: 'button' | 'submit'
   onClick?: () => void
   disabled?: boolean
   className?: string
-  children: ReactNode
-  'aria-label'?: string
   /** AlertDialog points its initial focus at its cancel button. */
   ref?: Ref<HTMLButtonElement>
-}
+} & (
+  | {
+      children: ReactNode
+      /** Leading glyph, drawn filled at 16px. */
+      icon?: IconName
+      'aria-label'?: string
+    }
+  | {
+      children?: never
+      icon: IconName
+      'aria-label': string
+    }
+)
 
 export function Button({
   variant = 'link',
@@ -61,7 +73,8 @@ export function Button({
   ref,
 }: ButtonProps) {
   const pill = variant !== 'link'
-  const padding = pill ? (icon ? 'pl-[10px] pr-[14px]' : 'px-[16px]') : ''
+  const iconOnly = icon != null && children == null
+  const padding = pill ? (iconOnly ? 'aspect-square' : icon ? 'pl-[10px] pr-[14px]' : 'px-[16px]') : ''
   return (
     <button
       ref={ref}

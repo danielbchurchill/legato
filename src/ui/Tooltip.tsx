@@ -41,6 +41,10 @@ type TooltipProps = {
   placement?: Placement
   /** A keyboard shortcut for the action, e.g. "space" or "/". */
   shortcut?: string
+  /** Never show, but keep the wrapper, so a trigger whose tooltip comes and
+   * goes with the space it has (a tab or button that loses its label) stays
+   * the same element, and keeps a keyboard user's focus. */
+  disabled?: boolean
 }
 
 /* The floating half on its own, for a caller that owns when it shows —
@@ -90,7 +94,7 @@ export function TooltipBubble({
   )
 }
 
-export function Tooltip({ label, children, monospace = false, placement = 'bottom', shortcut }: TooltipProps) {
+export function Tooltip({ label, children, monospace = false, placement = 'bottom', shortcut, disabled = false }: TooltipProps) {
   const [mounted, setMounted] = useState(false)
   const dwellRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wrapRef = useRef<HTMLSpanElement>(null)
@@ -152,7 +156,7 @@ export function Tooltip({ label, children, monospace = false, placement = 'botto
     >
       {children}
       <TooltipBubble
-        open={mounted}
+        open={mounted && !disabled}
         anchorRef={wrapRef}
         label={label}
         placement={placement}

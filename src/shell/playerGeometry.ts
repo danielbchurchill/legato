@@ -33,3 +33,22 @@ export const PLAYER_BAR_GAP = 2
 export const PLAYER_QUEUE_SIZE = 32
 export const PLAYER_VOLUME_SIZE = 32
 export const PLAYER_QUEUE_VOLUME_GAP = 2
+
+/* The idle pill, with nothing loaded (#308): "Nothing playing", the Shuffle
+ * library button and the space keycap. It fits inside the bar's width, so
+ * it gives way by the same arithmetic, and Player.spec.tsx checks these the
+ * same way. The button and the keycap are shared controls, whose sizes are
+ * in controlGeometry.ts. */
+export const IDLE_HEIGHT = 52
+/** Before "Nothing playing". Beside the button, either end, it's 8. */
+export const IDLE_PADDING_TEXT = 16
+export const IDLE_PADDING = 8
+export const IDLE_GAP = 12
+
+/* Text, measured in Chromium with Rubik and Sometype Mono and rounded up. */
+/** "Nothing playing" at 13px (95.3). */
+export const IDLE_SENTENCE_WIDTH = 96
+/** The button's "Shuffle library" at 13px (88.4). */
+export const IDLE_BUTTON_LABEL_WIDTH = 89
+/** The keycap's "space" (31.9). */
+export const IDLE_SHORTCUT_TEXT_WIDTH = 32
