@@ -60,6 +60,8 @@ The one paid product, once it launches, is **Legato Relay**: an always-on bridge
 
 On first start, a headless server shows a short setup code. Open `http://<your server>:8899/setup` on your home network to create the owner account, then add your music folder.
 
+To install the web app on a phone, the server needs an https address in front of it: [docs/install/https.md](docs/install/https.md).
+
 ## Privacy
 
 Your music, its metadata, your playlists and your play history stay on your own hardware. To fill in details, your server looks things up directly in MusicBrainz, the Cover Art Archive, LRCLIB, Deezer and Wikipedia/Wikidata. It also checks GitHub once a day for a new release; you can turn that off. Nothing about your library is sent to us. The full details are at [legato.fm/privacy](https://legato.fm/privacy).
