@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { createSession, getUserById, getUserBySessionToken, publicUser, sessionToken, type RelayUserRow } from "../accounts.js";
+import { createSession, describeClient, getUserById, getUserBySessionToken, publicUser, sessionToken, type RelayUserRow } from "../accounts.js";
 import {
   LINK_REDEEM_FAILURE_MESSAGES,
   mintLinkCode,
@@ -228,7 +228,9 @@ export function connectPageRoutes(
         reply.code(400);
         return { error: REDEEM_MESSAGES.not_found, reason: "not_found" };
       }
-      const { token, expiresAt } = createSession(db, user.id, {
+      // Labelled for the account's session list (issue #115) as a browser
+      // sign-in is: it's the web client, in whatever browser that is.
+      const { token, expiresAt } = createSession(db, user.id, describeClient(request.headers["user-agent"], "browser"), {
         serverId: result.serverId,
         originMac: originMacs([signingKeys.linkOriginKeys[0]!], origin)[0]!,
       });

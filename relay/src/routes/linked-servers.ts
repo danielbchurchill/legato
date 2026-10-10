@@ -84,7 +84,7 @@ export function linkedServerRoutes(
       }
       const servers = listLinkedServers(db, session.user.id).filter((s) => session.serverId === null || s.serverId === session.serverId);
       return {
-        servers: servers.map(({ serverId, linkedAt, tunnelLastSeenAt }) => {
+        servers: servers.map(({ serverId, linkedAt, tunnelLastSeenAt, credentialIssuedAt }) => {
           const live = tunnels?.get(serverId);
           return {
             serverId,
@@ -92,6 +92,7 @@ export function linkedServerRoutes(
             tunnel: live
               ? { connected: true, connectedAt: live.connectedAt.toISOString() }
               : { connected: false, lastSeenAt: tunnelLastSeenAt?.toISOString() ?? null },
+            credentialIssuedAt: credentialIssuedAt?.toISOString() ?? null,
           };
         }),
       };

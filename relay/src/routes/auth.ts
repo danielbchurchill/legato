@@ -10,13 +10,16 @@ import {
 import {
   createSession,
   deleteSession,
+  describeClient,
   generateState,
   getUserById,
   getSessionByToken,
   getUserBySessionToken,
   hasWebSession,
   isValidState,
+  listSessions,
   publicUser,
+  revokeSession,
   SESSION_COOKIE,
   sessionToken,
   upsertUser,
@@ -311,8 +314,20 @@ function successPage(displayName: string | null): string {
 // and nothing else, so a cookie never rides along cross-site.
 // GET /linked-servers is the connect screen's "your servers" (issue #117),
 // and POST /auth/relay-ticket is how a device gets through /relay/<id>/
-// (issue #365). routes/relay.ts answers /relay/* for the same origins.
-const CORS_ROUTES = new Set(["/auth/token", "/auth/me", "/auth/logout", "/auth/server-token", "/auth/relay-ticket", "/linked-servers"]);
+// (issue #365). routes/relay.ts answers /relay/* for the same origins. The
+// account's sessions and servers, and what Settings does to them, are
+// issue #115's.
+const CORS_ROUTES = new Set([
+  "/auth/token",
+  "/auth/me",
+  "/auth/logout",
+  "/auth/server-token",
+  "/auth/relay-ticket",
+  "/auth/sessions",
+  "/auth/sessions/:id",
+  "/linked-servers",
+  "/linked-servers/:serverId",
+]);
 const LOOPBACK_DEV_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/;
 
 export function isAllowedAppOrigin(origin: string | undefined): boolean {
@@ -344,7 +359,7 @@ function applyCors(request: FastifyRequest, reply: FastifyReply, db: Database, s
   const origin = request.headers.origin;
   if (!isLegatoClientOrigin(db, signingKeys, origin)) return;
   reply.header("Access-Control-Allow-Origin", origin);
-  reply.header("Access-Control-Allow-Methods", "GET, POST");
+  reply.header("Access-Control-Allow-Methods", "GET, POST, DELETE");
   reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
   reply.header("Access-Control-Max-Age", "600");
 }
@@ -499,7 +514,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
 
           const profile = await exchange(request.query.code);
           const user = upsertUser(db, provider, profile);
-          const { token, expiresAt } = createSession(db, user.id);
+          const { token, expiresAt } = createSession(db, user.id, describeClient(request.headers["user-agent"], "browser"));
           reply.setCookie(SESSION_COOKIE, token, { ...cookie, expires: expiresAt });
           const returnTo = returnPath(request.cookies[RETURN_COOKIE]);
           if (returnTo) {
@@ -543,7 +558,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
           reply.code(400);
           return { error: "invalid_grant", reason: "not_found", message: REDEEM_FAILURE_MESSAGES.not_found };
         }
-        const { token, expiresAt } = createSession(db, user.id);
+        const { token, expiresAt } = createSession(db, user.id, describeClient(request.headers["user-agent"], "app"));
         return { token, expiresAt: expiresAt.toISOString(), user: publicUser(user) };
       },
     );
@@ -670,6 +685,39 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
       if (token) deleteSession(db, token);
       reply.clearCookie(SESSION_COOKIE, cookie);
       return { ok: true };
+    });
+
+    // The account's sessions, for its settings (issue #115): what signed
+    // in, when, and when it was last used. current is the one asking. Web
+    // sessions (issue #365) are listed with the rest, but one can't list or
+    // sign out the account's others: these take a whole-account session.
+    app.get("/auth/sessions", async (request, reply) => {
+      const token = sessionToken(request);
+      const user = token ? getUserBySessionToken(db, token) : null;
+      if (!user || !token) {
+        reply.code(401);
+        return { error: "Sign in to legato.fm first.", reason: "signed_out" };
+      }
+      return {
+        sessions: listSessions(db, user.id, token).map((session) => ({
+          id: session.id,
+          client: session.client,
+          createdAt: session.createdAt.toISOString(),
+          lastSeenAt: session.lastSeenAt?.toISOString() ?? null,
+          current: session.current,
+        })),
+      };
+    });
+
+    // Signs one of the account's sessions out, its own included.
+    app.delete<{ Params: { id: string } }>("/auth/sessions/:id", async (request, reply) => {
+      const token = sessionToken(request);
+      const user = token ? getUserBySessionToken(db, token) : null;
+      if (!user) {
+        reply.code(401);
+        return { error: "Sign in to legato.fm first.", reason: "signed_out" };
+      }
+      return { revoked: revokeSession(db, user.id, request.params.id) };
     });
 
     // serverId says a web session (issue #365) can reach that one server

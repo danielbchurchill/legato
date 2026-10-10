@@ -319,6 +319,40 @@ describe("a link proof works once", () => {
   });
 });
 
+// Issue #115: the account's settings show how old each server's credential
+// is: the one it opens its tunnel with, not a replacement it hasn't used.
+describe("GET /linked-servers says when each server's credential was minted", () => {
+  type Listed = { serverId: string; credentialIssuedAt: string | null };
+  const list = async (h: ReturnType<typeof setup>, headers: Record<string, string>) =>
+    ((await h.app.inject({ url: "/linked-servers", headers })).json() as { servers: Listed[] }).servers;
+
+  it("gives the oldest live credential's time, and null once there's none", async () => {
+    const h = setup();
+    const { user, headers } = h.signIn();
+    const server = homeServer();
+    await h.link(headers, server);
+    h.db.prepare("UPDATE tunnel_credentials SET created_at = '2026-09-01 12:00:00'").run();
+    // A replacement the server hasn't moved onto yet.
+    await h.link(headers, server);
+    expect(await list(h, headers)).toMatchObject([{ serverId: server.serverId, credentialIssuedAt: "2026-09-01T12:00:00.000Z" }]);
+
+    h.db.prepare("DELETE FROM tunnel_credentials WHERE relay_user_id = ?").run(user.id);
+    expect(await list(h, headers)).toMatchObject([{ serverId: server.serverId, credentialIssuedAt: null }]);
+  });
+
+  it("counts only this account's credentials for the server", async () => {
+    const h = setup();
+    const owner = h.signIn("owner");
+    const other = h.signIn("other");
+    const server = homeServer();
+    await h.link(owner.headers, server);
+    h.db.prepare("DELETE FROM tunnel_credentials").run();
+    await h.link(other.headers, server);
+    expect((await list(h, owner.headers))[0]!.credentialIssuedAt).toBeNull();
+    expect((await list(h, other.headers))[0]!.credentialIssuedAt).not.toBeNull();
+  });
+});
+
 describe("unlinking and revoking remove the pair", () => {
   const credential = async (res: Promise<{ json(): unknown }>) =>
     ((await res).json() as { tunnel: { credential: string } }).tunnel.credential;

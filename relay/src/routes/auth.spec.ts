@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
 import { cookieAttributes, SUCCESS_PAGE_STYLE } from "./auth.js";
+import { createSession } from "../accounts.js";
 import { buildApp, DEFAULT_PAGE_CSP } from "../app.js";
 import { openDb } from "../db.js";
 import type { Database } from "../sqlite.js";
@@ -312,4 +313,105 @@ describe("native sign-in (issue #215)", () => {
     const start = await app.inject({ url: "/auth/github", headers: { origin: "tauri://localhost" } });
     expect(start.headers["access-control-allow-origin"]).toBeUndefined();
   });
+
+  // Issue #115: the account's sessions, listed and signed out from its
+  // settings in the desktop app.
+  describe("sessions", () => {
+    const MAC_WEBVIEW = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
+    const LINUX_FIREFOX = "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0";
+
+    async function appSession(): Promise<string> {
+      const code = await codeFromCallback();
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/token",
+        headers: { "user-agent": MAC_WEBVIEW },
+        payload: { code, code_verifier: VERIFIER, redirect_uri: REDIRECT },
+      });
+      return (res.json() as { token: string }).token;
+    }
+
+    async function browserSession(): Promise<string> {
+      const start = await app.inject({ url: "/auth/github" });
+      const state = new URL(String(start.headers.location)).searchParams.get("state")!;
+      const callback = await app.inject({
+        url: `/auth/github/callback?${new URLSearchParams({ state, code: "provider-code" })}`,
+        headers: { "user-agent": LINUX_FIREFOX },
+        cookies: { relay_oauth_state: start.cookies.find((c) => c.name === "relay_oauth_state")!.value },
+      });
+      return callback.cookies.find((c) => c.name === "relay_session")!.value;
+    }
+
+    type Listed = { id: string; client: string | null; createdAt: string; lastSeenAt: string | null; current: boolean };
+    const list = async (token: string) =>
+      ((await app.inject({ url: "/auth/sessions", headers: { authorization: `Bearer ${token}` } })).json() as { sessions: Listed[] }).sessions;
+
+    it("lists them with what signed in, when, and when each was last used, marking the one asking", async () => {
+      const browser = await browserSession();
+      const desktop = await appSession();
+      const sessions = await list(desktop);
+      expect(sessions.map((session) => [session.client, session.current])).toEqual([
+        ["Legato app on macOS", true],
+        ["Firefox on Linux", false],
+      ]);
+      // The desktop's own request just used it; the browser's hasn't been used since it signed in.
+      expect(Date.parse(sessions[0]!.lastSeenAt!)).toBeGreaterThan(Date.now() - 60_000);
+      expect(sessions[1]!.lastSeenAt).toBeNull();
+      // Nothing that could sign a session in.
+      expect(JSON.stringify(sessions)).not.toContain(browser);
+      expect(JSON.stringify(sessions)).not.toContain(desktop);
+    });
+
+    it("writes last seen once every few minutes, not on every request", async () => {
+      const desktop = await appSession();
+      await list(desktop);
+      db.prepare("UPDATE relay_sessions SET last_seen_at = '2026-01-01 00:00:00'").run();
+      await list(desktop);
+      const [{ last_seen_at: written }] = db.prepare("SELECT last_seen_at FROM relay_sessions").all() as { last_seen_at: string }[];
+      expect(written).not.toBe("2026-01-01 00:00:00");
+      db.prepare("UPDATE relay_sessions SET last_seen_at = datetime('now', '-1 minute')").run();
+      const [{ last_seen_at: recent }] = db.prepare("SELECT last_seen_at FROM relay_sessions").all() as { last_seen_at: string }[];
+      await list(desktop);
+      expect((db.prepare("SELECT last_seen_at FROM relay_sessions").get() as { last_seen_at: string }).last_seen_at).toBe(recent);
+    });
+
+    it("signs out one of the account's own sessions, and nobody else's", async () => {
+      const browser = await browserSession();
+      const desktop = await appSession();
+      const [, other] = await list(desktop);
+      const revoke = (token: string, id: string) =>
+        app.inject({ method: "DELETE", url: `/auth/sessions/${id}`, headers: { authorization: `Bearer ${token}`, origin: "tauri://localhost" } });
+
+      const stranger = db.prepare("INSERT INTO relay_users (provider, provider_user_id) VALUES ('google', 'g-other') RETURNING id").get() as {
+        id: number;
+      };
+      const strangerToken = createSession(db, stranger.id).token;
+      expect((await revoke(strangerToken, other!.id)).json()).toEqual({ revoked: false });
+      expect((await revoke(desktop, "not-an-id")).json()).toEqual({ revoked: false });
+
+      const res = await revoke(desktop, other!.id);
+      expect(res.json()).toEqual({ revoked: true });
+      expect(res.headers["access-control-allow-origin"]).toBe("tauri://localhost");
+      expect(((await app.inject({ url: "/auth/me", headers: { authorization: `Bearer ${browser}` } })).json() as { user: unknown }).user).toBeNull();
+      expect((await list(desktop)).map((session) => session.current)).toEqual([true]);
+    });
+
+    it("401s without a session", async () => {
+      expect((await app.inject({ url: "/auth/sessions" })).statusCode).toBe(401);
+      expect((await app.inject({ method: "DELETE", url: "/auth/sessions/1" })).statusCode).toBe(401);
+    });
+
+    it("allows DELETE from the desktop origins, for the routes Settings calls", async () => {
+      for (const url of ["/auth/sessions/1", "/linked-servers/0123456789abcdef0123456789abcdef"]) {
+        const pre = await app.inject({
+          method: "OPTIONS",
+          url,
+          headers: { origin: "tauri://localhost", "access-control-request-method": "DELETE" },
+        });
+        expect(pre.statusCode).toBe(204);
+        expect(pre.headers["access-control-allow-methods"]).toContain("DELETE");
+      }
+    });
+  });
 });
+
