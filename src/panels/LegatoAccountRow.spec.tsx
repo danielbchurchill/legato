@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /* Issue #325's review: the link button in Settings' legato.fm account group,
@@ -49,11 +49,20 @@ function serverSays(legato: Record<string, unknown>) {
   )
 }
 
+// Unmounted after each test, before the page is cleared. A root left
+// mounted keeps its timers and listeners: the confirm dialog's exit fade
+// (useMountFade) then unmounts its portal after the clear took it away, and
+// React's NotFoundError lands in whichever test runs next (#362 fixed the
+// same in the link-return spec).
+const roots: Root[] = []
+
 async function render() {
   const container = document.createElement('div')
   document.body.appendChild(container)
+  const root = createRoot(container)
+  roots.push(root)
   await act(async () => {
-    createRoot(container).render(createElement(LegatoAccountRow))
+    root.render(createElement(LegatoAccountRow))
   })
   return container
 }
@@ -78,6 +87,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  act(() => roots.splice(0).forEach((root) => root.unmount()))
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
 })

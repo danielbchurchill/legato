@@ -9,11 +9,10 @@ import {
   inferReason,
   outageFailure,
   outageFooter,
-  pathFor,
   type OutageFacts,
-  type ServerPath,
   type UnreachableReason,
 } from './unreachable'
+import type { ServerPath } from './serverPath'
 
 const NOW = Date.parse('2026-10-09T14:30:00Z')
 const MINUTE = 60_000
@@ -28,26 +27,6 @@ function facts(overrides: Partial<OutageFacts> = {}): OutageFacts {
     ...overrides,
   }
 }
-
-describe('pathFor', () => {
-  it('tells this computer, the home network and anywhere else apart', () => {
-    expect(pathFor('http://127.0.0.1:8899', true)).toBe('embedded')
-    expect(pathFor('http://127.0.0.1:8905', false)).toBe('this-device')
-    expect(pathFor('http://localhost:8899', false)).toBe('this-device')
-    expect(pathFor('http://[::1]:8899', false)).toBe('this-device')
-    expect(pathFor('http://192.168.1.20:8899', false)).toBe('home')
-    expect(pathFor('http://musicbox.local:8899', false)).toBe('home')
-    expect(pathFor('http://[fd12:3456::1]:8899', false)).toBe('home')
-    expect(pathFor('http://100.101.102.103:8899', false)).toBe('custom')
-    expect(pathFor('https://music.example.com', false)).toBe('custom')
-  })
-
-  it("only calls a loopback server the desktop app's own when the app started it", () => {
-    // The desktop app's default can point at another machine (a .env.local
-    // baked into the build); that's still a server elsewhere.
-    expect(pathFor('http://192.168.1.20:8899', true)).toBe('home')
-  })
-})
 
 describe('classifyFailure', () => {
   it('reads a fast failure as refused, and a slow one or a timeout as no answer', () => {
@@ -147,7 +126,7 @@ describe('describeOutage', () => {
 
   it('gives every reason on every path a sentence of its own', () => {
     const reasons: UnreachableReason[] = ['device-offline', 'network-changed', 'stopped', 'not-responding', 'asleep', 'offline']
-    const paths: ServerPath[] = ['embedded', 'this-device', 'home', 'custom']
+    const paths: ServerPath[] = ['embedded', 'this-device', 'home', 'relay', 'custom']
     for (const reason of reasons) {
       for (const path of paths) {
         const copy = describeOutage(reason, { ...ctx, path })
@@ -185,6 +164,18 @@ describe('describeOutage', () => {
   it('says why a home address stops working on another network', () => {
     expect(describeOutage('network-changed', ctx).why).toContain('only works on your home network')
     expect(describeOutage('network-changed', { ...ctx, path: 'custom' }).hint).toContain('Tailscale')
+  })
+
+  // #118 counts these as the home network, but they work from anywhere
+  // Tailscale or the name resolves, so a change of network doesn't explain
+  // them away.
+  it("doesn't say a Tailscale address or a dotless name only works at home", () => {
+    for (const host of ['100.101.102.103:8899', 'musicbox.tail1234.ts.net', 'musicbox:8899']) {
+      const copy = describeOutage('network-changed', { ...ctx, host, name: null })
+      expect(copy.why).not.toContain('only works on your home network')
+      expect(copy.hint).toContain('Tailscale')
+    }
+    expect(describeOutage('network-changed', { ...ctx, host: '[fd12:3456::1]:8899' }).why).toContain('only works on your home network')
   })
 })
 

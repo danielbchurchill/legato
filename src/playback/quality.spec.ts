@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   chooseQuality,
+  connectionPath,
   EARLY_END_MS,
   noteDrop,
   prefersAac,
   readQualityPreference,
   STALL_LIMIT_MS,
   storeQualityPreference,
+  streamQualitySnapshot,
   streamUrl,
+  subscribeStreamQuality,
   watchForDrops,
   type ServerTrouble,
 } from './quality'
+import { setConnectionPath } from '../connect/connectionPath'
 import {
   announceServerBack,
   noteCheckAnswered,
@@ -104,6 +108,46 @@ describe('quality preference', () => {
     const storage = memoryStorage()
     storeQualityPreference('standard', storage)
     expect(readQualityPreference(storage)).toBe('standard')
+  })
+})
+
+// Issue #118: the ladder starts from the path the connection store has,
+// and the indicator hears about every change to what it shows.
+describe('the connection path', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', memoryStorage())
+    vi.stubGlobal('window', { location: { href: 'http://127.0.0.1:5185/' } })
+    storeQualityPreference('auto')
+  })
+
+  afterEach(() => {
+    setConnectionPath('this-computer')
+    vi.unstubAllGlobals()
+  })
+
+  it("follows the store's path, so a route through the relay streams less", () => {
+    expect(connectionPath()).toBe('this-computer')
+    expect(new URL(streamUrl(7)).searchParams.get('quality')).toBe('original')
+    setConnectionPath('relay')
+    expect(connectionPath()).toBe('relay')
+    expect(new URL(streamUrl(7)).searchParams.get('quality')).toMatch(/^(opus|aac)160$/)
+    setConnectionPath('custom')
+    expect(new URL(streamUrl(7)).searchParams.get('quality')).toMatch(/^(opus|aac)256$/)
+    setConnectionPath('home')
+    expect(new URL(streamUrl(7)).searchParams.get('quality')).toBe('original')
+  })
+
+  it('records what each stream asked for, and says so on every change', () => {
+    const heard = vi.fn()
+    const stop = subscribeStreamQuality(heard)
+    streamUrl(7)
+    expect(streamQualitySnapshot().last).toEqual({ fileId: 7, quality: 'original' })
+    noteDrop()
+    expect(streamQualitySnapshot().drops).toBe(1)
+    storeQualityPreference('low')
+    expect(streamQualitySnapshot()).toMatchObject({ preference: 'low', drops: 0 })
+    expect(heard).toHaveBeenCalledTimes(3)
+    stop()
   })
 })
 

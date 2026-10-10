@@ -12,6 +12,7 @@ import { resolveNodeSizeMultipliers } from './canvas/nodeTypes'
 import { usePlayback } from './playback/usePlayback'
 import { AppShell } from './shell/AppShell'
 import { Rail } from './shell/Rail'
+import { ConnectionIndicator } from './shell/ConnectionIndicator'
 import { Capsule, type ViewMode } from './shell/Capsule'
 import { IdlePlayer, Player } from './shell/Player'
 import { LeftPanel, RightPanel } from './shell/SidePanel'
@@ -43,7 +44,9 @@ import { useLegatoRenewal } from './connect/hooks'
 import { useLegatoLinkReturn } from './connect/useLegatoLinkReturn'
 import { OPEN_CONNECT_EVENT, openConnectScreen, type ConnectReason } from './connect/openConnect'
 import { ServerUnreachableOverShell, ServerUnreachableWindow, type UnreachableView } from './connect/ServerUnreachable'
-import { describeOutage, inferReason, outageFooter, pathFor } from './connect/unreachable'
+import { describeOutage, inferReason, outageFooter } from './connect/unreachable'
+import { useConnectionPath } from './connect/connectionPath'
+import { serverPathOf } from './connect/serverPath'
 import { useReconnectEpoch } from './connect/reconnect'
 import { UnreachableContext, useUnreachableInShell, type UnreachableSurface } from './connect/unreachableSurface'
 import { IS_TAURI } from './config/runtime'
@@ -480,6 +483,14 @@ function Workspace({
           theme={resolvedTheme}
           initials={initialsFor(account)}
           accountLabel={account?.displayName ?? account?.email ?? 'Account'}
+          status={
+            <ConnectionIndicator
+              embedded={EMBEDDED_SERVER}
+              currentFileId={playback.status.currentFileId}
+              streaming={playback.status.streaming}
+              onOpenSettings={() => setLeftView({ kind: 'settings' })}
+            />
+          }
         />
         {leftView != null && owner != null && <LeftPanel label={PANEL_LABEL[owner]}>{leftContent}</LeftPanel>}
 
@@ -586,7 +597,8 @@ const OFFER_ANOTHER_SERVER_MS = 5000
 // a while, and until then "starting" is the truth.
 const EMBEDDED_START_GRACE_MS = 15_000
 
-const SERVER_PATH = pathFor(SERVER_ORIGIN, IS_TAURI && SERVER_ORIGIN === DEFAULT_SERVER_ORIGIN)
+// The desktop app's own server, which it started (server_process.rs).
+const EMBEDDED_SERVER = IS_TAURI && SERVER_ORIGIN === DEFAULT_SERVER_ORIGIN
 
 const connectElsewhere = () => openConnectScreen('unreachable')
 
@@ -612,21 +624,23 @@ function useMinuteClock(active: boolean): number {
 // under the state.
 function useUnreachableView({ outage, name, everConnected, retrying, retry }: ServerStatus): UnreachableView | null {
   const clock = useMinuteClock(outage != null)
+  // #118: the path the indicator shows, so the two can't disagree.
+  const path = serverPathOf(useConnectionPath(), EMBEDDED_SERVER)
   const copy = useMemo(() => {
     if (!outage) return null
     // The clock last ticked before the outage began, on the first render
     // with it.
     const now = Math.max(clock, outage.since)
-    const reason = inferReason({ ...outage, path: SERVER_PATH }, now)
+    const reason = inferReason({ ...outage, path }, now)
     return describeOutage(reason, {
-      path: SERVER_PATH,
+      path,
       name,
       host: new URL(SERVER_ORIGIN).host,
       lastSeenAt: outage.lastSeenAt,
       everConnected,
       now,
     })
-  }, [outage, name, everConnected, clock])
+  }, [outage, name, everConnected, clock, path])
   const { title, why, hint } = copy ?? { title: null, why: null, hint: null }
   return useMemo(() => {
     if (!outage || title == null || why == null) return null
@@ -675,6 +689,7 @@ function useAfter(ms: number, active: boolean): boolean {
 export default function App() {
   const connection = useServerReady()
   const { ready, everConnected, server } = connection
+  const path = serverPathOf(useConnectionPath(), EMBEDDED_SERVER)
   const connect = useConnectScreen()
   const { resolvedTheme } = useTheme()
   const chosen = SERVER_ORIGIN !== DEFAULT_SERVER_ORIGIN
@@ -707,7 +722,7 @@ export default function App() {
         <ServerUpdateNotice server={server} />
       </ToastProvider>
     )
-  } else if (!unreachable || (SERVER_PATH === 'embedded' && !embeddedHadTime)) {
+  } else if (!unreachable || (path === 'embedded' && !embeddedHadTime)) {
     // #128: an installed web app launched with the server out of reach
     // runs the service worker's cached shell, and "starting" would be a
     // lie there: no browser starts a server. It still polls, so the app
@@ -715,7 +730,7 @@ export default function App() {
     // way out when the server this client points at isn't there.
     main = (
       <Centered>
-        {SERVER_PATH === 'embedded' ? 'starting legato-server…' : 'connecting…'}
+        {path === 'embedded' ? 'starting legato-server…' : 'connecting…'}
         {offerAnother && <Button onClick={() => openConnectScreen('unreachable')}>connect to a different server</Button>}
       </Centered>
     )

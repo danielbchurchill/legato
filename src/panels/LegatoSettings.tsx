@@ -26,6 +26,7 @@ import { ServerFolderPicker } from '../library/ServerFolderPicker'
 import { formatLongDuration } from '../ui/format'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 import { StreamQualityRow } from './StreamQualityRow'
+import { NeverRelayRow } from './NeverRelayRow'
 import { LegatoAccountRow } from './LegatoAccountRow'
 import { ServingGroup } from './ServingGroup'
 import { deviceForSaved, type AudioDevice } from '../playback/audioDevices'
@@ -690,6 +691,7 @@ export function LegatoSettings({
           />
         </SettingsRow>
         <StreamQualityRow />
+        <NeverRelayRow />
         <SettingsRow label="Output" align="start">
           {IS_TAURI ? (
             <Select

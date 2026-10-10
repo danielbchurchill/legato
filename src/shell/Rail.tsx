@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import whiteLogoSrc from '../assets/brand/white-logo.png'
 import blackLogoSrc from '../assets/brand/black-logo.png'
 import { Icon } from '../ui/Icon'
@@ -6,10 +7,11 @@ import { TooltipGroup } from '../ui/TooltipGroup'
 import type { ResolvedTheme } from '../hooks/useTheme'
 import { Surface } from './Surface'
 import { RAIL_ITEMS, SETTINGS_ITEM, type RailItem } from './panels'
+import { railButtonClass } from './railButton'
 
 /* The rail: a 56px glass column floating 12px in from the window's left edge,
  * full height. The logo, then the two library destinations, then — pushed to
- * the bottom — settings and the avatar.
+ * the bottom — the connection indicator (#118), settings and the avatar.
  *
  * Clicking an item toggles its panel. The item stays lit for any page under
  * it (one playlist, one worklist), so the rail always says where you are.
@@ -23,6 +25,8 @@ type RailProps = {
   theme: ResolvedTheme
   initials: string
   accountLabel: string
+  /** Drawn above Settings: the connection indicator (ConnectionIndicator.tsx). */
+  status?: ReactNode
 }
 
 function RailButton({
@@ -43,11 +47,7 @@ function RailButton({
         onClick={onClick}
         aria-label={label}
         aria-pressed={active}
-        className={`grid size-[40px] shrink-0 place-items-center rounded-[12px] transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
-          active
-            ? 'bg-[var(--color-wash-2)] text-[var(--color-ink)]'
-            : 'text-[var(--color-ink-2)] hover:bg-[var(--color-wash)] hover:text-[var(--color-ink)]'
-        }`}
+        className={railButtonClass(active)}
       >
         <Icon name={icon} size={22} />
       </button>
@@ -55,7 +55,7 @@ function RailButton({
   )
 }
 
-export function Rail({ active, onToggle, theme, initials, accountLabel }: RailProps) {
+export function Rail({ active, onToggle, theme, initials, accountLabel, status }: RailProps) {
   return (
     <Surface
       role="navigation"
@@ -76,6 +76,7 @@ export function Rail({ active, onToggle, theme, initials, accountLabel }: RailPr
           <RailButton key={item.id} icon={item.icon} label={item.label} active={active === item.id} onClick={() => onToggle(item.id)} />
         ))}
         <span className="flex-1" />
+        {status}
         <RailButton
           icon={SETTINGS_ITEM.icon}
           label={SETTINGS_ITEM.label}
