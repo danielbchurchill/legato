@@ -24,6 +24,12 @@ type TopRow = { id: number; title: string; playCount: number };
 // every edge and looked each one up in plays: about 2.4 s per call at 30,000
 // albums (3.2M edges) even with nothing played, which held up every /stats,
 // and the Library header reads its counts from /stats (#302).
+//
+// Keeping planner statistics current (issue #354) doesn't make this
+// unnecessary. Once plays has rows and statistics, SQLite picks this order
+// itself. But ANALYZE records nothing for an empty table, and with nothing
+// played SQLite takes plays for a large table and walks every edge: 0.53 s
+// at 30,000 albums with every other table's statistics current.
 function topByEdge(db: Database, edgeType: "performed_by" | "appears_on"): TopRow | null {
   return (
     (db

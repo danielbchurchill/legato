@@ -131,6 +131,28 @@ describe("nodeSummary", () => {
     expect((nodeSummary(db, artist) as { topAlbum: { title: string } | null }).topAlbum?.title).toBe("Solo Record");
   });
 
+  // The tags and MusicBrainz can both credit the same artist on a recording.
+  it("counts a play once when two edges credit the artist on the same recording", () => {
+    const artist = makeNode("artist", "Pussy Riot");
+    const once = makeNode("release", "Credited Once");
+    const twice = makeNode("release", "Credited Twice");
+
+    const onceTrack = makeNode("recording", "credited once");
+    addEdge(onceTrack, artist, "performed_by");
+    addEdge(onceTrack, once, "appears_on");
+    const onceFile = addFile(onceTrack, {});
+    addPlay(onceTrack, onceFile);
+    addPlay(onceTrack, onceFile);
+
+    const twiceTrack = makeNode("recording", "credited twice");
+    addEdge(twiceTrack, artist, "performed_by", "local");
+    addEdge(twiceTrack, artist, "performed_by", "musicbrainz");
+    addEdge(twiceTrack, twice, "appears_on");
+    addPlay(twiceTrack, addFile(twiceTrack, {}));
+
+    expect((nodeSummary(db, artist) as { topAlbum: { title: string } | null }).topAlbum?.title).toBe("Credited Once");
+  });
+
   it("reads a release's rows off the aggregate table, dating it by year", () => {
     const release = makeNode("release", "MATRIARCHY NOW");
     db.prepare(

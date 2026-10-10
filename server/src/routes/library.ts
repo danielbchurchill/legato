@@ -204,12 +204,17 @@ function listAlbums(
       .get(...whereParams) as { count: number }
   ).count;
 
+  // CROSS JOIN starts release_last_played from plays, each play then finding
+  // its recording's few edges by edges_from_node_idx, as routes/stats.ts's
+  // topByEdge does and for the same reason (issue #354). With nothing played,
+  // plays has no statistics, and SQLite went through every appears_on edge
+  // instead: half a second a page at 30,000 albums, statistics or not.
   const rows = db
     .prepare(
       `WITH release_last_played AS (
          SELECT e.to_node AS release_node_id, MAX(p.started_at) AS last_played_at
-         FROM edges e
-         JOIN plays p ON p.recording_node_id = e.from_node
+         FROM plays p
+         CROSS JOIN edges e ON e.from_node = p.recording_node_id
          WHERE e.type = 'appears_on'
          GROUP BY e.to_node
        )
