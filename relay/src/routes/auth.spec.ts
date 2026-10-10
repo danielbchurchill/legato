@@ -190,6 +190,20 @@ describe("native sign-in (issue #215)", () => {
     expect(String(claim.headers["content-security-policy"])).toContain("script-src 'sha256-");
   });
 
+  // routes/relay.ts sets /relay's sandbox on the raw response. Fastify's
+  // reply.hasHeader sees that too, so the default policy never replaces it,
+  // even on HTML Fastify itself sends there.
+  it("keeps a policy set on the raw response, as /relay's sandbox is", async () => {
+    const sandboxed = buildApp({ db: openDb(":memory:") });
+    sandboxed.get("/sandboxed", async (_request, reply) => {
+      reply.raw.setHeader("content-security-policy", "sandbox");
+      return reply.type("text/html").send("<p>from a home server</p>");
+    });
+    const res = await sandboxed.inject({ url: "/sandboxed" });
+    await sandboxed.close();
+    expect(res.headers["content-security-policy"]).toBe("sandbox");
+  });
+
   it("rejects a non-loopback redirect before the provider is ever involved", async () => {
     for (const redirect of ["https://evil.example/callback", "http://localhost:53682/callback", "http://127.0.0.1:53682/elsewhere"]) {
       const res = await app.inject({ url: `/auth/github?${startQuery({ redirect_uri: redirect })}` });
