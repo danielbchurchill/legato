@@ -31,10 +31,21 @@ export type NodeSummary =
  * through the artists/albums tables, for the reason stated there — those
  * tables hold current-library aggregates, not play counts.
  *
- * EXISTS rather than a third join, because a recording credits one artist
- * per performed_by edge since 8a3426c: joining would count a play once per
+ * IN rather than a third join, because a recording credits one artist per
+ * performed_by edge since 8a3426c: joining would count a play once per
  * credited artist and hand the wrong release the top spot on anything
- * collaborative.
+ * collaborative. A recording is in the list once however many edges credit
+ * this artist on it.
+ *
+ * IN rather than EXISTS (issue #354), because the list is where the query
+ * starts: the artist's recordings, a few hundred at most, then their plays
+ * and releases, each through an index. An EXISTS is a test on a play, so
+ * the query has to start from plays or from every appears_on edge. With
+ * nothing played, plays has no statistics, since ANALYZE records nothing
+ * for an empty table, and SQLite took it for a large table and went through
+ * every edge: half a second per artist at 30,000 albums, statistics or not.
+ * This shape took under a millisecond with or without statistics, from
+ * nothing played to 200,000 plays.
  *
  * Null until there is play history. The card renders that as an em dash
  * rather than a zero — "nothing has been played yet" and "this artist's
@@ -47,11 +58,10 @@ function topAlbumForArtist(db: Database, artistNodeId: number): { id: number; ti
        FROM plays pl
        JOIN edges ao ON ao.from_node = pl.recording_node_id AND ao.type = 'appears_on'
        JOIN nodes n ON n.id = ao.to_node
-       WHERE EXISTS (
-         SELECT 1 FROM edges pb
-          WHERE pb.from_node = pl.recording_node_id
+       WHERE pl.recording_node_id IN (
+         SELECT pb.from_node FROM edges pb
+          WHERE pb.to_node = ?
             AND pb.type = 'performed_by'
-            AND pb.to_node = ?
        )
        GROUP BY ao.to_node
        ORDER BY playCount DESC, n.id ASC

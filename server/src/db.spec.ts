@@ -196,3 +196,42 @@ describe("openDb pre-migration backup", () => {
     }
   });
 });
+
+// Issue #354.
+describe("openDb planner statistics", () => {
+  test("gathers statistics for a database that has none", () => {
+    // A database from before #354: rows, and nothing in sqlite_stat1.
+    const old = openDbAt(dbPath, LATEST);
+    const node = old.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id");
+    const edge = old.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')");
+    const release = (node.get() as { id: number }).id;
+    for (let i = 0; i < 50; i++) edge.run((node.get() as { id: number }).id, release);
+    old.close();
+
+    const db = openDb(dbPath, { log: () => {} });
+    try {
+      const stat = db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'edges_from_node_idx'").get() as { stat: string };
+      expect(stat.stat.split(" ")[0]).toBe("50");
+    } finally {
+      db.close();
+    }
+  });
+
+  test("logs statistics it couldn't write, and opens anyway", () => {
+    const old = openDbAt(dbPath, LATEST);
+    old.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x')").run();
+    old.close();
+    const writer = openSqlite(dbPath);
+    writer.exec("BEGIN IMMEDIATE");
+
+    const lines: string[] = [];
+    try {
+      const db = openDb(dbPath, { log: (line) => lines.push(line) });
+      db.close();
+    } finally {
+      writer.exec("ROLLBACK");
+      writer.close();
+    }
+    expect(lines).toEqual([expect.stringContaining("couldn't refresh planner statistics")]);
+  });
+});

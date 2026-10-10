@@ -159,6 +159,33 @@ export function openConnection(dbPath: string, busyTimeoutMs = BUSY_TIMEOUT_MS):
   return db;
 }
 
+// Issue #354: SQLite picks a query plan from what sqlite_stat1 says about
+// each table's size and each index's spread, and until this nothing ever
+// wrote it. Planning blind, it took a join of plays and edges the long way
+// round, through every edge. This gathers what's missing or out of date:
+// a table never analyzed, or one that has grown or shrunk tenfold since.
+// Anything else is a check of each table's size, about 0.2 ms at 30,000
+// albums. Gathering it all from nothing took about 25 ms there (130 ms with
+// a cold cache), holding the write lock throughout.
+//
+// 0x10002 is what SQLite advises for a connection that stays open: check
+// every table, not only those this connection has queried. 0x10 keeps the
+// cap on how many rows each index is sampled from, which the default mask
+// has and a mask given explicitly loses: without it, the same run took
+// 255 ms.
+export function refreshPlannerStatistics(db: Database): void {
+  db.exec("PRAGMA optimize=0x10012");
+}
+
+// What another connection gathered reaches this one only when it next loads
+// the schema, and ANALYZE doesn't change the schema, so a long-lived
+// connection goes on planning with what it read when it opened. This reads
+// sqlite_stat1 again: 0.3 ms. It takes the write lock, briefly, so it runs
+// when no other connection is writing.
+export function reloadPlannerStatistics(db: Database): void {
+  db.exec("ANALYZE sqlite_schema");
+}
+
 // dbPath defaults to the real on-disk DB; tests pass ":memory:" (or a temp
 // file) to get the same schema/migrations against an isolated database.
 export function openDb(dbPath: string = path.join(DATA_DIR, "legato.db"), options: OpenDbOptions = {}): Database {
@@ -198,6 +225,22 @@ export function openDb(dbPath: string = path.join(DATA_DIR, "legato.db"), option
       db.exec(sql);
       db.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
     })();
+  }
+
+  // Issue #354: on the connection the server answers requests with, before it
+  // listens, so nothing is waiting while it runs. A first start after
+  // upgrading gathers everything; later starts find little or nothing to do.
+  // recompute() keeps the statistics current after that. Before the
+  // checkpoint below, which then takes what this writes along with the
+  // migrations' pages. SQLite also advises it after a migration that adds an
+  // index. Statistics only make queries faster, so failing to write them (a
+  // full disk, another process holding the write lock) is logged, not a
+  // reason to refuse to start.
+  try {
+    refreshPlannerStatistics(db);
+  } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    (options.log ?? console.log)(`database: couldn't refresh planner statistics (${cause}); the next recompute or start tries again`);
   }
 
   // Issue #320: a migration that changes much of the database leaves the
