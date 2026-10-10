@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
 import type { Database } from "./sqlite.js";
-import { MAX_LIVE_CREDENTIALS_PER_SERVER, tunnelCredentialHolder } from "./pairing.js";
+import { tunnelCredentialHolder } from "./pairing.js";
 import { sleep, startFixtureServer, type FixtureServerHandle } from "./testing/fixture-http-server.js";
 import {
   connectHomeServer,
@@ -352,7 +352,7 @@ describe("tunnel lifecycle", () => {
       expect(credentials(serverId)[0]).toBe(credential);
     });
 
-    it("answers one ask a minute from a connection, and stops minting once a server holds too many", async () => {
+    it("answers one ask a minute from a connection", async () => {
       const { tunnelUrl } = await relay();
       const account = signIn(db);
       const { serverId, credential, key } = linkServer(db, account.userId);
@@ -364,15 +364,78 @@ describe("tunnel lifecycle", () => {
       await sleep(50);
       expect(first.frames.filter((frame) => frame.type === "credential")).toHaveLength(1);
       expect(credentials(serverId)).toHaveLength(2);
+    });
 
-      // New connections with the same credential, each asking once and
-      // never moving onto what they got.
-      for (let i = 2; i < MAX_LIVE_CREDENTIALS_PER_SERVER + 2; i++) {
-        const next = await signedInSocket(tunnelUrl, credential);
-        next.socket.send(JSON.stringify(rotateFrame(key, credential)));
-        await sleep(30);
+    // The review's wedge: each rotation minted, so replacements the server
+    // never stored piled up until the cap stopped rotation for good.
+    it("hands the same replacement to every ask until it's used, so dropped rotations don't wedge rotation", async () => {
+      const { tunnelUrl } = await relay();
+      const account = signIn(db);
+      const { serverId, credential, key } = linkServer(db, account.userId);
+
+      // Five connections, each asking once and never moving onto what it got.
+      const sent: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const dropped = await signedInSocket(tunnelUrl, credential);
+        dropped.socket.send(JSON.stringify(rotateFrame(key, credential)));
+        await until(() => dropped.frames.some((frame) => frame.type === "credential"));
+        sent.push((dropped.frames.find((frame) => frame.type === "credential") as unknown as { credential: string }).credential);
+        dropped.socket.terminate();
       }
-      expect(credentials(serverId)).toHaveLength(MAX_LIVE_CREDENTIALS_PER_SERVER);
+      expect(new Set(sent).size).toBe(1);
+      expect(credentials(serverId)).toEqual([credential, sent[0]]);
+
+      // The sixth is the server storing it: it moves on, and the old one goes.
+      const client = await homeServer(tunnelUrl, credential, () => true);
+      expect(client.askForReplacement(rotateSignature(key, credential))).toBe(true);
+      await until(() => credentials(serverId).length === 1);
+      expect(credentials(serverId)).toEqual([sent[0]]);
+      expect(client.credential).toBe(sent[0]);
+    });
+
+    // The review's race (server/src/auth/legatoLink.ts): a link mints a
+    // credential, and before its answer is stored, a rotation runs on the
+    // tunnel's older one. When rotation minted, its replacement outranked
+    // the link's, retired it on first use, and then the link's answer
+    // stored the retired one over it: no credential that worked.
+    it("hands a server the link's credential when a link races a rotation, so it ends up with one that works", async () => {
+      const { httpUrl, tunnelUrl } = await relay();
+      const account = signIn(db);
+      const { serverId, credential, key } = linkServer(db, account.userId);
+      // What the home server has stored: its tunnel credential, then whatever arrives.
+      let stored = credential;
+      const client = await homeServer(tunnelUrl, credential, (replacement) => {
+        stored = replacement.credential;
+        return true;
+      });
+
+      // The link's report reached legato.fm, which minted its credential...
+      const linked = linkServer(db, account.userId, key).credential;
+      // ...and a rotation runs before the server stores it.
+      expect(client.askForReplacement(rotateSignature(key, credential))).toBe(true);
+      await until(() => credentials(serverId).length === 1);
+      // Then the link's answer is stored.
+      stored = linked;
+
+      expect(credentials(serverId)).toEqual([stored]);
+      expect(client.credential).toBe(stored);
+      await sleep(HEARTBEAT_MS * 3);
+      expect(client.state).toBe("connected");
+      const response = await fetch(`${httpUrl}/relay/${serverId}/after-race`, { headers: { cookie: account.cookieHeader } });
+      expect(await response.text()).toBe("home /after-race");
+    });
+
+    it("sends nothing while a link to another account is under way, whose answer brings the server its credential", async () => {
+      const { tunnelUrl } = await relay();
+      const first = signIn(db);
+      const { serverId, credential, key } = linkServer(db, first.userId);
+      const theirs = linkServer(db, signIn(db).userId, key).credential;
+
+      const { socket, frames } = await signedInSocket(tunnelUrl, credential);
+      socket.send(JSON.stringify(rotateFrame(key, credential)));
+      await sleep(100);
+      expect(frames.some((frame) => frame.type === "credential")).toBe(false);
+      expect(credentials(serverId)).toEqual([credential, theirs]);
     });
 
     it("refuses a tunnel that tries to move onto another server's credential, and leaves that server's alone", async () => {
@@ -409,9 +472,9 @@ describe("tunnel lifecycle", () => {
       expect(client.askForReplacement(rotateSignature(key, credential))).toBe(true);
       await until(() => client.credential !== credential);
       await until(() => credentials(serverId).length === 1);
-      // The new one's first use retires both the old one and the one that never arrived.
-      expect(credentials(serverId)).toEqual([client.credential]);
-      expect(client.credential).not.toBe(unused);
+      // The next ask gets the one that never arrived, and its first use retires the old one.
+      expect(client.credential).toBe(unused);
+      expect(credentials(serverId)).toEqual([unused]);
     });
 
     it("retires the old credential when a server whose tunnel dropped before it moved comes back on the replacement", async () => {

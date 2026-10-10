@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, verify, type KeyObject } from "node:crypto";
 import type { Database } from "./sqlite.js";
 import { normalizeCode } from "./claimCode.js";
-import { mintTunnelCredential, rotateTunnelCredential, tunnelCredentialHolder, type TunnelCredentialMinted } from "./pairing.js";
+import { liveTunnelCredential, mintTunnelCredential, rotateTunnelCredential, type TunnelCredentialMinted } from "./pairing.js";
 import { verifyIssuedToken, type SigningKeys } from "./signing-keys.js";
 import { parseSqliteDatetime } from "./sqlite-datetime.js";
 
@@ -340,14 +340,15 @@ export function acceptRotateProof(
   }
   if (Math.abs(nowSeconds - issuedAt) > UNLINK_PROOF_WINDOW_SECONDS) return { ok: false, reason: "stale" };
   return db.transaction((): RotateResult => {
-    const holder = tunnelCredentialHolder(db, token);
-    if (!holder?.serverId) return { ok: false, reason: "revoked" };
+    const current = liveTunnelCredential(db, token);
+    const serverId = current?.serverId;
+    if (!current || !serverId) return { ok: false, reason: "revoked" };
     const pair = db
       .prepare("SELECT public_key FROM linked_servers WHERE relay_user_id = ? AND server_id = ?")
-      .get(holder.relayUserId, holder.serverId) as { public_key: string } | undefined;
+      .get(current.relayUserId, serverId) as { public_key: string } | undefined;
     if (!pair) return { ok: false, reason: "not_linked" };
-    const message = rotateProofMessage({ issuer, serverId: holder.serverId, credential: token, issuedAt });
+    const message = rotateProofMessage({ issuer, serverId, credential: token, issuedAt });
     if (!verifyServerSignature(pair.public_key, message, signature)) return { ok: false, reason: "bad_signature" };
-    return { ok: true, credential: rotateTunnelCredential(db, token) };
+    return { ok: true, credential: rotateTunnelCredential(db, { ...current, serverId }) };
   })();
 }
