@@ -175,11 +175,21 @@ export function getUserById(db: Database, id: number): RelayUserRow | null {
 // How stale a session's last_seen_at may get before a request writes it
 // again (issue #115): "last seen" to the nearest few minutes, without a
 // write on every request. Both lookups below note it, so a web session's
-// (issue #365) is kept like any other.
+// (issue #365) is kept like any other. The write is best effort: one that
+// fails (the database locked, the disk full) still signs the session in,
+// and is logged the first time, not on every request after.
 const LAST_SEEN_EVERY_SQL = "-5 minutes";
+let lastSeenWarned = false;
 
 function noteSeen(db: Database, token: string, stale: number): void {
-  if (stale) db.prepare("UPDATE relay_sessions SET last_seen_at = datetime('now') WHERE id = ?").run(token);
+  if (!stale) return;
+  try {
+    db.prepare("UPDATE relay_sessions SET last_seen_at = datetime('now') WHERE id = ?").run(token);
+  } catch (err) {
+    if (!lastSeenWarned)
+      console.warn(`accounts: couldn't note when a session was last used (${err instanceof Error ? err.message : String(err)})`);
+    lastSeenWarned = true;
+  }
 }
 
 // The account a whole-account session belongs to. A web session, scoped to

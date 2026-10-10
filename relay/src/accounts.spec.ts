@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "./sqlite.js";
 import {
   createSession,
@@ -121,6 +121,23 @@ describe("sessions", () => {
 
   it("returns null for a token that was never issued", () => {
     expect(getUserBySessionToken(db, "not-a-real-token")).toBeNull();
+  });
+
+  // Issue #115's review: last_seen_at is best effort, and a write that
+  // fails (the database locked, the disk full) mustn't sign anyone out.
+  it("still signs the session in when last seen can't be written, and says so once", () => {
+    const user = upsertUser(db, "google", googleProfile);
+    const { token } = createSession(db, user.id);
+    db.exec("CREATE TRIGGER locked BEFORE UPDATE OF last_seen_at ON relay_sessions BEGIN SELECT RAISE(ABORT, 'database is locked'); END");
+    const warned = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(getUserBySessionToken(db, token)?.id).toBe(user.id);
+      expect(getUserBySessionToken(db, token)?.id).toBe(user.id);
+      expect(warned).toHaveBeenCalledTimes(1);
+      expect(String(warned.mock.calls[0]![0])).toContain("database is locked");
+    } finally {
+      warned.mockRestore();
+    }
   });
 
   it("returns null for an expired session", () => {
