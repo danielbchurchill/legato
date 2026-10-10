@@ -29,13 +29,13 @@ describe('createInstallOffer', () => {
     const event = promptEvent()
     early.captured(event)
     early.playbackStarted()
-    expect(early.ready()).toBe(event)
+    expect(early.ready()).toEqual({ kind: 'install', event })
 
     const late = createInstallOffer(memoryStorage())
     late.playbackStarted()
     expect(late.ready()).toBeNull()
     late.captured(event)
-    expect(late.ready()).toBe(event)
+    expect(late.ready()).toEqual({ kind: 'install', event })
   })
 
   it('tells subscribers when the offer may have become ready', () => {
@@ -67,6 +67,26 @@ describe('createInstallOffer', () => {
     offer.captured(promptEvent())
     offer.playbackStarted()
     offer.installed()
+    expect(offer.ready()).toBeNull()
+  })
+
+  it('says why over plain http instead, at the same moment and only once', () => {
+    const storage = memoryStorage()
+    const offer = createInstallOffer(storage, true)
+    expect(offer.ready()).toBeNull()
+    offer.playbackStarted()
+    expect(offer.ready()).toEqual({ kind: 'needs-https' })
+    offer.markOffered()
+    expect(offer.ready()).toBeNull()
+
+    const nextSession = createInstallOffer(storage, true)
+    nextSession.playbackStarted()
+    expect(nextSession.ready()).toBeNull()
+  })
+
+  it('has nothing to say on a page that can install but has no event yet', () => {
+    const offer = createInstallOffer(memoryStorage())
+    offer.playbackStarted()
     expect(offer.ready()).toBeNull()
   })
 })
