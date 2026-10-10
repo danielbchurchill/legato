@@ -242,10 +242,19 @@ export function tunnelCredentialHolder(db: Database, token: string): { relayUser
 // Mint order is rowid order. tunnel_credentials has no INTEGER PRIMARY
 // KEY, so its rowid is SQLite's own, and a new row's is always above every
 // row already there. Only VACUUM could renumber it, and nothing runs one.
-export function signInWithTunnelCredential(db: Database, token: string): { relayUserId: number; serverId: string | null } | null {
+//
+// A tunnel already signed in, moving onto another credential (issue #115),
+// names its server as forServer, and a credential for any other server is
+// refused, retiring nothing: checked in the same transaction, so nothing
+// can come between the check and the retiring.
+export function signInWithTunnelCredential(
+  db: Database,
+  token: string,
+  forServer?: string,
+): { relayUserId: number; serverId: string | null } | null {
   return db.transaction(() => {
     const row = liveTunnelCredential(db, token);
-    if (!row) return null;
+    if (!row || (forServer !== undefined && row.serverId !== forServer)) return null;
     if (row.serverId) db.prepare("DELETE FROM tunnel_credentials WHERE server_id = ? AND rowid < ?").run(row.serverId, row.rowid);
     return { relayUserId: row.relayUserId, serverId: row.serverId };
   })();

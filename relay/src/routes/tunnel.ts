@@ -72,13 +72,11 @@ function sendReplacementCredential(
 
 // A signed-in tunnel moving onto another credential (issue #115). Only one
 // for the same server: anything else is refused like a credential that
-// failed to sign in, and the tunnel closes. The holder is checked before
-// signing in, because signing in retires the server's earlier credentials,
-// and a credential for some other server mustn't retire that server's.
-function moveOnto(db: Database, tunnel: Tunnel, frame: TunnelFrame): string | null {
-  const credential = frame.type === "auth" && typeof frame.secret === "string" ? frame.secret : undefined;
-  if (!credential || tunnelCredentialHolder(db, credential)?.serverId !== tunnel.serverId) return null;
-  return signInWithTunnelCredential(db, credential) ? credential : null;
+// failed to sign in, and the tunnel closes. Signing in retires the
+// server's earlier credentials, so one for some other server is refused
+// without retiring that server's (pairing.ts).
+function moveOnto(db: Database, tunnel: Tunnel, credential: string): boolean {
+  return signInWithTunnelCredential(db, credential, tunnel.serverId) !== null;
 }
 
 // Writes when legato.fm last heard from each tunnel: its last frame or
@@ -172,13 +170,13 @@ export function tunnelRoutes(registry: TunnelRegistry, db: Database, options: { 
           tunnel.alive = true;
           tunnel.lastHeardAt = new Date();
           if (frame.type === "auth") {
-            const moved = moveOnto(db, tunnel, frame);
-            if (!moved) {
+            const credential = typeof frame.secret === "string" ? frame.secret : "";
+            if (!moveOnto(db, tunnel, credential)) {
               registry.drop(tunnel.serverId, socket);
               closing = true;
               return refuse(socket, INVALID_CREDENTIAL);
             }
-            tunnel.credential = moved;
+            tunnel.credential = credential;
             socket.send(JSON.stringify({ type: "auth-ok" }));
             return;
           }
