@@ -102,21 +102,33 @@ function recordLinkedServer(db: Database, relayUserId: number, serverId: string,
 // (issue #117). Only what the account itself made, and nothing a server
 // reported beyond its id. lastSeenAt is when legato.fm last heard from the
 // server's tunnel (issue #310, migration 0007), null if it never has.
+//
+// credentialIssuedAt is when the credential the server opens its tunnel
+// with was minted, for the account's settings (issue #115), null when this
+// account's link left it none. The oldest live one: a newer one is a
+// replacement the server hasn't moved onto, and its first use retires the
+// older (pairing.ts).
 export function listLinkedServers(
   db: Database,
   relayUserId: number,
-): { serverId: string; linkedAt: Date; tunnelLastSeenAt: Date | null }[] {
+): { serverId: string; linkedAt: Date; tunnelLastSeenAt: Date | null; credentialIssuedAt: Date | null }[] {
   const rows = db
     .prepare(
-      `SELECT linked_servers.server_id, linked_at, last_seen_at FROM linked_servers
+      `SELECT linked_servers.server_id, linked_at, last_seen_at,
+         (SELECT MIN(created_at) FROM tunnel_credentials
+          WHERE tunnel_credentials.relay_user_id = linked_servers.relay_user_id
+            AND tunnel_credentials.server_id = linked_servers.server_id
+            AND expires_at > datetime('now')) AS credential_issued_at
+       FROM linked_servers
        LEFT JOIN server_tunnels ON server_tunnels.server_id = linked_servers.server_id
        WHERE relay_user_id = ? ORDER BY linked_at, linked_servers.server_id`,
     )
-    .all(relayUserId) as { server_id: string; linked_at: string; last_seen_at: string | null }[];
+    .all(relayUserId) as { server_id: string; linked_at: string; last_seen_at: string | null; credential_issued_at: string | null }[];
   return rows.map((row) => ({
     serverId: row.server_id,
     linkedAt: parseSqliteDatetime(row.linked_at),
     tunnelLastSeenAt: row.last_seen_at ? parseSqliteDatetime(row.last_seen_at) : null,
+    credentialIssuedAt: row.credential_issued_at ? parseSqliteDatetime(row.credential_issued_at) : null,
   }));
 }
 

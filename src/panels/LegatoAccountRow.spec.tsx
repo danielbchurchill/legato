@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /* Issue #325's review: the link button in Settings' legato.fm account group,
@@ -49,11 +49,18 @@ function serverSays(legato: Record<string, unknown>) {
   )
 }
 
+// Unmounted after each test: a signed-in row also lists the account's
+// sessions and servers (#115), and an earlier test's fetch answering after
+// its body was cleared would re-render into nodes that are gone.
+const roots: Root[] = []
+
 async function render() {
   const container = document.createElement('div')
   document.body.appendChild(container)
+  const root = createRoot(container)
+  roots.push(root)
   await act(async () => {
-    createRoot(container).render(createElement(LegatoAccountRow))
+    root.render(createElement(LegatoAccountRow))
   })
   return container
 }
@@ -78,6 +85,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  act(() => {
+    for (const root of roots.splice(0)) root.unmount()
+  })
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
 })
@@ -103,6 +113,23 @@ describe('linking this server from Settings', () => {
     await act(async () => button('link again').click())
     expect(linkWithLegato).toHaveBeenCalledWith(SERVER_ID)
     expect(document.body.textContent).not.toContain('link a different account')
+  })
+
+  // Issue #115: the account removed the server on legato.fm, or its
+  // credential ran out, and a new link is the way back.
+  it('says the server was disconnected from legato.fm, and offers to link it again', async () => {
+    serverSays({ linked: true, linkedAccountId: '7', tunnel: 'refused' })
+    const container = await render()
+    expect(container.textContent).toContain('Disconnected from legato.fm. Link it again to reach it through legato.fm.')
+    await act(async () => button('link again').click())
+    expect(linkWithLegato).toHaveBeenCalledWith(SERVER_ID)
+  })
+
+  it('says nothing about a tunnel that is only reconnecting', async () => {
+    serverSays({ linked: true, linkedAccountId: '7', tunnel: 'waiting' })
+    const container = await render()
+    expect(container.textContent).toContain('This server is linked to legato.fm.')
+    expect(container.textContent).not.toContain('Disconnected')
   })
 
   it('says why instead of offering a link the desktop app would get refused', async () => {

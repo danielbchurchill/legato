@@ -34,6 +34,14 @@ import type { RequestFrame, TunnelFrame } from "../../../relay/src/protocol.js";
 // relayTunnel.ts). Linking again is what brings a new credential, but a
 // refusal can also be legato.fm's own mistake (a restored database, a bad
 // deploy), and a server shouldn't need a restart to come back from that.
+//
+// Rotation (issue #115, relay/src/protocol.ts). Asked for with
+// askForReplacement(), a credential frame brings this server's next
+// credential. onCredential
+// stores it, and only once it's stored does the tunnel move onto it, with
+// an auth frame on the same connection: that's what retires the old one on
+// legato.fm. Nothing reconnects, so a stream playing through the tunnel
+// plays on.
 
 export const TUNNEL_HEADER = "x-legato-tunnel";
 
@@ -94,12 +102,14 @@ export type TunnelClientOptions = {
   refusedRetryMs?: number;
   /** How long a closing socket has to send what's queued on it. */
   closeWaitMs?: number;
+  /** Stores a replacement credential from legato.fm. True once it's stored; only then does the tunnel move onto it. */
+  onCredential?: (replacement: { credential: string; expiresAt: string }) => boolean;
   random?: () => number;
   now?: () => number;
 };
 
 export class TunnelClient {
-  readonly credential: string;
+  private secret: string;
   private readonly options: TunnelClientOptions;
   private readonly target: URL;
   private readonly log: (level: "info" | "warn", message: string) => void;
@@ -124,7 +134,7 @@ export class TunnelClient {
 
   constructor(options: TunnelClientOptions) {
     this.options = options;
-    this.credential = options.credential;
+    this.secret = options.credential;
     this.target = new URL(options.target);
     this.log = options.log ?? (() => {});
   }
@@ -139,9 +149,21 @@ export class TunnelClient {
     return () => this.listeners.delete(listener);
   }
 
+  /** What it signs in with: the one it started with, or the last replacement it stored. */
+  get credential(): string {
+    return this.secret;
+  }
+
   start(): void {
     if (this.current !== "stopped") return;
     this.connect();
+  }
+
+  /** Asks legato.fm for a replacement credential, over the tunnel. False when it isn't connected. */
+  askForReplacement(): boolean {
+    if (this.current !== "connected" || this.socket?.readyState !== WebSocket.OPEN) return false;
+    this.socket.send(JSON.stringify({ type: "rotate" }));
+    return true;
   }
 
   // Answers already under way still go back first, for up to
@@ -190,7 +212,7 @@ export class TunnelClient {
     const authTimer = setTimeout(() => this.lost(socket, "legato.fm didn't answer"), AUTH_TIMEOUT_MS);
 
     socket.addEventListener("open", () => {
-      if (this.socket === socket) socket.send(JSON.stringify({ type: "auth", secret: this.credential }));
+      if (this.socket === socket) socket.send(JSON.stringify({ type: "auth", secret: this.secret }));
     });
     // Nothing a frame holds may throw out of this listener: Bun exits on
     // an exception there, and the whole server with it. forward() turns a
@@ -212,6 +234,8 @@ export class TunnelClient {
           this.forward(socket, drain, frame);
         } else if (frame?.type === "cancel" && typeof frame.requestId === "string") {
           this.requests.get(frame.requestId)?.cancel();
+        } else if (frame?.type === "credential" && this.current === "connected") {
+          this.replaced(socket, frame.credential, frame.expiresAt);
         }
       } catch (err) {
         if (this.frameWarned) return;
@@ -347,6 +371,19 @@ export class TunnelClient {
       this.retryTimer = null;
       this.connect();
     }, wait);
+  }
+
+  // A replacement credential from legato.fm. Kept, and the tunnel moved
+  // onto it, only once onCredential has stored it: the old one stays good
+  // until legato.fm sees the new one in use, so one that couldn't be
+  // stored is simply dropped. The relay answers the auth frame with
+  // auth-ok, which changes nothing here, or with auth-error if the
+  // credential was revoked meanwhile, which is a refusal like any other.
+  private replaced(socket: WebSocket, credential: unknown, expiresAt: unknown): void {
+    if (typeof credential !== "string" || !credential || typeof expiresAt !== "string") return;
+    if (credential === this.secret || !this.options.onCredential?.({ credential, expiresAt })) return;
+    this.secret = credential;
+    socket.send(JSON.stringify({ type: "auth", secret: credential }));
   }
 
   // One request from the relay, replayed against this server. Never
