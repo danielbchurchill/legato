@@ -1,7 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
-import { tunnelCredentialHolder } from "../pairing.js";
+import { signInWithTunnelCredential, tunnelCredentialHolder } from "../pairing.js";
 import { parseFrame, type TunnelFrame } from "../protocol.js";
 import type { Tunnel, TunnelRegistry } from "../tunnel-registry.js";
 
@@ -27,10 +27,11 @@ function refuse(socket: WebSocket, message: string): void {
 
 // Who a new tunnel's first frame says it is: the server its credential was
 // minted for, or why it's refused. The one place a tunnel's credential is
-// looked up when it signs in.
+// looked up when it signs in, and so where a credential's first use
+// retires the ones it replaces (pairing.ts).
 function signIn(db: Database, frame: TunnelFrame): { serverId: string; credential: string } | { refused: string } {
   const credential = frame.type === "auth" && typeof frame.secret === "string" ? frame.secret : undefined;
-  const holder = credential ? tunnelCredentialHolder(db, credential) : null;
+  const holder = credential ? signInWithTunnelCredential(db, credential) : null;
   if (!credential || !holder) return { refused: INVALID_CREDENTIAL };
   if (!holder.serverId) return { refused: UNBOUND_CREDENTIAL };
   return { serverId: holder.serverId, credential };

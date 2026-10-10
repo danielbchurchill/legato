@@ -124,17 +124,6 @@ export function removeLinkedServer(db: Database, relayUserId: number, serverId: 
   return db.prepare("DELETE FROM linked_servers WHERE relay_user_id = ? AND server_id = ?").run(relayUserId, serverId).changes > 0;
 }
 
-// One live tunnel credential per (account, server): a new one retires the
-// pair's older ones in the same transaction (issue #325). Linking again is
-// what an owner does after a leak, and a year-long credential left valid
-// would keep a copy that can connect as that server. A tunnel already open
-// on an old credential stays up until it next reconnects, and is refused
-// then. Listing, revoking and rotating credentials is #115's.
-function replaceTunnelCredential(db: Database, relayUserId: number, serverId: string): TunnelCredentialMinted {
-  db.prepare("DELETE FROM tunnel_credentials WHERE relay_user_id = ? AND server_id = ?").run(relayUserId, serverId);
-  return mintTunnelCredential(db, relayUserId, serverId);
-}
-
 // False when the proof was already spent. Rows past their expiry go first:
 // a proof that old is refused before it gets here, so its row has no job.
 function spendProof(db: Database, proofId: string, expiresAtSeconds: number, nowSeconds: number): boolean {
@@ -184,6 +173,15 @@ function strings<K extends string>(body: Record<string, unknown> | null | undefi
 // its owner chose not to link or the token ran out first, leaves no
 // credential behind, and the token's spent jti means one token mints one
 // credential.
+//
+// Minting retires nothing (issue #325). The server's current credential,
+// whichever account it was minted under, keeps working until the new one
+// first signs in to the tunnel, which retires it (pairing.ts,
+// signInWithTunnelCredential). If this answer never reaches the server,
+// it goes on with the credential it has. Linking again after a leak still
+// retires the leaked copy, as soon as the server reconnects with the new
+// one, which it does once the link's answer has gone (server/src/tunnel/
+// relayTunnel.ts). Listing and revoking credentials is #115's.
 export function acceptLinkProof(
   db: Database,
   keys: SigningKeys,
@@ -208,7 +206,7 @@ export function acceptLinkProof(
     if (!spendProof(db, `link:${claims.jti}`, claims.exp, nowSeconds)) return { ok: false, reason: "used" };
     const changed = !isLinkedServer(db, relayUserId, claims.aud);
     recordLinkedServer(db, relayUserId, claims.aud, proof.publicKey);
-    const tunnel = claims.tunnel ? replaceTunnelCredential(db, relayUserId, claims.aud) : null;
+    const tunnel = claims.tunnel ? mintTunnelCredential(db, relayUserId, claims.aud) : null;
     return { ok: true, relayUserId, serverId: claims.aud, changed, tunnel };
   })();
 }

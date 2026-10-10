@@ -8,7 +8,7 @@ import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
 import { acceptUnlinkProof, isLinkedServer, serverIdForPublicKey, UNLINK_PROOF_WINDOW_SECONDS } from "./linked-servers.js";
-import { tunnelCredentialHolder } from "./pairing.js";
+import { signInWithTunnelCredential, tunnelCredentialHolder } from "./pairing.js";
 import { parseSigningKeys, signServerToken, type SigningKeys } from "./signing-keys.js";
 import type { Database } from "./sqlite.js";
 
@@ -161,24 +161,35 @@ describe("a link token from /auth/server-token mints a tunnel credential when it
     expect(isLinkedServer(h.db, user.id, server.serverId)).toBe(false);
   });
 
-  it("keeps one live credential per account and server: linking again retires the old one", async () => {
+  // Minting retires nothing: the answer that carries a new credential can
+  // be lost. Its first sign-in to the tunnel retires the server's earlier
+  // ones, under any account (pairing.ts).
+  it("retires nothing when it mints: a newer credential's first sign-in retires the server's earlier ones", async () => {
     const h = setup();
     const owner = h.signIn("owner");
     const other = h.signIn("other");
     const server = homeServer();
     const elsewhere = homeServer();
-    const first = ((await h.link(owner.headers, server)).json() as { tunnel: { credential: string } }).tunnel.credential;
-    const otherAccount = ((await h.link(other.headers, server)).json() as { tunnel: { credential: string } }).tunnel.credential;
-    const otherServer = ((await h.link(owner.headers, elsewhere)).json() as { tunnel: { credential: string } }).tunnel.credential;
-
-    const again = ((await h.link(owner.headers, server)).json() as { tunnel: { credential: string } }).tunnel.credential;
+    const mint = async (headers: Record<string, string>, key: ServerKey) =>
+      ((await h.link(headers, key)).json() as { tunnel: { credential: string } }).tunnel.credential;
+    const first = await mint(owner.headers, server);
+    const otherAccount = await mint(other.headers, server);
+    const otherServer = await mint(owner.headers, elsewhere);
+    const again = await mint(owner.headers, server);
     expect(again).not.toBe(first);
+    expect(credentials(h.db)).toHaveLength(4);
+
+    // The first one signing in again retires nothing: the rest are newer.
+    expect(signInWithTunnelCredential(h.db, first)).toEqual({ relayUserId: owner.user.id, serverId: server.serverId });
+    expect(credentials(h.db)).toHaveLength(4);
+
+    expect(signInWithTunnelCredential(h.db, again)).toEqual({ relayUserId: owner.user.id, serverId: server.serverId });
     expect(tunnelCredentialHolder(h.db, first)).toBeNull();
-    expect(tunnelCredentialHolder(h.db, again)?.relayUserId).toBe(owner.user.id);
-    // Another account's pair, and this account's other server, keep theirs.
-    expect(tunnelCredentialHolder(h.db, otherAccount)?.relayUserId).toBe(other.user.id);
-    expect(tunnelCredentialHolder(h.db, otherServer)?.relayUserId).toBe(owner.user.id);
-    expect(credentials(h.db)).toHaveLength(3);
+    expect(tunnelCredentialHolder(h.db, otherAccount)).toBeNull();
+    // This account's other server keeps its own.
+    expect(tunnelCredentialHolder(h.db, otherServer)).toEqual({ relayUserId: owner.user.id, serverId: elsewhere.serverId });
+    expect(signInWithTunnelCredential(h.db, again)).not.toBeNull();
+    expect(credentials(h.db)).toHaveLength(2);
   });
 
   it("mints one per token: the same report again is spent", async () => {

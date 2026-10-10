@@ -204,3 +204,32 @@ export function tunnelCredentialHolder(db: Database, token: string): { relayUser
     .get(token) as { relay_user_id: number; server_id: string | null } | undefined;
   return row ? { relayUserId: row.relay_user_id, serverId: row.server_id } : null;
 }
+
+// A tunnel signing in with a credential (routes/tunnel.ts). The first time
+// a credential does, its server has plainly stored it, so every credential
+// for that server minted before it is retired, under any account, in the
+// same transaction (issue #325). That keeps one live credential per server,
+// and retires one only once its successor is in use. Minting
+// (linked-servers.ts) deletes nothing: the answer that carries a new
+// credential can be lost, and the server would be left holding one that's
+// already gone.
+//
+// Only earlier ones. A later credential is a successor the server may have
+// stored and not yet connected with, and an older one reconnecting in that
+// moment mustn't knock it out. One minted for an answer that never arrived
+// stays until a newer credential signs in. After a credential's first
+// sign-in nothing earlier is left, so a reconnect deletes nothing.
+//
+// Mint order is rowid order. tunnel_credentials has no INTEGER PRIMARY
+// KEY, so its rowid is SQLite's own, and a new row's is always above every
+// row already there. Only VACUUM could renumber it, and nothing runs one.
+export function signInWithTunnelCredential(db: Database, token: string): { relayUserId: number; serverId: string | null } | null {
+  return db.transaction(() => {
+    const row = db
+      .prepare(`SELECT rowid, relay_user_id, server_id FROM tunnel_credentials WHERE token = ? AND expires_at > datetime('now')`)
+      .get(token) as { rowid: number; relay_user_id: number; server_id: string | null } | undefined;
+    if (!row) return null;
+    if (row.server_id) db.prepare("DELETE FROM tunnel_credentials WHERE server_id = ? AND rowid < ?").run(row.server_id, row.rowid);
+    return { relayUserId: row.relay_user_id, serverId: row.server_id };
+  })();
+}
