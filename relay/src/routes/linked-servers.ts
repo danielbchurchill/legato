@@ -81,7 +81,7 @@ export function linkedServerRoutes(
         return { error: "Sign in to legato.fm first.", reason: "signed_out" };
       }
       return {
-        servers: listLinkedServers(db, user.id).map(({ serverId, linkedAt, tunnelLastSeenAt }) => {
+        servers: listLinkedServers(db, user.id).map(({ serverId, linkedAt, tunnelLastSeenAt, credentialIssuedAt }) => {
           const live = tunnels?.get(serverId);
           return {
             serverId,
@@ -89,6 +89,7 @@ export function linkedServerRoutes(
             tunnel: live
               ? { connected: true, connectedAt: live.connectedAt.toISOString() }
               : { connected: false, lastSeenAt: tunnelLastSeenAt?.toISOString() ?? null },
+            credentialIssuedAt: credentialIssuedAt?.toISOString() ?? null,
           };
         }),
       };
