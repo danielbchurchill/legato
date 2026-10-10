@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, verify, type KeyObject } from "node:crypto";
 import type { Database } from "./sqlite.js";
 import { normalizeCode } from "./claimCode.js";
-import { mintTunnelCredential, type TunnelCredentialMinted } from "./pairing.js";
+import { mintTunnelCredential, rotateTunnelCredential, tunnelCredentialHolder, type TunnelCredentialMinted } from "./pairing.js";
 import { verifyIssuedToken, type SigningKeys } from "./signing-keys.js";
 import { parseSqliteDatetime } from "./sqlite-datetime.js";
 
@@ -30,12 +30,15 @@ import { parseSqliteDatetime } from "./sqlite-datetime.js";
 // A claim (issue #237, pairing.ts) uses the same key a third way: the
 // server signs the pairing code it's redeeming, and the credential it gets
 // is bound to its id. That records no pair; the link it runs next does.
+// Rotation (issue #115, acceptRotateProof) is the fourth: the server signs
+// the tunnel credential it wants replaced.
 
 // Each proof starts with its own prefix, so a link proof can never be read
 // as an unlink or claim proof, or as anything else the key signs later.
 const LINK_PROOF_PREFIX = "legato.fm link proof\n";
 const UNLINK_PROOF_PREFIX = "legato.fm unlink proof\n";
 const CLAIM_PROOF_PREFIX = "legato.fm claim proof\n";
+const ROTATE_PROOF_PREFIX = "legato.fm rotate proof\n";
 
 // How far an unlink proof's issuedAt may be from this service's clock,
 // either way. Generous enough for a home server whose clock has drifted.
@@ -67,6 +70,10 @@ export function unlinkProofMessage(input: {
 
 export function claimProofMessage(input: { issuer: string; serverId: string; code: string; issuedAt: number }): string {
   return `${CLAIM_PROOF_PREFIX}${input.issuer}\n${input.serverId}\n${input.code}\n${input.issuedAt}`;
+}
+
+export function rotateProofMessage(input: { issuer: string; serverId: string; credential: string; issuedAt: number }): string {
+  return `${ROTATE_PROOF_PREFIX}${input.issuer}\n${input.serverId}\n${input.credential}\n${input.issuedAt}`;
 }
 
 function importServerKey(publicKey: string): KeyObject | null {
@@ -301,4 +308,46 @@ export function readClaimProof(
 export function claimProofSigned(issuer: string, proof: ClaimProof): boolean {
   const { code, serverId, publicKey, signature, issuedAt } = proof;
   return verifyServerSignature(publicKey, claimProofMessage({ issuer, serverId, code, issuedAt }), signature);
+}
+
+export type RotateFailure = "malformed" | "stale" | "revoked" | "not_linked" | "bad_signature";
+
+export type RotateResult = { ok: true; credential: TunnelCredentialMinted | null } | { ok: false; reason: RotateFailure };
+
+// A tunnel signed in with `token` asking for its server's next credential
+// (issue #115, routes/tunnel.ts). The credential is a bearer secret, and a
+// copy of it opens the tunnel as well as the server does, so it isn't
+// enough to renew itself: whoever held a copy could rotate, move onto what
+// they got, retire the real server's, and keep renewing. So the server
+// signs this service, its id, the time and the credential it's replacing,
+// and the signature is checked against the key it linked with
+// (linked_servers.public_key). The pair also has to be there: a credential
+// whose account has since unlinked the server (one left behind before
+// unlinking took credentials with it) gets nothing. The time gets the same
+// five minutes either way as an unlink proof. A proof is bound to the
+// credential it names, so a copy is good only for asking again within
+// those minutes, which is no more than the server could.
+export function acceptRotateProof(
+  db: Database,
+  issuer: string,
+  token: string,
+  frame: { issuedAt?: unknown; signature?: unknown },
+  nowSeconds = Math.floor(Date.now() / 1000),
+): RotateResult {
+  const { issuedAt, signature } = frame;
+  if (typeof signature !== "string" || typeof issuedAt !== "number" || !Number.isSafeInteger(issuedAt)) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (Math.abs(nowSeconds - issuedAt) > UNLINK_PROOF_WINDOW_SECONDS) return { ok: false, reason: "stale" };
+  return db.transaction((): RotateResult => {
+    const holder = tunnelCredentialHolder(db, token);
+    if (!holder?.serverId) return { ok: false, reason: "revoked" };
+    const pair = db
+      .prepare("SELECT public_key FROM linked_servers WHERE relay_user_id = ? AND server_id = ?")
+      .get(holder.relayUserId, holder.serverId) as { public_key: string } | undefined;
+    if (!pair) return { ok: false, reason: "not_linked" };
+    const message = rotateProofMessage({ issuer, serverId: holder.serverId, credential: token, issuedAt });
+    if (!verifyServerSignature(pair.public_key, message, signature)) return { ok: false, reason: "bad_signature" };
+    return { ok: true, credential: rotateTunnelCredential(db, token) };
+  })();
 }

@@ -5,7 +5,18 @@ import { openDb } from "./db.js";
 import type { Database } from "./sqlite.js";
 import { MAX_LIVE_CREDENTIALS_PER_SERVER, tunnelCredentialHolder } from "./pairing.js";
 import { sleep, startFixtureServer, type FixtureServerHandle } from "./testing/fixture-http-server.js";
-import { connectHomeServer, linkServer, listenApp, signIn, startHomeServer, waitForState } from "./testing/tunnel-harness.js";
+import {
+  connectHomeServer,
+  linkServer,
+  listenApp,
+  rotateFrame,
+  rotateSignature,
+  serverKey,
+  signIn,
+  startHomeServer,
+  TEST_ISSUER,
+  waitForState,
+} from "./testing/tunnel-harness.js";
 import type { TunnelClient } from "../../server/src/tunnel/client.js";
 
 // Issue #310: the tunnel's life on the relay's side, driven by the home
@@ -53,7 +64,7 @@ describe("tunnel lifecycle", () => {
   });
 
   async function relay(port = 0) {
-    const app = buildApp({ db, tunnelHeartbeatMs: HEARTBEAT_MS });
+    const app = buildApp({ db, tunnelHeartbeatMs: HEARTBEAT_MS, auth: { config: { callbackBaseUrl: TEST_ISSUER } } });
     const opened = { count: 0 };
     app.addHook("onRequest", async (request) => {
       if (request.url === "/tunnel") opened.count += 1;
@@ -95,17 +106,19 @@ describe("tunnel lifecycle", () => {
     const serverB = linkServer(db, account.userId);
     const before = Date.now() - 1_000;
 
+    // Both linked in the same second, so the list is in id order.
+    const tunnelOf = async (serverId: string) =>
+      (await yourServers(httpUrl, account.token)).find((server) => server.serverId === serverId)!.tunnel;
     const clientA = await homeServer(tunnelUrl, serverA.credential);
-    let servers = await yourServers(httpUrl, account.token);
-    expect(servers.map((server) => server.serverId)).toEqual([serverA.serverId, serverB.serverId]);
-    expect(servers[0]!.tunnel.connected).toBe(true);
-    expect(Date.parse(servers[0]!.tunnel.connectedAt!)).toBeGreaterThanOrEqual(before);
-    expect(servers[1]!.tunnel).toEqual({ connected: false, lastSeenAt: null });
+    const servers = await yourServers(httpUrl, account.token);
+    expect(servers.map((server) => server.serverId)).toEqual([serverA.serverId, serverB.serverId].sort());
+    expect((await tunnelOf(serverA.serverId)).connected).toBe(true);
+    expect(Date.parse((await tunnelOf(serverA.serverId)).connectedAt!)).toBeGreaterThanOrEqual(before);
+    expect(await tunnelOf(serverB.serverId)).toEqual({ connected: false, lastSeenAt: null });
 
     clientA.stop();
-    await until(async () => !(await yourServers(httpUrl, account.token))[0]!.tunnel.connected);
-    servers = await yourServers(httpUrl, account.token);
-    expect(Date.parse(servers[0]!.tunnel.lastSeenAt!)).toBeGreaterThanOrEqual(before);
+    await until(async () => !(await tunnelOf(serverA.serverId)).connected);
+    expect(Date.parse((await tunnelOf(serverA.serverId)).lastSeenAt!)).toBeGreaterThanOrEqual(before);
   });
 
   it("brings a server's tunnel back once the relay is back after a restart", async () => {
@@ -250,14 +263,14 @@ describe("tunnel lifecycle", () => {
     it("hands the server a 90-day replacement, moves its open tunnel onto it, and retires the old one", async () => {
       const { httpUrl, tunnelUrl, opened } = await relay();
       const account = signIn(db);
-      const { serverId, credential } = linkServer(db, account.userId);
+      const { serverId, credential, key } = linkServer(db, account.userId);
       const stored: { credential: string; expiresAt: string }[] = [];
       const client = await homeServer(tunnelUrl, credential, (replacement) => {
         stored.push(replacement);
         return true;
       });
 
-      expect(client.askForReplacement()).toBe(true);
+      expect(client.askForReplacement(rotateSignature(key, credential))).toBe(true);
       await until(() => credentials(serverId).length === 1 && credentials(serverId)[0] !== credential);
       const [replacement] = stored;
       expect(credentials(serverId)).toEqual([replacement!.credential]);
@@ -277,13 +290,61 @@ describe("tunnel lifecycle", () => {
       expect(warnings).toEqual([]);
     });
 
+    // The review's stolen credential: a copy of it signs a tunnel in, as it
+    // always could, but renewing it takes the server's own key.
+    it("refuses a rotate with no proof, one from another key, or one for another credential, and mints nothing", async () => {
+      const { tunnelUrl } = await relay();
+      const account = signIn(db);
+      const { serverId, credential, key } = linkServer(db, account.userId);
+      const other = linkServer(db, account.userId);
+
+      // One connection each: a refused ask still counts against the minute.
+      const asks = [
+        { type: "rotate" },
+        rotateFrame(serverKey(), credential),
+        rotateFrame(other.key, credential),
+        rotateFrame(key, other.credential),
+        rotateFrame(key, credential, Math.floor(Date.now() / 1000) - 10 * 60),
+        { ...rotateFrame(key, credential), issuedAt: String(Math.floor(Date.now() / 1000)) },
+      ];
+      const sockets = [];
+      for (const ask of asks) {
+        const copy = await signedInSocket(tunnelUrl, credential);
+        copy.socket.send(JSON.stringify(ask));
+        sockets.push(copy);
+      }
+      await sleep(100);
+      expect(sockets.flatMap((copy) => copy.frames).filter((frame) => frame.type === "credential")).toEqual([]);
+      expect(credentials(serverId)).toEqual([credential]);
+
+      // The server's own proof, on a connection of its own, still works.
+      const real = await signedInSocket(tunnelUrl, credential);
+      real.socket.send(JSON.stringify(rotateFrame(key, credential)));
+      await until(() => real.frames.some((frame) => frame.type === "credential"));
+    });
+
+    it("doesn't renew a credential whose account no longer links the server", async () => {
+      // A credential left behind by an unlink from before 5d7f91f, when
+      // removing the pair didn't take its credentials with it.
+      const { tunnelUrl } = await relay();
+      const account = signIn(db);
+      const { serverId, credential, key } = linkServer(db, account.userId);
+      db.prepare("DELETE FROM linked_servers WHERE relay_user_id = ? AND server_id = ?").run(account.userId, serverId);
+
+      const { socket, frames } = await signedInSocket(tunnelUrl, credential);
+      socket.send(JSON.stringify(rotateFrame(key, credential)));
+      await sleep(100);
+      expect(frames.some((frame) => frame.type === "credential")).toBe(false);
+      expect(credentials(serverId)).toEqual([credential]);
+    });
+
     it("retires nothing when the server can't store the replacement", async () => {
       const { tunnelUrl } = await relay();
       const account = signIn(db);
-      const { serverId, credential } = linkServer(db, account.userId);
+      const { serverId, credential, key } = linkServer(db, account.userId);
       const client = await homeServer(tunnelUrl, credential, () => false);
 
-      client.askForReplacement();
+      client.askForReplacement(rotateSignature(key, credential));
       await until(() => credentials(serverId).length === 2);
       await sleep(HEARTBEAT_MS * 3);
       expect(client.credential).toBe(credential);
@@ -294,11 +355,11 @@ describe("tunnel lifecycle", () => {
     it("answers one ask a minute from a connection, and stops minting once a server holds too many", async () => {
       const { tunnelUrl } = await relay();
       const account = signIn(db);
-      const { serverId, credential } = linkServer(db, account.userId);
+      const { serverId, credential, key } = linkServer(db, account.userId);
 
       const first = await signedInSocket(tunnelUrl, credential);
-      first.socket.send(JSON.stringify({ type: "rotate" }));
-      first.socket.send(JSON.stringify({ type: "rotate" }));
+      first.socket.send(JSON.stringify(rotateFrame(key, credential)));
+      first.socket.send(JSON.stringify(rotateFrame(key, credential)));
       await until(() => first.frames.some((frame) => frame.type === "credential"));
       await sleep(50);
       expect(first.frames.filter((frame) => frame.type === "credential")).toHaveLength(1);
@@ -308,7 +369,7 @@ describe("tunnel lifecycle", () => {
       // never moving onto what they got.
       for (let i = 2; i < MAX_LIVE_CREDENTIALS_PER_SERVER + 2; i++) {
         const next = await signedInSocket(tunnelUrl, credential);
-        next.socket.send(JSON.stringify({ type: "rotate" }));
+        next.socket.send(JSON.stringify(rotateFrame(key, credential)));
         await sleep(30);
       }
       expect(credentials(serverId)).toHaveLength(MAX_LIVE_CREDENTIALS_PER_SERVER);
@@ -319,7 +380,7 @@ describe("tunnel lifecycle", () => {
       const account = signIn(db);
       const mine = linkServer(db, account.userId);
       const older = linkServer(db, account.userId);
-      const theirs = linkServer(db, account.userId, older.serverId);
+      const theirs = linkServer(db, account.userId, older.key);
 
       const { socket, frames } = await signedInSocket(tunnelUrl, mine.credential);
       const closed = new Promise<number>((resolve) => socket.addEventListener("close", (event) => resolve(event.code)));
@@ -336,16 +397,16 @@ describe("tunnel lifecycle", () => {
     it("lets a server whose tunnel dropped before the replacement reached it back in on the old one", async () => {
       const { tunnelUrl } = await relay();
       const account = signIn(db);
-      const { serverId, credential } = linkServer(db, account.userId);
+      const { serverId, credential, key } = linkServer(db, account.userId);
 
       const lost = await signedInSocket(tunnelUrl, credential);
-      lost.socket.send(JSON.stringify({ type: "rotate" }));
+      lost.socket.send(JSON.stringify(rotateFrame(key, credential)));
       lost.socket.terminate();
       await until(() => credentials(serverId).length === 2);
       const unused = credentials(serverId)[1]!;
 
       const client = await homeServer(tunnelUrl, credential, () => true);
-      expect(client.askForReplacement()).toBe(true);
+      expect(client.askForReplacement(rotateSignature(key, credential))).toBe(true);
       await until(() => client.credential !== credential);
       await until(() => credentials(serverId).length === 1);
       // The new one's first use retires both the old one and the one that never arrived.
@@ -356,10 +417,10 @@ describe("tunnel lifecycle", () => {
     it("retires the old credential when a server whose tunnel dropped before it moved comes back on the replacement", async () => {
       const { tunnelUrl } = await relay();
       const account = signIn(db);
-      const { serverId, credential } = linkServer(db, account.userId);
+      const { serverId, credential, key } = linkServer(db, account.userId);
 
       const dropped = await signedInSocket(tunnelUrl, credential);
-      dropped.socket.send(JSON.stringify({ type: "rotate" }));
+      dropped.socket.send(JSON.stringify(rotateFrame(key, credential)));
       await until(() => dropped.frames.some((frame) => frame.type === "credential"));
       dropped.socket.terminate();
       const { credential: replacement } = dropped.frames.find((frame) => frame.type === "credential") as unknown as { credential: string };
@@ -373,11 +434,11 @@ describe("tunnel lifecycle", () => {
     it("mints no replacement for a credential revoked while its tunnel was up", async () => {
       const { tunnelUrl } = await relay();
       const account = signIn(db);
-      const { serverId, credential } = linkServer(db, account.userId);
+      const { serverId, credential, key } = linkServer(db, account.userId);
       const { socket, frames } = await signedInSocket(tunnelUrl, credential);
 
       db.prepare("DELETE FROM tunnel_credentials WHERE token = ?").run(credential);
-      socket.send(JSON.stringify({ type: "rotate" }));
+      socket.send(JSON.stringify(rotateFrame(key, credential)));
       await sleep(50);
       expect(frames.some((frame) => frame.type === "credential")).toBe(false);
       expect(credentials(serverId)).toEqual([]);

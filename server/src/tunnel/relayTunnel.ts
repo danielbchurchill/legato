@@ -1,6 +1,7 @@
 import type { FastifyReply } from "fastify";
 import { legatoIdentity } from "../auth/legatoIdentity.js";
 import { isLinkedAccount } from "../auth/legatoUsers.js";
+import { loadServerKey, rotateProof } from "../auth/serverKey.js";
 import {
   forgetTunnelCredential,
   readTunnelCredential,
@@ -31,7 +32,9 @@ import { TunnelClient, type TunnelClientOptions, type TunnelState } from "./clie
 // replacement over the tunnel: when the tunnel connects, and once a day
 // while it stays up, but not more than once an hour. That's about a month
 // after each credential arrives, so a server that's off for a while still
-// has two months to come back before it would need linking again. The
+// has two months to come back before it would need linking again. Each ask
+// is signed with this server's identity key (auth/serverKey.ts,
+// rotateProof), so a copy of the credential can't renew itself. The
 // replacement is stored over the one it replaces, for the same account,
 // and the client moves its tunnel onto it (tunnel/client.ts). A legato.fm
 // from before rotation never answers, and the credential runs out as it
@@ -70,6 +73,8 @@ export class RelayTunnel {
   // client stored becomes it.
   private credential: string | null = null;
   private expiresAt = 0;
+  // The legato.fm it was issued by, which the rotate proof names.
+  private origin: string | null = null;
   // When it last asked to replace which credential: once an hour at most
   // for each, through reconnects and syncs alike.
   private asked: { credential: string; at: number } | null = null;
@@ -116,6 +121,7 @@ export class RelayTunnel {
     this.stop();
     this.credential = stored.credential;
     this.expiresAt = Date.parse(stored.expiresAt);
+    this.origin = identity.origin;
     if (!(this.expiresAt > Date.now())) {
       this.log(
         "warn",
@@ -149,11 +155,25 @@ export class RelayTunnel {
     this.credential = null;
   }
 
+  // From a timer or a state listener, where a throw is uncaught and Bun
+  // exits, so a key that can't be read (SQLITE_BUSY) is logged and the ask
+  // waits for the next check.
   private rotateIfDue(): void {
     const now = Date.now();
-    if (!this.credential || this.expiresAt - now >= ROTATE_WHEN_LEFT_MS) return;
-    if (this.asked?.credential === this.credential && now - this.asked.at < ROTATE_ASK_INTERVAL_MS) return;
-    if (this.client?.askForReplacement()) this.asked = { credential: this.credential, at: now };
+    const credential = this.credential;
+    if (!credential || !this.origin || this.expiresAt - now >= ROTATE_WHEN_LEFT_MS) return;
+    if (this.asked?.credential === credential && now - this.asked.at < ROTATE_ASK_INTERVAL_MS) return;
+    let proof: { issuedAt: number; signature: string };
+    try {
+      proof = rotateProof(loadServerKey(this.db), { issuer: this.origin, credential, nowSeconds: Math.floor(now / 1000) });
+    } catch (err) {
+      this.log(
+        "warn",
+        `legato.fm: couldn't sign this server's ask for a new tunnel credential (${err instanceof Error ? err.message : String(err)}); it asks again later`,
+      );
+      return;
+    }
+    if (this.client?.askForReplacement(proof)) this.asked = { credential, at: now };
   }
 
   // Only over the credential this tunnel was started with, or its last

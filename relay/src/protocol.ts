@@ -89,14 +89,19 @@ export interface ResponseErrorFrame {
 
 // Rotation (issue #115). A credential lasts 90 days, and a server replaces
 // it over the tunnel it signed in with, so it never has to be claimed or
-// linked again for that. The server sends rotate; the relay answers with a
-// credential frame, for the same account and server. The server stores
-// it, then sends it back in an auth frame on the same tunnel, and that
-// retires the old one (relay/src/pairing.ts). So a credential frame that
-// never arrives, or one the server couldn't store, retires nothing. A
-// relay from before rotation ignores rotate.
+// linked again for that. The server sends rotate, signed with its identity
+// key (server/src/auth/serverKey.ts, rotateProof), so a copy of its
+// credential can't renew itself; the relay checks it against the key the
+// server linked with (relay/src/linked-servers.ts, acceptRotateProof) and
+// answers with a credential frame, for the same account and server. The
+// server stores it, then sends it back in an auth frame on the same
+// tunnel, and that retires the old one (relay/src/pairing.ts). So a
+// credential frame that never arrives, or one the server couldn't store,
+// retires nothing. A relay from before rotation ignores rotate.
 export interface RotateFrame {
   type: "rotate";
+  issuedAt: number;
+  signature: string;
 }
 
 export interface CredentialFrame {

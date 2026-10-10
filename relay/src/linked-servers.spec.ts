@@ -3,11 +3,11 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { FastifyInstance } from "fastify";
 // The home server's real proof signer, not a copy: the point is that what a
 // server sends is exactly what this relay accepts, and nothing else is.
-import { linkProof, unlinkProof, serverIdForPublicKey as serverSideId, type ServerKey } from "../../server/src/auth/serverKey.js";
+import { linkProof, rotateProof, unlinkProof, serverIdForPublicKey as serverSideId, type ServerKey } from "../../server/src/auth/serverKey.js";
 import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
-import { acceptUnlinkProof, isLinkedServer, serverIdForPublicKey, UNLINK_PROOF_WINDOW_SECONDS } from "./linked-servers.js";
+import { acceptRotateProof, acceptUnlinkProof, isLinkedServer, serverIdForPublicKey, UNLINK_PROOF_WINDOW_SECONDS } from "./linked-servers.js";
 import { signInWithTunnelCredential, tunnelCredentialHolder } from "./pairing.js";
 import { parseSigningKeys, signServerToken, type SigningKeys } from "./signing-keys.js";
 import type { Database } from "./sqlite.js";
@@ -486,5 +486,27 @@ describe("spent proofs", () => {
     const proof = unlinkProof(server, { issuer: ISSUER, accountId: String(user.id), nowSeconds: later });
     expect(acceptUnlinkProof(h.db, ISSUER, proof, later)).toMatchObject({ ok: true, changed: true });
     expect(count(h.db)).toBe(1);
+  });
+});
+
+// Issue #115: renewing a tunnel credential takes the server's own key, as
+// routes/tunnel.ts asks for it. tunnel.spec.ts drives it over a tunnel.
+describe("a rotate proof", () => {
+  it("renews a credential for the server that signed it, for this service only", async () => {
+    const h = setup();
+    const { user, headers } = h.signIn();
+    const server = homeServer();
+    const { tunnel } = (await h.link(headers, server)).json() as { tunnel: { credential: string } };
+
+    const elsewhere = rotateProof(server, { issuer: "https://auth.elsewhere.test", credential: tunnel.credential, nowSeconds: now() });
+    expect(acceptRotateProof(h.db, ISSUER, tunnel.credential, elsewhere)).toEqual({ ok: false, reason: "bad_signature" });
+    const unlink = unlinkProof(server, { issuer: ISSUER, accountId: String(user.id), nowSeconds: now() });
+    expect(acceptRotateProof(h.db, ISSUER, tunnel.credential, unlink)).toEqual({ ok: false, reason: "bad_signature" });
+
+    const own = rotateProof(server, { issuer: ISSUER, credential: tunnel.credential, nowSeconds: now() });
+    const rotated = acceptRotateProof(h.db, ISSUER, tunnel.credential, own);
+    const token = rotated.ok ? rotated.credential?.token : undefined;
+    expect(typeof token).toBe("string");
+    expect(tunnelCredentialHolder(h.db, token!)).toEqual({ relayUserId: user.id, serverId: server.serverId });
   });
 });

@@ -159,10 +159,10 @@ export class TunnelClient {
     this.connect();
   }
 
-  /** Asks legato.fm for a replacement credential, over the tunnel. False when it isn't connected. */
-  askForReplacement(): boolean {
+  /** Asks legato.fm for a replacement credential over the tunnel, with relayTunnel.ts's signed proof. False when it isn't connected. */
+  askForReplacement(proof: { issuedAt: number; signature: string }): boolean {
     if (this.current !== "connected" || this.socket?.readyState !== WebSocket.OPEN) return false;
-    this.socket.send(JSON.stringify({ type: "rotate" }));
+    this.socket.send(JSON.stringify({ type: "rotate", ...proof }));
     return true;
   }
 

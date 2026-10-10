@@ -1,7 +1,9 @@
+import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../sqlite.js";
 import { createSession, upsertUser } from "../accounts.js";
 import { mintTunnelCredential } from "../pairing.js";
+import { rotateProof, serverIdForPublicKey, type ServerKey } from "../../../server/src/auth/serverKey.js";
 import { TunnelClient, type TunnelClientOptions, type TunnelState } from "../../../server/src/tunnel/client.js";
 
 // Plays the home-server side of the tunnel in tests with the home server's
@@ -57,20 +59,44 @@ export function waitForState(client: TunnelClient, state: TunnelState, timeoutMs
   });
 }
 
+// The issuer specs give the relay (buildApp's auth.config.callbackBaseUrl),
+// which a rotate proof names.
+export const TEST_ISSUER = "https://auth.legato.test";
+
+// A home server's identity key, the way server/src/auth/serverKey.ts makes one.
+export function serverKey(): ServerKey {
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const publicKey = (createPublicKey(privateKey).export({ format: "jwk" }) as { x: string }).x;
+  return { serverId: serverIdForPublicKey(publicKey), publicKey, privateKey };
+}
+
 // What a claim's link leaves on the relay (linked-servers.ts,
-// acceptLinkProof): the account's pair with the server, and a tunnel
-// credential bound to the server's id. Written straight to the db: the
-// proofs themselves are claim.spec.ts's.
-let serverCounter = 0;
-export function linkServer(db: Database, relayUserId: number, serverId?: string): { serverId: string; credential: string } {
-  serverCounter += 1;
-  const id = serverId ?? serverCounter.toString(16).padStart(32, "0");
+// acceptLinkProof): the account's pair with the server, its public key,
+// and a tunnel credential bound to the server's id. Written straight to
+// the db: the proofs themselves are claim.spec.ts's. Pass a key to mint
+// another credential for a server already linked.
+export function linkServer(
+  db: Database,
+  relayUserId: number,
+  key: ServerKey = serverKey(),
+): { serverId: string; credential: string; key: ServerKey } {
   db.prepare("INSERT OR IGNORE INTO linked_servers (relay_user_id, server_id, public_key) VALUES (?, ?, ?)").run(
     relayUserId,
-    id,
-    `test-public-key-${id}`,
+    key.serverId,
+    key.publicKey,
   );
-  return { serverId: id, credential: mintTunnelCredential(db, relayUserId, id).token };
+  return { serverId: key.serverId, credential: mintTunnelCredential(db, relayUserId, key.serverId).token, key };
+}
+
+// A rotate proof signed the way the home server signs one (tunnel/
+// relayTunnel.ts), for the credential its tunnel is signed in with: what
+// TunnelClient.askForReplacement sends, and the frame a raw socket does.
+export function rotateSignature(key: ServerKey, credential: string, issuedAt = Math.floor(Date.now() / 1000)) {
+  return rotateProof(key, { issuer: TEST_ISSUER, credential, nowSeconds: issuedAt });
+}
+
+export function rotateFrame(key: ServerKey, credential: string, issuedAt?: number) {
+  return { type: "rotate", ...rotateSignature(key, credential, issuedAt) };
 }
 
 export async function listenApp(app: FastifyInstance, port = 0): Promise<{ httpUrl: string; tunnelUrl: string }> {

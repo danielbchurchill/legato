@@ -1,7 +1,8 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
-import { rotateTunnelCredential, signInWithTunnelCredential, tunnelCredentialHolder } from "../pairing.js";
+import { acceptRotateProof } from "../linked-servers.js";
+import { signInWithTunnelCredential, tunnelCredentialHolder } from "../pairing.js";
 import { parseFrame, type TunnelFrame } from "../protocol.js";
 import type { Tunnel, TunnelRegistry } from "../tunnel-registry.js";
 
@@ -42,13 +43,31 @@ function signIn(db: Database, frame: TunnelFrame): { serverId: string; credentia
   return { serverId: holder.serverId, credential };
 }
 
-// Rotation (issue #115, protocol.ts): the server asked, so a credential for
-// the same account and server goes down its tunnel, and the server moves
-// onto it with an auth frame. Nothing, when pairing.ts mints nothing.
-function sendReplacementCredential(db: Database, tunnel: Tunnel): void {
-  const minted = rotateTunnelCredential(db, tunnel.credential);
-  if (!minted) return;
-  tunnel.socket.send(JSON.stringify({ type: "credential", credential: minted.token, expiresAt: minted.expiresAt.toISOString() }));
+// Rotation (issue #115, protocol.ts): the server asked, with a proof signed
+// by its key, so a credential for the same account and server goes down
+// its tunnel, and the server moves onto it with an auth frame. Nothing,
+// when the proof doesn't check out or pairing.ts has nothing to send. A
+// refused proof is logged: a real server's is only refused for a clock
+// more than five minutes out, and otherwise it's someone else's copy of
+// the credential. Without an issuer (RELAY_AUTH_CALLBACK_BASE_URL unset)
+// no proof can be checked, so nothing rotates.
+function sendReplacementCredential(
+  app: FastifyInstance,
+  db: Database,
+  issuer: string | undefined,
+  tunnel: Tunnel,
+  frame: TunnelFrame,
+): void {
+  if (!issuer) return;
+  const rotated = acceptRotateProof(db, issuer, tunnel.credential, frame as { issuedAt?: unknown; signature?: unknown });
+  if (!rotated.ok) {
+    if (rotated.reason !== "revoked")
+      app.log.warn(`tunnel: refused server ${tunnel.serverId}'s ask for a new credential (${rotated.reason})`);
+    return;
+  }
+  if (!rotated.credential) return;
+  const { token, expiresAt } = rotated.credential;
+  tunnel.socket.send(JSON.stringify({ type: "credential", credential: token, expiresAt: expiresAt.toISOString() }));
 }
 
 // A signed-in tunnel moving onto another credential (issue #115). Only one
@@ -102,7 +121,9 @@ function heartbeat(registry: TunnelRegistry, db: Database): void {
 // credential is bound to the server's id (migration 0006), and the id is
 // what the tunnel is registered under (tunnel-registry.ts). One account's
 // servers each keep their own tunnel.
-export function tunnelRoutes(registry: TunnelRegistry, db: Database, options: { heartbeatMs?: number } = {}) {
+// issuer is this service's own URL (RELAY_AUTH_CALLBACK_BASE_URL), which a
+// rotate proof names.
+export function tunnelRoutes(registry: TunnelRegistry, db: Database, options: { heartbeatMs?: number; issuer?: string } = {}) {
   return async function routes(app: FastifyInstance) {
     const beat = setInterval(() => heartbeat(registry, db), options.heartbeatMs ?? HEARTBEAT_MS);
     beat.unref?.();
@@ -165,7 +186,7 @@ export function tunnelRoutes(registry: TunnelRegistry, db: Database, options: { 
             const now = new Date();
             if (tunnel.rotateAskedAt && now.getTime() - tunnel.rotateAskedAt.getTime() < ROTATE_ASK_INTERVAL_MS) return;
             tunnel.rotateAskedAt = now;
-            sendReplacementCredential(db, tunnel);
+            sendReplacementCredential(app, db, options.issuer, tunnel, frame);
             return;
           }
           if (registry.handleFrame(socket, frame) === "hostile") close(4002, "sent a frame no Legato server sends");
