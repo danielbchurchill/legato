@@ -1,5 +1,6 @@
 import { API_BASE as API } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
+import { getConnectionPath, type ConnectionPath } from '../connect/connectionPath'
 import { checkServerNow, inOutage, SERVER_ANSWERED_EVENT, SERVER_BACK_EVENT, serverFailingSince, serverTroubleSince } from '../connect/reconnect'
 
 /* Issue #120: which rung of the server's quality ladder a browser
@@ -13,7 +14,6 @@ import { checkServerNow, inOutage, SERVER_ANSWERED_EVENT, SERVER_BACK_EVENT, ser
  * HLS or other mid-track switching (#120). */
 
 export type StreamQuality = 'original' | 'opus96' | 'opus160' | 'opus256' | 'aac160' | 'aac256'
-export type ConnectionPath = 'home' | 'relay' | 'custom'
 
 /** Codec-neutral rungs, best first. Which codec a rung means depends on
  * the browser (rungQuality below). */
@@ -25,19 +25,19 @@ export type QualityPreference = 'auto' | Rung
 
 export const QUALITY_PREFERENCES: readonly QualityPreference[] = ['auto', ...LADDER]
 
-// Issue #120's default rung for each connection path.
+// Issue #120's default rung for each connection path. This computer plays
+// the original, as the home network does.
 const DEFAULT_RUNG: Record<ConnectionPath, Rung> = {
+  'this-computer': 'original',
   home: 'original',
   relay: 'standard',
   custom: 'high',
 }
 
-/** How this client reaches its server. It always says 'home' for now.
- * Nothing yet knows the real answer: the connection-path indicator is
- * #118's, and #118 replaces this function's body when it lands. 'home'
- * keeps today's behaviour (full-quality audio) until then. */
+/** How this client reaches its server, as #118's connection-path store has
+ * it (connect/connectionPath.ts). */
 export function connectionPath(): ConnectionPath {
-  return 'home'
+  return getConnectionPath()
 }
 
 type BrowserTraits = { userAgent: string; maxTouchPoints: number; canPlayOpus: boolean }

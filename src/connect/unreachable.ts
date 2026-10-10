@@ -1,40 +1,25 @@
-import { isLanHost, isLoopbackHost } from './address'
 import { formatSince } from './lastSeen'
+import type { ServerPath } from './serverPath'
 
 /* The server-unreachable state (issue #119, plan 03's "Server unreachable"):
  * what happened, the likely why, and one action. Nothing tells a client why
  * a server stopped answering, so the why is inferred from what the client
  * can see for itself:
  *
- *   - the path it was using: this computer, the home network, or anywhere
- *     else (a Tailscale address, a domain behind a proxy);
+ *   - the path it was using (serverPath.ts): this computer, the home
+ *     network, or anywhere else (a Tailscale address, a domain behind a
+ *     proxy);
  *   - how the health check failed: turned away at once, no answer at all,
  *     or an answer that wasn't Legato's;
  *   - when the server last answered, and whether this device's network
  *     dropped or changed since.
  *
- * #310's relay is a fourth path with failures of its own (legato.fm out of
- * reach, or the server's tunnel down). It adds a ServerPath and its own
- * branch in inferReason; the reasons below don't assume a direct
- * connection beyond the paths that name one. */
-
-export type ServerPath =
-  /** The desktop app's own server, which the app started (server_process.rs). */
-  | 'embedded'
-  /** Something else on this computer: a server run by hand, a dev setup. */
-  | 'this-device'
-  /** An address that only works on the local network (address.ts). */
-  | 'home'
-  /** Anything else: a Tailscale address, a domain. */
-  | 'custom'
-
-/** Which path `origin` is. `embedded` says the desktop app started the
- * server at that origin itself. */
-export function pathFor(origin: string, embedded: boolean): ServerPath {
-  const host = new URL(origin).hostname
-  if (isLoopbackHost(host)) return embedded ? 'embedded' : 'this-device'
-  return isLanHost(host) ? 'home' : 'custom'
-}
+ * The relay is a path with failures of its own (legato.fm out of reach, or
+ * the server's tunnel down). #118 named it as a ServerPath; no client
+ * connects through it yet, and the one that does adds its own branch in
+ * inferReason. Until then the reasons below treat it like any path that
+ * isn't this computer, and don't assume a direct connection beyond the
+ * paths that name one. */
 
 /** How one health check failed. */
 export type CheckFailure =

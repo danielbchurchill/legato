@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   chooseQuality,
+  connectionPath,
   EARLY_END_MS,
   noteDrop,
   prefersAac,
@@ -11,6 +12,7 @@ import {
   watchForDrops,
   type ServerTrouble,
 } from './quality'
+import { setConnectionPath } from '../connect/connectionPath'
 import {
   announceServerBack,
   noteCheckAnswered,
@@ -104,6 +106,32 @@ describe('quality preference', () => {
     const storage = memoryStorage()
     storeQualityPreference('standard', storage)
     expect(readQualityPreference(storage)).toBe('standard')
+  })
+})
+
+// Issue #118: the ladder starts from the path the connection-path store has.
+describe('the connection path', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', memoryStorage())
+    vi.stubGlobal('window', { location: { href: 'http://127.0.0.1:5185/' } })
+    storeQualityPreference('auto')
+  })
+
+  afterEach(() => {
+    setConnectionPath('this-computer')
+    vi.unstubAllGlobals()
+  })
+
+  it("follows the store's path, so a route through the relay streams less", () => {
+    expect(connectionPath()).toBe('this-computer')
+    expect(new URL(streamUrl(7)).searchParams.get('quality')).toBe('original')
+    setConnectionPath('relay')
+    expect(connectionPath()).toBe('relay')
+    expect(new URL(streamUrl(7)).searchParams.get('quality')).toMatch(/^(opus|aac)160$/)
+    setConnectionPath('custom')
+    expect(new URL(streamUrl(7)).searchParams.get('quality')).toMatch(/^(opus|aac)256$/)
+    setConnectionPath('home')
+    expect(new URL(streamUrl(7)).searchParams.get('quality')).toBe('original')
   })
 })
 

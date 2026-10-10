@@ -15,8 +15,18 @@
 //   embedded server.
 // - app.legato.fm: a server picked on the connect screen, the same way,
 //   once that client exists.
+//
+// A pick can be a route through legato.fm's relay (`<relay>/relay/<server
+// id>`), so the "origin" below can carry that path. With this device's
+// "never use the relay" on (#118), a route through it isn't used. Which
+// path the resolved base takes goes to the connection-path store
+// (connect/connectionPath.ts) as this module loads.
 
+import { neverUseRelay, setConnectionPath } from '../connect/connectionPath'
+import { readKnownServers } from '../connect/knownServers'
 import { readServerChoice } from '../connect/serverChoice'
+import { connectionPathOf, pathFor, relayedServerId } from '../connect/serverPath'
+import { RELAY_ORIGIN } from './relayHost'
 
 // Matches the server's own LEGATO_PORT default (server/src/config.ts).
 const DEFAULT_HOST = '127.0.0.1'
@@ -32,18 +42,39 @@ export interface ServerEnv {
   VITE_SERVER_PORT?: string
 }
 
+/** This device's "never use the relay" (#118), passed only while it's on. */
+export interface RelayPin {
+  relayOrigin: string
+  /** The address this device last reached a server on at home, by id. */
+  homeOrigin: (serverId: string) => string | null
+}
+
 // Dev overrides: set VITE_SERVER_HOST to reach a server bound to a
 // different interface (previewing over Tailscale while Vite and the server
 // both run here), VITE_SERVER_PORT alongside LEGATO_PORT to point at a
 // second server on the same machine while the default port stays taken.
 // `||` rather than `??` so an empty `VITE_SERVER_PORT=` line in a .env file
 // falls back instead of producing `http://127.0.0.1:/api/v1`.
-export function resolveServerOrigin(page: PageContext | null, env: ServerEnv, chosen: string | null = null): string {
+export function resolveServerOrigin(
+  page: PageContext | null,
+  env: ServerEnv,
+  chosen: string | null = null,
+  pin: RelayPin | null = null,
+): string {
   if (page?.servedByServer) return page.origin
   // A server picked on the connect screen comes ahead of the default.
   // Choosing one reloads the page, so the constants below re-resolve
   // without every importer having to become a function call.
-  if (chosen) return chosen
+  if (chosen) {
+    const relayed = pin ? relayedServerId(chosen, pin.relayOrigin) : null
+    if (relayed === null) return chosen
+    // Pinned off the relay: the same server directly, at the address this
+    // device last reached it on at home. Away from home that doesn't
+    // answer, which is what the pin asks for. A server never reached at
+    // home has no such address, and it's as though nothing were picked.
+    const home = pin?.homeOrigin(relayed)
+    if (home) return home
+  }
   return `http://${env.VITE_SERVER_HOST || DEFAULT_HOST}:${env.VITE_SERVER_PORT || DEFAULT_PORT}`
 }
 
@@ -66,7 +97,15 @@ const SERVER_ENV: ServerEnv = {
   VITE_SERVER_HOST: import.meta.env.VITE_SERVER_HOST,
   VITE_SERVER_PORT: import.meta.env.VITE_SERVER_PORT,
 }
-export const SERVER_ORIGIN = resolveServerOrigin(currentPage(), SERVER_ENV, readServerChoice())
+const RELAY_PIN: RelayPin = {
+  relayOrigin: RELAY_ORIGIN,
+  homeOrigin: (serverId) => readKnownServers()[serverId]?.lanOrigin ?? null,
+}
+
+export const SERVER_ORIGIN = resolveServerOrigin(currentPage(), SERVER_ENV, readServerChoice(), neverUseRelay() ? RELAY_PIN : null)
+// Whether the desktop app started this server doesn't change the path's
+// kind, only how it's put into words (serverPath.ts).
+setConnectionPath(connectionPathOf(pathFor(SERVER_ORIGIN, false)))
 /** The server this client uses when nothing was picked: in the desktop app,
  * its own embedded one. The connect screen offers to go back to it. */
 export const DEFAULT_SERVER_ORIGIN = resolveServerOrigin(currentPage(), SERVER_ENV)
