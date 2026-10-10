@@ -137,8 +137,11 @@ describe("backoffDelay", () => {
 });
 
 describe("DrainPoll", () => {
+  // Writable, so a spec can move the socket's state under the poll.
+  type FakeSocket = { readyState: WebSocket["readyState"]; bufferedAmount: number };
+
   it("resumes every response waiting on a socket from one poll, once it's back under the low-water mark", async () => {
-    const socket = { readyState: WebSocket.OPEN as number, bufferedAmount: 2 * 1024 * 1024 };
+    const socket: FakeSocket = { readyState: WebSocket.OPEN, bufferedAmount: 2 * 1024 * 1024 };
     const drain = new DrainPoll(socket, 10);
     const timers = spyOn(globalThis, "setTimeout");
     const resumed: number[] = [];
@@ -158,7 +161,7 @@ describe("DrainPoll", () => {
   });
 
   it("resumes what's waiting once the socket has closed, rather than waiting on it for ever", async () => {
-    const socket = { readyState: WebSocket.OPEN as number, bufferedAmount: 2 * 1024 * 1024 };
+    const socket: FakeSocket = { readyState: WebSocket.OPEN, bufferedAmount: 2 * 1024 * 1024 };
     const drain = new DrainPoll(socket, 10);
     let resumed = false;
     drain.wait(() => (resumed = true));
