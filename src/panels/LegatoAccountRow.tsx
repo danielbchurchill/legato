@@ -8,7 +8,7 @@ import { IS_TAURI } from '../config/runtime'
 import { RELAY_ORIGIN } from '../config/relayHost'
 import { API_BASE } from '../config/serverHost'
 import { useAccount } from '../auth/accountContext'
-import type { AuthStatus } from '../auth/useAuth'
+import type { AuthStatus, TunnelStatus } from '../auth/useAuth'
 import { describeLinkFailure, LINK_CHANGED_EVENT, linkWithLegato } from '../connect/legatoLink'
 import { startBrowserLink } from '../connect/legatoLinkReturn'
 import { SettingsGroup } from './SettingsPrimitives'
@@ -182,7 +182,13 @@ export function LegatoAccountRow() {
   )
 }
 
-type LinkStatus = { serverId: string; issuer: string | null; linked: boolean; linkedAccountId: string | null }
+type LinkStatus = {
+  serverId: string
+  issuer: string | null
+  linked: boolean
+  linkedAccountId: string | null
+  tunnel: TunnelStatus | null
+}
 
 /** This server's id, which legato.fm it trusts, and whether the signed-in
  * user is linked there; again whenever a link finishes elsewhere. */
@@ -199,6 +205,7 @@ function useLinkStatus(): { status: LinkStatus | null | 'unavailable'; reload: (
                 issuer: legato.issuer ?? null,
                 linked: legato.linked === true,
                 linkedAccountId: legato.linkedAccountId ?? null,
+                tunnel: legato.tunnel ?? null,
               }
             : 'unavailable',
         ),
@@ -267,12 +274,19 @@ function ServerLink({ relayUser }: { relayUser: RelayUser | null }) {
   // can only link a server that trusts that one. The web client goes to
   // whichever the server trusts.
   const otherIssuer = IS_TAURI && issuer !== null && !sameOrigin(issuer, RELAY_ORIGIN)
+  // Issue #115: legato.fm refused this server's tunnel credential (the
+  // account removed the server, or revoked it) or it ran out. Only a new
+  // link brings another, so that's what this says to do.
+  const disconnected = status.linked && (status.tunnel === 'refused' || status.tunnel === 'expired')
+  const canLink = issuer !== null && owner && !otherIssuer && (!IS_TAURI || relayUser !== null)
   const said =
     issuer === null
       ? "legato.fm is turned off on this server, so it can't be linked."
-      : status.linked
-        ? 'This server is linked to legato.fm.'
-        : "This server isn't linked to a legato.fm account yet."
+      : disconnected
+        ? 'Disconnected from legato.fm.'
+        : status.linked
+          ? 'This server is linked to legato.fm.'
+          : "This server isn't linked to a legato.fm account yet."
   const hint =
     issuer === null
       ? null
@@ -284,8 +298,9 @@ function ServerLink({ relayUser }: { relayUser: RelayUser | null }) {
             ? status.linked
               ? 'Sign in to legato.fm to link it again.'
               : 'Sign in to legato.fm to link it.'
-            : null
-  const canLink = issuer !== null && owner && !otherIssuer && (!IS_TAURI || relayUser !== null)
+            : disconnected
+              ? 'Link it again to reach it through legato.fm.'
+              : null
   // Linking from the desktop app as a different legato.fm account than the
   // one linked replaces it: the server unlinks the old one
   // (server/src/auth/legatoLink.ts). So that's asked first.
