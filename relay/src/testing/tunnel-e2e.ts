@@ -9,6 +9,11 @@
 // unlinking with a stream playing answers and then closes the tunnel. No
 // real provider, and nothing sent to auth.legato.fm.
 //
+// Issue #115 adds two steps: a server back after more than 60 days off
+// swaps its credential for a 90-day one over the tunnel it just opened,
+// without reconnecting, and removing a server from the account (what
+// Settings' `remove` does) closes its tunnel and tells its owner.
+//
 // It starts everything itself, as child processes, so it can kill the
 // relay outright (SIGKILL, no goodbye) the way a crash or a deploy would:
 //
@@ -97,7 +102,7 @@ let relayProcess = startRelay();
 await until("the relay answers /health", async () => (await fetch(`${RELAY}/health`)).ok);
 const servers = PORTS.map((port, i) => {
   const name = `server-${"ab"[i]}`;
-  start(name, SERVER_DIR, {
+  const child = start(name, SERVER_DIR, {
     LEGATO_PORT: port,
     LEGATO_DATA_DIR: path.join(DIR, name),
     LEGATO_ID_ORIGIN: RELAY,
@@ -105,7 +110,7 @@ const servers = PORTS.map((port, i) => {
     LEGATO_MDNS: "off",
     LEGATO_SERVER_NAME: name,
   });
-  return { name, api: `http://127.0.0.1:${port}/api/v1`, dataDir: path.join(DIR, name), id: "", token: "" };
+  return { name, api: `http://127.0.0.1:${port}/api/v1`, dataDir: path.join(DIR, name), id: "", token: "", child };
 });
 for (const server of servers) await until(`${server.name} answers /health`, async () => (await fetch(`${server.api}/health`)).ok);
 step("relay and two servers up", `${RELAY}, ${servers.map((s) => s.api).join(", ")}`);
@@ -423,20 +428,91 @@ step(
   `down ${((backAt - downAt) / 1000).toFixed(1)} s; both servers back ${(reconnectedMs / 1000).toFixed(1)} s after it was`,
 );
 
-// 5. Revoke server-b's credential: the relay closes its tunnel at the next
-// heartbeat, server-b stops with one warning (its next try is an hour
-// away), and server-a carries on.
-relayDb.prepare("DELETE FROM tunnel_credentials WHERE server_id = ?").run(servers[1]!.id);
-await until("server-b's tunnel closes", async () => (await tunnelOf(servers[1]!.id))?.connected === false, 45_000);
-await until("server-b says why it stopped", async () => logOf("server-b").includes("refused this server's tunnel credential"));
+// 4b. server-a comes back after more than 60 days off (issue #115): its
+// credential has 20 days left, so once its tunnel is up it asks for a
+// replacement over it, stores it and moves the tunnel onto it. The relay
+// retires the old one, and the connection it opened stays.
+const serverCredential = (name: string) => {
+  const db = openSqlite(path.join(DIR, name, "legato.db"));
+  const row = db.prepare("SELECT credential, expires_at FROM tunnel_credential").get() as { credential: string; expires_at: string } | null;
+  db.close();
+  return row;
+};
+const relayCredentials = (serverId: string) =>
+  relayDb.prepare("SELECT token, expires_at FROM tunnel_credentials WHERE server_id = ? ORDER BY rowid").all(serverId) as {
+    token: string;
+    expires_at: string;
+  }[];
+servers[0]!.child.kill("SIGTERM");
+await new Promise((resolve) => servers[0]!.child.once("exit", resolve));
+const offline = serverCredential("server-a")!;
+const nearlyGone = new Date(Date.now() + 20 * 24 * 3600 * 1000).toISOString();
+const serverADb = openSqlite(path.join(servers[0]!.dataDir, "legato.db"));
+serverADb.prepare("UPDATE tunnel_credential SET expires_at = ?").run(nearlyGone);
+serverADb.close();
+relayDb.prepare("UPDATE tunnel_credentials SET expires_at = datetime('now', '+20 days') WHERE token = ?").run(offline.credential);
+start("server-a", SERVER_DIR, {
+  LEGATO_PORT: PORTS[0]!,
+  LEGATO_DATA_DIR: servers[0]!.dataDir,
+  LEGATO_ID_ORIGIN: RELAY,
+  LEGATO_UPDATE_CHECK: "off",
+  LEGATO_MDNS: "off",
+  LEGATO_SERVER_NAME: "server-a",
+});
+await until("server-a stores a replacement", async () => serverCredential("server-a")?.credential !== offline.credential, 30_000);
+const replacement = serverCredential("server-a")!;
+await until("the relay retires the old credential", async () => {
+  const live = relayCredentials(servers[0]!.id);
+  return live.length === 1 && live[0]!.token === replacement.credential;
+});
+const daysLeft = (Date.parse(replacement.expires_at) - Date.now()) / (24 * 3600 * 1000);
+check(daysLeft > 89 && daysLeft <= 90, `the replacement lasts 90 days (${daysLeft.toFixed(1)})`);
+await sleep(1_000);
+const sinceRestart = logOf("server-a").split("legato.fm: tunnel connected to").length - 1;
+check(
+  sinceRestart === 2,
+  `server-a connected once after its restart, and rotating didn't reconnect it (${sinceRestart} connects in its log)`,
+);
+check(logOf("server-a").includes("replaced this server's tunnel credential"), "server-a says it replaced its credential");
+const afterRotation = await fetch(`${RELAY}/relay/${servers[0]!.id}/api/v1/auth/status`, { headers: { cookie } });
+check(afterRotation.ok, `server-a answers through its tunnel on the new credential (${afterRotation.status})`);
+step("server-a rotated after 60+ days off", `new credential good for ${daysLeft.toFixed(1)} days; the old one retired; same connection`);
+
+// 5. The account removes server-b, as Settings' `remove` does (issue
+// #115): the pair and its credential go, the relay closes the tunnel at
+// the next heartbeat, server-b stops with one warning (its next try is an
+// hour away), its owner sees it's disconnected, and server-a carries on.
+const removed = await fetch(`${RELAY}/linked-servers/${servers[1]!.id}`, {
+  method: "DELETE",
+  headers: { authorization: `Bearer ${sessionToken}`, origin: "tauri://localhost" },
+});
+check(
+  removed.ok && removed.headers.get("access-control-allow-origin") === "tauri://localhost",
+  `the desktop app removes server-b (${removed.status})`,
+);
+// It's off the account's list at once, so the server's own log says when
+// the heartbeat refused it.
+await until("server-b says why it stopped", async () => logOf("server-b").includes("refused this server's tunnel credential"), 45_000);
 const before = tunnelLines("server-b");
 await sleep(5_000);
 check(tunnelLines("server-b") === before, "server-b doesn't try again on the short backoff");
 check((logOf("server-b").match(/refused this server's tunnel credential/g) ?? []).length === 1, "server-b warned once");
 check((await tunnelOf(servers[0]!.id))?.connected === true, "server-a is still connected");
 const gone = await fetch(`${RELAY}/relay/${servers[1]!.id}/api/v1/auth/status`, { headers: { cookie } });
-check(gone.status === 503, `server-b can't be reached through the relay (${gone.status})`);
-step("credential revoked", `server-b stopped with one warning; server-a still connected; GET /relay/<b>/… → ${gone.status}`);
+check(gone.status === 404, `server-b can't be reached through the relay (${gone.status})`);
+const ownerSees = (await (
+  await fetch(`${servers[1]!.api}/auth/status`, { headers: { authorization: `Bearer ${servers[1]!.token}` } })
+).json()) as {
+  legato: { linked: boolean; tunnel: string };
+};
+check(
+  ownerSees.legato.linked && ownerSees.legato.tunnel === "refused",
+  `server-b's owner is told it's disconnected (${JSON.stringify(ownerSees.legato)})`,
+);
+step(
+  "server-b removed from the account",
+  `server-b stopped with one warning, and tells its owner; server-a still connected; GET /relay/<b>/… → ${gone.status}`,
+);
 
 // 6. server-a's owner links again from a phone, through legato.fm, with a
 // link token that brings a new credential: what a claim's /pair/exchange
