@@ -1,0 +1,15 @@
+-- #320: the era affinity used to tie every pair of artists whose albums share
+-- a decade, n(n-1)/2 collaborated_with edges labelled 'same_era' per decade:
+-- 1,647,358 of them on a 30,000-album library. recomputeCollaborationEdges
+-- now ties each artist to its closest few in the decade (entities/
+-- collaboration.ts), but only a recompute writes that, and nothing runs one
+-- at startup. So every old era tie goes here, and the next recompute puts
+-- the capped chain back.
+--
+-- Until then, nothing anyone sees changes. facts.ts and articles/recompute.ts
+-- skip a collaborated_with edge with a label. Similarity's artist clusters
+-- (similarity/features.ts) are the one reader that counts era ties, and
+-- they're only computed inside a recompute, after the chain is written
+-- again. GET /nodes/:id sends a node's edges, these included, but the app
+-- doesn't show collaborated_with ones.
+DELETE FROM edges WHERE type = 'collaborated_with' AND label = 'same_era';

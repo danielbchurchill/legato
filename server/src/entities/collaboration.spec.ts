@@ -1,11 +1,18 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
+import { computeArtistClusters } from "../similarity/features.js";
+import { openDbAt } from "../testing.js";
 import {
   computeAlbumRelations,
   computeArtistAffinities,
   computeArtistCollaborations,
+  ERA_NEIGHBOURS,
   recomputeCollaborationEdges,
+  type AlbumForRelations,
 } from "./collaboration.js";
 
 describe("computeArtistCollaborations", () => {
@@ -87,11 +94,11 @@ describe("computeArtistAffinities — G-7's wider artist-graph signals", () => {
       { nodeId: 10, primaryArtistNodeId: 500 },
       { nodeId: 11, primaryArtistNodeId: 600 },
     ];
-    const albumEraDecade = new Map([
-      [10, 1960],
-      [11, 1960],
+    const albumYear = new Map([
+      [10, 1962],
+      [11, 1968],
     ]);
-    const edges = computeArtistAffinities(albums, new Map(), albumEraDecade, [], []);
+    const edges = computeArtistAffinities(albums, new Map(), albumYear, [], []);
     expect(edges).toEqual([{ fromNode: 500, toNode: 600, type: "collaborated_with", affinityReason: "same_era" }]);
   });
 
@@ -100,11 +107,125 @@ describe("computeArtistAffinities — G-7's wider artist-graph signals", () => {
       { nodeId: 10, primaryArtistNodeId: 500 },
       { nodeId: 11, primaryArtistNodeId: 600 },
     ];
-    const albumEraDecade = new Map([
-      [10, 1960],
-      [11, 1990],
+    const albumYear = new Map([
+      [10, 1969],
+      [11, 1970],
     ]);
-    expect(computeArtistAffinities(albums, new Map(), albumEraDecade, [], [])).toEqual([]);
+    expect(computeArtistAffinities(albums, new Map(), albumYear, [], [])).toEqual([]);
+  });
+
+  // Issue #320.
+  describe("the era tie, capped", () => {
+    // One album each, artist 1000 + i in year 1960 + i % 10.
+    function decadeOf(count: number) {
+      const albums = Array.from({ length: count }, (_, i) => ({ nodeId: i, primaryArtistNodeId: 1000 + i }));
+      const albumYear = new Map(albums.map((a, i) => [a.nodeId, 1960 + (i % 10)]));
+      return { albums, albumYear };
+    }
+    const eraTies = (albums: AlbumForRelations[], albumYear: Map<number, number | null>) =>
+      computeArtistAffinities(albums, new Map(), albumYear, [], []).filter((e) => e.affinityReason === "same_era");
+
+    it("orders a decade's artists by year and ties each to the next three in that order", () => {
+      const years = [1965, 1961, 1969, 1963, 1967, 1960];
+      const albums = years.map((_, i) => ({ nodeId: i, primaryArtistNodeId: 100 + i }));
+      const albumYear = new Map(albums.map((a, i) => [a.nodeId, years[i]]));
+      // In year order: 105 (1960), 101 (1961), 103 (1963), 100 (1965), 104 (1967), 102 (1969).
+      const pairs = eraTies(albums, albumYear).map((e) => `${e.fromNode}-${e.toNode}`);
+
+      expect(ERA_NEIGHBOURS).toBe(3);
+      expect(pairs.sort()).toEqual(
+        ["101-105", "103-105", "100-105", "101-103", "100-101", "101-104", "100-103", "103-104", "102-103", "100-104", "100-102", "102-104"].sort(),
+      );
+      // The two years furthest apart aren't tied.
+      expect(pairs).not.toContain("102-105");
+    });
+
+    it("grows linearly with the number of artists, where every pair grew quadratically", () => {
+      for (const count of [100, 1000, 3000]) {
+        const { albums, albumYear } = decadeOf(count);
+        const ties = eraTies(albums, albumYear);
+        expect(ties).toHaveLength(ERA_NEIGHBOURS * count - (ERA_NEIGHBOURS * (ERA_NEIGHBOURS + 1)) / 2);
+        const perArtist = new Map<number, number>();
+        for (const e of ties) for (const n of [e.fromNode, e.toNode]) perArtist.set(n, (perArtist.get(n) ?? 0) + 1);
+        expect(Math.max(...perArtist.values())).toBe(2 * ERA_NEIGHBOURS);
+      }
+    });
+
+    it("keeps each decade one connected cluster, as every pair did", () => {
+      const { albums, albumYear } = decadeOf(500);
+      const clusters = computeArtistClusters(eraTies(albums, albumYear));
+      expect(clusters.size).toBe(500);
+      expect(new Set(clusters.values()).size).toBe(1);
+    });
+
+    it("pairs the same artists whatever order the albums come in, in every decade, breaking a tie in year by node id", () => {
+      // Artists 1000–1059 with one album each over 1955–1974, three to a
+      // year, and a second album for every third of 1000–1057 over
+      // 1962–1974, so some sit in two decades and some have two albums in one.
+      const albums: AlbumForRelations[] = Array.from({ length: 60 }, (_, i) => ({ nodeId: i, primaryArtistNodeId: 1000 + i }));
+      const albumYear = new Map<number, number | null>(albums.map((a, i) => [a.nodeId, 1955 + (i % 20)]));
+      for (let j = 0; j < 20; j++) {
+        albums.push({ nodeId: 60 + j, primaryArtistNodeId: 1000 + 3 * j });
+        albumYear.set(60 + j, 1962 + (j % 13));
+      }
+      const pairKeys = (list: AlbumForRelations[]) => new Set(eraTies(list, albumYear).map((e) => `${e.fromNode}-${e.toNode}`));
+      const inOrder = pairKeys(albums);
+      const scrambled = albums.map((album, i) => ({ album, key: (i * 37) % 83 })).sort((a, b) => a.key - b.key);
+
+      expect(pairKeys([...albums].reverse())).toEqual(inOrder);
+      expect(pairKeys(scrambled.map(({ album }) => album))).toEqual(inOrder);
+      // A pair side by side in two decades is still one edge.
+      expect(eraTies(albums, albumYear)).toHaveLength(inOrder.size);
+      // Each of the three decades has ties: 1001 is only in the 1950s, 1010
+      // only in the 1960s and 1016 only in the 1970s. (1000 has a 1962
+      // album too.)
+      for (const artist of ["1001", "1010", "1016"]) {
+        expect([...inOrder].some((pair) => pair.split("-").includes(artist))).toBe(true);
+      }
+      // 1000, 1020 and 1040 share 1955, so in id order 1000's three
+      // neighbours after it are 1020, 1040 and 1001 (1956), not 1021.
+      expect(inOrder).toContain("1000-1020");
+      expect(inOrder).toContain("1000-1040");
+      expect(inOrder).toContain("1000-1001");
+      expect(inOrder).not.toContain("1000-1021");
+    });
+
+    it("places an artist by its earliest album in each decade, and in every decade it has one", () => {
+      // Artist 500 has albums in 1969, 1960 and 1972; 601–604 one each in the
+      // 1960s, 700 one in the 1970s.
+      const albums = [500, 500, 500, 601, 602, 603, 604, 700].map((artist, i) => ({ nodeId: i, primaryArtistNodeId: artist }));
+      const albumYear = new Map([1969, 1960, 1972, 1962, 1964, 1966, 1968, 1975].map((year, i) => [i, year]));
+      const pairs = eraTies(albums, albumYear).map((e) => `${e.fromNode}-${e.toNode}`);
+
+      // At 1960 it's first, so its neighbours are the three after it, not 604.
+      expect(pairs).toContain("500-601");
+      expect(pairs).not.toContain("500-604");
+      expect(pairs).toContain("500-700");
+    });
+
+    it("gives an artist up to six era ties for each decade it has an album in, not six in all", () => {
+      // Artist 500 in three decades, each with four artists before it and
+      // three after, none of them in more than one decade.
+      const albums: AlbumForRelations[] = [];
+      const albumYear = new Map<number, number | null>();
+      const add = (artist: number, year: number) => {
+        albums.push({ nodeId: albums.length, primaryArtistNodeId: artist });
+        albumYear.set(albums.length - 1, year);
+      };
+      for (const decade of [1950, 1960, 1970]) {
+        add(500, decade + 4);
+        for (let k = 0; k < 8; k++) if (k !== 4) add(decade * 10 + k, decade + k);
+      }
+      const ties = eraTies(albums, albumYear);
+      const tiesOf = (artist: number) => ties.filter((e) => e.fromNode === artist || e.toNode === artist).length;
+
+      expect(tiesOf(500)).toBe(3 * 2 * ERA_NEIGHBOURS);
+      const artists = new Set(albums.map((a) => a.primaryArtistNodeId!));
+      for (const artist of artists) {
+        const decades = new Set(albums.filter((a) => a.primaryArtistNodeId === artist).map((a) => Math.floor(albumYear.get(a.nodeId)! / 10)));
+        expect(tiesOf(artist)).toBeLessThanOrEqual(2 * ERA_NEIGHBOURS * decades.size);
+      }
+    });
   });
 
   it("connects two artists whose recordings share a producer, even on different albums/labels/eras", () => {
@@ -362,6 +483,25 @@ describe("recomputeCollaborationEdges", () => {
   });
 });
 
+// Issue #320: eight artists, one album each, made in this order with these
+// years. Their node ids run in a different order from their years, so a
+// chain taken in id order would tie different pairs.
+const SHUFFLED_YEARS = [1964, 1960, 1966, 1961, 1967, 1962, 1965, 1963];
+
+// The era ties the cap allows among artists with one album each in one
+// decade: in year order, each artist to the next three.
+function chainPairs(artists: number[], years: number[]): string[] {
+  const order = artists.map((artist, i) => ({ artist, year: years[i]! })).sort((a, b) => a.year - b.year);
+  const pairs: string[] = [];
+  for (let i = 0; i < order.length; i++) {
+    for (let j = i + 1; j <= i + 3 && j < order.length; j++) {
+      const [a, b] = [order[i]!.artist, order[j]!.artist];
+      pairs.push(`${Math.min(a, b)}-${Math.max(a, b)}`);
+    }
+  }
+  return pairs.sort();
+}
+
 // Issue #281: written as a diff, so recompute's worker holds the write lock
 // only for what changed.
 describe("recomputeCollaborationEdges — writing only what changed", () => {
@@ -393,5 +533,125 @@ describe("recomputeCollaborationEdges — writing only what changed", () => {
     recomputeCollaborationEdges(db);
 
     expect(collaborations(db)).toEqual(first);
+  });
+
+  // Issue #320: migration 0041 clears a database's old era ties on upgrade,
+  // but a recompute given every pair in a decade converges on its own too.
+  it("removes the era ties past the cap, and leaves the rows of the ones within it alone", () => {
+    const db = openDb(":memory:");
+    const artists = SHUFFLED_YEARS.map((_, i) => makeNode(db, "artist", `Artist ${i}`));
+    artists.forEach((artist, i) => {
+      const release = makeNode(db, "release", `Album ${i}`);
+      db.prepare("INSERT INTO albums (node_id, primary_artist_node_id, track_count, year_min) VALUES (?, ?, 1, ?)").run(
+        release,
+        artist,
+        SHUFFLED_YEARS[i]!,
+      );
+    });
+    const insert = db.prepare("INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, 'collaborated_with', 'local', 'same_era')");
+    for (let i = 0; i < artists.length; i++) for (let j = i + 1; j < artists.length; j++) insert.run(artists[i], artists[j]);
+    type Row = { id: number; fromNode: number; toNode: number; source: string; label: string };
+    const before = collaborations(db) as Row[];
+    expect(before).toHaveLength(28);
+
+    recomputeCollaborationEdges(db);
+
+    const after = collaborations(db) as Row[];
+    expect(after.map((e) => `${e.fromNode}-${e.toNode}`).sort()).toEqual(chainPairs(artists, SHUFFLED_YEARS));
+    expect(after).toHaveLength(18);
+    // Every tie within the cap was already there, so each is its old row,
+    // id and all: nothing was deleted and written again.
+    const beforeByPair = new Map(before.map((e) => [`${e.fromNode}-${e.toNode}`, e]));
+    for (const e of after) expect(e).toEqual(beforeByPair.get(`${e.fromNode}-${e.toNode}`)!);
+  });
+});
+
+// Issue #320: the upgrade clears the old era ties itself, since nothing runs
+// a recompute at startup.
+describe("migration 0041", () => {
+  let dataDir: string;
+  let upgraded: Database | undefined;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(path.join(tmpdir(), "legato-0041-"));
+  });
+
+  afterEach(() => {
+    upgraded?.close();
+    upgraded = undefined;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  // A database migrated up to 0040, with the old schema's rows written in,
+  // then opened as the new release opens it.
+  function upgradeFrom0040(write: (old: Database) => void): Database {
+    const dbPath = path.join(dataDir, "legato.db");
+    const old = openDbAt(dbPath, 40);
+    write(old);
+    old.close();
+    upgraded = openDb(dbPath, { log: () => {} });
+    return upgraded;
+  }
+
+  const node = (db: Database, type: string, title: string) =>
+    (db.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as { id: number }).id;
+  const edgeRows = (db: Database) =>
+    db.prepare("SELECT id, from_node AS fromNode, to_node AS toNode, type, source, label FROM edges ORDER BY id").all() as {
+      id: number;
+      fromNode: number;
+      toNode: number;
+      type: string;
+      label: string | null;
+    }[];
+
+  it("deletes every same_era tie, and nothing else", () => {
+    let kept: unknown[] = [];
+    const db = upgradeFrom0040((old) => {
+      const [a, b, c, d] = ["A", "B", "C", "D"].map((title) => node(old, "artist", title));
+      const [first, second] = ["First", "Second"].map((title) => node(old, "release", title));
+      const edge = old.prepare("INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, ?, ?, ?)");
+      edge.run(a, b, "collaborated_with", "local", "same_era");
+      edge.run(a, c, "collaborated_with", "local", "same_era");
+      edge.run(b, c, "collaborated_with", "local", "same_label");
+      edge.run(c, d, "collaborated_with", "local", "same_credit");
+      edge.run(a, d, "collaborated_with", "local", null);
+      edge.run(b, d, "collaborated_with", "manual", null);
+      edge.run(first, second, "same_label", "local", null);
+      edge.run(b, a, "member_of", "musicbrainz", null);
+      kept = edgeRows(old).filter((e) => e.label !== "same_era");
+    });
+
+    expect(edgeRows(db)).toEqual(kept as ReturnType<typeof edgeRows>);
+    expect(kept).toHaveLength(6);
+  });
+
+  it("leaves the next recompute to tie each decade again, capped", () => {
+    let artists: number[] = [];
+    const db = upgradeFrom0040((old) => {
+      artists = SHUFFLED_YEARS.map((_, i) => node(old, "artist", `Artist ${i}`));
+      artists.forEach((artist, i) => {
+        const release = node(old, "release", `Album ${i}`);
+        old.prepare("INSERT INTO albums (node_id, primary_artist_node_id, track_count, year_min) VALUES (?, ?, 1, ?)").run(
+          release,
+          artist,
+          SHUFFLED_YEARS[i]!,
+        );
+      });
+      const insert = old.prepare(
+        "INSERT INTO edges (from_node, to_node, type, source, label) VALUES (?, ?, 'collaborated_with', 'local', 'same_era')",
+      );
+      for (let i = 0; i < artists.length; i++) for (let j = i + 1; j < artists.length; j++) insert.run(artists[i]!, artists[j]!);
+    });
+    const eraTies = () =>
+      edgeRows(db)
+        .filter((e) => e.label === "same_era")
+        .map((e) => `${e.fromNode}-${e.toNode}`)
+        .sort();
+    expect(eraTies()).toEqual([]);
+
+    recomputeCollaborationEdges(db);
+
+    expect(eraTies()).toEqual(chainPairs(artists, SHUFFLED_YEARS));
+    expect(eraTies()).toHaveLength(18);
   });
 });

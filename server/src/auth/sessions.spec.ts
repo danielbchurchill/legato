@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
-import { MIGRATIONS } from "../migrations/manifest.generated.js";
 import { openSqlite } from "../sqlite.js";
+import { openDbAt } from "../testing.js";
 import { createSession, deleteSession, hashToken, userForMediaTicket, userForSessionToken } from "./sessions.js";
 import { SignInLimiter } from "./rateLimit.js";
 
@@ -156,13 +156,7 @@ describe("migration 0029 on an existing server", () => {
   it("keeps Google/GitHub users as legacy, drops their old sessions, and has no owner", () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "legato-0029-"));
     const dbPath = path.join(dataDir, "legato.db");
-    const old = openSqlite(dbPath);
-    old.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))");
-    for (const { version, sql } of MIGRATIONS) {
-      if (version >= 29) break;
-      old.exec(sql);
-      old.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
-    }
+    const old = openDbAt(dbPath, 28);
     old.prepare("INSERT INTO users (provider, provider_user_id, email) VALUES ('google', 'g-1', 'd@example.com')").run();
     old.prepare("INSERT INTO sessions (id, user_id, expires_at) VALUES ('raw-token', 1, '2099-01-01')").run();
     old.close();
