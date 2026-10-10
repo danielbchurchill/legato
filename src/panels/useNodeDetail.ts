@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 
 export { API }
 
@@ -99,6 +100,10 @@ export function useNodeDetail(nodeId: number | null): NodeDetailState {
       .catch(() => setNode(null))
   }
 
+  // #119: again after an outage, so a load it broke (the track moved on
+  // while the server was gone) doesn't leave the panel's placeholders up for
+  // good.
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     if (nodeId == null) {
       setNode(null)
@@ -106,7 +111,7 @@ export function useNodeDetail(nodeId: number | null): NodeDetailState {
     }
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeId])
+  }, [nodeId, reconnects])
 
   // Enrichment lands minutes after a scan, over a rate-limited queue, while
   // the surface is already open — so a description arriving has to reload the

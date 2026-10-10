@@ -3,6 +3,7 @@ import { IconButton } from '../ui/IconButton'
 import { ScrollingText } from '../ui/ScrollingText'
 import { TextField } from '../ui/TextField'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 
 type PlaylistListItem = { id: number; name: string; track_count: number }
 
@@ -19,6 +20,8 @@ export function AddToPlaylistButton({ nodeId, size = 32 }: { nodeId: number; siz
   const [newName, setNewName] = useState('')
   const [justAdded, setJustAdded] = useState<number | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
+  // An open list loads again after an outage (#119).
+  const reconnects = useReconnectEpoch()
 
   useEffect(() => {
     if (!open) return
@@ -30,7 +33,7 @@ export function AddToPlaylistButton({ nodeId, size = 32 }: { nodeId: number; siz
       .then((r) => r.json())
       .then(setPlaylists)
       .catch(() => setPlaylists([]))
-  }, [open])
+  }, [open, reconnects])
 
   useEffect(() => {
     if (!open) return

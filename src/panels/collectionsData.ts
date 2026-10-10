@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useWsEvent } from '../hooks/useWs'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 
 /* The data behind Collections: the playlists, one playlist's tracks, and
  * the favourites — each kept live by the server's own change events, so a
  * favourite added from the map or a track added from the search palette
- * shows up here without a refresh. */
+ * shows up here without a refresh. Each loads again after an outage (#119),
+ * whose events never arrived. */
 
 export type PlaylistSummary = { id: number; name: string; track_count: number }
 export type PlaylistTrack = { id: number; title: string; canonical_duration_ms: number | null; position: number; playlist_track_id: number }
@@ -19,7 +21,8 @@ export function usePlaylists(): { playlists: PlaylistSummary[] | null; reload: (
       .then(setPlaylists)
       .catch(() => setPlaylists([]))
   }, [])
-  useEffect(reload, [reload])
+  const reconnects = useReconnectEpoch()
+  useEffect(reload, [reload, reconnects])
   useWsEvent(['playlist:changed', 'playlist:tracks-changed'], reload)
   return { playlists, reload }
 }
@@ -32,7 +35,8 @@ export function usePlaylistTracks(playlistId: number): { tracks: PlaylistTrack[]
       .then((tracks: PlaylistTrack[]) => setState({ playlistId, tracks }))
       .catch(() => setState({ playlistId, tracks: [] }))
   }, [playlistId])
-  useEffect(load, [load])
+  const reconnects = useReconnectEpoch()
+  useEffect(load, [load, reconnects])
   useWsEvent(['playlist:tracks-changed'], (payload) => {
     if ((payload as { playlistId?: number } | undefined)?.playlistId === playlistId) load()
   })
@@ -50,7 +54,8 @@ export function useFavourites(): Favourite[] | null {
       .then(setFavourites)
       .catch(() => setFavourites([]))
   }, [])
-  useEffect(load, [load])
+  const reconnects = useReconnectEpoch()
+  useEffect(load, [load, reconnects])
   useWsEvent(['favourites:changed'], load)
   return favourites
 }

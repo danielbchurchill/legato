@@ -13,6 +13,7 @@ import { useCoverColor, withAlpha } from '../ui/coverColor'
 import type { PlaybackStatus, RepeatMode } from '../playback/usePlayback'
 import type { PlaybackProblem } from '../playback/playbackError'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 import { Surface } from './Surface'
 import { useShellLayout } from './layout'
 import {
@@ -87,6 +88,7 @@ function seededBars(seed: number, barCount: number): number[] {
 
 function usePeaks(fileId: number | null): number[] {
   const [peaks, setPeaks] = useState<{ fileId: number; peaks: number[] } | null>(null)
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     if (fileId == null) return
     let cancelled = false
@@ -101,7 +103,7 @@ function usePeaks(fileId: number | null): number[] {
     return () => {
       cancelled = true
     }
-  }, [fileId])
+  }, [fileId, reconnects])
   return peaks != null && peaks.fileId === fileId ? peaks.peaks : []
 }
 

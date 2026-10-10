@@ -9,6 +9,7 @@ import { formatDuration, formatHoursMinutes, NO_VALUE, plural } from '../ui/form
 import { BackRow } from '../shell/SidePanel'
 import { useGraph } from '../canvas/graphContext'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 import type { usePlayback } from '../playback/usePlayback'
 import { totalDuration, usePlaylists, usePlaylistTracks, type PlaylistTrack } from './collectionsData'
 
@@ -21,6 +22,8 @@ type ImportReport = { sourceFilename: string; entries: { matchType: 'path' | 'me
 
 function useImportReport(playlistId: number): ImportReport | null {
   const [report, setReport] = useState<{ playlistId: number; report: ImportReport | null } | null>(null)
+  // Again after an outage (#119).
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     let cancelled = false
     fetch(`${API}/playlists/${playlistId}/import-report`)
@@ -30,7 +33,7 @@ function useImportReport(playlistId: number): ImportReport | null {
     return () => {
       cancelled = true
     }
-  }, [playlistId])
+  }, [playlistId, reconnects])
   return report?.playlistId === playlistId ? report.report : null
 }
 

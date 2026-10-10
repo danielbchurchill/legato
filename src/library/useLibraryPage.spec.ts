@@ -2,6 +2,7 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { announceServerBack } from '../connect/reconnect'
 import { mergePage, useLibraryPage, type LibraryPage } from './useLibraryPage'
 
 type Row = { id: number }
@@ -213,6 +214,37 @@ describe('useLibraryPage after a refresh moves the total (#302)', () => {
     // A page scrolled back to later is fetched too.
     act(() => result.current!.ensureRange(150, 299))
     expect(pending.map((p) => p.offset)).toEqual([150])
+
+    act(() => root.unmount())
+  })
+
+  // #119: after an outage the library:changed that would have refreshed the
+  // view went to a socket that wasn't there, so the full resync does it.
+  it('fetches page 0 and the range on screen again after an outage, keeping the rows shown', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    let root!: Root
+    const result: { current: LibraryPage<Row> | null } = { current: null }
+    function Harness() {
+      result.current = useLibraryPage<Row>('library/albums', '', 'name', 'asc')
+      return null
+    }
+    act(() => {
+      root = createRoot(container)
+      root.render(createElement(Harness))
+    })
+    await answer(0, 3_000)
+    act(() => result.current!.ensureRange(450, 749))
+    await answer(450, 3_000)
+    await answer(600, 3_000)
+
+    await act(async () => announceServerBack({ restarted: true }))
+    expect(pending.map((p) => p.offset).sort((a, b) => a - b)).toEqual([0, 450, 600])
+    // What was shown stays until the new pages land.
+    expect(result.current!.rows[450]).toEqual({ id: 450 })
+
+    while (pending.length > 0) await answer(pending[0].offset, 3_000)
+    expect(result.current!.rows.slice(450, 750).filter((row) => row === undefined)).toHaveLength(0)
 
     act(() => root.unmount())
   })

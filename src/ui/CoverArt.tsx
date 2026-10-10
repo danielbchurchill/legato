@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { API_BASE as API } from '../config/serverHost'
+import { useServerBackEpoch } from '../connect/reconnect'
 import { withMediaTicket } from '../auth/session'
 
 /* Album art from the cover cache. v2 rounds every cover a little (6px; 4px
@@ -45,6 +46,10 @@ export function CoverArt({ nodeId, size, className = '', alt = '', style, radius
   const imgRef = useRef<HTMLImageElement>(null)
 
   const src = nodeId == null ? null : withMediaTicket(`${API}/nodes/${nodeId}/cover?size=${size}`)
+  // #119: art that failed while the server was out of reach is asked for
+  // once more when it's back, after every outage, whether or not anything
+  // else reads again. Art that loaded stays as it is.
+  const reconnects = useServerBackEpoch()
 
   // Without this, moving from an album that has art to one that does not
   // leaves the previous failure latched and hides art that exists. Keyed
@@ -63,7 +68,7 @@ export function CoverArt({ nodeId, size, className = '', alt = '', style, radius
     // oxlint-disable-next-line react/set-state-in-effect
     setFailed(false)
     setLoaded(img != null && img.complete && img.naturalWidth > 0)
-  }, [src])
+  }, [src, reconnects])
 
   const frame = `relative shrink-0 overflow-hidden ${RADIUS[radius]} ${className}`
   const edgeOverlay = edge && (

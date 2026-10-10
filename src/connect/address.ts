@@ -44,6 +44,14 @@ export function isLanHost(host: string): boolean {
   return h === '::1' || /^f[cd][0-9a-f]{2}:/.test(h)
 }
 
+/** True for this machine: localhost, ::1 and the whole 127/8 block. The
+ * folder picker (library/folderPicker.ts) and the unreachable state
+ * (unreachable.ts) both ask. */
+export function isLoopbackHost(host: string): boolean {
+  const bare = host.replace(/^\[|\]$/g, '').toLowerCase()
+  return bare === 'localhost' || bare === '::1' || /^127(\.\d{1,3}){3}$/.test(bare)
+}
+
 /** The origin for one address a server advertised, in URL form. */
 export function originFor(address: string, port: number | string, scheme: 'http' | 'https' = 'http'): string {
   const host = address.includes(':') ? `[${address}]` : address

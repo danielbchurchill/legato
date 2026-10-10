@@ -312,3 +312,69 @@ describe('useSettings optimistic updates', () => {
     unmount()
   })
 })
+
+// #119, the coordinator's second review of #346: the stage waits for
+// `loaded` (App.tsx), and a first load that a change overtook (a click on
+// the map/library switch before a slow Pi answered) used to return without
+// setting it, which left the stage blank until the next outage.
+describe('useSettings first load, overtaken by a change', () => {
+  it('still counts as loaded, and fills in what it brought under the change', async () => {
+    serverSettings = { viewMode: 'map', repeatMode: 'all', showTracks: 'false' }
+    let answerLoad: () => void = () => undefined
+    let answerPut: () => void = () => undefined
+    vi.mocked(fetch).mockImplementation(async (_url, init) => {
+      if (init?.method === 'PUT') {
+        const partial = JSON.parse((init.body as string) ?? '{}') as Settings
+        await new Promise<void>((resolve) => (answerPut = resolve))
+        serverSettings = { ...serverSettings, ...partial }
+        return { ok: true, json: async () => serverSettings } as Response
+      }
+      const snapshot = { ...serverSettings }
+      await new Promise<void>((resolve) => (answerLoad = resolve))
+      return { ok: true, json: async () => snapshot } as Response
+    })
+    const { result, unmount } = renderSettingsHook()
+
+    act(() => {
+      void result.current!.updateSettings({ viewMode: 'library' })
+    })
+    await act(async () => answerLoad())
+    await act(async () => delay(1))
+
+    expect(result.current!.loaded).toBe(true)
+    expect(result.current!.settings).toEqual({ viewMode: 'library', repeatMode: 'all', showTracks: 'false' })
+
+    await act(async () => answerPut())
+    await act(async () => delay(1))
+    expect(result.current!.settings).toEqual({ viewMode: 'library', repeatMode: 'all', showTracks: 'false' })
+
+    unmount()
+  })
+
+  it('rolls a change that then fails back to what the first load brought, not to nothing', async () => {
+    serverSettings = { viewMode: 'map', repeatMode: 'all' }
+    let answerLoad: () => void = () => undefined
+    let failPut: () => void = () => undefined
+    vi.mocked(fetch).mockImplementation(async (_url, init) => {
+      if (init?.method === 'PUT') {
+        await new Promise<void>((resolve) => (failPut = resolve))
+        return { ok: false, status: 503, json: async () => ({}) } as Response
+      }
+      await new Promise<void>((resolve) => (answerLoad = resolve))
+      return { ok: true, json: async () => serverSettings } as Response
+    })
+    const { result, unmount } = renderSettingsHook()
+
+    act(() => {
+      void result.current!.updateSettings({ viewMode: 'library' })
+    })
+    await act(async () => answerLoad())
+    await act(async () => failPut())
+    await act(async () => delay(1))
+
+    expect(result.current!.loaded).toBe(true)
+    expect(result.current!.settings).toEqual({ viewMode: 'map', repeatMode: 'all' })
+
+    unmount()
+  })
+})

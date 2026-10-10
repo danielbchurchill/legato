@@ -710,8 +710,12 @@ The catalogue to build against:
 | Nothing playing | Now-playing panel and transport |
 | Queue is empty | Up next |
 | No maintenance items | Collection panel — this one is a *success* state and should read as calm, not empty |
-| Server not reachable | Whole window |
+| Server not reachable | Whole window, drawn over the shell once the app has run (below) |
 | Scan failed | Canvas, with the error and a retry |
+
+**Server not reachable (#119).** H9's shape: what happened as the title ("Can't reach musicbox"), the likely why under it, and one action, `try again`, with "connect to a different server" as a link beside it. The why is a guess from the path the client was using (this computer, the home network, anywhere else), how the health check failed (turned away, no answer, something else answering) and when the server last answered, so it says "probably": asleep, offline since …, stopped or restarting, this device's network changed, this device is offline. A hint follows where there's more to do than try again, such as keep-awake on a server that sleeps. There's no spinner. The client keeps checking in the background, the line under the action says so, and a `try again` that finds nothing says when it ran. The reasons and their words are in `src/connect/unreachable.ts`.
+
+Once the app has run, the state goes over the shell rather than replacing it, the way a dialog does: a `--color-canvas` 60% wash over the stage and panels, and the words on a glass card. The shell stays mounted underneath, with the queue in it, and the player stays above the wash, so whatever is already buffered keeps playing and can still be paused. When there's no shell to keep (a launch with the server already gone, or the sign-in check still waiting), the state takes the whole window, on the bare canvas with the wordmark, like the connect screen.
 
 Issues #50/#57 revised "Nothing playing" specifically: the row above described a static message left sitting in an otherwise-normal panel and transport, and in practice that read as broken chrome rather than a designed empty state. Both surfaces now remove themselves instead of narrating their own emptiness — `TransportDock.tsx` unmounts outright rather than showing every control disabled, and the now-playing panel auto-collapses to `NowPlayingCollapsed`'s narrow column (same collapsed treatment "Panel collapsed (v2)" above already uses for a manual collapse) instead of rendering the old "nothing playing" paragraph.
 

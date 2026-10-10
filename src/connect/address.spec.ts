@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isLanHost, normalizeAddress, originFor } from './address'
+import { isLanHost, isLoopbackHost, normalizeAddress, originFor } from './address'
 import { clearServerChoice, readServerChoice, storeServerChoice } from './serverChoice'
 
 describe('normalizeAddress', () => {
@@ -39,6 +39,18 @@ describe('isLanHost', () => {
     for (const host of ['100.88.83.70', 'music.example.com', '8.8.8.8', '172.32.0.1', '[2001:db8::1]']) {
       expect(isLanHost(host)).toBe(false)
     }
+  })
+})
+
+describe('isLoopbackHost', () => {
+  it('knows the whole 127/8 block, not just 127.0.0.1', () => {
+    expect(isLoopbackHost('127.0.1.1')).toBe(true)
+  })
+
+  it("doesn't mistake a name that only starts like one", () => {
+    expect(isLoopbackHost('127.0.0.1.example.com')).toBe(false)
+    expect(isLoopbackHost('localhost.lan')).toBe(false)
+    expect(isLoopbackHost('192.168.1.10')).toBe(false)
   })
 })
 

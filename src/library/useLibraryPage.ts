@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { API_BASE as API } from '../config/serverHost'
+import { useReconnectEpoch } from '../connect/reconnect'
 import { useLoadingWait } from './useLoadingWait'
 import type { SortDir } from './types'
 
@@ -173,15 +174,19 @@ export function useLibraryPage<Row>(
   // every page counts as unfetched again, so one scrolled back to later is
   // fetched afresh. If the total moved, the first page to land drops the
   // rest (mergePage), and the range on screen is fetched again (above).
-  const fetchedRevision = useRef(revision)
+  //
+  // The same after an outage (#119), whose library:changed events went to a
+  // socket that wasn't there.
+  const reconnects = useReconnectEpoch()
+  const fetchedFor = useRef({ revision, reconnects })
   useEffect(() => {
-    if (revision === fetchedRevision.current) return
-    fetchedRevision.current = revision
+    if (revision === fetchedFor.current.revision && reconnects === fetchedFor.current.reconnects) return
+    fetchedFor.current = { revision, reconnects }
     generation.current += 1
     loadedPages.current = new Set()
     loadPage(0)
     ensureRange(...shownRange.current)
-  }, [revision, loadPage, ensureRange])
+  }, [revision, reconnects, loadPage, ensureRange])
 
   const wait = useLoadingWait(loading)
 

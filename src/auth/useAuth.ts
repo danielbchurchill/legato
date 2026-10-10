@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { API_BASE, SERVER_ORIGIN } from '../config/serverHost'
 import { rememberServer } from '../connect/knownServers'
 import { renewLegatoSession } from '../connect/legatoSignIn'
+import { provideSessionCheck } from '../connect/reconnect'
 import { AUTH_REQUIRED_EVENT, clearSession, readSession, storeSession } from './session'
 
 export type AuthStatus = {
@@ -69,7 +70,11 @@ export function useAuth() {
   const [state, setState] = useState<AuthState>({ kind: 'checking' })
 
   const refresh = useCallback(async () => {
-    setState(await loadAuthState(true))
+    const next = await loadAuthState(true)
+    // #119: a check that couldn't reach the server says nothing about the
+    // session. A signed-in app stays mounted, with its queue and anything
+    // still playing, and the unreachable state over it says what happened.
+    setState((prev) => (next.kind === 'unreachable' && prev.kind === 'signed-in' ? prev : next))
   }, [])
 
   useEffect(() => {
@@ -79,9 +84,14 @@ export function useAuth() {
     const onAuthRequired = () => void refresh()
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired)
     window.addEventListener('focus', onAuthRequired)
+    // #119: once an outage ends, the session is checked (and a legato.fm one
+    // renewed, if it ran out meanwhile) before anything reads from the
+    // server again (connect/reconnect.ts).
+    const withdraw = provideSessionCheck(refresh)
     return () => {
       window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired)
       window.removeEventListener('focus', onAuthRequired)
+      withdraw()
     }
   }, [refresh])
 

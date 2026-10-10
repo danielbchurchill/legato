@@ -18,6 +18,7 @@ import { currentLyricIndex, parseSyncedLyrics } from './lyrics'
 import { useFavourite } from './useFavourite'
 import { useLyrics } from './useLyrics'
 import { API, useNodeDetail, type NodeDetail } from './useNodeDetail'
+import { useReconnectEpoch } from '../connect/reconnect'
 
 /* The right panel while it shows what's playing: the cover, the title, a few
  * actions, then up next / lyrics / details as underline tabs. It opens from
@@ -197,6 +198,7 @@ function sourceLabel(source: QueueSource | null, albumTitle: string | null, play
 function usePlaylistName(source: QueueSource | null): Map<number, string> {
   const [names, setNames] = useState(new Map<number, string>())
   const playlistId = source?.kind === 'playlist' ? source.playlistId : null
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     if (playlistId == null || names.has(playlistId)) return
     let cancelled = false
@@ -209,7 +211,7 @@ function usePlaylistName(source: QueueSource | null): Map<number, string> {
     return () => {
       cancelled = true
     }
-  }, [playlistId, names])
+  }, [playlistId, names, reconnects])
   return names
 }
 

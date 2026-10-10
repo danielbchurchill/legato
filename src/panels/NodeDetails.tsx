@@ -18,6 +18,7 @@ import { DetailRows } from './DetailRows'
 import { formatBitrate, formatFormat } from './format'
 import { useFavourite } from './useFavourite'
 import { API, useNodeDetail, type NodeDetail } from './useNodeDetail'
+import { useReconnectEpoch } from '../connect/reconnect'
 import { LABELS, useTagEdit, type EditableKey } from './useTagEdit'
 import { formatWhen } from './healthData'
 
@@ -44,8 +45,10 @@ const OVERVIEW_TRACKS = 5
 
 // `version` refetches the same path when it changes: the Metadata tab passes
 // the node, which is a new object after every reload.
+// Each loads again after an outage (#119), keeping what it showed until then.
 function useJson<T>(path: string | null, version?: unknown): T | null {
   const [state, setState] = useState<{ path: string; version: unknown; value: T | null } | null>(null)
+  const reconnects = useReconnectEpoch()
   useEffect(() => {
     if (!path) return
     let cancelled = false
@@ -56,7 +59,7 @@ function useJson<T>(path: string | null, version?: unknown): T | null {
     return () => {
       cancelled = true
     }
-  }, [path, version])
+  }, [path, version, reconnects])
   return state && state.path === path && state.version === version ? state.value : null
 }
 
