@@ -81,17 +81,28 @@ export async function linkLegatoAccount(db: Database, userId: number, token: str
     };
   }
 
-  const previous = linkedAccountId(db, userId);
-  if (!linkAccount(db, userId, accountId).ok) return ACCOUNT_TAKEN;
-  if (reported.tunnel && identity.origin) storeTunnelCredential(db, { origin: identity.origin, accountId, ...reported.tunnel });
+  // The link, its tunnel credential and the old account's credential land
+  // together or not at all. With the report made, linkAccount fails only
+  // when another user here took this account while the report was out: a
+  // legacy user matched by email (auth/legatoUsers.ts) when a device
+  // opened this server under the pair legato.fm had just recorded. That
+  // pair is then true of that user, so it isn't reported unlinked, which
+  // would cut them off. The credential this report brought back is never
+  // stored; legato.fm retires it when a newer one first opens the tunnel
+  // (relay/src/pairing.ts).
+  const linked = db.transaction((): { previous: string | null } | null => {
+    const previous = linkedAccountId(db, userId);
+    if (!linkAccount(db, userId, accountId).ok) return null;
+    if (reported.tunnel && identity.origin) storeTunnelCredential(db, { origin: identity.origin, accountId, ...reported.tunnel });
+    // The old account's tunnel credential goes, unless this link's
+    // already replaced it.
+    if (previous && previous !== accountId) forgetTunnelCredential(db, previous);
+    return { previous };
+  })();
+  if (!linked) return ACCOUNT_TAKEN;
   // Linking a different account replaces the old one here, so legato.fm
-  // stops vouching for the old one too. Best effort, like an unlink. The
-  // old account's tunnel credential goes with it, unless this link's
-  // already replaced it.
-  if (previous && previous !== accountId) {
-    forgetTunnelCredential(db, previous);
-    await identity.recordUnlink(previous);
-  }
+  // stops vouching for the old one too. Best effort, like an unlink.
+  if (linked.previous && linked.previous !== accountId) await identity.recordUnlink(linked.previous);
   identity.syncSchedule();
   return { ok: true, linked: { accountId, email: result.claims.email, name: result.claims.name } };
 }
