@@ -8,7 +8,9 @@ import {
   readQualityPreference,
   STALL_LIMIT_MS,
   storeQualityPreference,
+  streamQualitySnapshot,
   streamUrl,
+  subscribeStreamQuality,
   watchForDrops,
   type ServerTrouble,
 } from './quality'
@@ -109,7 +111,8 @@ describe('quality preference', () => {
   })
 })
 
-// Issue #118: the ladder starts from the path the connection-path store has.
+// Issue #118: the ladder starts from the path the connection store has,
+// and the indicator hears about every change to what it shows.
 describe('the connection path', () => {
   beforeEach(() => {
     vi.stubGlobal('localStorage', memoryStorage())
@@ -132,6 +135,19 @@ describe('the connection path', () => {
     expect(new URL(streamUrl(7)).searchParams.get('quality')).toMatch(/^(opus|aac)256$/)
     setConnectionPath('home')
     expect(new URL(streamUrl(7)).searchParams.get('quality')).toBe('original')
+  })
+
+  it('records what each stream asked for, and says so on every change', () => {
+    const heard = vi.fn()
+    const stop = subscribeStreamQuality(heard)
+    streamUrl(7)
+    expect(streamQualitySnapshot().last).toEqual({ fileId: 7, quality: 'original' })
+    noteDrop()
+    expect(streamQualitySnapshot().drops).toBe(1)
+    storeQualityPreference('low')
+    expect(streamQualitySnapshot()).toMatchObject({ preference: 'low', drops: 0 })
+    expect(heard).toHaveBeenCalledTimes(3)
+    stop()
   })
 })
 

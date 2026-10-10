@@ -12,6 +12,7 @@ import { resolveNodeSizeMultipliers } from './canvas/nodeTypes'
 import { usePlayback } from './playback/usePlayback'
 import { AppShell } from './shell/AppShell'
 import { Rail } from './shell/Rail'
+import { ConnectionIndicator } from './shell/ConnectionIndicator'
 import { Capsule, type ViewMode } from './shell/Capsule'
 import { IdlePlayer, Player } from './shell/Player'
 import { LeftPanel, RightPanel } from './shell/SidePanel'
@@ -482,6 +483,13 @@ function Workspace({
           theme={resolvedTheme}
           initials={initialsFor(account)}
           accountLabel={account?.displayName ?? account?.email ?? 'Account'}
+          status={
+            <ConnectionIndicator
+              embedded={EMBEDDED_SERVER}
+              currentFileId={playback.status.currentFileId}
+              onOpenSettings={() => setLeftView({ kind: 'settings' })}
+            />
+          }
         />
         {leftView != null && owner != null && <LeftPanel label={PANEL_LABEL[owner]}>{leftContent}</LeftPanel>}
 
@@ -615,8 +623,7 @@ function useMinuteClock(active: boolean): number {
 // under the state.
 function useUnreachableView({ outage, name, everConnected, retrying, retry }: ServerStatus): UnreachableView | null {
   const clock = useMinuteClock(outage != null)
-  // #118: the path the connection-path store has, which the indicator
-  // will show too, so the two can't disagree.
+  // #118: the path the indicator shows, so the two can't disagree.
   const path = serverPathOf(useConnectionPath(), EMBEDDED_SERVER)
   const copy = useMemo(() => {
     if (!outage) return null

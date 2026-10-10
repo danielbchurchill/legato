@@ -4,10 +4,14 @@ import cancel from '../assets/icons/cancel.svg?raw'
 import checkmark from '../assets/icons/checkmark.svg?raw'
 import chevronDown from '../assets/icons/chevron-down.svg?raw'
 import chevronUp from '../assets/icons/chevron-up.svg?raw'
+import cloud from '../assets/icons/cloud.svg?raw'
+import computer from '../assets/icons/computer.svg?raw'
 import database from '../assets/icons/database.svg?raw'
 import eye from '../assets/icons/eye.svg?raw'
 import fastForward from '../assets/icons/fast-forward.svg?raw'
+import globe from '../assets/icons/globe.svg?raw'
 import heart from '../assets/icons/heart.svg?raw'
+import home from '../assets/icons/home.svg?raw'
 import info from '../assets/icons/info.svg?raw'
 import library from '../assets/icons/library.svg?raw'
 import list from '../assets/icons/list.svg?raw'
@@ -79,7 +83,11 @@ import volumeMute from '../assets/icons/volume-mute.svg?raw'
  * indeterminate marks, Select's selected-option mark, NumberInput's
  * decrement (its increment reuses `add`), the Spinner's quarter-open arc
  * (proicons' own "Spinner" glyph, rotated by Spinner.tsx, never redrawn),
- * and the transport's muted-volume state. */
+ * and the transport's muted-volume state.
+ *
+ * `computer`, `home`, `cloud` and `globe` are the rail's connection
+ * indicator (#118), one per path: this computer, the home network, through
+ * legato.fm, and a custom address. */
 const GLYPHS = {
   add,
   'arrow-swap': arrowSwap,
@@ -87,10 +95,14 @@ const GLYPHS = {
   checkmark,
   'chevron-down': chevronDown,
   'chevron-up': chevronUp,
+  cloud,
+  computer,
   database,
   eye,
   'fast-forward': fastForward,
+  globe,
   heart,
+  home,
   info,
   library,
   list,

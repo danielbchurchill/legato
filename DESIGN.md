@@ -41,10 +41,18 @@ The shell floats 12px in from every edge: a 56px rail, a 320px left panel beside
 
 ### Shell
 
-- **Rail:** Collections (favourites, playlists, import), Library health (database inspector, tag manager, maintenance worklists), then Settings and the avatar. Seven destinations became three; map settings moved onto the map.
+- **Rail:** Collections (favourites, playlists, import), Library health (database inspector, tag manager, maintenance worklists), then the connection indicator, Settings and the avatar. Seven destinations became three; map settings moved onto the map.
 - **Capsule:** the map/library switch and the way into search (⌘K/Ctrl-K from anywhere, or `/`).
 - **Right panel:** now playing (up next, lyrics, details) or node details. It replaces the full-screen inspector modal, so the map stays visible. One right panel at a time; Escape closes it, then clears the selection, then closes the left panel.
 - **Player:** replaces the 514×121 dock. It takes a wash of the playing cover's colour from its left edge. The waveform is the server's existing loudness envelope (`/files/:id/peaks`), and a seeded shape stands in until it arrives. With nothing loaded, it's an idle pill with "Shuffle library", which queues up to 500 random tracks from the library. The pill sits where the bar would, inside its width.
+
+#### The connection indicator
+
+Plan 03 asks for a small, always-visible status naming the path to the server, with the stream quality, explained on hover or tap (#118). It's a button in the rail, above Settings, because the rail is the one part of the shell that's always on screen. The capsule and the player each give way part by part as the stage narrows, and the player goes away when nothing is loaded. The button is drawn like the rail's other buttons (`src/shell/railButton.ts`), and its glyph names the path: `computer` for this computer, `home` for the home network, `cloud` for through legato.fm, and `globe` for a custom address (a Tailscale address or a domain). Its tooltip, which is also its accessible name, adds the quality: "Home network · original", "Through legato.fm · Opus 160 kbps". The desktop app plays files from disk, so it always says original.
+
+A click or tap opens a popover with the path as its heading, then one sentence on what the path means, the server's address in mono where it's the server's own, and one sentence on the quality and why. That why is the path's default, the pick in Settings, or a step down after the connection dropped. While a drop or a new pick has moved the ladder, the popover tells the playing track apart from the next one. A line says when this device never uses the relay, and a `settings` link opens Settings. The words are in `src/connect/describeConnection.ts`.
+
+It follows the connection-path store (`src/connect/connectionPath.ts`) and the quality ladder's state, so it changes the moment either does: a new track, a drop, a new pick, or a move to another path. The popover reads the server's name and the pin as it opens.
 
 #### The player as it narrows
 
@@ -536,7 +544,7 @@ Every glyph is 24 × 24, `fill="none"`, `stroke="currentColor"`, `stroke-width="
 
 Never hand-draw an icon or inline a `<path>`. If a needed glyph is missing, pull it from proicons; if proicons does not have it, that is a design decision, not an implementation one.
 
-Icons in use: `search`, `cancel`, `chevron-down`, `pencil`, `info` (also the player's queue toggle), `pause`, `play`, `volume`, `map`, `database`, `heart`, `tag`, `sliders`, `panel-left-collapse` (the last five vendored for v2's rail and panel-collapse icon — see "The shell (v2)"), `settings` (proicons' gear, the rail's Settings; `sliders` is map options), `list` (proicons' "Bullet List": Collections and wherever a playlist shows), `library` (proicons' "Library": the map/library switch's library tab), `eye` (proicons' actual "Eye" glyph, vendored for the selected-node card's "open full details" button — see "Controls"), and `checkmark`, `subtract`, `spinner`, `volume-mute` for the gpui-kit controls (checkbox marks, Select's selected option, NumberInput's decrement, the Spinner's arc, the muted dock).
+Icons in use: `search`, `cancel`, `chevron-down`, `pencil`, `info` (also the player's queue toggle), `computer`, `home`, `cloud` and `globe` (the connection indicator's paths, #118), `pause`, `play`, `volume`, `map`, `database`, `heart`, `tag`, `sliders`, `panel-left-collapse` (the last five vendored for v2's rail and panel-collapse icon — see "The shell (v2)"), `settings` (proicons' gear, the rail's Settings; `sliders` is map options), `list` (proicons' "Bullet List": Collections and wherever a playlist shows), `library` (proicons' "Library": the map/library switch's library tab), `eye` (proicons' actual "Eye" glyph, vendored for the selected-node card's "open full details" button — see "Controls"), and `checkmark`, `subtract`, `spinner`, `volume-mute` for the gpui-kit controls (checkbox marks, Select's selected option, NumberInput's decrement, the Spinner's arc, the muted dock).
 
 **On/off state has no filled-glyph convention to reach for.** proicons ships no filled or solid variant for any of its 544 icons, `heart` included — checked directly, not assumed. So the favourites heart's "on" state (`NodeTitleBlock.tsx`, `Favourites.tsx`'s row) isn't a second vendored glyph; `Icon.tsx`'s `filled` prop swaps the same path's `fill="none"` for `fill="currentColor"` at render time. This is the one exception to "every glyph is stroke-only" above, and it's a render-time transform of the existing vendored path, not a hand-drawn one — the thing this section actually rules out.
 

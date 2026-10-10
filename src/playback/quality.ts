@@ -102,16 +102,43 @@ export function storeQualityPreference(preference: QualityPreference, storage: S
   storage?.setItem(PREFERENCE_KEY, preference)
   // A new pick is a fresh start: the rungs already given up were given up
   // under the old one.
-  dropsThisSession = 0
+  changeQuality({ preference, drops: 0 })
 }
 
-// Rungs given up so far in this tab. It never climbs back up on its own:
-// nothing here can tell a network that has recovered from one that is
-// about to drop again. Reloading the tab or changing the setting resets it.
-let dropsThisSession = 0
+/** What the connection indicator (#118) shows about quality, as one value
+ * that's replaced whenever any of it changes. */
+export type StreamQualityState = {
+  /** What the web player last asked for, and for which file. */
+  last: { fileId: number; quality: StreamQuality } | null
+  /** The last pick stored on this device, here so a new one is a change.
+   * The ladder itself reads storage (readQualityPreference). */
+  preference: QualityPreference
+  /** Rungs given up so far in this tab. It never climbs back up on its
+   * own: nothing here can tell a network that has recovered from one that
+   * is about to drop again. Reloading the tab or changing the setting
+   * resets it. */
+  drops: number
+}
+
+let qualityState: StreamQualityState = { last: null, preference: readQualityPreference(), drops: 0 }
+const qualityListeners = new Set<() => void>()
+
+function changeQuality(patch: Partial<StreamQualityState>) {
+  qualityState = { ...qualityState, ...patch }
+  for (const listener of qualityListeners) listener()
+}
+
+export function streamQualitySnapshot(): StreamQualityState {
+  return qualityState
+}
+
+export function subscribeStreamQuality(listener: () => void): () => void {
+  qualityListeners.add(listener)
+  return () => qualityListeners.delete(listener)
+}
 
 export function noteDrop(): void {
-  dropsThisSession += 1
+  changeQuality({ drops: qualityState.drops + 1 })
 }
 
 function currentBrowser(): BrowserTraits {
@@ -126,16 +153,22 @@ function currentBrowser(): BrowserTraits {
 
 let aacForThisBrowser: boolean | null = null
 
+/** The quality the next stream asks for, on `path`. */
+export function nextStreamQuality(path: ConnectionPath = connectionPath()): StreamQuality {
+  aacForThisBrowser ??= prefersAac(currentBrowser())
+  return chooseQuality({
+    path,
+    preference: readQualityPreference(),
+    drops: qualityState.drops,
+    aac: aacForThisBrowser,
+  })
+}
+
 /** The URL the web player loads for a file. The single place #120's
  * quality choice reaches usePlayback. */
 export function streamUrl(fileId: number): string {
-  aacForThisBrowser ??= prefersAac(currentBrowser())
-  const quality = chooseQuality({
-    path: connectionPath(),
-    preference: readQualityPreference(),
-    drops: dropsThisSession,
-    aac: aacForThisBrowser,
-  })
+  const quality = nextStreamQuality()
+  changeQuality({ last: { fileId, quality } })
   return withMediaTicket(`${API}/files/${fileId}/stream?quality=${quality}`)
 }
 
