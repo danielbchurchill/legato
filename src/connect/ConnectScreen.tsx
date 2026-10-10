@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import whiteWordmarkSrc from '../assets/brand/white-wordmark.svg'
 import blackWordmarkSrc from '../assets/brand/black-wordmark.svg'
+import { storeRelayTicket, type StoredRelayTicket } from '../auth/relayTicket'
 import { storeSession, type StoredSession } from '../auth/session'
 import {
   clearRelaySession,
@@ -12,7 +13,7 @@ import {
   type RelayProvider,
 } from '../auth/relaySession'
 import { IS_TAURI } from '../config/runtime'
-import { DEFAULT_SERVER_ORIGIN, SERVED_BY_SERVER, SERVER_ORIGIN } from '../config/serverHost'
+import { DEFAULT_SERVER_ORIGIN, RELAY_SERVER_ID, SERVED_BY_SERVER, SERVER_ORIGIN } from '../config/serverHost'
 import type { ResolvedTheme } from '../hooks/useTheme'
 import { Button } from '../ui/Button'
 import { SectionLabel } from '../ui/SectionLabel'
@@ -22,12 +23,13 @@ import { TextField } from '../ui/TextField'
 import { originFor } from './address'
 import { useDiscoveredServers, useYourServers, type Discovery, type YourServers } from './hooks'
 import { verifyServerIdentity } from './identity'
-import { rememberServer } from './knownServers'
+import { readKnownServers, rememberServer } from './knownServers'
 import { formatSince } from './lastSeen'
 import { describeLegatoFailure, signInWithLegato } from './legatoSignIn'
 import type { ConnectReason } from './openConnect'
 import { probeAddress, type NativeProbe } from './probe'
 import { clearServerChoice, storeServerChoice } from './serverChoice'
+import { relayBase, relayedServerId } from './serverPath'
 import type { FoundServer, Reach } from './yourServers'
 
 /* The connect screen (issue #117, plan 03's "Connecting a client"): which
@@ -37,8 +39,9 @@ import type { FoundServer, Reach } from './yourServers'
  *      app browses natively (src-tauri/src/discovery.rs). A browser can't,
  *      and says so rather than showing an empty list;
  *   2. your servers: the legato.fm account's linked servers, each marked at
- *      home or offline since … (yourServers.ts). legato.fm sign-in lives
- *      in the desktop app, so a browser says that too;
+ *      home, through legato.fm, or offline since … (yourServers.ts).
+ *      legato.fm sign-in lives in the desktop app, so a browser without a
+ *      legato.fm session says that too;
  *   3. an address: anything typed, checked first, with an error that says
  *      what's wrong (probe.ts).
  *
@@ -341,6 +344,8 @@ function reachRow(reach: Reach): { status: Status; detail: ReactNode } {
           </>
         ),
       }
+    case 'relay':
+      return { status: 'ok', detail: 'through legato.fm' }
     case 'offline':
       return {
         status: 'idle',
@@ -349,11 +354,22 @@ function reachRow(reach: Reach): { status: Status; detail: ReactNode } {
   }
 }
 
+/** What the screen calls the server in use: through the relay, its name
+ * rather than legato.fm's host. */
+function currentServerLabel(): string {
+  if (!RELAY_SERVER_ID) return hostOf(SERVER_ORIGIN)
+  return `${readKnownServers()[RELAY_SERVER_ID]?.name ?? 'your server'} through legato.fm`
+}
+
 /** Where connecting goes: the chosen server is stored and the page reloads
- * onto it, with a legato.fm session already in place when there is one. */
-function goTo(origin: string, session?: StoredSession): void {
+ * onto it, with a legato.fm session already in place when there is one,
+ * and the relay ticket when it's reached through legato.fm. A page a server
+ * served opens another server's own page instead, except through the
+ * relay, whose pages run no script. */
+function goTo(origin: string, session?: StoredSession, relayTicket?: StoredRelayTicket): void {
   if (session) storeSession(session, localStorage, origin)
-  if (SERVED_BY_SERVER) {
+  if (relayTicket) storeRelayTicket(relayTicket, localStorage, origin)
+  if (SERVED_BY_SERVER && !relayedServerId(origin)) {
     window.location.assign(`${origin}/`)
     return
   }
@@ -364,12 +380,20 @@ function goTo(origin: string, session?: StoredSession): void {
 
 const nativeProbe = IS_TAURI ? (origin: string) => invoke<NativeProbe>('probe_server', { origin }) : null
 
+// A browser can hold a legato.fm session only once it has one; signing in
+// to legato.fm from a browser isn't built yet.
+const ACCOUNT_SUPPORTED = IS_TAURI || readRelaySession() !== null
+
 export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme; reason: ConnectReason; onClose: (() => void) | null }) {
   const network = useDiscoveredServers()
   const [account, setAccount] = useState<RelayAccount>(() =>
-    !IS_TAURI ? { kind: 'unsupported' } : readRelaySession() ? { kind: 'checking' } : { kind: 'signed-out', configured: null, waiting: null },
+    !ACCOUNT_SUPPORTED
+      ? { kind: 'unsupported' }
+      : readRelaySession()
+        ? { kind: 'checking' }
+        : { kind: 'signed-out', configured: null, waiting: null },
   )
-  const { state: yours, reload: reloadYours } = useYourServers(network, account.kind === 'signed-in')
+  const { state: yours, reload: reloadYours } = useYourServers(network, account.kind === 'signed-in', ACCOUNT_SUPPORTED)
   const [address, setAddress] = useState('')
   const [addressBusy, setAddressBusy] = useState(false)
   const [addressError, setAddressError] = useState<string | null>(null)
@@ -377,7 +401,7 @@ export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
 
   useEffect(() => {
-    if (!IS_TAURI) return
+    if (!ACCOUNT_SUPPORTED) return
     let cancelled = false
     const token = readRelaySession()?.token ?? null
     fetchRelayMe(token)
@@ -439,6 +463,21 @@ export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme
     try {
       const result = await signInWithLegato(origin, serverId)
       if (result.ok) return goTo(origin, result.session)
+      setRowErrors((e) => ({ ...e, [serverId]: describeLegatoFailure(result.failure, name) }))
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  // Through legato.fm's relay (#365): the same legato.fm sign-in, against
+  // the server's base on the relay.
+  const connectRelay = async (serverId: string, name: string) => {
+    setBusyKey(serverId)
+    setRowErrors((e) => ({ ...e, [serverId]: '' }))
+    try {
+      const base = relayBase(serverId)
+      const result = await signInWithLegato(base, serverId)
+      if (result.ok) return goTo(base, result.session, result.relayTicket)
       setRowErrors((e) => ({ ...e, [serverId]: describeLegatoFailure(result.failure, name) }))
     } finally {
       setBusyKey(null)
@@ -514,16 +553,21 @@ export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme
     yours.kind === 'listed'
       ? yours.servers.map(({ serverId, name, reach }) => {
           const { status, detail } = reachRow(reach)
-          const here = reach.kind === 'home' && reach.origin === SERVER_ORIGIN
+          const here =
+            (reach.kind === 'home' && reach.origin === SERVER_ORIGIN) || (reach.kind === 'relay' && RELAY_SERVER_ID === serverId)
+          const busy = busyKey === serverId
           return {
             key: serverId,
             name,
             status: here ? 'accent' : status,
             detail: here ? <>{detail} · in use</> : detail,
-            action:
-              reach.kind === 'home' && !here
-                ? { label: 'connect', onClick: () => void connectYours(serverId, name, reach.origin), busy: busyKey === serverId }
-                : undefined,
+            action: here
+              ? undefined
+              : reach.kind === 'home'
+                ? { label: 'connect', onClick: () => void connectYours(serverId, name, reach.origin), busy }
+                : reach.kind === 'relay'
+                  ? { label: 'connect', onClick: () => void connectRelay(serverId, name), busy }
+                  : undefined,
             error: rowErrors[serverId] || null,
           }
         })
@@ -534,7 +578,7 @@ export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme
     <ConnectScreenView
       theme={theme}
       reason={reason}
-      currentLabel={IS_TAURI && usingDefault ? "this computer's server" : hostOf(SERVER_ORIGIN)}
+      currentLabel={IS_TAURI && usingDefault ? "this computer's server" : currentServerLabel()}
       network={network}
       networkRows={networkRows}
       account={account}

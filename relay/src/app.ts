@@ -3,9 +3,12 @@ import websocketPlugin from "@fastify/websocket";
 import type { Database } from "./sqlite.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import { hashSource } from "./csp.js";
-import { authRoutes, SUCCESS_PAGE_STYLE, type AuthRoutesOptions } from "./routes/auth.js";
-import { relayRoutes } from "./routes/relay.js";
+import { RELAY_SIGNING_KEYS } from "./config.js";
+import { clientAddress } from "./rate-limit.js";
+import { authRoutes, ENV_CONFIG, SUCCESS_PAGE_STYLE, type AuthRoutesOptions } from "./routes/auth.js";
+import { redactCredentials, relayRoutes } from "./routes/relay.js";
 import { tunnelRoutes } from "./routes/tunnel.js";
+import { parseSigningKeys, type SigningKeys } from "./signing-keys.js";
 import { TunnelRegistry } from "./tunnel-registry.js";
 
 export interface BuildAppOptions {
@@ -34,8 +37,42 @@ export const DEFAULT_PAGE_CSP = [
 ].join("; ");
 
 export function buildApp(options: BuildAppOptions): FastifyInstance {
-  const app = Fastify({ logger: options.logger ?? false });
+  // Fastify's default request serializer, except the URL: a relay ticket
+  // and a home server's media ticket ride in /relay/* query strings (issue
+  // #365), and every cover through the relay would otherwise write both
+  // into the log.
+  const app = Fastify({
+    logger: options.logger
+      ? {
+          serializers: {
+            req: (request) => ({
+              method: request.method,
+              url: redactCredentials(request.url),
+              host: request.host,
+              remoteAddress: clientAddress(request.headers, request.ip),
+              remotePort: request.socket?.remotePort,
+            }),
+          },
+        }
+      : false,
+  });
   const registry = new TunnelRegistry();
+
+  // Resolved once, for both the routes that sign (routes/auth.ts) and the
+  // relay that checks what they signed (routes/relay.ts). Undefined reads
+  // RELAY_SIGNING_KEYS; null is "signing off". A bad secret is a log line
+  // and signing off, so it can't stop sign-in itself from working.
+  let signingKeys: SigningKeys | null = null;
+  if (options.auth?.signingKeys !== undefined) {
+    signingKeys = options.auth.signingKeys;
+  } else {
+    try {
+      signingKeys = parseSigningKeys(RELAY_SIGNING_KEYS);
+    } catch (err) {
+      app.log.error(`${err instanceof Error ? err.message : String(err)} Server token signing is off until it's fixed.`);
+    }
+  }
+  const issuer = (options.auth?.config ?? ENV_CONFIG).callbackBaseUrl;
 
   app.register(cookie);
 
@@ -55,10 +92,10 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
 
   app.register(websocketPlugin);
   app.register(tunnelRoutes(registry, options.db, { heartbeatMs: options.tunnelHeartbeatMs }));
-  app.register(relayRoutes(registry, options.db));
+  app.register(relayRoutes(registry, options.db, { signingKeys, issuer }));
   // Also registers the pairing, claim and linked-server routes, which need
-  // the signing keys it resolves, and the tunnels for GET /linked-servers.
-  app.register(authRoutes(options.db, { ...options.auth, tunnels: registry }));
+  // the signing keys, and the tunnels for GET /linked-servers.
+  app.register(authRoutes(options.db, { ...options.auth, signingKeys, tunnels: registry }));
 
   return app;
 }

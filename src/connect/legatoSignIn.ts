@@ -1,7 +1,9 @@
 import { readRelaySession } from '../auth/relaySession'
+import { fetchRelayTicket, fetchWithRelayTicket, storeRelayTicket, type StoredRelayTicket } from '../auth/relayTicket'
 import { readSession, storeSession, type StoredSession } from '../auth/session'
 import { RELAY_ORIGIN } from '../config/relayHost'
 import { verifyServerIdentity, type IdentityFailure } from './identity'
+import { relayedServerId } from './serverPath'
 
 /* Signing in to a home server with legato.fm (issue #117), in three steps,
  * in this order:
@@ -15,7 +17,13 @@ import { verifyServerIdentity, type IdentityFailure } from './identity'
  * Renewal runs the same three steps with the legato.fm session this device
  * already holds, well before the session ends (useLegatoRenewal.ts). The
  * old session isn't signed out: an <audio> URL built on its media ticket
- * keeps playing until it expires on its own. */
+ * keeps playing until it expires on its own.
+ *
+ * Through legato.fm's relay (issue #365), `origin` is the server's base
+ * there, and a relay ticket for the server comes first: every step after
+ * it goes through the relay with the ticket. The identity check still runs,
+ * so a tunnel that answered for the wrong server would be caught. The
+ * ticket comes back with the session, and renewal renews both. */
 
 export type LegatoSignInFailure =
   | { step: 'identity'; reason: IdentityFailure }
@@ -24,7 +32,9 @@ export type LegatoSignInFailure =
   | { step: 'not-linked' }
   | { step: 'server'; status: number; reason: string | null; message: string }
 
-export type LegatoSignInResult = { ok: true; session: StoredSession } | { ok: false; failure: LegatoSignInFailure }
+export type LegatoSignInResult =
+  | { ok: true; session: StoredSession; relayTicket?: StoredRelayTicket }
+  | { ok: false; failure: LegatoSignInFailure }
 
 export type LegatoSignInDeps = { fetchImpl?: typeof fetch; relayOrigin?: string; relayToken?: string | null }
 
@@ -34,7 +44,20 @@ export async function signInWithLegato(origin: string, serverId: string, deps: L
   const relayToken = deps.relayToken === undefined ? (readRelaySession()?.token ?? null) : deps.relayToken
   if (!relayToken) return { ok: false, failure: { step: 'signed-out' } }
 
-  const identity = await verifyServerIdentity(origin, serverId, fetchImpl)
+  let relayTicket: StoredRelayTicket | undefined
+  let serverFetch = fetchImpl
+  if (relayedServerId(origin, relayOrigin) === serverId) {
+    const issued = await fetchRelayTicket(serverId, { fetchImpl, relayOrigin, relayToken })
+    if (!issued.ok) {
+      const { failure } = issued
+      if (failure.kind === 'relay') return { ok: false, failure: { step: 'relay', message: failure.message } }
+      return { ok: false, failure: { step: failure.kind } }
+    }
+    relayTicket = issued.ticket
+    serverFetch = fetchWithRelayTicket(origin, relayTicket.ticket, fetchImpl)
+  }
+
+  const identity = await verifyServerIdentity(origin, serverId, serverFetch)
   if (!identity.ok) return { ok: false, failure: { step: 'identity', reason: identity.reason } }
 
   let tokenRes: Response
@@ -58,7 +81,7 @@ export async function signInWithLegato(origin: string, serverId: string, deps: L
 
   let res: Response
   try {
-    res = await fetchImpl(`${origin}/api/v1/auth/legato/session`, {
+    res = await serverFetch(`${origin}/api/v1/auth/legato/session`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${issued.token}` },
       credentials: 'omit',
@@ -82,6 +105,7 @@ export async function signInWithLegato(origin: string, serverId: string, deps: L
   return {
     ok: true,
     session: { token: body.token, mediaTicket: body.mediaTicket, legato: { serverId, expiresAt: body.expiresAt } },
+    ...(relayTicket ? { relayTicket } : {}),
   }
 }
 
@@ -123,5 +147,21 @@ export async function renewLegatoSession(origin: string, deps: LegatoSignInDeps 
   const result = await signInWithLegato(origin, current.legato.serverId, deps)
   if (!result.ok) return false
   storeSession(result.session, storage, origin)
+  if (result.relayTicket) storeRelayTicket(result.relayTicket, storage, origin)
+  return true
+}
+
+/** Replaces the relay ticket for `base`, a server's base on legato.fm's
+ * relay, with a fresh one. False, with the old one left alone, when
+ * legato.fm refuses or can't be reached. */
+export async function renewRelayTicket(
+  base: string,
+  deps: { fetchImpl?: typeof fetch; relayOrigin?: string; relayToken?: string | null; storage?: Storage } = {},
+): Promise<boolean> {
+  const serverId = relayedServerId(base, deps.relayOrigin ?? RELAY_ORIGIN)
+  if (!serverId) return false
+  const issued = await fetchRelayTicket(serverId, deps)
+  if (!issued.ok) return false
+  storeRelayTicket(issued.ticket, deps.storage ?? localStorage, base)
   return true
 }

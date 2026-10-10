@@ -730,7 +730,9 @@ describe("frames a home server sends back", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("body");
     expect(response.headers.get("cache-control")).toBe("no-store");
-    for (const name of ["etag", "set-cookie", "vary", "retry-after"]) expect(response.headers.get(name)).toBeNull();
+    for (const name of ["etag", "set-cookie", "retry-after"]) expect(response.headers.get(name)).toBeNull();
+    // The relay's own, in place of the one it dropped.
+    expect(response.headers.get("vary")).toBe("Origin");
     expect(tunnel.closed).toBe(false);
   });
 

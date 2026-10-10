@@ -6,7 +6,6 @@ import {
   RELAY_GITHUB_CLIENT_SECRET,
   RELAY_GOOGLE_CLIENT_ID,
   RELAY_GOOGLE_CLIENT_SECRET,
-  RELAY_SIGNING_KEYS,
 } from "../config.js";
 import {
   createSession,
@@ -33,7 +32,7 @@ import {
 } from "../native-sign-in.js";
 import { isLinkedServer } from "../linked-servers.js";
 import { clientAddress, ExchangeLimiter, TokenLimiter } from "../rate-limit.js";
-import { parseSigningKeys, SERVER_ID_PATTERN, signServerToken, type SigningKeys } from "../signing-keys.js";
+import { SERVER_ID_PATTERN, signRelayTicket, signServerToken, type SigningKeys } from "../signing-keys.js";
 import type { TunnelRegistry } from "../tunnel-registry.js";
 import { claimPageRoutes, claimReturnPath } from "./claim-page.js";
 import { linkPageRoutes, linkReturnPath } from "./link-page.js";
@@ -72,7 +71,7 @@ export type AuthConfig = {
   callbackBaseUrl?: string;
 };
 
-const ENV_CONFIG: AuthConfig = {
+export const ENV_CONFIG: AuthConfig = {
   googleClientId: RELAY_GOOGLE_CLIENT_ID,
   googleClientSecret: RELAY_GOOGLE_CLIENT_SECRET,
   githubClientId: RELAY_GITHUB_CLIENT_ID,
@@ -314,8 +313,10 @@ function publicUser(user: RelayUserRow) {
 // or a loopback Vite in development, all cross-origin to auth.legato.fm.
 // No Access-Control-Allow-Credentials: these callers send a bearer token
 // and nothing else, so a cookie never rides along cross-site.
-// GET /linked-servers is the connect screen's "your servers" (issue #117).
-const CORS_ROUTES = new Set(["/auth/token", "/auth/me", "/auth/logout", "/auth/server-token", "/linked-servers"]);
+// GET /linked-servers is the connect screen's "your servers" (issue #117),
+// and POST /auth/relay-ticket is how a device gets through /relay/<id>/
+// (issue #365). routes/relay.ts answers /relay/* for the same origins.
+const CORS_ROUTES = new Set(["/auth/token", "/auth/me", "/auth/logout", "/auth/server-token", "/auth/relay-ticket", "/linked-servers"]);
 const LOOPBACK_DEV_ORIGIN = /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/;
 
 export function isAllowedAppOrigin(origin: string | undefined): boolean {
@@ -346,8 +347,9 @@ export interface AuthRoutesOptions {
   // POST /link/redeem's own brake (routes/link-page.ts, issue #325).
   linkLimiter?: TokenLimiter;
   exchangeLimiter?: ExchangeLimiter;
-  // Token signing keys (issue #114). Undefined reads RELAY_SIGNING_KEYS;
-  // null is "signing off", which is what tests of the unconfigured path pass.
+  // Token signing keys (issue #114). buildApp resolves them, reading
+  // RELAY_SIGNING_KEYS when its caller passes none; null is "signing off",
+  // which is what tests of the unconfigured path pass.
   signingKeys?: SigningKeys | null;
   // The live tunnels, for the tunnel state GET /linked-servers reports
   // (issue #310). buildApp passes its own.
@@ -365,16 +367,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
   const exchangeLimiter = options.exchangeLimiter ?? new ExchangeLimiter();
 
   return async function routes(app: FastifyInstance) {
-    let signingKeys: SigningKeys | null = null;
-    if (options.signingKeys !== undefined) {
-      signingKeys = options.signingKeys;
-    } else {
-      try {
-        signingKeys = parseSigningKeys(RELAY_SIGNING_KEYS);
-      } catch (err) {
-        app.log.error(`${err instanceof Error ? err.message : String(err)} Server token signing is off until it's fixed.`);
-      }
-    }
+    const signingKeys = options.signingKeys ?? null;
 
     app.addHook("onRequest", async (request, reply) => {
       if (CORS_ROUTES.has(request.routeOptions.url ?? "")) applyCors(request, reply);
@@ -575,6 +568,37 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
       const scope = requested !== "link" && isLinkedServer(db, user.id, serverId) ? "access" : "link";
       const issued = signServerToken(signingKeys, { issuer: config.callbackBaseUrl, user, serverId, scope });
       return { token: issued.token, expiresAt: issued.expiresAt.toISOString(), scope: issued.scope };
+    });
+
+    // A relay ticket for one server this account has linked (issue #365,
+    // signing-keys.ts): what gets a device through /relay/<id>/. Only for a
+    // linked server, as an access token is, and the relay checks the pair
+    // again on every request, so unlinking ends a ticket's use at once.
+    app.post<{ Body: { serverId?: unknown } | null }>("/auth/relay-ticket", async (request, reply) => {
+      const token = sessionToken(request);
+      const user = token ? getUserBySessionToken(db, token) : null;
+      if (!user) {
+        reply.code(401);
+        return { error: "Sign in to legato.fm first.", reason: "signed_out" };
+      }
+      if (!signingKeys || !config.callbackBaseUrl) {
+        reply.code(503);
+        return { error: SIGNING_NOT_CONFIGURED, reason: "signing_not_configured" };
+      }
+      const serverId = request.body?.serverId;
+      if (typeof serverId !== "string" || !SERVER_ID_PATTERN.test(serverId)) {
+        reply.code(400);
+        return {
+          error: "serverId must be the 32-character id from the server's GET /api/v1/auth/status (legato.serverId).",
+          reason: "bad_server_id",
+        };
+      }
+      if (!isLinkedServer(db, user.id, serverId)) {
+        reply.code(404);
+        return { error: "No server with that id is linked to this account.", reason: "not_linked" };
+      }
+      const { ticket, expiresAt } = signRelayTicket(signingKeys, { issuer: config.callbackBaseUrl, user, serverId });
+      return { ticket, expiresAt: expiresAt.toISOString() };
     });
 
     app.post("/auth/logout", async (request, reply) => {

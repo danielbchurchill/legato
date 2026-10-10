@@ -40,7 +40,7 @@ import { ErrorBoundary, RenderError } from './ui/ErrorBoundary'
 import { useCoverColor, withAlpha } from './ui/coverColor'
 import { LAUNCHED_OFFLINE } from './pwa/register'
 import { ConnectScreen } from './connect/ConnectScreen'
-import { useLegatoRenewal } from './connect/hooks'
+import { useLegatoRenewal, useRelayTicketRenewal } from './connect/hooks'
 import { useLegatoLinkReturn } from './connect/useLegatoLinkReturn'
 import { OPEN_CONNECT_EVENT, openConnectScreen, type ConnectReason } from './connect/openConnect'
 import { ServerUnreachableOverShell, ServerUnreachableWindow, type UnreachableView } from './connect/ServerUnreachable'
@@ -767,6 +767,7 @@ function OwnerGated({ gated, children }: { gated: boolean; children: ReactNode }
   // preference, so the two can't disagree (#282).
   const { resolvedTheme } = useTheme()
   useLegatoRenewal(state.kind === 'signed-in')
+  useRelayTicketRenewal()
   useLegatoLinkReturn(state.kind === 'signed-in')
 
   // A server that has just gained its gate is asked again: what the old one
