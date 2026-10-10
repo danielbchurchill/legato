@@ -8,6 +8,7 @@
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "test": "bun test --isolate",
+    "typecheck": "tsc --noEmit -p .",
     "backfill:covers": "bun src/cover/backfill-cli.ts",
     "backfill:tags": "bun src/scan/backfill-tags-cli.ts",
     "backfill:edges": "bun src/match/backfill-edges-cli.ts",

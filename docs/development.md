@@ -68,7 +68,7 @@ Killing the Tauri binary alone doesn't stop its child Vite or server processes. 
 ## Checks and builds
 
 ```sh
-npm run check:all              # server tests, vitest, build, lint, sidecar build, cargo test
+npm run check:all              # server type check, server tests, vitest, build, lint, sidecar build, cargo test
 npm --prefix relay test        # the relay's tests
 npm run build                  # web assets only
 npx tauri build                # a packaged desktop app, sidecar included
