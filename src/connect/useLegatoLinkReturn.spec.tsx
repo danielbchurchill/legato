@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToastProvider } from '../ui/Toast'
 import { useLegatoLinkReturn } from './useLegatoLinkReturn'
@@ -16,11 +16,19 @@ function Finisher() {
   return null
 }
 
+// Every root a test mounts, unmounted after it. A root left mounted keeps
+// React's scheduler running past the test, and once vitest has torn the
+// file's jsdom down that work throws "window is not defined", which fails
+// the run even though every test passed.
+const roots: Root[] = []
+
 async function render() {
   const container = document.createElement('div')
   document.body.appendChild(container)
+  const root = createRoot(container)
+  roots.push(root)
   await act(async () => {
-    createRoot(container).render(createElement(ToastProvider, null, createElement(Finisher)))
+    root.render(createElement(ToastProvider, null, createElement(Finisher)))
   })
   return container
 }
@@ -38,7 +46,10 @@ beforeEach(() => {
   )
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await act(async () => {
+    for (const root of roots.splice(0)) root.unmount()
+  })
   document.body.innerHTML = ''
   sessionStorage.clear()
   vi.unstubAllGlobals()
