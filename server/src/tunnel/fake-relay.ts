@@ -17,8 +17,10 @@ export type FakeRelay = {
   url: string;
   /** Every connection that reached /tunnel. */
   opened: number;
-  /** The credential each auth frame carried, in order. */
+  /** The credential each auth frame carried, in order, a signed-in tunnel's moving onto a replacement included. */
   auths: string[];
+  /** Rotate frames that reached it. */
+  rotates: number;
   userAgents: (string | null)[];
   closed: number;
   /** Pings that reached it, from any tunnel. */
@@ -34,9 +36,21 @@ export type FakeRelay = {
 
 // `replace` does what the real relay does when a server signs in again
 // (relay/src/tunnel-registry.ts, set()): it closes the older connection,
-// failing whatever was still on its way up it.
-export function startFakeRelay(options: { accept: (credential: string) => boolean; port?: number; replace?: boolean }): FakeRelay {
+// failing whatever was still on its way up it. `rotate` answers a rotate
+// frame with a credential frame, or with nothing when it returns null.
+// "drop" cuts the connection off instead. `then: "drop"` sends the
+// credential, then cuts the connection off when the server tries to move
+// onto it, before the move counts.
+export type FakeRotation = { credential: string; expiresAt: string; then?: "drop" } | "drop" | null;
+
+export function startFakeRelay(options: {
+  accept: (credential: string) => boolean;
+  port?: number;
+  replace?: boolean;
+  rotate?: () => FakeRotation;
+}): FakeRelay {
   const signedIn: ServerWebSocket<SocketData>[] = [];
+  let dropNextMove = false;
   const waiting = new Map<string, (frame: TunnelFrame) => void>();
   // What each request is waiting on, so a tunnel that closes fails its
   // requests the way the relay does, rather than leaving them hanging.
@@ -56,16 +70,31 @@ export function startFakeRelay(options: { accept: (credential: string) => boolea
       message(ws, raw) {
         const frame = JSON.parse(String(raw)) as TunnelFrame;
         if (frame.type === "auth") {
+          if (dropNextMove && signedIn.includes(ws)) {
+            dropNextMove = false;
+            return ws.terminate();
+          }
           relay.auths.push(frame.secret);
           relay.userAgents.push(ws.data.userAgent);
           if (options.accept(frame.secret)) {
-            if (options.replace) for (const older of signedIn.splice(0)) older.close(4000, "replaced by a newer tunnel connection");
-            signedIn.push(ws);
+            if (options.replace) {
+              for (const older of signedIn.splice(0)) if (older !== ws) older.close(4000, "replaced by a newer tunnel connection");
+            }
+            if (!signedIn.includes(ws)) signedIn.push(ws);
             ws.send(JSON.stringify({ type: "auth-ok" }));
           } else {
             ws.send(JSON.stringify({ type: "auth-error", message: "missing or invalid tunnel credential" }));
             ws.close(4001, "missing or invalid tunnel credential");
           }
+          return;
+        }
+        if (frame.type === "rotate") {
+          relay.rotates += 1;
+          const next = options.rotate?.() ?? null;
+          if (next === "drop") return ws.terminate();
+          if (!next) return;
+          dropNextMove = next.then === "drop";
+          ws.send(JSON.stringify({ type: "credential", credential: next.credential, expiresAt: next.expiresAt }));
           return;
         }
         if ("requestId" in frame) waiting.get(frame.requestId)?.(frame);
@@ -89,6 +118,7 @@ export function startFakeRelay(options: { accept: (credential: string) => boolea
     url: `ws://127.0.0.1:${server.port}/tunnel`,
     opened: 0,
     auths: [],
+    rotates: 0,
     userAgents: [],
     closed: 0,
     pings: 0,

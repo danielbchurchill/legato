@@ -32,11 +32,20 @@ import { parseSqliteDatetime } from "./sqlite-datetime.js";
 // short enough that a code nobody redeemed isn't a standing liability.
 const PAIRING_CODE_TTL_SQL = "+10 minutes";
 
-// ~1 year: this replaces what used to be a permanent, never-rotated
-// RELAY_SHARED_SECRET, so it's deliberately long-lived — a home server
-// pairs once and stays paired. Real rotation/revocation is a follow-up,
-// not something this prototype needs yet.
-const TUNNEL_CREDENTIAL_TTL_SQL = "+1 year";
+// 90 days (issue #115). A server doesn't have to be claimed or linked again
+// when it runs out: it swaps it for a new one over its tunnel well before
+// then (rotateTunnelCredential), so a credential that leaks is good for
+// weeks, not a year. The account can revoke it any time, by removing the
+// server (linked-servers.ts, removeLinkedServer). Credentials minted for a
+// year before this keep their expiry, and their servers rotate them as
+// they near the end of it, like any other.
+const TUNNEL_CREDENTIAL_TTL_SQL = "+90 days";
+
+// How many unexpired credentials a server may hold before rotating stops
+// minting more. One is normal, two while a rotation is under way, a few
+// more when links happen in between. A server that keeps asking and never
+// moves onto what it got would otherwise add a row each time.
+export const MAX_LIVE_CREDENTIALS_PER_SERVER = 5;
 
 export interface TunnelCredentialMinted {
   token: string;
@@ -247,5 +256,24 @@ export function signInWithTunnelCredential(db: Database, token: string): { relay
     if (!row) return null;
     if (row.server_id) db.prepare("DELETE FROM tunnel_credentials WHERE server_id = ? AND rowid < ?").run(row.server_id, row.rowid);
     return { relayUserId: row.relay_user_id, serverId: row.server_id };
+  })();
+}
+
+// A replacement for the credential a tunnel is signed in with (issue #115),
+// for the same account and server, minted the way a link mints one: it
+// retires nothing. The server moves its tunnel onto it with an auth frame
+// (routes/tunnel.ts), and that first sign-in retires this one and every
+// other earlier credential, as above. Null when the credential has been
+// revoked or has run out since the tunnel signed in, or when the server
+// already holds MAX_LIVE_CREDENTIALS_PER_SERVER.
+export function rotateTunnelCredential(db: Database, token: string): TunnelCredentialMinted | null {
+  return db.transaction(() => {
+    const holder = tunnelCredentialHolder(db, token);
+    if (!holder?.serverId) return null;
+    const { live } = db
+      .prepare("SELECT COUNT(*) AS live FROM tunnel_credentials WHERE server_id = ? AND expires_at > datetime('now')")
+      .get(holder.serverId) as { live: number };
+    if (live >= MAX_LIVE_CREDENTIALS_PER_SERVER) return null;
+    return mintTunnelCredential(db, holder.relayUserId, holder.serverId);
   })();
 }

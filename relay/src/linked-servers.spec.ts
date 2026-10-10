@@ -144,7 +144,7 @@ describe("a link token from /auth/server-token mints a tunnel credential when it
     expect(res.statusCode).toBe(200);
     const body = res.json() as { tunnel: { credential: string; expiresAt: string } };
     expect(body.tunnel.credential).toMatch(/^[0-9a-f]{64}$/);
-    expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 300 * 24 * 3600 * 1000);
+    expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 89 * 24 * 3600 * 1000);
     expect(tunnelCredentialHolder(h.db, body.tunnel.credential)).toEqual({ relayUserId: user.id, serverId: server.serverId });
     expect(credentials(h.db)).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
   });

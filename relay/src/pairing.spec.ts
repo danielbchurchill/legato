@@ -18,13 +18,14 @@ beforeEach(() => {
 });
 
 describe("mintTunnelCredential", () => {
-  it("mints a credential tied to the given account, expiring about a year out", () => {
+  // Issue #115: 90 days, and the server rotates it before then.
+  it("mints a credential tied to the given account, expiring 90 days out", () => {
     const { token, expiresAt } = mintTunnelCredential(db, userId);
 
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     const daysOut = (expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
-    expect(daysOut).toBeGreaterThan(360);
-    expect(daysOut).toBeLessThan(370);
+    expect(daysOut).toBeGreaterThan(89);
+    expect(daysOut).toBeLessThanOrEqual(90);
   });
 });
 
