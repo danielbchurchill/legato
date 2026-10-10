@@ -396,6 +396,24 @@ describe("native sign-in (issue #215)", () => {
       expect((await list(desktop)).map((session) => session.current)).toEqual([true]);
     });
 
+    // The review: ids were relay_sessions' rowids, which SQLite reuses once
+    // the newest row is deleted, and which count every sign-in there's been.
+    it("gives each session an opaque id that never names a session signed in after it", async () => {
+      const desktop = await appSession();
+      await browserSession();
+      const other = async () => (await list(desktop)).find((session) => !session.current)!;
+      const first = await other();
+      expect(first.id).toMatch(/^[0-9a-f]{32}$/);
+      const revoke = (id: string) => app.inject({ method: "DELETE", url: `/auth/sessions/${id}`, headers: { authorization: `Bearer ${desktop}` } });
+      expect((await revoke(first.id)).json()).toEqual({ revoked: true });
+
+      // Signed in again, into the row SQLite would hand the same rowid.
+      const again = await browserSession();
+      expect((await other()).id).not.toBe(first.id);
+      expect((await revoke(first.id)).json()).toEqual({ revoked: false });
+      expect(((await app.inject({ url: "/auth/me", headers: { authorization: `Bearer ${again}` } })).json() as { user: unknown }).user).not.toBeNull();
+    });
+
     it("401s without a session", async () => {
       expect((await app.inject({ url: "/auth/sessions" })).statusCode).toBe(401);
       expect((await app.inject({ method: "DELETE", url: "/auth/sessions/1" })).statusCode).toBe(401);

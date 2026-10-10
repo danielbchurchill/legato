@@ -82,7 +82,8 @@ const SESSION_TTL_SQL = "+30 days";
 // account's.
 export type SessionScope = { serverId: string; originMac: string };
 
-// client is describeClient()'s label for what signed in (issue #115).
+// client is describeClient()'s label for what signed in (issue #115), and
+// public_id what the account's settings call it (migration 0010).
 export function createSession(
   db: Database,
   userId: number,
@@ -92,11 +93,13 @@ export function createSession(
   const token = randomBytes(32).toString("hex");
   const row = db
     .prepare(
-      `INSERT INTO relay_sessions (id, user_id, client, expires_at, server_id, origin_mac)
-       VALUES (?, ?, ?, datetime('now', ?), ?, ?)
+      `INSERT INTO relay_sessions (id, user_id, client, public_id, expires_at, server_id, origin_mac)
+       VALUES (?, ?, ?, ?, datetime('now', ?), ?, ?)
        RETURNING expires_at`,
     )
-    .get(token, userId, client, SESSION_TTL_SQL, scope?.serverId ?? null, scope?.originMac ?? null) as { expires_at: string };
+    .get(token, userId, client, randomBytes(16).toString("hex"), SESSION_TTL_SQL, scope?.serverId ?? null, scope?.originMac ?? null) as {
+    expires_at: string;
+  };
   return { token, expiresAt: parseSqliteDatetime(row.expires_at) };
 }
 
@@ -137,17 +140,17 @@ export function describeClient(userAgent: string | undefined, kind: "app" | "bro
 export type SessionListing = { id: string; client: string | null; createdAt: Date; lastSeenAt: Date | null; current: boolean };
 
 // The account's live sessions, newest first, for its settings (issue #115).
-// A session's id here is its rowid, never its token: the token is what
+// A session's id here is its public_id, never its token: the token is what
 // signs it in. current marks the one asking.
 export function listSessions(db: Database, userId: number, currentToken: string): SessionListing[] {
   const rows = db
     .prepare(
-      `SELECT rowid, id, client, created_at, last_seen_at FROM relay_sessions
+      `SELECT id, public_id, client, created_at, last_seen_at FROM relay_sessions
        WHERE user_id = ? AND expires_at > datetime('now') ORDER BY created_at DESC, rowid DESC`,
     )
-    .all(userId) as { rowid: number; id: string; client: string | null; created_at: string; last_seen_at: string | null }[];
+    .all(userId) as { id: string; public_id: string; client: string | null; created_at: string; last_seen_at: string | null }[];
   return rows.map((row) => ({
-    id: String(row.rowid),
+    id: row.public_id,
     client: row.client,
     createdAt: parseSqliteDatetime(row.created_at),
     lastSeenAt: row.last_seen_at ? parseSqliteDatetime(row.last_seen_at) : null,
@@ -158,8 +161,8 @@ export function listSessions(db: Database, userId: number, currentToken: string)
 // Signs one of the account's own sessions out. False for an id that isn't
 // one of them.
 export function revokeSession(db: Database, userId: number, id: string): boolean {
-  if (!/^[1-9][0-9]{0,15}$/.test(id)) return false;
-  return db.prepare("DELETE FROM relay_sessions WHERE rowid = ? AND user_id = ?").run(Number(id), userId).changes > 0;
+  if (!/^[0-9a-f]{32}$/.test(id)) return false;
+  return db.prepare("DELETE FROM relay_sessions WHERE public_id = ? AND user_id = ?").run(id, userId).changes > 0;
 }
 
 // Null when the account is gone, so a caller holding an id from a code or
