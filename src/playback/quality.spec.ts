@@ -646,6 +646,140 @@ describe('watchForDrops', () => {
     expect(onDrop).not.toHaveBeenCalled()
   })
 
+  // #369, from the coordinator's drop test: the track stalled at 7.9 s,
+  // and Chrome had its clock back at 0 by the time the network error came.
+  describe('where a dropped track picks up', () => {
+    // An element whose loads, as a real one's do, start from 0.
+    function reloadingAudio() {
+      const audio = new FakeAudio()
+      const loads: string[] = []
+      let src = audio.src
+      Object.defineProperty(audio, 'src', {
+        get: () => src,
+        set: (value: string) => {
+          src = value
+          loads.push(value)
+          audio.currentTime = 0
+        },
+      })
+      return { audio, loads, first: src }
+    }
+
+    const stallFor = (audio: FakeAudio, ms: number) => {
+      audio.fire('waiting')
+      vi.advanceTimersByTime(ms)
+    }
+
+    it('reloads at the spot it last played to when the element reads 0 by the time its network error fires', () => {
+      const { audio, loads, first } = reloadingAudio()
+      const onDrop = vi.fn()
+      watchForDrops(audio, onDrop, { online: null })
+
+      audio.currentTime = 7.9
+      audio.fire('timeupdate')
+      // Chrome takes the clock back to 0 as the load fails. A timeupdate
+      // reporting that doesn't move the spot either.
+      audio.currentTime = 0
+      audio.error = { code: 2 }
+      audio.fire('timeupdate')
+      audio.fire('error')
+
+      expect(onDrop).toHaveBeenCalledTimes(1)
+      expect(nextQuality()).toBe('opus256')
+      expect(loads).toEqual([first])
+      expect(audio.currentTime).toBe(7.9)
+    })
+
+    it('leaves a track dropped for a stall paused where it stopped, and its live stream unloaded', () => {
+      const { audio, loads } = reloadingAudio()
+      const online = new EventTarget()
+      const onDrop = vi.fn()
+      watchForDrops(audio, onDrop, { online })
+
+      audio.currentTime = 7.9
+      audio.fire('timeupdate')
+      stallFor(audio, STALL_LIMIT_MS)
+      expect(onDrop).toHaveBeenCalledTimes(1)
+      expect(audio.paused).toBe(true)
+
+      // Nothing failed, so the server answering is no reason to load it again.
+      online.dispatchEvent(new Event(SERVER_ANSWERED_EVENT))
+      online.dispatchEvent(new Event('online'))
+      expect(loads).toEqual([])
+      expect(audio.currentTime).toBe(7.9)
+    })
+
+    it('counts a stall and the network error after it as one drop, and reloads at the spot the stall stopped it', () => {
+      const { audio, loads, first } = reloadingAudio()
+      const online = new EventTarget()
+      const onDrop = vi.fn()
+      watchForDrops(audio, onDrop, { online })
+
+      audio.currentTime = 10.9
+      audio.fire('timeupdate')
+      stallFor(audio, STALL_LIMIT_MS)
+      // Six seconds on, the connection gives up, its clock already back at 0.
+      vi.advanceTimersByTime(6000)
+      audio.currentTime = 0
+      audio.error = { code: 2 }
+      audio.fire('error')
+
+      expect(onDrop).toHaveBeenCalledTimes(1)
+      expect(nextQuality()).toBe('opus256')
+      expect(loads).toEqual([first])
+      expect(audio.currentTime).toBe(10.9)
+
+      // That reload fails too, still offline, and the next one starts there.
+      audio.fire('loadstart')
+      audio.error = { code: 4 }
+      audio.fire('error')
+      online.dispatchEvent(new Event('online'))
+      expect(loads).toEqual([first, first])
+      expect(audio.currentTime).toBe(10.9)
+      expect(onDrop).toHaveBeenCalledTimes(1)
+    })
+
+    it('counts an error as a drop of its own once the track has played again since a stall', () => {
+      const audio = new FakeAudio()
+      const onDrop = vi.fn()
+      watchForDrops(audio, onDrop, { online: null })
+
+      audio.currentTime = 30
+      audio.fire('timeupdate')
+      stallFor(audio, STALL_LIMIT_MS)
+      audio.paused = false
+      audio.fire('playing')
+      audio.currentTime = 95
+      audio.fire('timeupdate')
+      audio.currentTime = 0
+      audio.error = { code: 2 }
+      audio.fire('error')
+
+      expect(onDrop).toHaveBeenCalledTimes(2)
+      expect(nextQuality()).toBe('opus160')
+      expect(audio.currentTime).toBe(95)
+    })
+
+    it("doesn't take a new track for one that dropped at the spot the last one played to", async () => {
+      const audio = new FakeAudio()
+      const onDrop = vi.fn()
+      watchForDrops(audio, onDrop, { online: null, serverTrouble: steady })
+
+      audio.currentTime = 50
+      audio.fire('timeupdate')
+      // Next, and the new stream fails before it plays at all.
+      audio.src = 'http://server/api/v1/files/2/stream?quality=original'
+      audio.currentTime = 0
+      audio.fire('loadstart')
+      audio.error = { code: 2 }
+      audio.fire('error')
+      await settle()
+
+      expect(onDrop).not.toHaveBeenCalled()
+      expect(audio.currentTime).toBe(0)
+    })
+  })
+
   it('stops listening after cleanup', () => {
     const audio = new FakeAudio()
     const onDrop = vi.fn()
