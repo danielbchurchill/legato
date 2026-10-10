@@ -129,13 +129,14 @@ const yourServers = async () =>
 const tunnelOf = async (serverId: string) => (await yourServers()).find((s) => s.serverId === serverId)?.tunnel;
 
 for (const server of servers) {
-  type Setup = { code: string; claim: { state: string; account?: { id: string } } };
+  type Setup = { code: string; claimUrl: string; claim: { state: string; account?: { id: string } } };
   const setup = async () => (await (await fetch(`${server.api}/auth/setup`)).json()) as Setup;
-  const { code } = await setup();
+  const { code, claimUrl } = await setup();
+  // The QR's server id, as the claim page posts it (issue #324).
   const claimed = await fetch(`${RELAY}/pair/claim`, {
     method: "POST",
     headers: { cookie, origin: RELAY, "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, server: new URL(claimUrl).searchParams.get("server") }),
   });
   check(claimed.ok, `the account claims ${server.name}'s code (${claimed.status})`);
   const view = await until(`${server.name} picks the claim up`, async () => {
@@ -451,7 +452,7 @@ const credentialBefore = storedCredential();
 const keys = parseSigningKeys(process.env.RELAY_SIGNING_KEYS)!;
 type RelayUser = Parameters<typeof signServerToken>[1]["user"];
 const relayUser = relayDb.prepare("SELECT * FROM relay_users WHERE id = ?").get(account.id) as RelayUser;
-const linkToken = signServerToken(keys, { issuer: RELAY, user: relayUser, serverId: servers[0]!.id, scope: "link", tunnel: true }).token;
+const linkToken = signServerToken(keys, { issuer: RELAY, user: relayUser, serverId: servers[0]!.id, scope: "link" }).token;
 const relink = await fetch(`${RELAY}/relay/${servers[0]!.id}/api/v1/auth/legato/link`, {
   method: "POST",
   headers: { cookie, authorization: `Bearer ${servers[0]!.token}`, "content-type": "application/json" },

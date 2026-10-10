@@ -75,7 +75,6 @@ function fakeRelay(nowSeconds: () => number) {
         ...testClaims(aud, nowSeconds()),
         sub: claim.sub,
         scope: "link",
-        tunnel: true,
         name: claim.name,
         email: claim.email,
       };

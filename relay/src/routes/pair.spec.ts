@@ -77,7 +77,8 @@ describe("POST /pair/exchange", () => {
     expect(response.statusCode).toBe(200);
     const { linkToken } = response.json() as { linkToken: string };
     const claims = JSON.parse(Buffer.from(linkToken.split(".")[1]!, "base64url").toString()) as Record<string, unknown>;
-    expect(claims).toMatchObject({ sub: String(userId), aud: server.serverId, scope: "link", tunnel: true, iss: ISSUER });
+    expect(claims).toMatchObject({ sub: String(userId), aud: server.serverId, scope: "link", iss: ISSUER });
+    expect(claims).not.toHaveProperty("tunnel");
   });
 
   // Issue #324: a server whose first answer was lost asks again.

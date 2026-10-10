@@ -49,7 +49,6 @@ export function linkedServerRoutes(
       }
       if (result.changed) request.log.info(`linked-servers: account ${result.relayUserId} linked server ${result.serverId}`);
       const linked = { accountId: String(result.relayUserId), serverId: result.serverId };
-      if (!result.tunnel) return { linked };
       return { linked, tunnel: { credential: result.tunnel.token, expiresAt: result.tunnel.expiresAt.toISOString() } };
     });
 

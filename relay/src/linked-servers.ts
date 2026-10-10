@@ -155,10 +155,11 @@ export const PROOF_FAILURE_MESSAGES: Record<ProofFailure, string> = {
   no_account: "The legato.fm account in that proof no longer exists.",
 };
 
-// tunnel is the credential a link mints (issues #237 and #325), null for an
-// unlink and for a link token that wasn't marked for one.
-export type ProofResult =
-  | { ok: true; relayUserId: number; serverId: string; changed: boolean; tunnel: TunnelCredentialMinted | null }
+export type ProofResult = { ok: true; relayUserId: number; serverId: string; changed: boolean } | { ok: false; reason: ProofFailure };
+
+// tunnel is the credential every link mints (issues #237, #325 and #348).
+export type LinkProofResult =
+  | { ok: true; relayUserId: number; serverId: string; changed: boolean; tunnel: TunnelCredentialMinted }
   | { ok: false; reason: ProofFailure };
 
 function strings<K extends string>(body: Record<string, unknown> | null | undefined, keys: K[]): Record<K, string> | null {
@@ -173,14 +174,15 @@ function strings<K extends string>(body: Record<string, unknown> | null | undefi
 // tokens on every request, and one of those mustn't be able to bring back a
 // pair the account has just removed.
 //
-// A link token marked `tunnel` also mints the server's tunnel credential,
-// bound to its id, in the transaction that records the pair. A claim's
-// token is marked (routes/pair.ts), and since issue #325 so is every link
-// token a client asks for, so a server linked from Settings can open the
-// tunnel as a claimed one can. A link the server never reports, because
-// its owner chose not to link or the token ran out first, leaves no
-// credential behind, and the token's spent jti means one token mints one
-// credential.
+// Every link reported here also mints the server's tunnel credential,
+// bound to its id, in the transaction that records the pair, whoever
+// signed the token: a claim (routes/pair.ts), a client linking from
+// Settings (routes/auth.ts), or the web client (routes/link-page.ts). No
+// claim in the token decides it (issue #348), so a signer added later
+// can't leave its servers without one. A link the server never reports,
+// because its owner chose not to link or the token ran out first, leaves
+// no credential behind, and the token's spent jti means one token mints
+// one credential.
 //
 // Minting retires nothing (issue #325). The server's current credential,
 // whichever account it was minted under, keeps working until the new one
@@ -196,7 +198,7 @@ export function acceptLinkProof(
   issuer: string,
   body: Record<string, unknown> | null | undefined,
   nowSeconds = Math.floor(Date.now() / 1000),
-): ProofResult {
+): LinkProofResult {
   const proof = strings(body, ["publicKey", "linkToken", "signature"]);
   if (!proof) return { ok: false, reason: "malformed" };
   const claims = verifyIssuedToken(keys, proof.linkToken, { issuer, nowSeconds });
@@ -209,12 +211,12 @@ export function acceptLinkProof(
   }
 
   const relayUserId = Number(claims.sub);
-  return db.transaction((): ProofResult => {
+  return db.transaction((): LinkProofResult => {
     if (!db.prepare("SELECT 1 FROM relay_users WHERE id = ?").get(relayUserId)) return { ok: false, reason: "no_account" };
     if (!spendProof(db, `link:${claims.jti}`, claims.exp, nowSeconds)) return { ok: false, reason: "used" };
     const changed = !isLinkedServer(db, relayUserId, claims.aud);
     recordLinkedServer(db, relayUserId, claims.aud, proof.publicKey);
-    const tunnel = claims.tunnel ? mintTunnelCredential(db, relayUserId, claims.aud) : null;
+    const tunnel = mintTunnelCredential(db, relayUserId, claims.aud);
     return { ok: true, relayUserId, serverId: claims.aud, changed, tunnel };
   })();
 }
@@ -244,12 +246,12 @@ export function acceptUnlinkProof(
 
   const relayUserId = Number(proof.accountId);
   return db.transaction((): ProofResult => {
-    if (!isLinkedServer(db, relayUserId, serverId)) return { ok: true, relayUserId, serverId, changed: false, tunnel: null };
+    if (!isLinkedServer(db, relayUserId, serverId)) return { ok: true, relayUserId, serverId, changed: false };
     if (!spendProof(db, `unlink:${proof.nonce}`, issuedAt + UNLINK_PROOF_WINDOW_SECONDS, nowSeconds)) {
       return { ok: false, reason: "used" };
     }
     removeLinkedServer(db, relayUserId, serverId);
-    return { ok: true, relayUserId, serverId, changed: true, tunnel: null };
+    return { ok: true, relayUserId, serverId, changed: true };
   })();
 }
 

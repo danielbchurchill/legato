@@ -354,9 +354,9 @@ export function linkPageRoutes(
       return reply.code(204).send();
     });
 
-    // A `link` token for the account and server the code was minted for,
-    // marked for a tunnel credential (signing-keys.ts). The credential
-    // itself is minted only when the server reports the link.
+    // A `link` token for the account and server the code was minted for.
+    // The tunnel credential is minted only when the server reports the link
+    // (linked-servers.ts).
     //
     // A code is 32 random bytes, spent on its first try and useless without
     // its verifier, so guessing gains nothing. The brake (rate-limit.ts) is
@@ -400,7 +400,7 @@ export function linkPageRoutes(
         reply.code(400);
         return { error: LINK_REDEEM_FAILURE_MESSAGES.not_found, reason: "not_found" };
       }
-      const issued = signServerToken(signingKeys, { issuer, user, serverId: result.serverId, scope: "link", tunnel: true });
+      const issued = signServerToken(signingKeys, { issuer, user, serverId: result.serverId, scope: "link" });
       return { token: issued.token, expiresAt: issued.expiresAt.toISOString(), scope: issued.scope };
     });
   };
