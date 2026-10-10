@@ -10,6 +10,10 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# Release archives and SHA256SUMS from scripts/package-release.mjs.
+dist-release
+# Vitest's artifact directory: attachments, blob and HTML reports.
+.vitest
 *.local
 *.tsbuildinfo
 
