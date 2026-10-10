@@ -1,13 +1,15 @@
 // Local end-to-end for issue #325: a home server linked to legato.fm from
 // its own web client, in headless Chrome. The first link from Settings is
 // made to fail (this relay drops the server's report, as if legato.fm
-// couldn't be reached), the owner tries again and it links, then links once
-// more to check the old tunnel credential is retired. Then the review's
-// cases: a redeem that's rate limited keeps its code for "try again", Back
-// from legato.fm leaves the button ready, and a code that comes back to a
-// tab with no verifier says the link didn't finish. No real provider, and
-// nothing sent to auth.legato.fm: GitHub's authorize page is answered inside
-// Chrome.
+// couldn't be reached), the owner tries again and it links, and the
+// server's tunnel (#310) opens to this relay. Linking once more moves the
+// tunnel to the new credential, which retires the old one. Then the
+// review's cases: a redeem that's rate limited keeps its code for "try
+// again", Back from legato.fm leaves the button ready, a code that comes
+// back to a tab with no verifier says the link didn't finish, and an
+// unlink takes the credential and closes the tunnel. No real provider, and
+// nothing sent to auth.legato.fm: GitHub's authorize page is answered
+// inside Chrome.
 //
 // Two ways to the owner. By default it's created over the API without a
 // claim, as on every server set up before #237. With LINK_E2E_SETUP=claim
@@ -125,8 +127,10 @@ relay.addHook("onRequest", async (request, reply) => {
 await relay.listen({ port: PORT, host: new URL(RELAY).hostname });
 step("relay listening", `${RELAY}, data dir ${DATA_DIR}`);
 
-const relayPairs = () => db.prepare("SELECT relay_user_id, server_id FROM linked_servers").all() as { server_id: string }[];
-const relayCredentials = () => db.prepare("SELECT token, server_id FROM tunnel_credentials").all() as { token: string; server_id: string }[];
+const relayPairs = () =>
+  db.prepare("SELECT relay_user_id, server_id FROM linked_servers").all() as { relay_user_id: number; server_id: string }[];
+const relayCredentials = () =>
+  db.prepare("SELECT token, server_id FROM tunnel_credentials").all() as { token: string; server_id: string }[];
 
 // --- the server ---
 
@@ -152,6 +156,37 @@ const storedCredential = () => serverRow<{ credential: string; account_id: strin
 const linkedAccount = () =>
   serverRow<{ legato_account_id: string | null }>("SELECT legato_account_id FROM users WHERE role = 'owner'")?.legato_account_id ?? null;
 check(linkedAccount() === null && !storedCredential(), "the server starts unlinked, with no tunnel credential");
+
+// Whether the server's tunnel is connected to this relay, as the account's
+// "your servers" on legato.fm says.
+let accountSession: string | null = null;
+async function tunnelConnected(): Promise<boolean> {
+  const pair = relayPairs()[0];
+  if (!pair) return false;
+  accountSession ??= createSession(db, pair.relay_user_id).token;
+  const res = await fetch(`${RELAY}/linked-servers`, { headers: { authorization: `Bearer ${accountSession}` } });
+  const { servers } = (await res.json()) as { servers: { serverId: string; tunnel: { connected: boolean } }[] };
+  return servers.some((server) => server.serverId === serverId && server.tunnel.connected);
+}
+
+// After a link, the relay holds the new credential beside the old one
+// until the server's tunnel signs in with the new one, which retires the
+// old (review A1). Waits for that: one credential on the relay, the one the
+// server stored, with the tunnel up.
+async function tunnelSettled(label: string): Promise<string> {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const credentials = relayCredentials();
+    const stored = storedCredential()?.credential;
+    const connected = await tunnelConnected();
+    if (credentials.length === 1 && credentials[0]!.token === stored && connected) return stored;
+    check(
+      Date.now() < deadline,
+      `${label}: the relay holds ${credentials.length} credentials, the server stored ${stored ? "one" : "none"}, the tunnel is ${connected ? "up" : "down"}`,
+    );
+    await sleep(200);
+  }
+}
 
 // --- Chrome over CDP ---
 
@@ -348,7 +383,8 @@ check(credentials.length === 1 && credentials[0]!.server_id === serverId, "the r
 const stored = storedCredential();
 check(stored?.credential === credentials[0]!.token, "the server stored that credential");
 check(linkedAccount() === stored!.account_id, "the owner is linked to that account");
-step("linked on the second try", `account ${stored!.account_id}, credential stored`);
+check((await tunnelSettled("the link")) === stored!.credential, "the server's tunnel is open with it");
+step("linked on the second try", `account ${stored!.account_id}, credential stored, tunnel open`);
 
 // 5. Cancel says so, and changes nothing.
 await click("link again");
@@ -358,16 +394,15 @@ await waitFor(textIs("nothing linked"), "the cancelled toast");
 await screenshot("cancelled");
 check(relayCredentials()[0]?.token === stored!.credential, "cancelling changed nothing");
 
-// 6. Linking again retires the old credential.
+// 6. Linking again moves the tunnel to the new credential, and that
+// retires the old one (review A1).
 await openSettings();
 await click("link again");
 await waitFor(`location.origin === ${JSON.stringify(RELAY)} && document.body.dataset.view === 'ready'`, "the ready link page");
 await click("link this server");
 await waitFor(textIs("linked to legato.fm"), "the success toast");
-const after = relayCredentials();
-check(after.length === 1 && after[0]!.token !== stored!.credential, "one credential, a new one");
-check(storedCredential()?.credential === after[0]!.token, "the server stored the new one");
-step("linking again retired the old credential");
+check((await tunnelSettled("linking again")) !== stored!.credential, "the tunnel moved to a new credential");
+step("linking again moved the tunnel to a new credential, which retired the old one");
 
 // The relay keeps no plain hash of where a code went (review B2).
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -392,8 +427,7 @@ const beforeRetry = relayCredentials()[0]!.token;
 await click("try again");
 await waitFor(textIs("This server is linked to Rowan."), "the success toast after trying again");
 check(await evaluate<boolean>(`sessionStorage.getItem('legato:link-pending') === null`), "the spent code is gone from the tab");
-check(relayCredentials().length === 1 && relayCredentials()[0]!.token !== beforeRetry, "trying again linked, with a new credential");
-check(storedCredential()?.credential === relayCredentials()[0]!.token, "and the server stored it");
+check((await tunnelSettled("trying again")) !== beforeRetry, "trying again linked, and the tunnel moved to its new credential");
 await screenshot("linked-after-try-again");
 step("a rate-limited redeem kept its code, and trying again linked");
 
@@ -429,6 +463,25 @@ check(!(await location()).includes("legato_link"), "the code is out of the addre
 check(await evaluate<boolean>(textIs("start again from Settings here")), "it says where to start again");
 await screenshot("link-did-not-finish");
 step("a code with no verifier says the link didn't finish");
+
+// 10. Unlinking takes the pair's credential on the relay, and the tunnel
+// closes (review A2). The web client has no unlink control yet, so it's
+// the API, with the owner's session from the page.
+const ownerToken = await evaluate<string>(`JSON.parse(localStorage.getItem(${JSON.stringify(`legato:session:${SERVER}`)})).token`);
+const unlinked = await fetch(`${API}/auth/legato/link`, { method: "DELETE", headers: { authorization: `Bearer ${ownerToken}` } });
+check(
+  unlinked.ok && ((await unlinked.json()) as { legatoNotified: boolean }).legatoNotified === true,
+  "the server unlinked and told legato.fm",
+);
+check(relayPairs().length === 0 && relayCredentials().length === 0, "the relay holds no pair and no credential");
+// The server's tunnel is the only WebSocket that comes to this relay.
+const closedBy = Date.now() + 15_000;
+while (relay.websocketServer.clients.size > 0) {
+  check(Date.now() < closedBy, "the tunnel closed");
+  await sleep(200);
+}
+check(!storedCredential() && linkedAccount() === null, "the server forgot its credential");
+step("unlinking took the credential and closed the tunnel");
 
 socket.close();
 await relay.close();
