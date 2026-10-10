@@ -40,7 +40,11 @@ FROM --platform=$BUILDPLATFORM node:24.19.0-slim AS web
 WORKDIR /web
 COPY --from=client package.json package-lock.json ./
 RUN npm ci
-COPY --from=client index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json ./
+COPY --from=client index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json tsconfig.sw.json ./
+# The two build scripts `npm run build` runs: vite.config.ts imports the
+# service worker's plugin (#128), and check-built-css.mjs checks the output.
+# Copying single files keeps the rest of scripts/ out of this stage.
+COPY --from=client scripts/vite-shell-worker.ts scripts/check-built-css.mjs ./scripts/
 COPY --from=client public ./public
 COPY --from=client src ./src
 RUN npm run build
