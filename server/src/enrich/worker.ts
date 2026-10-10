@@ -30,6 +30,7 @@ import {
   enqueueArtistMemberLookupIfNeeded,
   enqueueCoverArtLookupIfNeeded,
   enqueueDescriptionLookupIfNeeded,
+  isArtistInBound,
   isMemberLookupArtist,
 } from "./queue.js";
 import { assignTracks, pickBestRelease, scoreReleaseCandidate, type LocalAlbumInput, type LocalTrack } from "./releaseMatch.js";
@@ -516,6 +517,18 @@ async function resolveReleaseGroupMbid(db: Database, releaseNodeId: number): Pro
   return releaseGroupMbid;
 }
 
+// Issue #321: an artist's photo and description lookups check the bound
+// again before any request, as processArtistMemberLookup does. An artist
+// can leave it after its lookups were queued, and the prune that removes it
+// only runs at the next start, so until then its lookups would still reach
+// Deezer and Wikipedia. Its job is deleted, not marked done, so it's queued
+// again if the artist comes back inside the bound.
+function dropIfPastBound(db: Database, job: EnrichJob): boolean {
+  if (isArtistInBound(db, job.node_id)) return false;
+  db.prepare("DELETE FROM enrich_jobs WHERE id = ?").run(job.id);
+  return true;
+}
+
 // job.node_id is an *artist* node here. Every outcome marks the job done:
 // a tag that names two artists will still name two artists tomorrow, and
 // Deezer not having a photo is an answer, not a failure. Only a thrown
@@ -531,6 +544,8 @@ async function processArtistImageLookup(db: Database, job: EnrichJob): Promise<v
     finish();
     return;
   }
+
+  if (dropIfPastBound(db, job)) return;
 
   // Art of its own already — a photo from an earlier run, or a manual
   // override, which must never be displaced (cover/extract.ts's PRECEDENCE).
@@ -587,6 +602,7 @@ async function processDescriptionLookup(db: Database, job: EnrichJob): Promise<v
 
   let relations: MbUrlRelation[] = [];
   if (node.type === "artist") {
+    if (dropIfPastBound(db, job)) return;
     if (looksLikeMultipleArtists(node.title)) {
       recordDescription(db, job.node_id, DESCRIPTION_SOURCE, null);
       finish();

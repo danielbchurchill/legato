@@ -690,13 +690,30 @@ describe("membership bound — issue #269", () => {
   });
 });
 
+// An artist node a recording names as its performer, so inside the bound.
+function insertPerformer(title: string): number {
+  const artist = (db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get(title) as {
+    id: number;
+  }).id;
+  const recording = (db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', ?) RETURNING id").get(
+    `${title} track`,
+  ) as { id: number }).id;
+  db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'performed_by', 'local')").run(
+    recording,
+    artist,
+  );
+  return artist;
+}
+
+function enqueueLookup(nodeId: number, jobType: string): void {
+  db.prepare("INSERT INTO enrich_jobs (node_id, job_type, status) VALUES (?, ?, 'queued')").run(nodeId, jobType);
+}
+
 // Issue #272.
 describe("processArtistImageLookup", () => {
   it("skips a credit-line title without writing an mbid row the hygiene worklist would list", async () => {
-    const node = (db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get("Pussy Riot; Slayyyter") as {
-      id: number;
-    }).id;
-    db.prepare("INSERT INTO enrich_jobs (node_id, job_type, status) VALUES (?, 'artist_image_lookup', 'queued')").run(node);
+    const node = insertPerformer("Pussy Riot; Slayyyter");
+    enqueueLookup(node, "artist_image_lookup");
 
     await runDueJobs(db);
 
@@ -704,5 +721,32 @@ describe("processArtistImageLookup", () => {
     expect(db.prepare("SELECT field FROM field_provenance WHERE node_id = ?").all(node)).toEqual([]);
     const job = db.prepare("SELECT status FROM enrich_jobs WHERE node_id = ?").get(node) as { status: string };
     expect(job.status).toBe("done");
+  });
+});
+
+// Issue #321: an artist can leave the bound after its lookups were queued,
+// and the prune that removes it only runs at the next start.
+describe("photo and description lookups past the bound", () => {
+  it("make no request for an artist past the bound, and drop its jobs so they're queued again if it comes back", async () => {
+    const inside = insertPerformer("Radiohead");
+    const past = (db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', 'Pete Best') RETURNING id").get() as {
+      id: number;
+    }).id;
+    for (const node of [inside, past]) {
+      enqueueLookup(node, "artist_image_lookup");
+      enqueueLookup(node, "description_lookup");
+    }
+    mocked(deezer.fetchArtistImage).mockResolvedValue(null);
+    mocked(mbClient.searchArtist).mockResolvedValue([]);
+
+    await runDueJobs(db);
+
+    expect(mocked(deezer.fetchArtistImage).mock.calls).toEqual([["Radiohead"]]);
+    expect(mocked(mbClient.searchArtist).mock.calls).toEqual([["Radiohead"]]);
+    expect(db.prepare("SELECT job_type, status FROM enrich_jobs WHERE node_id = ? ORDER BY job_type").all(inside)).toEqual([
+      { job_type: "artist_image_lookup", status: "done" },
+      { job_type: "description_lookup", status: "done" },
+    ]);
+    expect(db.prepare("SELECT id FROM enrich_jobs WHERE node_id = ?").all(past)).toEqual([]);
   });
 });

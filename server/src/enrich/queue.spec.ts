@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
@@ -7,7 +10,10 @@ import {
   enqueueDescriptionLookupIfNeeded,
   enqueueEnrichmentIfNeeded,
   enqueueLookupsInBound,
+  isArtistInBound,
   isEnrichmentEnabled,
+  withBound,
+  BOUND_SQL,
 } from "./queue.js";
 
 let db: Database;
@@ -205,5 +211,146 @@ describe("enqueueLookupsInBound", () => {
     db.prepare("INSERT INTO settings (key, value) VALUES ('enrichmentEnabled', 'false')").run();
     enqueueLookupsInBound(db);
     expect(jobs()).toEqual([]);
+  });
+});
+
+// Issue #321.
+describe("withBound", () => {
+  const node = (on: Database, type: string, title: string) =>
+    (on.prepare("INSERT INTO nodes (type, title) VALUES (?, ?) RETURNING id").get(type, title) as { id: number }).id;
+  const edge = (on: Database, from: number, to: number, type: string) =>
+    on.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, ?, 'local')").run(from, to, type);
+  const ids = (table: string, on: Database = db) =>
+    (on.prepare(`SELECT id FROM temp.${table} ORDER BY id`).all() as { id: number }[]).map((r) => r.id);
+  const tempTables = () =>
+    (db.prepare("SELECT name FROM sqlite_temp_master WHERE type = 'table'").all() as { name: string }[]).map(
+      (r) => r.name,
+    );
+
+  // A band in the library, its member, and the member's other group.
+  function library(on: Database) {
+    const beatles = node(on, "artist", "The Beatles");
+    const george = node(on, "artist", "George Harrison");
+    const wilburys = node(on, "artist", "Traveling Wilburys");
+    edge(on, node(on, "recording", "Something"), beatles, "performed_by");
+    edge(on, george, beatles, "member_of");
+    edge(on, george, wilburys, "member_of");
+    return { beatles, george, wilburys };
+  }
+
+  it("reads the performers, their members and groups, and the groups of those, then drops its tables", () => {
+    const { beatles, george, wilburys } = library(db);
+
+    const sets = withBound(db, () => ({ lookup: ids("member_lookup_artists"), inBound: ids("artists_in_bound") }));
+
+    expect(sets).toEqual({ lookup: [beatles, george], inBound: [beatles, george, wilburys] });
+    expect(tempTables()).toEqual([]);
+  });
+
+  it("agrees with isArtistInBound about every artist", () => {
+    const { wilburys } = library(db);
+    const dylan = node(db, "artist", "Bob Dylan");
+    edge(db, dylan, wilburys, "member_of");
+    edge(db, dylan, node(db, "artist", "The Band"), "member_of");
+    edge(db, node(db, "recording", "Produced"), node(db, "artist", "George Martin"), "produced_by");
+    node(db, "artist", "Nobody's");
+
+    const inBound = withBound(db, () => ids("artists_in_bound"));
+
+    const artists = (db.prepare("SELECT id FROM nodes WHERE type = 'artist' ORDER BY id").all() as { id: number }[]).map(
+      (r) => r.id,
+    );
+    expect(artists.filter((id) => isArtistInBound(db, id))).toEqual(inBound);
+    expect(inBound).toHaveLength(4);
+  });
+
+  it("reads all three sets from one snapshot, whatever another connection commits in between", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "legato-bound-"));
+    const file = path.join(dir, "legato.db");
+    const reader = openDb(file, { log: () => {} });
+    const writer = openDb(file, { log: () => {} });
+    try {
+      const { beatles, george, wilburys } = library(reader);
+      // After the performers are read, a new band and a new member of the
+      // old one are committed on the other connection.
+      const exec = reader.exec.bind(reader);
+      Object.assign(reader, {
+        exec: (sql: string) => {
+          exec(sql);
+          if (sql === BOUND_SQL[0]) {
+            edge(writer, node(writer, "recording", "Creep"), node(writer, "artist", "Radiohead"), "performed_by");
+            edge(writer, node(writer, "artist", "Pete Best"), beatles, "member_of");
+          }
+        },
+      });
+
+      const sets = withBound(reader, () => ({
+        performers: ids("performers", reader),
+        lookup: ids("member_lookup_artists", reader),
+        inBound: ids("artists_in_bound", reader),
+      }));
+
+      expect(sets).toEqual({ performers: [beatles], lookup: [beatles, george], inBound: [beatles, george, wilburys] });
+      Object.assign(reader, { exec });
+      expect(withBound(reader, () => ids("artists_in_bound", reader))).toHaveLength(5);
+    } finally {
+      writer.close();
+      reader.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws at a nested call before touching the caller's tables", () => {
+    const { beatles, george, wilburys } = library(db);
+
+    withBound(db, () => {
+      expect(() => withBound(db, () => 0)).toThrow(
+        "withBound: already reading the bound on this connection; read its temp tables instead of nesting",
+      );
+      expect(ids("artists_in_bound")).toEqual([beatles, george, wilburys]);
+    });
+
+    expect(tempTables()).toEqual([]);
+    expect(withBound(db, () => ids("member_lookup_artists"))).toEqual([beatles, george]);
+  });
+
+  describe("when a table won't drop", () => {
+    let failDrop: boolean;
+
+    beforeEach(() => {
+      failDrop = false;
+      const exec = db.exec.bind(db);
+      Object.assign(db, {
+        exec: (sql: string) => {
+          if (failDrop && sql === "DROP TABLE IF EXISTS temp.performers") throw new Error("database table is locked");
+          exec(sql);
+        },
+      });
+    });
+
+    it("drops the others and throws fn's own error, not the drop's", () => {
+      expect(() =>
+        withBound(db, () => {
+          failDrop = true;
+          throw new Error("what really went wrong");
+        }),
+      ).toThrow("what really went wrong");
+
+      expect(tempTables()).toEqual(["performers"]);
+    });
+
+    it("throws the drop's error if fn succeeded, and the next call starts clean", () => {
+      library(db);
+      expect(() =>
+        withBound(db, () => {
+          failDrop = true;
+        }),
+      ).toThrow("database table is locked");
+      expect(tempTables()).toEqual(["performers"]);
+
+      failDrop = false;
+      expect(withBound(db, () => ids("artists_in_bound"))).toHaveLength(3);
+      expect(tempTables()).toEqual([]);
+    });
   });
 });
