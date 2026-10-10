@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
@@ -28,10 +28,22 @@ use tauri::{AppHandle, Emitter, State};
 // always already well ahead of whatever byte decode actually needs next,
 // absorbing exactly the kind of transient stall that a bigger BufReader
 // couldn't.
+//
+// Issue #185: the same reader carries a track streamed from the server,
+// with one difference. A file stays buffered from its first byte and a seek
+// waits for the download to reach it. A stream can be asked for again from
+// any offset, so a read well past what has arrived, or behind it, starts
+// the download again from there instead of waiting for the whole file.
 struct NetworkAheadReader {
   shared: Arc<Shared>,
   pos: u64,
 }
+
+// What a download reads: the file, or the body of a stream response.
+type Body = Box<dyn Read + Send>;
+
+// Asks for a stream again from a byte offset (a ranged GET).
+type Reopen = Box<dyn Fn(u64) -> io::Result<Body> + Send + Sync>;
 
 struct Shared {
   state: Mutex<PrefetchState>,
@@ -43,9 +55,18 @@ struct Shared {
   // every queue_stop left one thread per opened track pulling its whole
   // file over the network.
   abandoned: AtomicBool,
+  // None for a file, which is only ever read from the start.
+  reopen: Option<Reopen>,
+  // How long a read waits on a download that has stopped arriving before
+  // it fails, which ends the track rather than holding the output silent.
+  // None for a file: a mount that stalls has always been waited out.
+  stall_limit: Option<Duration>,
 }
 
 struct PrefetchState {
+  // Where `buf` starts in the file. Always 0 for a file; a stream that
+  // started again holds the bytes from that offset on.
+  start: u64,
   buf: Vec<u8>,
   // None while the background thread is still reading. Some(Ok(())) once
   // it's reached EOF. Some(Err(_)) if the underlying read failed partway
@@ -53,52 +74,128 @@ struct PrefetchState {
   // thread as a real io::Error instead of a silent truncation that would
   // otherwise look like "the track just ended early."
   done: Option<io::Result<()>>,
+  // Which download fills `buf`. Starting again bumps it, and the download
+  // it replaced stops at its next chunk.
+  download: u64,
 }
 
+// How far past the downloaded edge a stream's read can land and still wait
+// for the download to get there. On a home network that's a fraction of a
+// second of downloading; further than that, a new request is quicker.
+const STREAM_REACH: u64 = 1 << 20;
+
+// The web player's own stall limit (STALL_LIMIT_MS in playback/quality.ts).
+const STREAM_STALL_LIMIT: Duration = Duration::from_secs(20);
+
 impl NetworkAheadReader {
-  fn new(mut file: File) -> io::Result<Self> {
+  fn new(file: File) -> io::Result<Self> {
     let len = file.metadata()?.len();
+    Ok(Self::start(Box::new(file), len, None, None))
+  }
+
+  // `body` is the stream from its first byte, and `len` its length.
+  fn stream(body: Body, len: u64, reopen: Reopen) -> Self {
+    Self::start(body, len, Some(reopen), Some(STREAM_STALL_LIMIT))
+  }
+
+  fn start(body: Body, len: u64, reopen: Option<Reopen>, stall_limit: Option<Duration>) -> Self {
     // Capped, not because files here ever approach it, but so a
     // surprising metadata length can't turn into an oversized upfront
     // allocation before a single byte has actually been read.
     let initial_capacity = len.min(64 << 20) as usize;
     let shared = Arc::new(Shared {
-      state: Mutex::new(PrefetchState { buf: Vec::with_capacity(initial_capacity), done: None }),
+      state: Mutex::new(PrefetchState { start: 0, buf: Vec::with_capacity(initial_capacity), done: None, download: 0 }),
       ready: Condvar::new(),
       len,
       abandoned: AtomicBool::new(false),
+      reopen,
+      stall_limit,
     });
+    download(shared.clone(), 0, move || Ok(body));
+    NetworkAheadReader { shared, pos: 0 }
+  }
 
-    let background = shared.clone();
-    std::thread::spawn(move || {
-      let mut chunk = vec![0u8; 256 * 1024];
-      loop {
-        if background.abandoned.load(Ordering::Relaxed) {
-          break;
+  // A stream's read that lands outside what this download will soon have
+  // starts a new one where it landed.
+  fn restart_if_out_of_reach(&self, state: &mut PrefetchState) {
+    if self.shared.reopen.is_none() {
+      return;
+    }
+    let end = state.start + state.buf.len() as u64;
+    if self.pos >= state.start && self.pos <= end + STREAM_REACH {
+      return;
+    }
+    let at = self.pos;
+    state.download += 1;
+    state.start = at;
+    state.buf.clear();
+    state.done = None;
+    let shared = self.shared.clone();
+    download(self.shared.clone(), state.download, move || (shared.reopen.as_ref().unwrap())(at));
+  }
+
+  fn wait<'a>(&self, state: MutexGuard<'a, PrefetchState>) -> io::Result<MutexGuard<'a, PrefetchState>> {
+    let Some(limit) = self.shared.stall_limit else {
+      return Ok(self.shared.ready.wait(state).unwrap());
+    };
+    // Every chunk that arrives wakes this, so only a download that has
+    // stopped altogether runs out the limit.
+    let (state, waited) = self.shared.ready.wait_timeout(state, limit).unwrap();
+    if waited.timed_out() {
+      return Err(io::Error::new(io::ErrorKind::TimedOut, "the server's stream stopped arriving"));
+    }
+    Ok(state)
+  }
+}
+
+// Reads `open`'s body into the buffer on a thread of its own, as fast as it
+// arrives, until it ends or fails, the reader is dropped, or a newer
+// download replaces it.
+fn download(shared: Arc<Shared>, id: u64, open: impl FnOnce() -> io::Result<Body> + Send + 'static) {
+  std::thread::spawn(move || {
+    let mut body = match open() {
+      Ok(body) => body,
+      Err(e) => return finish(&shared, id, Err(e)),
+    };
+    let mut chunk = vec![0u8; 256 * 1024];
+    loop {
+      if shared.abandoned.load(Ordering::Relaxed) {
+        break;
+      }
+      let read = body.read(&mut chunk);
+      let mut state = shared.state.lock().unwrap();
+      if state.download != id {
+        break;
+      }
+      match read {
+        // A body that ends short of the length it started with was cut
+        // off, not finished: said as an error, like a failed read.
+        Ok(0) if state.start + (state.buf.len() as u64) < shared.len => {
+          drop(state);
+          return finish(&shared, id, Err(io::Error::new(io::ErrorKind::UnexpectedEof, "ended before its length")));
         }
-        match file.read(&mut chunk) {
-          Ok(0) => {
-            let mut state = background.state.lock().unwrap();
-            state.done = Some(Ok(()));
-            background.ready.notify_all();
-            break;
-          }
-          Ok(n) => {
-            let mut state = background.state.lock().unwrap();
-            state.buf.extend_from_slice(&chunk[..n]);
-            background.ready.notify_all();
-          }
-          Err(e) => {
-            let mut state = background.state.lock().unwrap();
-            state.done = Some(Err(e));
-            background.ready.notify_all();
-            break;
-          }
+        Ok(0) => {
+          drop(state);
+          return finish(&shared, id, Ok(()));
+        }
+        Ok(n) => {
+          state.buf.extend_from_slice(&chunk[..n]);
+          shared.ready.notify_all();
+        }
+        Err(e) => {
+          drop(state);
+          return finish(&shared, id, Err(e));
         }
       }
-    });
+    }
+  });
+}
 
-    Ok(NetworkAheadReader { shared, pos: 0 })
+fn finish(shared: &Shared, id: u64, result: io::Result<()>) {
+  let mut state = shared.state.lock().unwrap();
+  if state.download == id {
+    state.done = Some(result);
+    shared.ready.notify_all();
   }
 }
 
@@ -110,48 +207,39 @@ impl Drop for NetworkAheadReader {
 
 impl Read for NetworkAheadReader {
   fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+    if self.pos >= self.shared.len {
+      return Ok(0);
+    }
     let mut state = self.shared.state.lock().unwrap();
+    self.restart_if_out_of_reach(&mut state);
     loop {
-      let available = state.buf.len() as u64 - self.pos;
-      if available > 0 {
-        let n = available.min(out.len() as u64) as usize;
-        let start = self.pos as usize;
-        out[..n].copy_from_slice(&state.buf[start..start + n]);
+      let end = state.start + state.buf.len() as u64;
+      if self.pos >= state.start && self.pos < end {
+        let n = (end - self.pos).min(out.len() as u64) as usize;
+        let from = (self.pos - state.start) as usize;
+        out[..n].copy_from_slice(&state.buf[from..from + n]);
         self.pos += n as u64;
         return Ok(n);
       }
       match &state.done {
         Some(Ok(())) => return Ok(0),
         Some(Err(e)) => return Err(io::Error::new(e.kind(), e.to_string())),
-        None => state = self.shared.ready.wait(state).unwrap(),
+        None => state = self.wait(state)?,
       }
     }
   }
 }
 
 impl Seek for NetworkAheadReader {
+  // Only moves the position. The next read waits for the bytes there (or,
+  // for a stream, asks for them), and says if they never come.
   fn seek(&mut self, seek: SeekFrom) -> io::Result<u64> {
-    let target = match seek {
+    self.pos = match seek {
       SeekFrom::Start(n) => n,
       SeekFrom::End(n) => (self.shared.len as i64 + n).max(0) as u64,
       SeekFrom::Current(n) => (self.pos as i64 + n).max(0) as u64,
     };
-
-    // A seek is really just a read that discards what it reads — it needs
-    // the same wait, since the target byte may not have arrived yet
-    // either. The whole file stays buffered once downloaded (nothing is
-    // ever evicted), so seeking backward is always immediate.
-    let mut state = self.shared.state.lock().unwrap();
-    while (state.buf.len() as u64) < target {
-      match &state.done {
-        Some(Ok(())) => break,
-        Some(Err(e)) => return Err(io::Error::new(e.kind(), e.to_string())),
-        None => state = self.shared.ready.wait(state).unwrap(),
-      }
-    }
-
-    self.pos = target;
-    Ok(target)
+    Ok(self.pos)
   }
 }
 
@@ -160,7 +248,9 @@ impl Seek for NetworkAheadReader {
 // resolves a recording node id to a file path + ReplayGain via
 // POST /api/v1/queue/resolve (the same call the remote/WASM path needs)
 // and hands Rust only the resolved plan — one implementation of "turn a
-// node into a file" instead of two that can drift.
+// node into a file" instead of two that can drift. The plan includes the
+// server's stream URL for the file (#185), which is the only request this
+// module ever makes, and only when the file isn't here.
 
 #[derive(Clone, Deserialize)]
 pub struct QueueTrack {
@@ -169,6 +259,14 @@ pub struct QueueTrack {
   /// ReplayGain track gain in dB, applied directly via rodio's
   /// amplify_decibel — None means "no tag, play at 0dB."
   pub replaygain_track_gain: Option<f32>,
+  /// Issue #185: the server's stream of this file (quality=original, with
+  /// a media ticket), asked for only when `file_path` won't open here.
+  #[serde(default)]
+  pub stream_url: Option<String>,
+  /// Set when the track opened from `stream_url` rather than the file, for
+  /// the transport to say so. Rust's own: React never sends it.
+  #[serde(skip)]
+  pub streaming: bool,
 }
 
 /// Issue #125: off/all/one, a persisted
@@ -235,15 +333,47 @@ fn classify_open_error(path: &str, err: &io::Error) -> PlaybackError {
   }
 }
 
+// Issue #185: the open failures that mean the file isn't on this machine,
+// so the server's copy is worth asking for. Gone, or a folder on its path
+// gone (an unmounted or never-mounted library); a dead NFS handle; or not
+// ours to read. Anything else that stops a local open, such as an I/O
+// error from a failing disk, is reported as it always was. So is a file
+// that opens but won't decode: the server would send the same bytes.
+fn stream_instead(open_error: io::ErrorKind, stream_url: Option<&str>) -> Option<&str> {
+  use io::ErrorKind::{NotADirectory, NotFound, PermissionDenied, StaleNetworkFileHandle};
+  match open_error {
+    NotFound | NotADirectory | StaleNetworkFileHandle | PermissionDenied => stream_url,
+    _ => None,
+  }
+}
+
+// A stream that couldn't be had is reported as the local failure that sent
+// playback to it, so the transport's account of a missing drive (#184)
+// still holds, with what the server said added to its detail.
+fn with_stream_failure(local: PlaybackError, stream_failure: &str) -> PlaybackError {
+  match local {
+    PlaybackError::FileUnreachable { path, nearest_folder, nearest_folder_empty, detail } => PlaybackError::FileUnreachable {
+      path,
+      nearest_folder,
+      nearest_folder_empty,
+      detail: format!("{detail}; the server's stream failed too: {stream_failure}"),
+    },
+    other => other,
+  }
+}
+
 #[derive(Clone, Serialize)]
 pub struct PositionEvent {
   pub position_ms: u64,
   pub recording_node_id: Option<i64>,
+  /// The current track is playing from the server's stream (#185).
+  pub streaming: bool,
 }
 
 #[derive(Clone, Serialize)]
 pub struct TrackChangedEvent {
   pub recording_node_id: Option<i64>,
+  pub streaming: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -251,6 +381,7 @@ pub struct QueueStatus {
   pub playing: bool,
   pub position_ms: u64,
   pub current_recording_node_id: Option<i64>,
+  pub streaming: bool,
   pub queue_len: usize,
   pub volume: f32,
 }
@@ -356,9 +487,11 @@ fn gain_db(track: &QueueTrack) -> f32 {
 // open_source. The two are separate so the open, which can take seconds
 // over NFS, runs without the session lock held, and only this quick part
 // runs under it. Shared by queue_enqueue and the monitor thread, so
-// there's one place ReplayGain is applied.
-fn append_opened(session: &mut Session, track: QueueTrack, source: Decoder<NetworkAheadReader>) {
-  session.sink.append(source.amplify_decibel(gain_db(&track)));
+// there's one place ReplayGain is applied, to a streamed track the same as
+// to a file.
+fn append_opened(session: &mut Session, mut track: QueueTrack, opened: Opened) {
+  session.sink.append(opened.source.amplify_decibel(gain_db(&track)));
+  track.streaming = opened.streaming;
   session.queue.push_back(track);
 }
 
@@ -372,15 +505,95 @@ fn take_next_to_open(queue: &VecDeque<QueueTrack>, pending: &mut VecDeque<QueueT
   pending.pop_front()
 }
 
-// Testable without a Player (and so without an audio device).
-fn open_source(path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError> {
-  let file = File::open(path).map_err(|e| classify_open_error(path, &e))?;
+// A track's decoder, and whether it came from the server's stream.
+struct Opened {
+  source: Decoder<NetworkAheadReader>,
+  streaming: bool,
+}
+
+// Testable without a Player (and so without an audio device). The file
+// itself whenever it opens here. Issue #185: when it isn't here, the
+// server's stream of it.
+fn open_source(track: &QueueTrack) -> Result<Opened, PlaybackError> {
+  let path = track.file_path.as_str();
   // See NetworkAheadReader above: confirmed live over an NFS-mounted
   // library that a plain File/BufReader pops mid-track, even with a large
   // buffer, because decode's reads are still synchronous with the
   // network. This background-prefetches instead.
-  let reader = NetworkAheadReader::new(file).map_err(|e| classify_open_error(path, &e))?;
-  Decoder::new(reader).map_err(|e| PlaybackError::Undecodable { path: path.to_string(), detail: e.to_string() })
+  match File::open(path).and_then(NetworkAheadReader::new) {
+    Ok(reader) => decode(reader, path).map(|source| Opened { source, streaming: false }),
+    Err(err) => {
+      let unreachable = classify_open_error(path, &err);
+      let Some(url) = stream_instead(err.kind(), track.stream_url.as_deref()) else {
+        return Err(unreachable);
+      };
+      let reader = open_server_stream(url).map_err(|failure| with_stream_failure(unreachable, &failure))?;
+      decode(reader, path).map(|source| Opened { source, streaming: true })
+    }
+  }
+}
+
+// One agent for every stream, so the track playing and the one opened
+// behind it share connections to the server.
+fn stream_agent() -> &'static ureq::Agent {
+  static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+  AGENT.get_or_init(|| {
+    // The OS decides which certificates to trust, as it does for the
+    // webview and for the connect screen's probe (probe.rs).
+    let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
+    ureq::Agent::config_builder()
+      .tls_config(tls)
+      .timeout_connect(Some(Duration::from_secs(5)))
+      .timeout_recv_response(Some(Duration::from_secs(20)))
+      .build()
+      .into()
+  })
+}
+
+// The URL carries a media ticket, so it's never logged, and no error from
+// here repeats it: a failure is described by what the server answered.
+fn open_server_stream(url: &str) -> Result<NetworkAheadReader, String> {
+  let response = stream_agent().get(url).call().map_err(|e| describe_stream_error(&e))?;
+  // The original-quality route always sends one. Without it, the decoder
+  // couldn't be told the length, and a seek back would fail again.
+  let len = response.body().content_length().ok_or_else(|| "it sent no length".to_string())?;
+  let body = Box::new(response.into_body().into_reader());
+  let url = url.to_string();
+  Ok(NetworkAheadReader::stream(body, len, Box::new(move |at| stream_from(&url, at))))
+}
+
+// The rest of the stream from byte `at`, for a read well past what has
+// arrived, or behind it.
+fn stream_from(url: &str, at: u64) -> io::Result<Body> {
+  let response = stream_agent()
+    .get(url)
+    .header("Range", format!("bytes={at}-"))
+    .call()
+    .map_err(|e| io::Error::other(describe_stream_error(&e)))?;
+  // A whole file in answer would be read as if it began at `at`.
+  if response.status() != 206 {
+    return Err(io::Error::other(format!("it answered {} to a range", response.status().as_u16())));
+  }
+  Ok(Box::new(response.into_body().into_reader()))
+}
+
+fn describe_stream_error(e: &ureq::Error) -> String {
+  match e {
+    ureq::Error::StatusCode(code) => format!("it answered {code}"),
+    other => other.to_string(),
+  }
+}
+
+// With the length, symphonia seeks by byte offset in either direction.
+// Without it, it treats the source as forward-only: a seek back failed with
+// RandomAccessNotSupported, and the scrubber only ever moved forward.
+fn decode(reader: NetworkAheadReader, path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError> {
+  let len = reader.shared.len;
+  Decoder::builder()
+    .with_data(reader)
+    .with_byte_len(len)
+    .build()
+    .map_err(|e| PlaybackError::Undecodable { path: path.to_string(), detail: e.to_string() })
 }
 
 // Pure gapless-repeat scheduling core — given how many tracks have
@@ -463,7 +676,7 @@ fn spawn_monitor(
       }
     };
     let opened = to_open.map(|track| {
-      let source = open_source(&track.file_path);
+      let source = open_source(&track);
       (track, source)
     });
 
@@ -474,7 +687,7 @@ fn spawn_monitor(
     if let Some((track, source)) = opened {
       session.opening = false;
       match source {
-        Ok(source) => append_opened(session, track, source),
+        Ok(opened) => append_opened(session, track, opened),
         // Skipped, the same as a track queue_enqueue rejects is dropped
         // from usePlayback's queue. The next tick opens the one after it.
         Err(err) => log::warn!("[playback] skipping a track that won't open: {err:?}"),
@@ -489,12 +702,13 @@ fn spawn_monitor(
     }
     let position_ms = session.sink.get_pos().as_millis() as u64;
     let current_node = session.queue.front().map(|t| t.recording_node_id);
+    let streaming = session.queue.front().is_some_and(|t| t.streaming);
     let announce = std::mem::take(&mut session.announce_owed);
     drop(guard);
 
-    let _ = app.emit("playback://position", PositionEvent { position_ms, recording_node_id: current_node });
+    let _ = app.emit("playback://position", PositionEvent { position_ms, recording_node_id: current_node, streaming });
     if announce {
-      let _ = app.emit("playback://track-changed", TrackChangedEvent { recording_node_id: current_node });
+      let _ = app.emit("playback://track-changed", TrackChangedEvent { recording_node_id: current_node, streaming });
     }
   });
 }
@@ -623,7 +837,7 @@ pub fn queue_enqueue(app: AppHandle, state: State<PlaybackState>, track: QueueTr
 
   session.opening = true;
   drop(guard);
-  let opened = open_source(&track.file_path);
+  let opened = open_source(&track);
   let mut guard = state.session.lock().unwrap();
   // Stopped or replaced while the file was opening: whoever did that has
   // moved on from this track, and dropping `opened` cancels its download.
@@ -633,9 +847,9 @@ pub fn queue_enqueue(app: AppHandle, state: State<PlaybackState>, track: QueueTr
   session.opening = false;
 
   match opened {
-    Ok(source) => {
+    Ok(opened) => {
       session.full_order.push(track.clone());
-      append_opened(session, track, source);
+      append_opened(session, track, opened);
       Ok(())
     }
     Err(err) => {
@@ -687,7 +901,10 @@ pub fn queue_stop(state: State<PlaybackState>) -> Result<(), String> {
   Ok(())
 }
 
-#[tauri::command]
+/// `async` for the same reason as queue_enqueue: rodio's try_seek waits for
+/// the decoder to land, and on a streamed track (#185) that can wait on the
+/// network, which on the main thread would freeze the window.
+#[tauri::command(async)]
 pub fn queue_seek(state: State<PlaybackState>, position_ms: u64) -> Result<(), String> {
   if let Some(session) = state.session.lock().unwrap().as_ref() {
     session
@@ -733,10 +950,18 @@ pub fn queue_status(state: State<PlaybackState>) -> QueueStatus {
       playing: !session.sink.is_paused() && !session.sink.empty(),
       position_ms: session.sink.get_pos().as_millis() as u64,
       current_recording_node_id: session.queue.front().map(|t| t.recording_node_id),
+      streaming: session.queue.front().is_some_and(|t| t.streaming),
       queue_len: session.queue.len(),
       volume,
     },
-    None => QueueStatus { playing: false, position_ms: 0, current_recording_node_id: None, queue_len: 0, volume },
+    None => QueueStatus {
+      playing: false,
+      position_ms: 0,
+      current_recording_node_id: None,
+      streaming: false,
+      queue_len: 0,
+      volume,
+    },
   }
 }
 
@@ -760,13 +985,12 @@ mod tests {
 
   #[test]
   fn gain_db_defaults_to_zero_when_no_tag() {
-    let track = QueueTrack { file_path: String::new(), recording_node_id: 0, replaygain_track_gain: None };
-    assert_eq!(gain_db(&track), 0.0);
+    assert_eq!(gain_db(&track(0)), 0.0);
   }
 
   #[test]
   fn gain_db_passes_through_the_tag_value() {
-    let track = QueueTrack { file_path: String::new(), recording_node_id: 0, replaygain_track_gain: Some(-6.5) };
+    let track = QueueTrack { replaygain_track_gain: Some(-6.5), ..track(0) };
     assert_eq!(gain_db(&track), -6.5);
   }
 
@@ -774,7 +998,11 @@ mod tests {
   // bookkeeping, never touches the filesystem — so an empty path plus a
   // distinguishing id is enough to tell tracks apart by assertion.
   fn track(id: i64) -> QueueTrack {
-    QueueTrack { file_path: String::new(), recording_node_id: id, replaygain_track_gain: None }
+    QueueTrack { file_path: String::new(), recording_node_id: id, replaygain_track_gain: None, stream_url: None, streaming: false }
+  }
+
+  fn at_path(path: &Path) -> QueueTrack {
+    QueueTrack { file_path: path.to_str().unwrap().to_string(), ..track(0) }
   }
 
   fn ids(tracks: &[QueueTrack]) -> Vec<i64> {
@@ -946,7 +1174,7 @@ mod tests {
     let mount_point = scratch_dir("unmounted");
     let path = mount_point.join("Music/Artist/Album/01.flac");
 
-    let err = open_source(path.to_str().unwrap()).err().unwrap();
+    let err = open_source(&at_path(&path)).err().unwrap();
 
     let (nearest, empty) = unreachable_parts(err);
     assert_eq!(nearest.as_deref(), mount_point.to_str());
@@ -962,7 +1190,7 @@ mod tests {
     std::fs::create_dir_all(&album).unwrap();
     std::fs::write(album.join("02.flac"), b"still here").unwrap();
 
-    let err = open_source(album.join("01.flac").to_str().unwrap()).err().unwrap();
+    let err = open_source(&at_path(&album.join("01.flac"))).err().unwrap();
 
     let (nearest, empty) = unreachable_parts(err);
     assert_eq!(nearest.as_deref(), album.to_str());
@@ -976,10 +1204,316 @@ mod tests {
     let path = dir.join("01.flac");
     std::fs::write(&path, vec![0x5au8; 4096]).unwrap();
 
-    let err = open_source(path.to_str().unwrap()).err().unwrap();
+    let err = open_source(&at_path(&path)).err().unwrap();
 
     assert!(matches!(err, PlaybackError::Undecodable { .. }), "got {err:?}");
     std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  // A 16-bit stereo PCM WAV of `seconds` of silence: the smallest real audio
+  // file symphonia decodes, written without an encoder.
+  fn wav_bytes(seconds: u32) -> Vec<u8> {
+    let (rate, channels, bytes_per_sample) = (44_100u32, 2u16, 2u16);
+    let data_len = rate * seconds * u32::from(channels * bytes_per_sample);
+    let mut wav = Vec::with_capacity(44 + data_len as usize);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&rate.to_le_bytes());
+    wav.extend_from_slice(&(rate * u32::from(channels * bytes_per_sample)).to_le_bytes());
+    wav.extend_from_slice(&(channels * bytes_per_sample).to_le_bytes());
+    wav.extend_from_slice(&(bytes_per_sample * 8).to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.resize(44 + data_len as usize, 0);
+    wav
+  }
+
+  #[test]
+  fn open_source_seeks_back_as_well_as_forward() {
+    let dir = scratch_dir("seek");
+    let path = dir.join("01.wav");
+    std::fs::write(&path, wav_bytes(10)).unwrap();
+
+    let mut source = open_source(&at_path(&path)).unwrap().source;
+
+    source.try_seek(Duration::from_secs(8)).expect("seek forward");
+    source.try_seek(Duration::from_secs(2)).expect("seek back");
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  // Issue #185's decision: the open failures that mean the file isn't here
+  // stream, nothing else does, and nothing streams without a URL.
+  #[test]
+  fn stream_instead_only_when_the_file_is_not_here() {
+    use io::ErrorKind::{Interrupted, InvalidData, NotADirectory, NotFound, Other, PermissionDenied, StaleNetworkFileHandle, TimedOut};
+    let url = Some("http://musicbox:8899/api/v1/files/7/stream?quality=original&t=ticket");
+    for kind in [NotFound, NotADirectory, StaleNetworkFileHandle, PermissionDenied] {
+      assert_eq!(stream_instead(kind, url), url, "{kind:?}");
+      assert_eq!(stream_instead(kind, None), None, "{kind:?} with no stream to ask for");
+    }
+    for kind in [Other, TimedOut, Interrupted, InvalidData] {
+      assert_eq!(stream_instead(kind, url), None, "{kind:?}");
+    }
+  }
+
+  // A response body that hands over its first `head` bytes, then nothing
+  // more until the test drops `hold`'s sender, as a stalled connection would.
+  struct Trickle {
+    data: Vec<u8>,
+    head: usize,
+    hold: std::sync::mpsc::Receiver<()>,
+  }
+
+  impl Read for Trickle {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+      if self.head == 0 {
+        let _ = self.hold.recv();
+        return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
+      }
+      let n = self.head.min(out.len());
+      let from = self.data.len() - self.head;
+      out[..n].copy_from_slice(&self.data[from..from + n]);
+      self.head -= n;
+      Ok(n)
+    }
+  }
+
+  // Bytes that say where they came from, so a read at the wrong offset shows.
+  fn numbered(len: usize) -> Vec<u8> {
+    (0..len).map(|i| (i % 251) as u8).collect()
+  }
+
+  // A stream body whose first 1000 bytes arrive, and a reopen that records
+  // each offset it's asked for and serves the rest from there at once.
+  fn stalled_stream(data: &[u8], stall_limit: Duration) -> (NetworkAheadReader, Arc<Mutex<Vec<u64>>>, std::sync::mpsc::Sender<()>) {
+    let (release, hold) = std::sync::mpsc::channel();
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let reopen: Reopen = {
+      let (data, asked) = (data.to_vec(), asked.clone());
+      Box::new(move |at| {
+        asked.lock().unwrap().push(at);
+        Ok(Box::new(io::Cursor::new(data[at as usize..].to_vec())) as Body)
+      })
+    };
+    let body = Box::new(Trickle { data: data[..1000].to_vec(), head: 1000, hold });
+    let reader = NetworkAheadReader::start(body, data.len() as u64, Some(reopen), Some(stall_limit));
+    (reader, asked, release)
+  }
+
+  #[test]
+  fn a_stream_read_far_from_what_has_arrived_asks_from_there() {
+    let data = numbered(4 << 20);
+    let (mut reader, asked, _release) = stalled_stream(&data, STREAM_STALL_LIMIT);
+    let mut buf = [0u8; 16];
+
+    reader.read_exact(&mut buf).unwrap();
+    assert_eq!(buf, data[..16]);
+
+    let far = 3 << 20;
+    reader.seek(SeekFrom::Start(far)).unwrap();
+    reader.read_exact(&mut buf).unwrap();
+    assert_eq!(buf, data[far as usize..far as usize + 16]);
+
+    // Behind where that download started.
+    reader.seek(SeekFrom::Start(100)).unwrap();
+    reader.read_exact(&mut buf).unwrap();
+    assert_eq!(buf, data[100..116]);
+
+    assert_eq!(*asked.lock().unwrap(), vec![far, 100]);
+  }
+
+  #[test]
+  fn a_stream_read_within_reach_waits_and_gives_up_once_nothing_arrives() {
+    let data = numbered(4 << 20);
+    let (mut reader, asked, _release) = stalled_stream(&data, Duration::from_millis(200));
+
+    reader.seek(SeekFrom::Start(1000 + 4096)).unwrap();
+    let err = reader.read(&mut [0u8; 16]).unwrap_err();
+
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert!(asked.lock().unwrap().is_empty(), "waited for this download rather than starting another");
+  }
+
+  #[test]
+  fn a_stream_cut_off_short_of_its_length_is_an_error() {
+    let body = Box::new(io::Cursor::new(vec![1u8; 1000]));
+    let mut reader = NetworkAheadReader::stream(body, 2000, Box::new(|_| Err(io::Error::other("not asked"))));
+
+    let err = reader.read_to_end(&mut Vec::new()).unwrap_err();
+
+    assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+  }
+
+  // A stand-in for the server's GET /files/:id/stream at original quality:
+  // `body` with its length, honouring a `bytes=N-` range with a 206, or a
+  // 404 when there's no body. Each connection gets one answer and is
+  // closed. `requests` records each request line, and the range if any.
+  struct StreamServer {
+    url: String,
+    requests: Arc<Mutex<Vec<String>>>,
+  }
+
+  fn stream_server(body: Option<Vec<u8>>) -> StreamServer {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/api/v1/files/7/stream?quality=original&t=secret-ticket", listener.local_addr().unwrap());
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let seen = requests.clone();
+    std::thread::spawn(move || {
+      for conn in listener.incoming().flatten() {
+        let (body, seen) = (body.clone(), seen.clone());
+        std::thread::spawn(move || answer(conn, body.as_deref(), &seen));
+      }
+    });
+    StreamServer { url, requests }
+  }
+
+  fn answer(mut conn: std::net::TcpStream, body: Option<&[u8]>, seen: &Mutex<Vec<String>>) {
+    use std::io::{BufRead, Write};
+    let mut lines = io::BufReader::new(conn.try_clone().unwrap()).lines();
+    let request = lines.next().unwrap().unwrap();
+    let mut from = None;
+    for line in lines.map_while(Result::ok).take_while(|line| !line.is_empty()) {
+      if let Some(range) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+        from = range.trim().trim_end_matches('-').parse::<usize>().ok();
+      }
+    }
+    seen.lock().unwrap().push(match from {
+      Some(at) => format!("{request} from {at}"),
+      None => request,
+    });
+    let response = match (body, from) {
+      (None, _) => b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_vec(),
+      (Some(body), Some(at)) => {
+        let head = format!(
+          "HTTP/1.1 206 Partial Content\r\ncontent-range: bytes {at}-{}/{}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+          body.len() - 1,
+          body.len(),
+          body.len() - at,
+        );
+        [head.as_bytes(), &body[at..]].concat()
+      }
+      (Some(body), None) => {
+        let head = format!("HTTP/1.1 200 OK\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+        [head.as_bytes(), body].concat()
+      }
+    };
+    // A reader that started again elsewhere hangs up mid-body.
+    let _ = conn.write_all(&response);
+  }
+
+  fn streamed(path: &Path, url: &str) -> QueueTrack {
+    QueueTrack { stream_url: Some(url.to_string()), ..at_path(path) }
+  }
+
+  // The real check, short of a server: a client with no mount plays, and
+  // seeks both ways in, a track it can only get from the server.
+  #[test]
+  fn a_track_whose_file_is_not_here_plays_from_the_server() {
+    let server = stream_server(Some(wav_bytes(10)));
+    let dir = scratch_dir("streamed");
+
+    let opened = open_source(&streamed(&dir.join("gone/01.wav"), &server.url)).unwrap();
+
+    assert!(opened.streaming);
+    let mut source = opened.source;
+    assert_eq!((&mut source).take(44_100).count(), 44_100);
+    source.try_seek(Duration::from_secs(8)).expect("seek forward");
+    source.try_seek(Duration::from_secs(2)).expect("seek back");
+    assert_eq!(
+      server.requests.lock().unwrap()[0],
+      "GET /api/v1/files/7/stream?quality=original&t=secret-ticket HTTP/1.1"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn a_file_that_is_here_is_never_streamed() {
+    let server = stream_server(Some(wav_bytes(1)));
+    let dir = scratch_dir("local-first");
+    let path = dir.join("01.wav");
+    std::fs::write(&path, wav_bytes(1)).unwrap();
+
+    let opened = open_source(&streamed(&path, &server.url)).unwrap();
+
+    assert!(!opened.streaming);
+    assert!(server.requests.lock().unwrap().is_empty());
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  // It opened, so it's here: the server would send the same bytes.
+  #[test]
+  fn a_file_that_is_here_but_will_not_decode_is_not_streamed() {
+    let server = stream_server(Some(wav_bytes(1)));
+    let dir = scratch_dir("local-garbage");
+    let path = dir.join("01.flac");
+    std::fs::write(&path, vec![0x5au8; 4096]).unwrap();
+
+    let err = open_source(&streamed(&path, &server.url)).err().unwrap();
+
+    assert!(matches!(err, PlaybackError::Undecodable { .. }), "got {err:?}");
+    assert!(server.requests.lock().unwrap().is_empty());
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn a_stream_the_server_does_not_have_reports_the_file_as_unreachable_here() {
+    let server = stream_server(None);
+    let dir = scratch_dir("stream-404");
+    let path = dir.join("01.flac");
+
+    let err = open_source(&streamed(&path, &server.url)).err().unwrap();
+
+    let PlaybackError::FileUnreachable { path: reported, nearest_folder, detail, .. } = err else {
+      panic!("expected FileUnreachable, got {err:?}");
+    };
+    assert_eq!(reported, path.to_str().unwrap());
+    assert_eq!(nearest_folder.as_deref(), dir.to_str());
+    assert!(detail.ends_with("; the server's stream failed too: it answered 404"), "{detail}");
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn a_server_that_is_not_there_is_reported_without_the_media_ticket() {
+    // Bound and closed again, so nothing is listening there.
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/api/v1/files/7/stream?quality=original&t=secret-ticket");
+    let dir = scratch_dir("stream-refused");
+
+    let err = open_source(&streamed(&dir.join("01.flac"), &url)).err().unwrap();
+
+    let PlaybackError::FileUnreachable { detail, .. } = err else { panic!("expected FileUnreachable, got {err:?}") };
+    assert!(detail.contains("; the server's stream failed too: "), "{detail}");
+    assert!(!detail.contains("secret-ticket"), "{detail}");
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn a_stream_that_is_not_audio_is_undecodable() {
+    let server = stream_server(Some(vec![0x5au8; 4096]));
+    let dir = scratch_dir("stream-garbage");
+    let path = dir.join("01.flac");
+
+    let err = open_source(&streamed(&path, &server.url)).err().unwrap();
+
+    let PlaybackError::Undecodable { path: reported, .. } = err else { panic!("expected Undecodable, got {err:?}") };
+    assert_eq!(reported, path.to_str().unwrap());
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn stream_from_asks_the_server_for_the_rest_from_an_offset() {
+    let data = numbered(10_000);
+    let server = stream_server(Some(data.clone()));
+
+    let mut rest = Vec::new();
+    stream_from(&server.url, 1000).unwrap().read_to_end(&mut rest).unwrap();
+
+    assert_eq!(rest, data[1000..]);
+    assert!(server.requests.lock().unwrap()[0].ends_with(" from 1000"));
   }
 
   // usePlayback.ts switches on `kind` and reads these field names; this
@@ -1083,6 +1617,40 @@ mod tests {
     std::thread::sleep(Duration::from_millis(300));
     let pos_after = sink.get_pos();
     assert!(pos_after.as_secs() >= 30, "seek should have jumped forward: {pos_after:?}");
+
+    sink.stop();
+  }
+
+  // The same, for #185: a track whose file isn't on this machine, played
+  // from a real Legato server's stream through the real output device.
+  // Not run by default either: set LEGATO_TEST_STREAM_URL to a track's
+  // GET /api/v1/files/:id/stream?quality=original&t=<media ticket>, a track
+  // at least 40 s long.
+  #[test]
+  #[ignore]
+  fn real_stream_smoke_test() {
+    let url = std::env::var("LEGATO_TEST_STREAM_URL").expect("set LEGATO_TEST_STREAM_URL to a server's stream URL");
+    let missing = std::env::temp_dir().join(format!("legato-not-mounted-{}/01.flac", std::process::id()));
+
+    let opened = open_source(&streamed(&missing, &url)).expect("stream the track");
+    assert!(opened.streaming);
+
+    let stream = DeviceSinkBuilder::open_default_sink().expect("open audio device");
+    let sink = Player::connect_new(stream.mixer());
+    sink.set_volume(0.2);
+    sink.append(opened.source.amplify_decibel(-6.0));
+
+    std::thread::sleep(Duration::from_millis(800));
+    assert!(sink.get_pos().as_millis() > 0, "playback should have advanced: {:?}", sink.get_pos());
+
+    sink.try_seek(Duration::from_secs(30)).expect("seek forward");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(sink.get_pos().as_secs() >= 30, "seek should have jumped forward: {:?}", sink.get_pos());
+
+    sink.try_seek(Duration::from_secs(5)).expect("seek back");
+    std::thread::sleep(Duration::from_millis(300));
+    let back = sink.get_pos();
+    assert!(back.as_secs() >= 5 && back.as_secs() < 30, "seek should have jumped back: {back:?}");
 
     sink.stop();
   }

@@ -37,7 +37,7 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-function renderPlayer(problem: PlaybackProblem | null, onResolveProblem = () => undefined, layout?: ShellLayout) {
+function renderPlayer(problem: PlaybackProblem | null, onResolveProblem = () => undefined, layout?: ShellLayout, streaming = false) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const noop = () => undefined
@@ -59,6 +59,7 @@ function renderPlayer(problem: PlaybackProblem | null, onResolveProblem = () => 
             currentRecordingNodeId: null,
             currentFileId: null,
             currentDurationMs: null,
+            streaming,
             volume: 1,
           },
           shuffled: false,
@@ -114,6 +115,21 @@ describe('Player playback problem (#184)', () => {
     const container = renderPlayer(null)
     expect(container.querySelector('[role="alert"]')).toBeNull()
     expect(container.querySelector('[aria-label="Seek"]')).not.toBeNull()
+  })
+})
+
+describe('Player streaming label (#185)', () => {
+  it('says quietly that a track is streaming from the server', () => {
+    const container = renderPlayer(null, undefined, undefined, true)
+    // The innermost match: the tooltip's wrapper holds the same text.
+    const label = [...container.querySelectorAll('span')].findLast((s) => s.textContent === ' · streaming')
+    expect(label).toBeDefined()
+    expect(label!.className).toContain('--color-ink-3')
+  })
+
+  it('says nothing for a track playing from this computer', () => {
+    const container = renderPlayer(null)
+    expect(container.textContent).not.toContain('streaming')
   })
 })
 

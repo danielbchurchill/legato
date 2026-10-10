@@ -276,8 +276,18 @@ export function Player({
         <span title={title} className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
           {title}
         </span>
-        <span title={artist ?? undefined} className="truncate text-small text-[var(--color-ink-2)]">
-          {artist ?? ''}
+        <span className="flex min-w-0 text-small">
+          <span title={artist ?? undefined} className="truncate text-[var(--color-ink-2)]">
+            {artist ?? ''}
+          </span>
+          {/* #185: the file isn't on this computer, so the track came from
+           * the server. Said quietly, in words in the quietest ink, and the
+           * artist truncates before it does. */}
+          {status.streaming && (
+            <Tooltip label="Streaming from the server. This file isn't on this computer." placement="top">
+              <span className="shrink-0 whitespace-pre text-[var(--color-ink-3)]">{artist ? ' · streaming' : 'streaming'}</span>
+            </Tooltip>
+          )}
         </span>
       </div>
 

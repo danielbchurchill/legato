@@ -33,7 +33,11 @@ tauri-plugin-autostart = "2"
 # rather than rustls's default aws-lc-rs, which needs cmake and NASM to build.
 mdns-sd = { version = "0.21", default-features = false, features = ["logging"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-rustls-platform-verifier = "0.6"
+rustls-platform-verifier = "0.7"
+# Issue #185: a track whose file isn't on this machine streams from the
+# server instead (playback.rs). Blocking, so it fits the prefetch thread that
+# already reads files; rustls with ring and the OS verifier, as above.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 
 [dev-dependencies]
 # probe.rs's test serves a self-signed certificate to check it's reported

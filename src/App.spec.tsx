@@ -84,7 +84,15 @@ vi.mock('./connect/ConnectScreen', async () => {
 // Every function on it is a spy, made once per name.
 const playbackState = vi.hoisted(() => ({
   currentTitle: null as string | null,
-  status: { playing: false, positionMs: 0, currentRecordingNodeId: null, currentFileId: null, currentDurationMs: null, volume: 1 },
+  status: {
+    playing: false,
+    positionMs: 0,
+    currentRecordingNodeId: null,
+    currentFileId: null,
+    currentDurationMs: null,
+    streaming: false,
+    volume: 1,
+  },
   queueBusy: false,
   shuffled: false,
   problem: null,
