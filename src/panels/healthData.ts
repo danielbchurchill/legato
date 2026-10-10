@@ -60,8 +60,8 @@ type FetchedOptions = {
   /** A failed fetch (a 5xx, a 401, the server gone) keeps what was fetched
    * before, rather than going back to null. Until something has been
    * fetched, it tries again on a backoff, because the event that would
-   * fetch again may not come for days, and the socket that carries it
-   * doesn't reconnect after a server restart. */
+   * fetch again may not come for days, and a failure that isn't an outage
+   * (a 500 from a server that's up) gets no resync after it (#119). */
   keep?: boolean
 }
 

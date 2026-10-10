@@ -281,7 +281,8 @@ describe('Library header and Artists tab after the library changes (#302)', () =
 
 describe("Library header when /stats doesn't answer at first (#302)", () => {
   // Nothing else would fetch it again: the next library:changed may be days
-  // away on a library that's caught up, and the socket doesn't reconnect.
+  // away on a library that's caught up, and a 500 from a server that's up
+  // is no outage, so no resync follows it (#119).
   for (const failure of ['500', 'network'] as const) {
     it(`tries again after 1, 2, 4… s, then every 30 s, until it answers (${failure})`, async () => {
       vi.useFakeTimers()
