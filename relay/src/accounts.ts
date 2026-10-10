@@ -60,21 +60,37 @@ export function upsertUser(db: Database, provider: Provider, profile: OAuthProfi
     .get(provider, profile.providerUserId) as RelayUserRow;
 }
 
+// An account as the clients that signed in to it are told about it.
+export function publicUser(user: RelayUserRow) {
+  return {
+    id: user.id,
+    provider: user.provider,
+    email: user.email,
+    displayName: user.display_name,
+    avatarUrl: user.avatar_url,
+  };
+}
+
 // 30 days — long enough a session doesn't nag to re-auth constantly,
 // short enough a token nobody explicitly revoked doesn't live forever.
 // See sqlite-datetime.ts for why this is written via SQL-relative
 // datetime math rather than a JS toISOString() string.
 const SESSION_TTL_SQL = "+30 days";
 
-export function createSession(db: Database, userId: number): { token: string; expiresAt: Date } {
+// A web session (issue #365, migration 0011) is scoped to one server and
+// bound to the origin it was issued to; every other session is the whole
+// account's.
+export type SessionScope = { serverId: string; originMac: string };
+
+export function createSession(db: Database, userId: number, scope?: SessionScope): { token: string; expiresAt: Date } {
   const token = randomBytes(32).toString("hex");
   const row = db
     .prepare(
-      `INSERT INTO relay_sessions (id, user_id, expires_at)
-       VALUES (?, ?, datetime('now', ?))
+      `INSERT INTO relay_sessions (id, user_id, expires_at, server_id, origin_mac)
+       VALUES (?, ?, datetime('now', ?), ?, ?)
        RETURNING expires_at`,
     )
-    .get(token, userId, SESSION_TTL_SQL) as { expires_at: string };
+    .get(token, userId, SESSION_TTL_SQL, scope?.serverId ?? null, scope?.originMac ?? null) as { expires_at: string };
   return { token, expiresAt: parseSqliteDatetime(row.expires_at) };
 }
 
@@ -85,15 +101,52 @@ export function getUserById(db: Database, id: number): RelayUserRow | null {
   return row ?? null;
 }
 
+// The account a whole-account session belongs to. A web session, scoped to
+// one server, is null here, so every route refuses one unless it asks for
+// it by name, through getSessionByToken.
 export function getUserBySessionToken(db: Database, token: string): RelayUserRow | null {
   const row = db
     .prepare(
       `SELECT u.* FROM relay_sessions s
        JOIN relay_users u ON u.id = s.user_id
-       WHERE s.id = ? AND s.expires_at > datetime('now')`,
+       WHERE s.id = ? AND s.expires_at > datetime('now') AND s.server_id IS NULL`,
     )
     .get(token) as RelayUserRow | undefined;
   return row ?? null;
+}
+
+// Any live session, with the one server it's scoped to, or null when it's
+// the whole account's. Only for the routes a web session may use: the
+// relay tickets and access tokens for its server, its server in GET
+// /linked-servers, and /auth/me.
+export function getSessionByToken(db: Database, token: string): { user: RelayUserRow; serverId: string | null } | null {
+  const row = db
+    .prepare(
+      `SELECT u.*, s.server_id AS session_server_id FROM relay_sessions s
+       JOIN relay_users u ON u.id = s.user_id
+       WHERE s.id = ? AND s.expires_at > datetime('now')`,
+    )
+    .get(token) as (RelayUserRow & { session_server_id: string | null }) | undefined;
+  if (!row) return null;
+  const { session_server_id: serverId, ...user } = row;
+  return { user, serverId };
+}
+
+// True when some live web session was issued to an origin with one of
+// these HMACs (one per origin key, link-codes.ts's originMacs), for
+// `serverId` when it's given. What the relay's CORS asks of an origin that
+// isn't the desktop app's (routes/auth.ts, routes/relay.ts).
+export function hasWebSession(db: Database, originMacs: readonly string[], serverId?: string): boolean {
+  if (originMacs.length === 0) return false;
+  const marks = originMacs.map(() => "?").join(", ");
+  const row = db
+    .prepare(
+      `SELECT 1 AS found FROM relay_sessions
+       WHERE origin_mac IN (${marks}) AND expires_at > datetime('now')${serverId === undefined ? "" : " AND server_id = ?"}
+       LIMIT 1`,
+    )
+    .get(...originMacs, ...(serverId === undefined ? [] : [serverId])) as { found: number } | undefined;
+  return row !== undefined;
 }
 
 export function deleteSession(db: Database, token: string): void {
