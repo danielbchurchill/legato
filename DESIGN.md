@@ -52,7 +52,7 @@ Plan 03 asks for a small, always-visible status naming the path to the server, w
 
 A click or tap opens a popover with the path as its heading, then one sentence on what the path means, the server's address in mono where it's the server's own, and one sentence on the quality and why. That why is the path's default, the pick in Settings, or a step down after the connection dropped. While a drop or a new pick has moved the ladder, the popover tells the playing track apart from the next one. A line says when this device never uses the relay, and a `settings` link opens Settings. The words are in `src/connect/describeConnection.ts`.
 
-It follows the connection-path store (`src/connect/connectionPath.ts`) and the quality ladder's state, so it changes the moment either does: a new track, a drop, a new pick, or a move to another path. The popover reads the server's name and the pin as it opens.
+It follows the connection-path store (`src/connect/connectionPath.ts`) and the quality ladder's state, so it changes the moment either does: a new track, a drop, a new pick, or a move to another path. The popover reads the server's name and the pin as it opens. "Never use the relay" is a switch in Settings, kept per device like the stream quality. It isn't offered on a page a server served, since that page only ever talks to its own server.
 
 #### The player as it narrows
 
