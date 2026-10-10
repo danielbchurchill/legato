@@ -1,9 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { WS_BASE } from '../config/serverHost'
+import { API_BASE, RELAY_SERVER_ID, WS_BASE } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
 import { SERVER_BACK_EVENT } from '../connect/reconnect'
 
 const WS_URL = `${WS_BASE}/ws`
+const EVENTS_URL = `${API_BASE}/events`
 
 // #119: a socket the server dropped (a restart, an outage) opens again,
 // waiting a little longer after each failed try. The shell stays mounted
@@ -35,6 +36,16 @@ export function useWsEvent(eventNames: string[], onEvent: (payload?: unknown) =>
     // no events).
     if (!namesKey) return
     const names = namesKey.split(',')
+    if (RELAY_SERVER_ID) {
+      return listenThroughRelay((data) => {
+        try {
+          const { event, payload } = JSON.parse(data)
+          if (names.includes(event)) onEventRef.current(payload)
+        } catch {
+          // ignore malformed messages
+        }
+      })
+    }
     let ws: WebSocket | null = null
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     let retryMs = RECONNECT_FIRST_MS
@@ -83,4 +94,64 @@ export function useWsEvent(eventNames: string[], onEvent: (payload?: unknown) =>
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [namesKey])
+}
+
+// Through legato.fm's relay (#365) the server's events come as server-sent
+// events (GET /events): the relay's tunnel carries HTTP, not WebSockets.
+// One stream for every hook on the page, not one each as with the
+// WebSocket: a stream holds its connection open for good, and a browser
+// opens only six HTTP/1.1 connections to one host, so a stream per hook
+// would leave none for anything else the page asks the relay.
+//
+// An EventSource retries by itself with the URL it started with, whose
+// tickets may have run out by then, so on any error it's closed and opened
+// again with fresh ones, waiting as the WebSocket's reconnects do. When an
+// outage ends it's replaced, for the same reason the sockets are.
+const relayListeners = new Set<(data: string) => void>()
+let relayStream: EventSource | null = null
+let relayRetryTimer: ReturnType<typeof setTimeout> | null = null
+let relayRetryMs = RECONNECT_FIRST_MS
+
+function openRelayStream(): void {
+  relayRetryTimer = null
+  const source = new EventSource(withMediaTicket(EVENTS_URL))
+  relayStream = source
+  source.onopen = () => {
+    relayRetryMs = RECONNECT_FIRST_MS
+  }
+  source.onmessage = (msg) => {
+    for (const listener of relayListeners) listener(msg.data as string)
+  }
+  source.onerror = () => {
+    source.close()
+    if (relayStream !== source) return
+    relayStream = null
+    relayRetryTimer = setTimeout(openRelayStream, relayRetryMs)
+    relayRetryMs = Math.min(relayRetryMs * 2, RECONNECT_MAX_MS)
+  }
+}
+
+function onRelayServerBack(): void {
+  if (relayRetryTimer !== null) clearTimeout(relayRetryTimer)
+  relayRetryMs = RECONNECT_FIRST_MS
+  const old = relayStream
+  openRelayStream()
+  old?.close()
+}
+
+function listenThroughRelay(listener: (data: string) => void): () => void {
+  relayListeners.add(listener)
+  if (relayListeners.size === 1) {
+    openRelayStream()
+    window.addEventListener(SERVER_BACK_EVENT, onRelayServerBack)
+  }
+  return () => {
+    relayListeners.delete(listener)
+    if (relayListeners.size > 0) return
+    window.removeEventListener(SERVER_BACK_EVENT, onRelayServerBack)
+    if (relayRetryTimer !== null) clearTimeout(relayRetryTimer)
+    relayRetryTimer = null
+    relayStream?.close()
+    relayStream = null
+  }
 }

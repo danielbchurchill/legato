@@ -106,6 +106,9 @@ export const SERVER_ORIGIN = resolveServerOrigin(currentPage(), SERVER_ENV, read
 // Whether the desktop app started this server doesn't change the path's
 // kind, only how it's put into words (serverPath.ts).
 setConnectionPath(connectionPathOf(pathFor(SERVER_ORIGIN, false)))
+/** The server's id when this client reaches it through legato.fm's relay
+ * (#365); null on every other path. */
+export const RELAY_SERVER_ID = relayedServerId(SERVER_ORIGIN)
 /** The server this client uses when nothing was picked: in the desktop app,
  * its own embedded one. The connect screen offers to go back to it. */
 export const DEFAULT_SERVER_ORIGIN = resolveServerOrigin(currentPage(), SERVER_ENV)

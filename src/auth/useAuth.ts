@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { API_BASE, SERVER_ORIGIN } from '../config/serverHost'
+import { API_BASE, RELAY_SERVER_ID, SERVER_ORIGIN } from '../config/serverHost'
 import { rememberServer } from '../connect/knownServers'
-import { renewLegatoSession } from '../connect/legatoSignIn'
+import { renewLegatoSession, renewRelayTicket } from '../connect/legatoSignIn'
 import { provideSessionCheck } from '../connect/reconnect'
 import { AUTH_REQUIRED_EVENT, clearSession, readSession, storeSession } from './session'
 
@@ -34,6 +34,12 @@ function toState(status: AuthStatus): AuthState {
 async function loadAuthState(mayRenew: boolean): Promise<AuthState> {
   try {
     const res = await fetch(`${API_BASE}/auth/status`)
+    // /auth/status is public on the server, so through legato.fm's relay a
+    // 401 is the relay's: the relay ticket ran out while this device slept
+    // through its renewal (#365). One fresh ticket, then the same check.
+    if (res.status === 401 && RELAY_SERVER_ID && mayRenew && (await renewRelayTicket(SERVER_ORIGIN))) {
+      return loadAuthState(false)
+    }
     if (!res.ok) throw new Error(`auth status returned ${res.status}`)
     const status = (await res.json()) as AuthStatus
     // A legato.fm session that ran out (the device slept through its
