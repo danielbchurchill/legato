@@ -5,7 +5,8 @@ import { checkServerNow, inOutage, SERVER_ANSWERED_EVENT, SERVER_BACK_EVENT, ser
 /* Issue #120: which rung of the server's quality ladder a browser
  * client asks GET /files/:id/stream for. Only the web <audio> path uses
  * this. Native desktop playback reads files straight off disk and never
- * asks the server to transcode anything.
+ * asks the server to transcode anything. When a file isn't on this
+ * machine, it streams the original instead (nativeStreamUrl below).
  *
  * Chosen once per track, when its URL is built: a drop part-way through a
  * track pauses that track and moves the *next* one down a rung. There's no
@@ -136,6 +137,14 @@ export function streamUrl(fileId: number): string {
     aac: aacForThisBrowser,
   })
   return withMediaTicket(`${API}/files/${fileId}/stream?quality=${quality}`)
+}
+
+/** Issue #185: where native playback gets a file that won't open on this
+ * machine. Always the original: the same bytes the file would have given,
+ * so decode, ReplayGain and gapless work as they do for a local file, and
+ * the native decoder can't read the ladder's Opus or AAC rungs anyway. */
+export function nativeStreamUrl(fileId: number): string {
+  return withMediaTicket(`${API}/files/${fileId}/stream?quality=original`)
 }
 
 // HTMLMediaElement's MEDIA_ERR_NETWORK and MEDIA_ERR_SRC_NOT_SUPPORTED.

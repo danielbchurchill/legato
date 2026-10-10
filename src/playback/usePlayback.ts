@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
-import { streamUrl, watchForDrops } from './quality'
+import { nativeStreamUrl, streamUrl, watchForDrops } from './quality'
 import { useMediaSession } from './mediaSession'
 import { notePlaybackStarted } from '../pwa/installOffer'
 import {
@@ -71,6 +71,9 @@ export type PlaybackStatus = {
    * scrubber fetches peaks by file id, not recording id. */
   currentFileId: number | null
   currentDurationMs: number | null
+  /** Native playback only (#185): the current track's file isn't on this
+   * machine, so it's playing from the server's stream. */
+  streaming: boolean
   volume: number
 }
 
@@ -202,6 +205,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     currentRecordingNodeId: null,
     currentFileId: null,
     currentDurationMs: null,
+    streaming: false,
     volume: 1,
   })
   const [currentTitle, setCurrentTitle] = useState<string | null>(null)
@@ -462,17 +466,22 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       .then((s) => setStatus((prev) => ({ ...prev, volume: s.volume })))
       .catch(() => undefined)
 
-    const unlistenPosition = listen<{ position_ms: number; recording_node_id: number | null }>(
+    const unlistenPosition = listen<{ position_ms: number; recording_node_id: number | null; streaming: boolean }>(
       'playback://position',
       (e) => {
-        setStatus((s) => ({ ...s, positionMs: e.payload.position_ms, currentRecordingNodeId: e.payload.recording_node_id }))
+        setStatus((s) => ({
+          ...s,
+          positionMs: e.payload.position_ms,
+          currentRecordingNodeId: e.payload.recording_node_id,
+          streaming: e.payload.streaming,
+        }))
         if (currentPlay.current && currentPlay.current.recordingNodeId === e.payload.recording_node_id) {
           currentPlay.current.lastPositionMs = e.payload.position_ms
         }
       },
     ).catch(() => undefined)
 
-    const unlistenTrackChanged = listen<{ recording_node_id: number | null }>('playback://track-changed', (e) => {
+    const unlistenTrackChanged = listen<{ recording_node_id: number | null; streaming: boolean }>('playback://track-changed', (e) => {
       const nodeId = e.payload.recording_node_id
       // A rebuild (shuffle/reorder/remove/insert while something's
       // playing) tears the Rust session down and re-enqueues starting with
@@ -506,6 +515,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
           currentRecordingNodeId: nodeId,
           currentFileId: info?.fileId ?? null,
           currentDurationMs: info?.durationMs ?? null,
+          streaming: e.payload.streaming,
         }))
         setUpNext(playSequence.current.slice(currentIndex.current + 1))
       } else {
@@ -513,7 +523,14 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         currentIndex.current = -1
         setCurrentTitle(null)
         setUpNext([])
-        setStatus((s) => ({ ...s, playing: false, currentRecordingNodeId: null, currentFileId: null, currentDurationMs: null }))
+        setStatus((s) => ({
+          ...s,
+          playing: false,
+          currentRecordingNodeId: null,
+          currentFileId: null,
+          currentDurationMs: null,
+          streaming: false,
+        }))
       }
     }).catch(() => undefined)
 
@@ -544,6 +561,9 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
               // about *which* precomputed gain to send, not something the
               // audio engine needs to know about.
               replaygain_track_gain: gainForMode(info, replaygainMode),
+              // Only fetched if file_path won't open on this machine (#185).
+              // Built now, so each rebuild carries the current media ticket.
+              stream_url: nativeStreamUrl(info.fileId),
             },
           })
         } catch (error) {
@@ -583,6 +603,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         currentRecordingNodeId: null,
         currentFileId: null,
         currentDurationMs: null,
+        streaming: false,
       }))
       // Only an unreachable file needs the server's view of the drive; the
       // other two kinds say everything on their own.
@@ -923,6 +944,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       currentRecordingNodeId: null,
       currentFileId: null,
       currentDurationMs: null,
+      streaming: false,
       volume: status.volume,
     })
     setCurrentTitle(null)
