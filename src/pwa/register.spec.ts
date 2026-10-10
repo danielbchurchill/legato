@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shouldRegisterShellWorker } from './register'
+import { needsHttps, shouldRegisterShellWorker } from './register'
 
 const servedPage = { prod: true, isTauri: false, servedByServer: true, supported: true }
 
@@ -22,5 +22,23 @@ describe('shouldRegisterShellWorker', () => {
 
   it('does nothing where service workers do not exist (plain http off localhost)', () => {
     expect(shouldRegisterShellWorker({ ...servedPage, supported: false })).toBe(false)
+  })
+})
+
+describe('needsHttps', () => {
+  const httpPage = { prod: true, isTauri: false, servedByServer: true, secureContext: false }
+
+  it('is true for a page a server handed out over plain http, off localhost', () => {
+    expect(needsHttps(httpPage)).toBe(true)
+  })
+
+  it('is false over https, or on localhost, where the worker registers', () => {
+    expect(needsHttps({ ...httpPage, secureContext: true })).toBe(false)
+  })
+
+  it('is false wherever there would be no worker anyway (Tauri, Vite dev, a page no server served)', () => {
+    expect(needsHttps({ ...httpPage, isTauri: true })).toBe(false)
+    expect(needsHttps({ ...httpPage, prod: false })).toBe(false)
+    expect(needsHttps({ ...httpPage, servedByServer: false })).toBe(false)
   })
 })

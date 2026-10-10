@@ -16,7 +16,7 @@ import { SERVED_BY_SERVER } from '../config/serverHost'
  * - A browser that has service workers at all. They exist only in a secure
  *   context: https, or http on localhost. A phone opening
  *   http://musicbox:8899 has none, which is why it can't install the app
- *   either (see the PR for #128).
+ *   either (see the PR for #128). That page says so (needsHttps below).
  */
 export function shouldRegisterShellWorker(env: {
   prod: boolean
@@ -27,7 +27,34 @@ export function shouldRegisterShellWorker(env: {
   return env.prod && !env.isTauri && env.servedByServer && env.supported
 }
 
+/* The one reason for no worker that the person can fix (#316): a page a
+ * server handed out over plain http, opened from anywhere but that machine.
+ * Without a worker the browser won't install the app either, so the install
+ * offer (installOffer.ts) explains instead and links the page on putting
+ * https in front of the server. */
+export function needsHttps(env: {
+  prod: boolean
+  isTauri: boolean
+  servedByServer: boolean
+  secureContext: boolean
+}): boolean {
+  return env.prod && !env.isTauri && env.servedByServer && !env.secureContext
+}
+
+export const HTTPS_DOCS_URL = 'https://github.com/danielbchurchill/legato/blob/main/docs/install/https.md'
+
+export const NEEDS_HTTPS = needsHttps({
+  prod: import.meta.env.PROD,
+  isTauri: IS_TAURI,
+  servedByServer: SERVED_BY_SERVER,
+  secureContext: typeof window === 'undefined' || window.isSecureContext,
+})
+
 export function registerShellWorker(): void {
+  if (NEEDS_HTTPS) {
+    console.info(`legato: not installable from ${location.origin}: browsers only run a service worker over https. See ${HTTPS_DOCS_URL}`)
+    return
+  }
   const register = shouldRegisterShellWorker({
     prod: import.meta.env.PROD,
     isTauri: IS_TAURI,

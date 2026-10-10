@@ -188,7 +188,8 @@ function Workspace({
   // lives inside usePlayback.
   const repeatMode = (settings.repeatMode as RepeatMode) || 'off'
   const playback = usePlayback(replaygainMode, repeatMode)
-  // #128: the install offer, shown once after the first track plays.
+  // #128: the install offer, shown once after the first track plays. Over
+  // plain http it says why there's none instead (#316).
   useInstallOffer()
   const canvasRef = useRef<CanvasHandle>(null)
 
