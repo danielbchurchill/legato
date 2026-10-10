@@ -148,17 +148,9 @@ export function issuedTokenExpiresAt(token: string): Date {
   return new Date(typeof exp === "number" ? exp * 1000 : 0);
 }
 
-// Reads back a token this service signed, when a home server returns one as
-// part of a proof (issue #231). The checks a home server makes on the way in
-// (server/src/auth/legatoToken.ts) are mostly beside the point here: this is
-// the issuer, so a token is good if one of its own published keys signed it,
-// for this issuer, and it hasn't expired. Null for anything else; the caller
-// only needs to know it can't be used.
-export function verifyIssuedToken(
-  keys: SigningKeys,
-  token: string,
-  input: { issuer: string; nowSeconds?: number },
-): IssuedClaims | null {
+// The claims of a token one of this service's own published keys signed, for
+// this issuer, that hasn't expired. Null for anything else.
+function readOwnToken(keys: SigningKeys, token: string, issuer: string, nowSeconds?: number): Record<string, unknown> | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [headerPart, payloadPart, signaturePart] = parts as [string, string, string];
@@ -171,10 +163,71 @@ export function verifyIssuedToken(
 
   const claims = decodeSegment(payloadPart);
   if (!claims) return null;
-  const { iss, sub, aud, scope, jti, exp } = claims;
-  const now = input.nowSeconds ?? Math.floor(Date.now() / 1000);
-  if (iss !== input.issuer || typeof exp !== "number" || exp <= now) return null;
+  const now = nowSeconds ?? Math.floor(Date.now() / 1000);
+  if (claims.iss !== issuer || typeof claims.exp !== "number" || claims.exp <= now) return null;
+  return claims;
+}
+
+// Reads back a token this service signed, when a home server returns one as
+// part of a proof (issue #231). The checks a home server makes on the way in
+// (server/src/auth/legatoToken.ts) are mostly beside the point here: this is
+// the issuer, so a token is good if one of its own published keys signed it,
+// for this issuer, and it hasn't expired. Null for anything else; the caller
+// only needs to know it can't be used.
+export function verifyIssuedToken(
+  keys: SigningKeys,
+  token: string,
+  input: { issuer: string; nowSeconds?: number },
+): IssuedClaims | null {
+  const claims = readOwnToken(keys, token, input.issuer, input.nowSeconds);
+  if (!claims) return null;
+  const { sub, aud, scope, jti, exp } = claims;
   if (typeof sub !== "string" || typeof aud !== "string" || !SERVER_ID_PATTERN.test(aud)) return null;
   if ((scope !== "access" && scope !== "link") || typeof jti !== "string" || !jti) return null;
-  return { sub, aud, scope, jti, exp };
+  return { sub, aud, scope, jti, exp: exp as number };
+}
+
+// A relay ticket (issue #365): what lets a device through /relay/<server
+// id>/ to one server it has linked (routes/relay.ts). It's this service's
+// alone. A home server never sees one, because the relay takes it off every
+// request before forwarding it, and wouldn't accept one anyway: its verifier
+// refuses a lifetime over fifteen minutes and any scope but access and link
+// (server/src/auth/legatoToken.ts).
+//
+// It lasts twelve hours, as the session a home server opens with an access
+// token does (server/src/auth/sessions.ts), and the client renews both
+// together. <img>, <audio> and the event stream can't send a header, so the
+// ticket rides in their URLs. A ten-minute access token there would change
+// every cover's URL each time it was renewed and would refuse an <audio>
+// range request partway through a long track. Twelve hours keeps those
+// URLs as stable as a home server's own media ticket keeps them. Unlinking
+// still takes effect at once: the relay checks the pair on every request.
+// It carries no email or name, since it travels in URLs.
+export const RELAY_TICKET_TTL_SECONDS = 12 * 60 * 60;
+export const RELAY_TICKET_SCOPE = "relay";
+
+export function signRelayTicket(
+  keys: SigningKeys,
+  input: { issuer: string; user: RelayUserRow; serverId: string; nowSeconds?: number },
+): { ticket: string; expiresAt: Date } {
+  const iat = input.nowSeconds ?? Math.floor(Date.now() / 1000);
+  const exp = iat + RELAY_TICKET_TTL_SECONDS;
+  const header = { alg: "EdDSA", typ: "JWT", kid: keys.signing.kid };
+  const claims = { iss: input.issuer, sub: String(input.user.id), aud: input.serverId, iat, exp, scope: RELAY_TICKET_SCOPE };
+  const signingInput = `${b64(header)}.${b64(claims)}`;
+  const signature = sign(null, Buffer.from(signingInput), keys.signing.privateKey).toString("base64url");
+  return { ticket: `${signingInput}.${signature}`, expiresAt: new Date(exp * 1000) };
+}
+
+// The account a relay ticket was issued to, when it's good for this server.
+// Null for a ticket for any other server, an expired one, or anything else.
+export function verifyRelayTicket(
+  keys: SigningKeys,
+  ticket: string,
+  input: { issuer: string; serverId: string; nowSeconds?: number },
+): { accountId: number } | null {
+  const claims = readOwnToken(keys, ticket, input.issuer, input.nowSeconds);
+  if (!claims || claims.scope !== RELAY_TICKET_SCOPE || claims.aud !== input.serverId) return null;
+  const accountId = typeof claims.sub === "string" && /^[1-9]\d*$/.test(claims.sub) ? Number(claims.sub) : NaN;
+  return Number.isSafeInteger(accountId) ? { accountId } : null;
 }
