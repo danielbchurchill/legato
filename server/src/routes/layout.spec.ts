@@ -85,7 +85,7 @@ describe("PUT /layout/settled (#274)", () => {
       { id: recordings[0], x: 1 / 3, y: Math.PI * 1e5 },
     ]);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ saved: 2 });
+    expect(res.json<unknown>()).toEqual({ saved: 2 });
 
     const nodes = await graphNodes();
     expect(nodes.get(artist)).toMatchObject({ settled_x: 0.1 + 0.2, settled_y: -1234.5678901234567 });
@@ -131,7 +131,7 @@ describe("PUT /layout/settled (#274)", () => {
   it("ignores ids the map has no position for", async () => {
     buildLibrary();
     const res = await saveSettled([{ id: 999999, x: 1, y: 2 }]);
-    expect(res.json()).toEqual({ saved: 0 });
+    expect(res.json<unknown>()).toEqual({ saved: 0 });
   });
 });
 

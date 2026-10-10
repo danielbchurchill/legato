@@ -22,9 +22,10 @@ How to work on Legato: the layout, the conventions, and the non-obvious things t
 
 ## Checks
 
-`npm run check:all` runs every local check, in order: server tests, vitest, build, lint, the sidecar build (skipped if already built), and `cargo test`. Run it before every PR. Relay changes also need `npm --prefix relay test`.
+`npm run check:all` runs every local check, in order: the server's type check, server tests, vitest, build, lint, the sidecar build (skipped if already built), and `cargo test`. Run it before every PR. Relay changes also need `npm --prefix relay test`.
 
 - **Server tests:** `bun:test`, as `*.spec.ts` files next to the source. Use `openDb(":memory:")` for a database. The `Database` type comes from `server/src/sqlite.ts`, the only file that knows the engine is `bun:sqlite`. Don't import `better-sqlite3` or vitest in `server/`.
+- **Server types:** `bun test` strips types without checking them, so `npm --prefix server run typecheck` (`tsc --noEmit`) checks them, in `check:all` and CI.
 - **App tests:** vitest, scoped to `src/**/*.spec.{ts,tsx}`.
 - **Lint:** oxlint (`.oxlintrc.json`), not eslint.
 

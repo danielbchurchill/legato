@@ -82,7 +82,7 @@ describe("web client routes", () => {
 
   it("keeps real API routes ahead of the wildcard", async () => {
     const res = await app.inject({ method: "GET", url: "/api/v1/health" });
-    expect(res.json()).toEqual({ status: "ok" });
+    expect(res.json<unknown>()).toEqual({ status: "ok" });
   });
 
   it("answers an unknown API path with a JSON 404, even from a browser", async () => {

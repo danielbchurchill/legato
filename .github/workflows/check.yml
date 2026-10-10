@@ -87,6 +87,11 @@ jobs:
             exit 1;
           }
 
+      # `bun test` strips types without checking them, and the root build's
+      # `tsc -b` covers only the app, so server/ needs its own pass (#318).
+      - name: type-check server
+        run: npm --prefix server run typecheck
+
       - name: server test suite
         run: npm --prefix server test
 

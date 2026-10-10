@@ -480,7 +480,7 @@ describe("telling legato.fm about links (issue #231)", () => {
     const { token: owner } = await createOwnerForTest(h.app);
     await linkOwner(h, owner);
     const res = await h.app.inject({ method: "DELETE", url: "/api/v1/auth/legato/link", headers: bearer(owner) });
-    expect(res.json()).toEqual({ ok: true, legatoNotified: true });
+    expect(res.json<unknown>()).toEqual({ ok: true, legatoNotified: true });
 
     const report = h.reports()[1]!;
     expect(report.url).toBe(`${TEST_ISSUER}/linked-servers/unlink`);
@@ -491,7 +491,7 @@ describe("telling legato.fm about links (issue #231)", () => {
 
     // Nothing linked, nothing to report.
     const again = await h.app.inject({ method: "DELETE", url: "/api/v1/auth/legato/link", headers: bearer(owner) });
-    expect(again.json()).toEqual({ ok: true, legatoNotified: null });
+    expect(again.json<unknown>()).toEqual({ ok: true, legatoNotified: null });
     expect(h.reports()).toHaveLength(2);
   });
 
@@ -502,7 +502,7 @@ describe("telling legato.fm about links (issue #231)", () => {
     await linkOwner(h, owner);
     online = false;
     const res = await h.app.inject({ method: "DELETE", url: "/api/v1/auth/legato/link", headers: bearer(owner) });
-    expect(res.json()).toEqual({ ok: true, legatoNotified: false });
+    expect(res.json<unknown>()).toEqual({ ok: true, legatoNotified: false });
     expect(await linkedStatus(h, owner)).toBe(false);
     expect(h.identity.scheduled).toBe(false);
   });
