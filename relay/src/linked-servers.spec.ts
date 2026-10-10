@@ -8,6 +8,7 @@ import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
 import { acceptUnlinkProof, isLinkedServer, serverIdForPublicKey, UNLINK_PROOF_WINDOW_SECONDS } from "./linked-servers.js";
+import { signInWithTunnelCredential, tunnelCredentialHolder } from "./pairing.js";
 import { parseSigningKeys, signServerToken, type SigningKeys } from "./signing-keys.js";
 import type { Database } from "./sqlite.js";
 
@@ -98,7 +99,7 @@ describe("POST /auth/server-token signs access only for linked servers", () => {
 
     const res = await h.link(owner.headers, server);
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ linked: { accountId: String(owner.user.id), serverId: server.serverId } });
+    expect(res.json()).toMatchObject({ linked: { accountId: String(owner.user.id), serverId: server.serverId } });
 
     expect((await h.serverToken(owner.headers, server.serverId)).scope).toBe("access");
     expect((await h.serverToken(owner.headers, other.serverId)).scope).toBe("link");
@@ -126,6 +127,79 @@ describe("POST /auth/server-token signs access only for linked servers", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().reason).toBe("bad_scope");
+  });
+});
+
+// Issue #325: a server linked from Settings, with no claim behind it, gets a
+// tunnel credential the way a claimed one does, and only once it reports the
+// link. A token handed out and never used leaves nothing here.
+describe("a link token from /auth/server-token mints a tunnel credential when it's reported", () => {
+  const credentials = (db: Database) => db.prepare("SELECT relay_user_id, server_id FROM tunnel_credentials").all();
+
+  it("mints one, bound to the server's id, in the report's answer", async () => {
+    const h = setup();
+    const { user, headers } = h.signIn();
+    const server = homeServer();
+    const res = await h.link(headers, server);
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { tunnel: { credential: string; expiresAt: string } };
+    expect(body.tunnel.credential).toMatch(/^[0-9a-f]{64}$/);
+    expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 300 * 24 * 3600 * 1000);
+    expect(tunnelCredentialHolder(h.db, body.tunnel.credential)).toEqual({ relayUserId: user.id, serverId: server.serverId });
+    expect(credentials(h.db)).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
+  });
+
+  it("mints nothing for a token that's handed out and never reported, or for a report refused", async () => {
+    const h = setup();
+    const { user, headers } = h.signIn();
+    const server = homeServer();
+    const { token } = await h.serverToken(headers, server.serverId, "link");
+    expect(credentials(h.db)).toEqual([]);
+    // Signed by a different server: refused, so nothing is recorded.
+    expect((await h.postLink(linkProof(homeServer(), token))).statusCode).toBe(403);
+    expect(credentials(h.db)).toEqual([]);
+    expect(isLinkedServer(h.db, user.id, server.serverId)).toBe(false);
+  });
+
+  // Minting retires nothing: the answer that carries a new credential can
+  // be lost. Its first sign-in to the tunnel retires the server's earlier
+  // ones, under any account (pairing.ts).
+  it("retires nothing when it mints: a newer credential's first sign-in retires the server's earlier ones", async () => {
+    const h = setup();
+    const owner = h.signIn("owner");
+    const other = h.signIn("other");
+    const server = homeServer();
+    const elsewhere = homeServer();
+    const mint = async (headers: Record<string, string>, key: ServerKey) =>
+      ((await h.link(headers, key)).json() as { tunnel: { credential: string } }).tunnel.credential;
+    const first = await mint(owner.headers, server);
+    const otherAccount = await mint(other.headers, server);
+    const otherServer = await mint(owner.headers, elsewhere);
+    const again = await mint(owner.headers, server);
+    expect(again).not.toBe(first);
+    expect(credentials(h.db)).toHaveLength(4);
+
+    // The first one signing in again retires nothing: the rest are newer.
+    expect(signInWithTunnelCredential(h.db, first)).toEqual({ relayUserId: owner.user.id, serverId: server.serverId });
+    expect(credentials(h.db)).toHaveLength(4);
+
+    expect(signInWithTunnelCredential(h.db, again)).toEqual({ relayUserId: owner.user.id, serverId: server.serverId });
+    expect(tunnelCredentialHolder(h.db, first)).toBeNull();
+    expect(tunnelCredentialHolder(h.db, otherAccount)).toBeNull();
+    // This account's other server keeps its own.
+    expect(tunnelCredentialHolder(h.db, otherServer)).toEqual({ relayUserId: owner.user.id, serverId: elsewhere.serverId });
+    expect(signInWithTunnelCredential(h.db, again)).not.toBeNull();
+    expect(credentials(h.db)).toHaveLength(2);
+  });
+
+  it("mints one per token: the same report again is spent", async () => {
+    const h = setup();
+    const { headers } = h.signIn();
+    const server = homeServer();
+    const { token } = await h.serverToken(headers, server.serverId, "link");
+    expect((await h.postLink(linkProof(server, token))).statusCode).toBe(200);
+    expect((await h.postLink(linkProof(server, token))).json()).toMatchObject({ reason: "used" });
+    expect(credentials(h.db)).toHaveLength(1);
   });
 });
 
@@ -232,16 +306,20 @@ describe("a link proof works once", () => {
 });
 
 describe("unlinking and revoking remove the pair", () => {
-  it("the server's signed unlink removes it, once", async () => {
+  const credential = async (res: Promise<{ json(): unknown }>) =>
+    ((await res).json() as { tunnel: { credential: string } }).tunnel.credential;
+
+  it("the server's signed unlink removes it, once, and its tunnel credential with it", async () => {
     const h = setup();
     const { user, headers } = h.signIn();
     const server = homeServer();
-    await h.link(headers, server);
+    const tunnel = await credential(h.link(headers, server));
 
     const proof = unlinkProof(server, { issuer: ISSUER, accountId: String(user.id), nowSeconds: now() });
     const res = await h.postUnlink(proof);
     expect(res.json()).toEqual({ unlinked: true });
     expect((await h.serverToken(headers, server.serverId)).scope).toBe("link");
+    expect(tunnelCredentialHolder(h.db, tunnel)).toBeNull();
 
     // Linked again, the old unlink proof can't undo it.
     await h.link(headers, server);
@@ -274,13 +352,13 @@ describe("unlinking and revoking remove the pair", () => {
     expect((await h.serverToken(headers, server.serverId)).scope).toBe("access");
   });
 
-  it("the account can revoke a server itself, and only its own pair", async () => {
+  it("the account can revoke a server itself, and only its own pair and credential", async () => {
     const h = setup();
     const owner = h.signIn("owner");
     const friend = h.signIn("friend");
     const server = homeServer();
-    await h.link(owner.headers, server);
-    await h.link(friend.headers, server);
+    const ownerTunnel = await credential(h.link(owner.headers, server));
+    const friendTunnel = await credential(h.link(friend.headers, server));
 
     const url = `/linked-servers/${server.serverId}`;
     expect((await h.app.inject({ method: "DELETE", url })).statusCode).toBe(401);
@@ -290,6 +368,8 @@ describe("unlinking and revoking remove the pair", () => {
 
     expect((await h.serverToken(owner.headers, server.serverId)).scope).toBe("link");
     expect((await h.serverToken(friend.headers, server.serverId)).scope).toBe("access");
+    expect(tunnelCredentialHolder(h.db, ownerTunnel)).toBeNull();
+    expect(tunnelCredentialHolder(h.db, friendTunnel)).toEqual({ relayUserId: friend.user.id, serverId: server.serverId });
   });
 
   // Issue #117: the connect screen's "your servers".

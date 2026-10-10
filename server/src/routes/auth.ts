@@ -346,11 +346,15 @@ export function authRoutes(
         // about their own row.
         // publicKey (issue #117) is what the id is a hash of, for a client
         // checking POST /auth/identity's signature.
+        // linkedAccountId is the owner's own linked legato.fm account (issue
+        // #325), so the desktop app can tell before linking again whether
+        // that would replace a different account. Only the owner gets it.
         legato: {
           serverId: legatoIdentity(db).serverId(),
           publicKey: loadServerKey(db).publicKey,
           issuer: legatoIdentity(db).origin,
           linked: request.authUser ? linkedAccountId(db, request.authUser.id) !== null : null,
+          ...(request.authUser?.role === "owner" ? { linkedAccountId: linkedAccountId(db, request.authUser.id) } : {}),
         },
       };
     });
@@ -455,7 +459,8 @@ export function authRoutes(
         request.log.info("auth: owner account created");
 
         // The owner exists whatever happens next. A link that fails says
-        // why alongside the session, and the owner can link from the app.
+        // why alongside the session, and the owner can link again from
+        // Settings (issue #325).
         let legato: { linked: { accountId: string; email: string | null; name: string | null } | null; error?: string; reason?: string } | undefined;
         if (linking) {
           const linkToken = claims.take(linkAccountId);

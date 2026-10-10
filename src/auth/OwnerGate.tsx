@@ -29,6 +29,10 @@ type ErrorBody = { error?: string; reason?: string; retryAfter?: number }
 // #237). linked is null when it couldn't, and error says why.
 type LegatoOutcome = { linked: { accountId: string; name: string | null } | null; error?: string }
 
+// Settings' legato.fm account group (src/panels/LegatoAccountRow.tsx) is
+// where an owner links this server, in the web client or the desktop app.
+const LINK_LATER = 'You can link it later: open Settings and choose link to legato.fm, under legato.fm account.'
+
 /** Rowan (r•••@example.com), or whichever of the two the account has. */
 function accountLabel(account: ClaimAccount): string {
   if (account.name && account.email) return `${account.name} (${account.email})`
@@ -168,6 +172,8 @@ export function OwnerGate({
         <div className="flex w-full max-w-[360px] flex-col items-stretch gap-[12px]">
           <p className="text-[length:var(--text-base)] text-[var(--color-ink)]">The owner is created, but no account was linked.</p>
           <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{unlinked.message}</p>
+          {/* Issue #325: where to try again, which before it was nowhere. */}
+          <p className="text-[length:var(--text-base)] text-[var(--color-muted)]">{LINK_LATER}</p>
           <div className="flex justify-center">
             <Button onClick={() => onSession(unlinked.session)}>continue</Button>
           </div>

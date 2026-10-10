@@ -6,16 +6,18 @@ import { forgetTunnelCredential, storeTunnelCredential } from "./tunnelCredentia
 
 // Linking a user here to a legato.fm account with a `link` token (issues
 // #114 and #231). Two callers: POST /auth/legato/link, where the owner
-// brings a token from the app, and creating the owner on /setup with a
-// claim (issue #237, auth/claim.ts), where the token came from legato.fm's
-// /pair/exchange. Both run the same checks and the same signed report.
+// brings a token from Settings, in the desktop app or the web client
+// (issue #325), and creating the owner on /setup with a claim (issue #237,
+// auth/claim.ts), where the token came from legato.fm's /pair/exchange.
+// Both run the same checks and the same signed report.
 //
 // The server sees legato.fm's own signature on who the account is, then
 // reports the link to legato.fm, signed with this server's identity key
 // (auth/serverKey.ts). Nothing changes here unless legato.fm recorded it,
-// so the two can't disagree about a link that just failed. A claim's report
-// also brings back the tunnel credential, stored with the link. The caller
-// syncs the tunnel once its answer has gone (issue #310, tunnel/
+// so the two can't disagree about a link that just failed. The report also
+// brings back the tunnel credential, stored with the link: legato.fm mints
+// one for a claim's link and, since #325, for a link from Settings too. The
+// caller syncs the tunnel once its answer has gone (issue #310, tunnel/
 // relayTunnel.ts's syncRelayTunnelOnceAnswered): a link made through the
 // tunnel comes down the connection a new credential replaces.
 
@@ -79,17 +81,28 @@ export async function linkLegatoAccount(db: Database, userId: number, token: str
     };
   }
 
-  const previous = linkedAccountId(db, userId);
-  if (!linkAccount(db, userId, accountId).ok) return ACCOUNT_TAKEN;
-  if (reported.tunnel && identity.origin) storeTunnelCredential(db, { origin: identity.origin, accountId, ...reported.tunnel });
+  // The link, its tunnel credential and the old account's credential land
+  // together or not at all. With the report made, linkAccount fails only
+  // when another user here took this account while the report was out: a
+  // legacy user matched by email (auth/legatoUsers.ts) when a device
+  // opened this server under the pair legato.fm had just recorded. That
+  // pair is then true of that user, so it isn't reported unlinked, which
+  // would cut them off. The credential this report brought back is never
+  // stored; legato.fm retires it when a newer one first opens the tunnel
+  // (relay/src/pairing.ts).
+  const linked = db.transaction((): { previous: string | null } | null => {
+    const previous = linkedAccountId(db, userId);
+    if (!linkAccount(db, userId, accountId).ok) return null;
+    if (reported.tunnel && identity.origin) storeTunnelCredential(db, { origin: identity.origin, accountId, ...reported.tunnel });
+    // The old account's tunnel credential goes, unless this link's
+    // already replaced it.
+    if (previous && previous !== accountId) forgetTunnelCredential(db, previous);
+    return { previous };
+  })();
+  if (!linked) return ACCOUNT_TAKEN;
   // Linking a different account replaces the old one here, so legato.fm
-  // stops vouching for the old one too. Best effort, like an unlink. The
-  // old account's tunnel credential goes with it, unless this link's
-  // already replaced it.
-  if (previous && previous !== accountId) {
-    forgetTunnelCredential(db, previous);
-    await identity.recordUnlink(previous);
-  }
+  // stops vouching for the old one too. Best effort, like an unlink.
+  if (linked.previous && linked.previous !== accountId) await identity.recordUnlink(linked.previous);
   identity.syncSchedule();
   return { ok: true, linked: { accountId, email: result.claims.email, name: result.claims.name } };
 }

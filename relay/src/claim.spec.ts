@@ -132,7 +132,9 @@ describe("a claim, start to finish", () => {
     expect(h.pairs()).toEqual([]);
   });
 
-  it("mints no credential for an ordinary link, only a claim's", async () => {
+  // Issue #325: a server linked from Settings, with no claim, needs a
+  // tunnel as much as a claimed one, so its link mints one the same way.
+  it("mints a credential for an ordinary link too, once it's reported", async () => {
     const h = setup();
     const { user, cookie } = h.signIn();
     const server = homeServer();
@@ -142,9 +144,10 @@ describe("a claim, start to finish", () => {
       headers: { cookie },
       payload: { serverId: server.serverId, scope: "link" },
     });
-    const reported = await h.report(linkProof(server, (res.json() as { token: string }).token));
-    expect(reported.json()).toEqual({ linked: { accountId: String(user.id), serverId: server.serverId } });
     expect(h.credentials()).toEqual([]);
+    const reported = await h.report(linkProof(server, (res.json() as { token: string }).token));
+    expect(reported.json()).toMatchObject({ linked: { accountId: String(user.id), serverId: server.serverId } });
+    expect(h.credentials()).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
   });
 });
 

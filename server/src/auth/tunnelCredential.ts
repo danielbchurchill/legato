@@ -2,8 +2,8 @@ import type { Database } from "../sqlite.js";
 
 // The credential this server's tunnel connects to legato.fm with (issue
 // #237, migration 0039). legato.fm hands it over only when the server
-// reports a link that came from a claim (auth/legatoLink.ts), so it's here
-// only once the owner has linked the account that claimed the server.
+// reports a link (auth/legatoLink.ts), from a claim or, since issue #325,
+// from Settings, so it's here only once the owner has linked an account.
 // The tunnel (issue #310, tunnel/relayTunnel.ts) connects with it, and
 // unlinking that account forgets it.
 

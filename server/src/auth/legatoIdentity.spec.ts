@@ -17,6 +17,7 @@ import {
 } from "./legato-test-keys.js";
 import { serverIdForPublicKey } from "./serverKey.js";
 import { createSession } from "./sessions.js";
+import { readTunnelCredential } from "./tunnelCredential.js";
 import { buildTestApp, createOwnerForTest } from "./test-app.js";
 
 // Issue #114 end to end through the real gate and routes: a legato.fm token
@@ -176,6 +177,19 @@ describe("linking the owner", () => {
 
     const status = await h.app.inject({ method: "GET", url: "/api/v1/auth/status", headers: bearer(owner) });
     expect(status.json().legato.linked).toBe(true);
+    // The owner learns which account, so the desktop app can ask before
+    // linking a different one in its place (issue #325).
+    expect(status.json().legato.linkedAccountId).toBe("42");
+  });
+
+  it("tells only the owner which account is linked", async () => {
+    const h = await setup();
+    const { token: owner } = await createOwnerForTest(h.app);
+    const status = (headers: Record<string, string>) => h.app.inject({ method: "GET", url: "/api/v1/auth/status", headers });
+    expect((await status(bearer(owner))).json().legato.linkedAccountId).toBeNull();
+    await linkOwner(h, owner);
+    expect((await status(bearer(owner))).json().legato.linkedAccountId).toBe("42");
+    expect((await status({})).json().legato).not.toHaveProperty("linkedAccountId");
   });
 
   it("unlinking stops the daily refresh and the token stops working", async () => {
@@ -390,6 +404,33 @@ describe("telling legato.fm about links (issue #231)", () => {
     expect(await linkedStatus(h, owner)).toBe(false);
   });
 
+  // Issue #325: a link from Settings brings a tunnel credential back, as a
+  // claim's does, and it's stored with the link. A link legato.fm didn't
+  // record stores none.
+  it("stores the tunnel credential legato.fm's answer brings, and never shows it", async () => {
+    const credential = "c".repeat(64);
+    const h = await setup({
+      answer: () => Response.json({ linked: {}, tunnel: { credential, expiresAt: "2027-10-09T12:00:00.000Z" } }),
+    });
+    const { token: owner } = await createOwnerForTest(h.app);
+    const res = await linkOwner(h, owner);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain(credential);
+    expect(readTunnelCredential(h.db, TEST_ISSUER)).toEqual({
+      origin: TEST_ISSUER,
+      accountId: "42",
+      credential,
+      expiresAt: "2027-10-09T12:00:00.000Z",
+    });
+  });
+
+  it("stores no tunnel credential when legato.fm refuses the link", async () => {
+    const h = await setup({ answer: () => Response.json({ error: "No.", reason: "used" }, { status: 409 }) });
+    const { token: owner } = await createOwnerForTest(h.app);
+    expect((await linkOwner(h, owner)).statusCode).toBe(409);
+    expect(readTunnelCredential(h.db, TEST_ISSUER)).toBeNull();
+  });
+
   it("refuses an access token or an account taken here without telling legato.fm anything", async () => {
     const h = await setup();
     const { token: owner } = await createOwnerForTest(h.app);
@@ -400,6 +441,38 @@ describe("telling legato.fm about links (issue #231)", () => {
     h.db.prepare("INSERT INTO users (provider, provider_user_id, role, legato_account_id) VALUES ('google', 'g', 'legacy', '99')").run();
     expect((await linkOwner(h, owner, h.token({ sub: "99", scope: "link" }))).json().reason).toBe("account_taken");
     expect(h.reports()).toEqual([]);
+  });
+
+  // Issue #325's review: the report went through, then the link here
+  // can't be made. A legacy user matched by email, through the pair the
+  // report had just recorded, took the account in the meantime.
+  it("keeps the old link and its credential, and reports nothing more, when another user takes the account mid-report", async () => {
+    let reported = 0;
+    const h = await setup({
+      answer: () => {
+        reported += 1;
+        if (reported === 2) {
+          h.db
+            .prepare("INSERT INTO users (provider, provider_user_id, role, legato_account_id) VALUES ('google', 'g', 'legacy', '43')")
+            .run();
+        }
+        return Response.json({ linked: {}, tunnel: { credential: String(reported).repeat(64), expiresAt: "2027-10-09T12:00:00.000Z" } });
+      },
+    });
+    const { token: owner } = await createOwnerForTest(h.app);
+    expect((await linkOwner(h, owner)).statusCode).toBe(200);
+
+    const res = await linkOwner(h, owner, h.token({ sub: "43", scope: "link" }));
+    expect(res.statusCode).toBe(409);
+    expect(res.json().reason).toBe("account_taken");
+    const linked = h.db.prepare("SELECT role, legato_account_id FROM users ORDER BY id").all();
+    expect(linked).toEqual([
+      { role: "owner", legato_account_id: "42" },
+      { role: "legacy", legato_account_id: "43" },
+    ]);
+    expect(readTunnelCredential(h.db, TEST_ISSUER)).toMatchObject({ accountId: "42", credential: "1".repeat(64) });
+    // No unlink: legato.fm's pair is true of the user who has the account.
+    expect(h.reports().map((r) => r.url.replace(TEST_ISSUER, ""))).toEqual(["/linked-servers", "/linked-servers"]);
   });
 
   it("reports an unlink, signed for this service, account and time", async () => {

@@ -1,9 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Button } from '../ui/Button'
-import { Skeleton } from '../ui/Skeleton'
+import { AlertDialog } from '../ui/Dialog'
+import { Shimmer, Skeleton } from '../ui/Skeleton'
 import { IS_TAURI } from '../config/runtime'
+import { RELAY_ORIGIN } from '../config/relayHost'
+import { API_BASE } from '../config/serverHost'
+import { useAccount } from '../auth/accountContext'
+import type { AuthStatus } from '../auth/useAuth'
+import { describeLinkFailure, LINK_CHANGED_EVENT, linkWithLegato } from '../connect/legatoLink'
+import { startBrowserLink } from '../connect/legatoLinkReturn'
 import { SettingsGroup } from './SettingsPrimitives'
 import {
   clearRelaySession,
@@ -33,8 +40,11 @@ type RowState =
  * to legato.fm as, and the Google/GitHub sign-in that gets it there.
  * Signing in opens the system browser through the Rust loopback listener
  * (src-tauri/src/relay_sign_in.rs); see src/auth/relaySession.ts for the
- * flow. Nothing uses this session yet; #114 is what makes it reach a home
- * server. */
+ * flow.
+ *
+ * Under it, in the desktop app and the web client alike, whether this server
+ * is linked to legato.fm and the way for its owner to link it (issue #325,
+ * ServerLink below). */
 export function LegatoAccountRow() {
   const [state, setState] = useState<RowState>({ kind: 'loading' })
   const [error, setError] = useState<string | null>(null)
@@ -100,12 +110,6 @@ export function LegatoAccountRow() {
 
   return (
     <SettingsGroup title="legato.fm account">
-      {!IS_TAURI && (
-        <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">
-          Sign in to legato.fm from the Legato desktop app.
-        </p>
-      )}
-
       {IS_TAURI && state.kind === 'loading' && <Skeleton className="h-[12px] w-[140px] rounded-full" />}
 
       {state.kind === 'signed-in' && (
@@ -172,6 +176,161 @@ export function LegatoAccountRow() {
       )}
 
       {error && <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{error}</p>}
+
+      <ServerLink relayUser={state.kind === 'signed-in' ? state.user : null} />
     </SettingsGroup>
+  )
+}
+
+type LinkStatus = { serverId: string; issuer: string | null; linked: boolean; linkedAccountId: string | null }
+
+/** This server's id, which legato.fm it trusts, and whether the signed-in
+ * user is linked there; again whenever a link finishes elsewhere. */
+function useLinkStatus(): { status: LinkStatus | null | 'unavailable'; reload: () => void } {
+  const [status, setStatus] = useState<LinkStatus | null | 'unavailable'>(null)
+  const reload = useCallback(() => {
+    fetch(`${API_BASE}/auth/status`)
+      .then((r) => r.json() as Promise<AuthStatus>)
+      .then(({ legato }) =>
+        setStatus(
+          legato
+            ? {
+                serverId: legato.serverId,
+                issuer: legato.issuer ?? null,
+                linked: legato.linked === true,
+                linkedAccountId: legato.linkedAccountId ?? null,
+              }
+            : 'unavailable',
+        ),
+      )
+      .catch(() => setStatus('unavailable'))
+  }, [])
+  useEffect(() => {
+    reload()
+    window.addEventListener(LINK_CHANGED_EVENT, reload)
+    return () => window.removeEventListener(LINK_CHANGED_EVENT, reload)
+  }, [reload])
+  return { status, reload }
+}
+
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin
+  } catch {
+    return false
+  }
+}
+
+function hostOf(origin: string): string {
+  try {
+    return new URL(origin).host
+  } catch {
+    return origin
+  }
+}
+
+function accountName(user: RelayUser): string {
+  if (user.displayName && user.email) return `${user.displayName} (${user.email})`
+  return user.displayName ?? user.email ?? "this app's legato.fm account"
+}
+
+/* Issue #325: linking this server to legato.fm from Settings, for a server
+ * whose owner was created without a claim, or whose first link failed, or
+ * that legato.fm stopped vouching for ("link again"). Both clients end at the
+ * server's own link endpoint (src/connect/legatoLink.ts). The desktop app
+ * asks legato.fm with the session above; the web client can't hold one, so
+ * it goes to legato.fm's /link page and comes back (legatoLinkReturn.ts). */
+function ServerLink({ relayUser }: { relayUser: RelayUser | null }) {
+  const account = useAccount()
+  const { status, reload } = useLinkStatus()
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [confirmingReplace, setConfirmingReplace] = useState(false)
+
+  // Back from legato.fm with the browser's back button, the page can come
+  // back from the back-forward cache exactly as it left: still linking.
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setBusy(false)
+    }
+    window.addEventListener('pageshow', onPageShow)
+    return () => window.removeEventListener('pageshow', onPageShow)
+  }, [])
+
+  if (status === null) return <Skeleton className="h-[12px] w-[200px] rounded-full" />
+  // A server from before #114 has no legato.fm identity to link.
+  if (status === 'unavailable') return null
+
+  const owner = account?.role === 'owner'
+  const { issuer } = status
+  // The desktop app gets its token from the legato.fm it signs in to, so it
+  // can only link a server that trusts that one. The web client goes to
+  // whichever the server trusts.
+  const otherIssuer = IS_TAURI && issuer !== null && !sameOrigin(issuer, RELAY_ORIGIN)
+  const said =
+    issuer === null
+      ? "legato.fm is turned off on this server, so it can't be linked."
+      : status.linked
+        ? 'This server is linked to legato.fm.'
+        : "This server isn't linked to a legato.fm account yet."
+  const hint =
+    issuer === null
+      ? null
+      : !owner
+        ? "Only this server's owner can link it."
+        : otherIssuer
+          ? `It uses legato.fm at ${hostOf(issuer)}, and this app signs in at ${hostOf(RELAY_ORIGIN)}, so it can't link it from here.`
+          : IS_TAURI && !relayUser
+            ? 'Sign in to legato.fm to link it.'
+            : null
+  const canLink = issuer !== null && owner && !otherIssuer && (!IS_TAURI || relayUser !== null)
+  // Linking from the desktop app as a different legato.fm account than the
+  // one linked replaces it: the server unlinks the old one
+  // (server/src/auth/legatoLink.ts). So that's asked first.
+  const replaces = IS_TAURI && relayUser !== null && status.linkedAccountId !== null && status.linkedAccountId !== String(relayUser.id)
+
+  const link = async () => {
+    setConfirmingReplace(false)
+    setNotice(null)
+    setBusy(true)
+    // The web client leaves for legato.fm here and comes back to the app.
+    if (!IS_TAURI) return startBrowserLink(status.serverId, issuer!)
+    const result = await linkWithLegato(status.serverId)
+    setBusy(false)
+    if (!result.ok) return setNotice(describeLinkFailure(result.failure))
+    setNotice(`Linked to ${result.linked.name ?? result.linked.email ?? 'your legato.fm account'}.`)
+    reload()
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
+        <p className="min-w-0 text-[length:var(--text-sm)] text-[color:var(--color-control)]">
+          {said}
+          {hint && ` ${hint}`}
+        </p>
+        {canLink && (
+          <Button onClick={() => (replaces ? setConfirmingReplace(true) : void link())} disabled={busy}>
+            {busy ? <Shimmer>linking…</Shimmer> : status.linked ? 'link again' : 'link to legato.fm'}
+          </Button>
+        )}
+      </div>
+      {notice && <p className="text-[length:var(--text-sm)] text-[color:var(--color-control)]">{notice}</p>}
+      {relayUser && (
+        <AlertDialog
+          open={confirmingReplace}
+          onCancel={() => setConfirmingReplace(false)}
+          onConfirm={() => void link()}
+          title="link a different account"
+          description={
+            <p>
+              This server is linked to another legato.fm account. Link it to {accountName(relayUser)} instead? The other account will stop
+              opening it.
+            </p>
+          }
+          confirmLabel="link instead"
+        />
+      )}
+    </>
   )
 }

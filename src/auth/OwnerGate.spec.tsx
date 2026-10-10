@@ -115,6 +115,8 @@ describe('OwnerGate on /setup, with a claim', () => {
     await fillPasswords(container)
     await act(async () => button(container, 'create owner and link Rowan (r•••@example.com)').click())
     expect(container.textContent).toContain("Couldn't reach legato.fm to record the link.")
+    // Issue #325: and where to link it from instead.
+    expect(container.textContent).toContain('You can link it later: open Settings and choose link to legato.fm, under legato.fm account.')
     expect(onSession).not.toHaveBeenCalled()
     await act(async () => button(container, 'continue').click())
     expect(onSession).toHaveBeenCalled()

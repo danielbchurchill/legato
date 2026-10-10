@@ -4,6 +4,7 @@ import {
   createSession,
   deleteSession,
   generateState,
+  getUserById,
   getUserBySessionToken,
   isValidState,
   upsertUser,
@@ -94,6 +95,15 @@ describe("upsertUser", () => {
   it("stores a null email when the provider doesn't supply one", () => {
     const user = upsertUser(db, "github", { ...googleProfile, email: null });
     expect(user.email).toBeNull();
+  });
+});
+
+describe("getUserById", () => {
+  it("finds an account by its id, and answers null for one that's gone", () => {
+    const user = upsertUser(db, "google", googleProfile);
+    expect(getUserById(db, user.id)).toEqual(user);
+    db.prepare("DELETE FROM relay_users WHERE id = ?").run(user.id);
+    expect(getUserById(db, user.id)).toBeNull();
   });
 });
 

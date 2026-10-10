@@ -40,6 +40,7 @@ import { useCoverColor, withAlpha } from './ui/coverColor'
 import { LAUNCHED_OFFLINE } from './pwa/register'
 import { ConnectScreen } from './connect/ConnectScreen'
 import { useLegatoRenewal } from './connect/hooks'
+import { useLegatoLinkReturn } from './connect/useLegatoLinkReturn'
 import { OPEN_CONNECT_EVENT, openConnectScreen, type ConnectReason } from './connect/openConnect'
 import { useInstallOffer } from './pwa/installOffer'
 
@@ -604,6 +605,7 @@ function OwnerGated({ children }: { children: ReactNode }) {
   // preference, so the two can't disagree (#282).
   const { resolvedTheme } = useTheme()
   useLegatoRenewal(state.kind === 'signed-in')
+  useLegatoLinkReturn(state.kind === 'signed-in')
 
   switch (state.kind) {
     case 'checking':

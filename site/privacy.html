@@ -106,7 +106,8 @@
         Each request carries the IP address legato.fm saw your device at, so your server can tell
         your devices apart when it limits wrong passwords, and so its own log shows where a request
         came from.
-        Unlinking closes the connection and deletes the credential from your server.
+        Unlinking closes the connection and deletes the credential from your server, and from
+        legato.fm once it's told.
       </p>
       <p>
         Until a server has an owner, it has a setup page with a code you can scan to claim it
@@ -116,6 +117,14 @@
         is closed, and for good once the server has an owner. If someone has claimed the code,
         the server also fetches legato.fm's public signing keys. Apart from that, a server that
         isn't linked never contacts legato.fm.
+      </p>
+      <p>
+        You can also link a server from Settings in its own web page. Your browser then goes to
+        legato.fm and comes back to that page with a short-lived code, which the page trades for
+        the sign-in token it links with. To check that only that page uses the code, legato.fm
+        keeps the page's address with it, but only as a keyed hash: a one-way code made with a
+        secret key that isn't stored alongside it, so the address can't be read back from our
+        database. legato.fm deletes both after 10 minutes.
       </p>
 
       <h2>This website</h2>

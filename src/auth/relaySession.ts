@@ -1,3 +1,4 @@
+import { sha256 } from '@noble/hashes/sha2.js'
 import { RELAY_ORIGIN } from '../config/relayHost'
 
 /* The desktop app's own legato.fm session (issue #215), separate from the
@@ -74,11 +75,14 @@ export function base64url(bytes: Uint8Array): string {
 }
 
 /** A fresh RFC 7636 verifier (32 random bytes, 43 base64url characters) and
- * its S256 challenge. */
-export async function createPkcePair(): Promise<{ verifier: string; challenge: string }> {
+ * its S256 challenge, for the desktop app's sign-in and the web client's link
+ * (src/connect/legatoLinkReturn.ts). Hashed in JavaScript: the web client is
+ * usually plain http on a LAN address, which isn't a secure context, so
+ * crypto.subtle isn't there (the same reason identity.ts verifies with
+ * @noble). getRandomValues is there either way. */
+export function createPkcePair(): { verifier: string; challenge: string } {
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)))
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
-  return { verifier, challenge: base64url(new Uint8Array(digest)) }
+  return { verifier, challenge: base64url(sha256(new TextEncoder().encode(verifier))) }
 }
 
 function unreachable(origin: string): RelaySignInError {
@@ -152,7 +156,7 @@ type SignInDeps = {
 /** The whole sign-in: challenge, browser, loopback, redemption, storage. */
 export async function signInWithRelay(provider: RelayProvider, deps: SignInDeps): Promise<RelayUser> {
   const { invoke, storage = localStorage, origin = RELAY_ORIGIN, fetchImpl = fetch } = deps
-  const { verifier, challenge } = await createPkcePair()
+  const { verifier, challenge } = createPkcePair()
   let callback: LoopbackCallback
   try {
     callback = await invoke<LoopbackCallback>('relay_sign_in', { relayOrigin: origin, provider, codeChallenge: challenge })
