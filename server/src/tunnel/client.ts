@@ -379,9 +379,21 @@ export class TunnelClient {
   // stored is simply dropped. The relay answers the auth frame with
   // auth-ok, which changes nothing here, or with auth-error if the
   // credential was revoked meanwhile, which is a refusal like any other.
+  //
+  // One whose expiry isn't a date still to come is refused and logged:
+  // stored, it would read back as a credential already gone, or one that's
+  // never due for rotation. The expiry is stored the one way, as ISO.
   private replaced(socket: WebSocket, credential: unknown, expiresAt: unknown): void {
-    if (typeof credential !== "string" || !credential || typeof expiresAt !== "string") return;
-    if (credential === this.secret || !this.options.onCredential?.({ credential, expiresAt })) return;
+    if (typeof credential !== "string" || !credential || credential === this.secret) return;
+    const expires = typeof expiresAt === "string" ? Date.parse(expiresAt) : Number.NaN;
+    if (!(expires > this.now())) {
+      this.log(
+        "warn",
+        `legato.fm: refused a new tunnel credential whose expiry (${String(expiresAt).slice(0, 40)}) isn't a date in the future; this server keeps the one it has`,
+      );
+      return;
+    }
+    if (!this.options.onCredential?.({ credential, expiresAt: new Date(expires).toISOString() })) return;
     this.secret = credential;
     socket.send(JSON.stringify({ type: "auth", secret: credential }));
   }

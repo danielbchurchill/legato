@@ -443,6 +443,31 @@ describe("RelayTunnel rotation", () => {
     expect(h.fake.opened).toBe(2);
   });
 
+  // The review: an expiry that isn't a date was stored, and sync() read it
+  // back as NaN.
+  it("refuses a replacement whose expiry isn't a date in the future, says so, and never stores it", async () => {
+    const h = await setup();
+    h.link("42");
+    h.store("42", "live-1");
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+
+    for (const expiresAt of ["not a date", inDays(-1), 1767225600000, null])
+      h.fake.send({ type: "credential", credential: "live-2", expiresAt });
+    await sleep(100);
+    expect(h.fake.auths).toEqual(["live-1"]);
+    expect(stored(h.db, h.fake.origin)).toBe("live-1");
+    expect(h.tunnel.state).toBe("connected");
+    expect(h.lines.filter((line) => line.level === "warn").map((line) => line.message)).toEqual(
+      Array(4).fill(expect.stringContaining("isn't a date in the future")),
+    );
+
+    // One with a real expiry is taken as before, its expiry written the one way.
+    h.fake.send({ type: "credential", credential: "live-2", expiresAt: "2099-01-01T00:00:00Z" });
+    while (h.fake.auths.length < 2) await sleep(10);
+    expect(readTunnelCredential(h.db, h.fake.origin)?.expiresAt).toBe("2099-01-01T00:00:00.000Z");
+  });
+
   it("drops a replacement for a credential it no longer holds, and keeps the tunnel on the one it has", async () => {
     const h = await setup();
     h.link("42");
