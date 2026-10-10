@@ -306,16 +306,20 @@ describe("a link proof works once", () => {
 });
 
 describe("unlinking and revoking remove the pair", () => {
-  it("the server's signed unlink removes it, once", async () => {
+  const credential = async (res: Promise<{ json(): unknown }>) =>
+    ((await res).json() as { tunnel: { credential: string } }).tunnel.credential;
+
+  it("the server's signed unlink removes it, once, and its tunnel credential with it", async () => {
     const h = setup();
     const { user, headers } = h.signIn();
     const server = homeServer();
-    await h.link(headers, server);
+    const tunnel = await credential(h.link(headers, server));
 
     const proof = unlinkProof(server, { issuer: ISSUER, accountId: String(user.id), nowSeconds: now() });
     const res = await h.postUnlink(proof);
     expect(res.json()).toEqual({ unlinked: true });
     expect((await h.serverToken(headers, server.serverId)).scope).toBe("link");
+    expect(tunnelCredentialHolder(h.db, tunnel)).toBeNull();
 
     // Linked again, the old unlink proof can't undo it.
     await h.link(headers, server);
@@ -348,13 +352,13 @@ describe("unlinking and revoking remove the pair", () => {
     expect((await h.serverToken(headers, server.serverId)).scope).toBe("access");
   });
 
-  it("the account can revoke a server itself, and only its own pair", async () => {
+  it("the account can revoke a server itself, and only its own pair and credential", async () => {
     const h = setup();
     const owner = h.signIn("owner");
     const friend = h.signIn("friend");
     const server = homeServer();
-    await h.link(owner.headers, server);
-    await h.link(friend.headers, server);
+    const ownerTunnel = await credential(h.link(owner.headers, server));
+    const friendTunnel = await credential(h.link(friend.headers, server));
 
     const url = `/linked-servers/${server.serverId}`;
     expect((await h.app.inject({ method: "DELETE", url })).statusCode).toBe(401);
@@ -364,6 +368,8 @@ describe("unlinking and revoking remove the pair", () => {
 
     expect((await h.serverToken(owner.headers, server.serverId)).scope).toBe("link");
     expect((await h.serverToken(friend.headers, server.serverId)).scope).toBe("access");
+    expect(tunnelCredentialHolder(h.db, ownerTunnel)).toBeNull();
+    expect(tunnelCredentialHolder(h.db, friendTunnel)).toEqual({ relayUserId: friend.user.id, serverId: server.serverId });
   });
 
   // Issue #117: the connect screen's "your servers".

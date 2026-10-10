@@ -16,7 +16,8 @@ import { connectHomeServer, listenApp, signIn, waitForState } from "./testing/tu
 // with every link a real signed report (POST /linked-servers) and every
 // tunnel the home server's own client. Minting retires nothing; the new
 // credential's first sign-in retires the server's earlier ones, under any
-// account (pairing.ts).
+// account (pairing.ts); unlinking takes the pair's credential with it
+// (linked-servers.ts).
 
 const ISSUER = "https://auth.legato.test";
 const HEARTBEAT_MS = 50;
@@ -141,6 +142,36 @@ describe("tunnel credentials across a server's links", () => {
     expect(tunnelCredentialHolder(db, second)).not.toBeNull();
     await connect(second);
     expect(tunnelCredentialHolder(db, first)).toBeNull();
+  });
+
+  it("takes the credential with a signed unlink, and refuses the server's tunnel at the next heartbeat", async () => {
+    const owner = signIn(db);
+    const server = homeServerKey();
+    const client = await connect(await link(owner, server));
+
+    const unlinked = await app.inject({
+      method: "POST",
+      url: "/linked-servers/unlink",
+      payload: unlinkProof(server, { issuer: ISSUER, accountId: String(owner.userId), nowSeconds: Math.floor(Date.now() / 1000) }),
+    });
+    expect(unlinked.json()).toEqual({ unlinked: true });
+    await waitForState(client, "refused");
+  });
+
+  it("takes the credential when the account removes the server itself", async () => {
+    const owner = signIn(db);
+    const server = homeServerKey();
+    const credential = await link(owner, server);
+    const client = await connect(credential);
+
+    const removed = await app.inject({
+      method: "DELETE",
+      url: `/linked-servers/${server.serverId}`,
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    expect(removed.json()).toEqual({ unlinked: true });
+    expect(tunnelCredentialHolder(db, credential)).toBeNull();
+    await waitForState(client, "refused");
   });
 
   it("retires the first account's credential once a second account's, after a relink, signs in", async () => {

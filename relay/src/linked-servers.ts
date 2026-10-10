@@ -120,8 +120,16 @@ export function listLinkedServers(
   }));
 }
 
+// The pair's tunnel credentials go with it, in the same transaction (issue
+// #325): a credential is the account's way of letting the server open the
+// tunnel, and an unlinked account no longer does. A tunnel open on one is
+// refused at the next heartbeat (routes/tunnel.ts). Another account's pair
+// with the same server keeps its own.
 export function removeLinkedServer(db: Database, relayUserId: number, serverId: string): boolean {
-  return db.prepare("DELETE FROM linked_servers WHERE relay_user_id = ? AND server_id = ?").run(relayUserId, serverId).changes > 0;
+  return db.transaction(() => {
+    db.prepare("DELETE FROM tunnel_credentials WHERE relay_user_id = ? AND server_id = ?").run(relayUserId, serverId);
+    return db.prepare("DELETE FROM linked_servers WHERE relay_user_id = ? AND server_id = ?").run(relayUserId, serverId).changes > 0;
+  })();
 }
 
 // False when the proof was already spent. Rows past their expiry go first:

@@ -97,7 +97,9 @@ export function linkedServerRoutes(
 
     // Revoking from the account's side. The server isn't told: its owner is
     // still linked there, but legato.fm signs only `link` tokens for it until
-    // the owner links again.
+    // the owner links again. The pair's tunnel credential goes too
+    // (linked-servers.ts), so the server's tunnel is refused at the next
+    // heartbeat, and stays off until that link brings a new one.
     app.delete<{ Params: { serverId: string } }>("/linked-servers/:serverId", async (request, reply) => {
       const token = sessionToken(request);
       const user = token ? getUserBySessionToken(db, token) : null;
