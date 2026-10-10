@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /* Issue #325's review: the link button in Settings' legato.fm account group,
@@ -49,11 +49,18 @@ function serverSays(legato: Record<string, unknown>) {
   )
 }
 
+// Unmounted after each test: a signed-in row also lists the account's
+// sessions and servers (#115), and an earlier test's fetch answering after
+// its body was cleared would re-render into nodes that are gone.
+const roots: Root[] = []
+
 async function render() {
   const container = document.createElement('div')
   document.body.appendChild(container)
+  const root = createRoot(container)
+  roots.push(root)
   await act(async () => {
-    createRoot(container).render(createElement(LegatoAccountRow))
+    root.render(createElement(LegatoAccountRow))
   })
   return container
 }
@@ -78,6 +85,9 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  act(() => {
+    for (const root of roots.splice(0)) root.unmount()
+  })
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
 })
