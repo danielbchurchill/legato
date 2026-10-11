@@ -122,3 +122,64 @@ describe('withMediaTicket', () => {
     expect(withMediaTicket(`${ORIGIN}/api/v1/ws`, null)).toBe(`${ORIGIN}/api/v1/ws`)
   })
 })
+
+/* Issue #365: through legato.fm's relay the server is a base with a path,
+ * which every server shares the origin of, and every request carries the
+ * relay ticket beside the server's own credential. */
+describe('through the relay', () => {
+  const SERVER = '0123456789abcdef0123456789abcdef'
+  const BASE = `https://auth.legato.fm/relay/${SERVER}`
+
+  function relaySetup(status = 200, body: unknown = {}) {
+    const storage = memoryStorage()
+    const baseFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json(body, { status }))
+    const onAuthRequired = vi.fn()
+    const authFetch = createAuthFetch({
+      baseFetch: baseFetch as unknown as typeof fetch,
+      origin: BASE,
+      storage,
+      onAuthRequired,
+      pageUrl: 'tauri://localhost/',
+      relayTicket: () => 'relay.ticket',
+    })
+    return { storage, baseFetch, onAuthRequired, authFetch }
+  }
+
+  it("sends this server's session and the relay ticket, and never a cookie", async () => {
+    const { storage, baseFetch, authFetch } = relaySetup()
+    storeSession({ token: 'tok', mediaTicket: 'tkt' }, storage, BASE)
+    await authFetch(`${BASE}/api/v1/stats`)
+    expect(sentHeaders(baseFetch).get('Authorization')).toBe('Bearer tok')
+    expect(sentHeaders(baseFetch).get('X-Legato-Relay')).toBe('relay.ticket')
+    expect(baseFetch.mock.calls[0]![1]!.credentials).toBe('omit')
+  })
+
+  it("sends nothing to another server on the relay, or to legato.fm's own routes", async () => {
+    const { storage, baseFetch, authFetch } = relaySetup()
+    storeSession({ token: 'tok', mediaTicket: 'tkt' }, storage, BASE)
+    await authFetch(`https://auth.legato.fm/relay/${'f'.repeat(32)}/api/v1/stats`)
+    await authFetch(`${BASE}x/api/v1/stats`)
+    await authFetch('https://auth.legato.fm/linked-servers')
+    for (const call of baseFetch.mock.calls) expect(call[1]).toBeUndefined()
+  })
+
+  it("keeps a password session when it's the relay that refused, not the server", async () => {
+    const refused = relaySetup(401, { reason: 'relay_signed_out' })
+    storeSession({ token: 'tok', mediaTicket: 'tkt' }, refused.storage, BASE)
+    await refused.authFetch(`${BASE}/api/v1/stats`)
+    expect(readSession(refused.storage, BASE)).toEqual({ token: 'tok', mediaTicket: 'tkt' })
+    expect(refused.onAuthRequired).toHaveBeenCalledOnce()
+
+    const server = relaySetup(401, { reason: 'signed_out' })
+    storeSession({ token: 'tok', mediaTicket: 'tkt' }, server.storage, BASE)
+    await server.authFetch(`${BASE}/api/v1/stats`)
+    expect(readSession(server.storage, BASE)).toBeNull()
+  })
+
+  it('adds the relay ticket to media URLs, with or without a session', () => {
+    expect(withMediaTicket(`${BASE}/api/v1/files/1/stream?quality=opus160`, { token: 't', mediaTicket: 'm+1' }, 'a.b_c')).toBe(
+      `${BASE}/api/v1/files/1/stream?quality=opus160&t=m%2B1&relay=a.b_c`,
+    )
+    expect(withMediaTicket(`${BASE}/api/v1/events`, null, 'a.b_c')).toBe(`${BASE}/api/v1/events?relay=a.b_c`)
+  })
+})

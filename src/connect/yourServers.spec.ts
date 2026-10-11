@@ -27,6 +27,7 @@ const found: FoundServer[] = [
 ]
 
 describe('knownServers', () => {
+
   it('remembers when and where this device reached a server, keeping only LAN addresses as one to look at', () => {
     const store = memoryStorage()
     rememberServer(ID, { origin: 'http://192.168.1.20:8899', name: 'musicbox' }, new Date('2026-10-08T10:00:00Z'), store)
@@ -80,6 +81,18 @@ describe('reachServer', () => {
 
   it('is offline with no time for a server this device never reached', async () => {
     expect(await reachServer(OTHER, [], {})).toEqual({ kind: 'offline', since: null })
+  })
+
+  // Issue #365.
+  it('is through legato.fm when not at home but its tunnel is up, unless the relay is pinned off', async () => {
+    const unreachable = vi.fn(async () => ({ ok: false as const, reason: 'unreachable' as const }))
+    const candidates = candidateOrigins(ID, found, known)
+    expect(await reachServer(ID, candidates, known, unreachable, { tunnelUp: true, allowed: true })).toEqual({ kind: 'relay' })
+    expect(await reachServer(ID, candidates, known, unreachable, { tunnelUp: true, allowed: false })).toMatchObject({ kind: 'offline' })
+    expect(await reachServer(ID, candidates, known, unreachable, { tunnelUp: false, allowed: true })).toMatchObject({ kind: 'offline' })
+    // At home still comes first.
+    const home = vi.fn(async () => ({ ok: true as const, serverId: ID, publicKey: 'k' }))
+    expect(await reachServer(ID, candidates, known, home, { tunnelUp: true, allowed: true })).toMatchObject({ kind: 'home' })
   })
 })
 

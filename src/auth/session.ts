@@ -1,5 +1,6 @@
-import { SERVER_ORIGIN } from '../config/serverHost'
+import { RELAY_SERVER_ID, SERVER_ORIGIN } from '../config/serverHost'
 import { noteReadFailed } from '../connect/reconnect'
+import { isUnderBase, readRelayTicket, RELAY_TICKET_HEADER, RELAY_TICKET_PARAM } from './relayTicket'
 
 /* The client half of issue #112's owner gate (server/src/auth/gate.ts).
  *
@@ -16,7 +17,11 @@ import { noteReadFailed } from '../connect/reconnect'
  *
  * installAuthFetch() adds the header by wrapping window.fetch once at
  * startup, so the ~25 files that call fetch() stay unchanged and a new one
- * is covered without anyone remembering. */
+ * is covered without anyone remembering.
+ *
+ * Through legato.fm's relay (issue #365) the server is a base with a path,
+ * https://auth.legato.fm/relay/<id>, not an origin, and both helpers add
+ * the relay ticket (relayTicket.ts) beside the server's own credential. */
 
 /** `legato` marks a session opened with a legato.fm access token (#117):
  * it lasts a fixed time and is renewed through legato.fm before it ends
@@ -31,11 +36,16 @@ export const AUTH_REQUIRED_EVENT = 'legato:auth-required'
 
 // Keyed by server origin, so a client pointed at a second server (another
 // worktree's port, the Pi instead of the local one) never sends one
-// server's token to the other.
+// server's token to the other. Every server shares the relay's origin, so
+// through the relay the key is the server's base there.
 const storageKey = (origin: string) => `legato:session:${origin}`
 
 function serverOrigin(): string {
-  return new URL(SERVER_ORIGIN, window.location.href).origin
+  return RELAY_SERVER_ID ? SERVER_ORIGIN : new URL(SERVER_ORIGIN, window.location.href).origin
+}
+
+function currentRelayTicket(): string | null {
+  return RELAY_SERVER_ID ? (readRelayTicket(localStorage, SERVER_ORIGIN)?.ticket ?? null) : null
 }
 
 export function readSession(storage: Storage = localStorage, origin = serverOrigin()): StoredSession | null {
@@ -62,10 +72,18 @@ export function clearSession(storage: Storage = localStorage, origin = serverOri
 }
 
 /** `url` with this session's media ticket appended, or unchanged when
- * signed out (the request then fails with 401 like any other). */
-export function withMediaTicket(url: string, session: StoredSession | null = readSession()): string {
-  if (!session) return url
-  return `${url}${url.includes('?') ? '&' : '?'}t=${encodeURIComponent(session.mediaTicket)}`
+ * signed out (the request then fails with 401 like any other). Through the
+ * relay, its ticket too. */
+export function withMediaTicket(
+  url: string,
+  session: StoredSession | null = readSession(),
+  relayTicket: string | null = currentRelayTicket(),
+): string {
+  const params: string[] = []
+  if (session) params.push(`t=${encodeURIComponent(session.mediaTicket)}`)
+  if (relayTicket) params.push(`${RELAY_TICKET_PARAM}=${encodeURIComponent(relayTicket)}`)
+  if (params.length === 0) return url
+  return `${url}${url.includes('?') ? '&' : '?'}${params.join('&')}`
 }
 
 function requestUrl(input: RequestInfo | URL): string {
@@ -82,23 +100,39 @@ type AuthFetchDeps = {
   /** A request the network failed: not one that was aborted. */
   onNetworkError?: (url: URL) => void
   pageUrl: string
+  /** Set when `origin` is a server's base on legato.fm's relay: the ticket
+   * every request under it carries. */
+  relayTicket?: () => string | null
 }
 
 // Split out from installAuthFetch so session.spec.ts can drive it without a
 // browser window.
-export function createAuthFetch({ baseFetch, origin, storage, onAuthRequired, onNetworkError, pageUrl }: AuthFetchDeps): typeof fetch {
+export function createAuthFetch({
+  baseFetch,
+  origin,
+  storage,
+  onAuthRequired,
+  onNetworkError,
+  pageUrl,
+  relayTicket,
+}: AuthFetchDeps): typeof fetch {
   return async (input, init) => {
     const url = new URL(requestUrl(input), pageUrl)
-    if (url.origin !== origin) return baseFetch(input, init)
+    if (!isUnderBase(url, origin)) return baseFetch(input, init)
 
     const session = readSession(storage, origin)
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
     if (session && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${session.token}`)
+    const ticket = relayTicket?.()
+    if (ticket && !headers.has(RELAY_TICKET_HEADER)) headers.set(RELAY_TICKET_HEADER, ticket)
     // 'include' so the cookie path works too: the Google/GitHub popup only
     // leaves a cookie behind, and the dev page on 127.0.0.1:5173 is a
     // different origin from the server on :8899 (same site, though, so a
-    // SameSite=Lax cookie is still sent).
-    const res = await baseFetch(input, { ...init, headers, credentials: init?.credentials ?? 'include' }).catch((err: unknown) => {
+    // SameSite=Lax cookie is still sent). Never through the relay: no
+    // cookie of legato.fm's belongs on a request from here, and its CORS
+    // allows no credentialed request (relay/src/routes/relay.ts).
+    const credentials = relayTicket ? 'omit' : (init?.credentials ?? 'include')
+    const res = await baseFetch(input, { ...init, headers, credentials }).catch((err: unknown) => {
       if (!(err instanceof DOMException && err.name === 'AbortError')) onNetworkError?.(url)
       throw err
     })
@@ -106,13 +140,27 @@ export function createAuthFetch({ baseFetch, origin, storage, onAuthRequired, on
     // A 401 from /auth/* is a wrong password or setup code, which the form
     // that sent it shows itself. Anywhere else it means this session is no
     // longer accepted. A legato.fm session stays put for useAuth to renew
-    // through legato.fm first (#117); it clears it if that fails.
+    // through legato.fm first (#117); it clears it if that fails. So does
+    // any session when it's the relay that refused, not the server: only
+    // the relay ticket ran out, and useAuth renews that.
     if (res.status === 401 && !url.pathname.includes('/auth/')) {
-      if (!session?.legato) clearSession(storage, origin)
+      const relayRefused = Boolean(relayTicket) && (await refusedByRelay(res))
+      if (!session?.legato && !relayRefused) clearSession(storage, origin)
       onAuthRequired()
     }
     return res
   }
+}
+
+// The relay's own refusal says so (relay/src/routes/relay.ts).
+export const RELAY_REFUSED_REASON = 'relay_signed_out'
+
+export async function refusedByRelay(res: Response): Promise<boolean> {
+  const body = (await res
+    .clone()
+    .json()
+    .catch(() => null)) as { reason?: unknown } | null
+  return body?.reason === RELAY_REFUSED_REASON
 }
 
 let installed = false
@@ -133,5 +181,6 @@ export function installAuthFetch(): void {
       if (!url.pathname.endsWith('/health')) noteReadFailed()
     },
     pageUrl: window.location.href,
+    relayTicket: RELAY_SERVER_ID ? currentRelayTicket : undefined,
   })
 }

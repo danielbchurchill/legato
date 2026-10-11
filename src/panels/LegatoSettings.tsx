@@ -17,7 +17,7 @@ import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
 import type { ReplayGainMode } from '../playback/usePlayback'
 import { signOut } from '../auth/useAuth'
-import { API_BASE as API, SERVER_ORIGIN } from '../config/serverHost'
+import { API_BASE as API, RELAY_SERVER_ID, SERVER_ORIGIN } from '../config/serverHost'
 import { useReconnectEpoch } from '../connect/reconnect'
 import { openConnectScreen } from '../connect/openConnect'
 import { IS_TAURI } from '../config/runtime'
@@ -237,7 +237,13 @@ function AccountGroup() {
       {/* #117: which server this is, and the way to another. */}
       <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
         <p className="min-w-0 truncate text-small text-[var(--color-ink-2)]" title={SERVER_ORIGIN}>
-          on <span className="mono">{new URL(SERVER_ORIGIN).host}</span>
+          {RELAY_SERVER_ID ? (
+            'through legato.fm'
+          ) : (
+            <>
+              on <span className="mono">{new URL(SERVER_ORIGIN).host}</span>
+            </>
+          )}
         </p>
         <Button onClick={() => openConnectScreen()}>change server</Button>
       </div>

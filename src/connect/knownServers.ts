@@ -1,4 +1,5 @@
 import { isLanHost } from './address'
+import { relayedServerId } from './serverPath'
 
 /* What this device remembers about each server it has reached (issue #117),
  * keyed by server id, in localStorage:
@@ -34,7 +35,9 @@ export function readKnownServers(store: Storage | null = storage()): KnownServer
 }
 
 /** Records that this device just reached `serverId` at `origin`. Only a LAN
- * origin replaces the remembered LAN address. */
+ * origin replaces the remembered LAN address. A route through legato.fm's
+ * relay (#365) never does, even from a dev relay on this computer: it's
+ * where "never use the relay" sends a client instead. */
 export function rememberServer(
   serverId: string,
   reached: { origin: string; name?: string | null },
@@ -43,7 +46,7 @@ export function rememberServer(
 ): KnownServers {
   const known = readKnownServers(store)
   const previous = known[serverId]
-  const lan = isLanHost(new URL(reached.origin).hostname)
+  const lan = isLanHost(new URL(reached.origin).hostname) && relayedServerId(reached.origin) === null
   known[serverId] = {
     name: reached.name ?? previous?.name ?? null,
     lanOrigin: lan ? reached.origin : (previous?.lanOrigin ?? null),

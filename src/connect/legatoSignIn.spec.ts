@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { readRelayTicket } from '../auth/relayTicket'
 import { readSession, storeSession } from '../auth/session'
 import { fakeServerKey } from './testServerKey'
-import { renewDelayMs, renewLegatoSession, RENEW_WHEN_LEFT_MS, signInWithLegato } from './legatoSignIn'
+import { renewDelayMs, renewLegatoSession, renewRelayTicket, RENEW_WHEN_LEFT_MS, signInWithLegato } from './legatoSignIn'
 
 /* Issue #117: signing in to a home server with legato.fm. The point of the
  * order: until the server proves it holds its id's key, legato.fm is never
@@ -126,5 +127,92 @@ describe('renewal', () => {
 
     storeSession({ token: 'pw', mediaTicket: 'pw-tkt' }, storage, HOME)
     expect(await renewLegatoSession(HOME, { storage, fetchImpl: net.fetchImpl, relayOrigin: RELAY, relayToken: 'relay-session' })).toBe(false)
+  })
+})
+
+/* Issue #365: the same sign-in through legato.fm's relay, where the server's
+ * base is RELAY/relay/<id> and every request to it needs a relay ticket. */
+describe('signInWithLegato through the relay', () => {
+  type RelayCall = { url: string; authorization: string | null; ticket: string | null; credentials: RequestCredentials | undefined }
+
+  function relayed(home: ReturnType<typeof fakeServerKey>, options: { ticketStatus?: number; ticketReason?: string } = {}) {
+    const base = `${RELAY}/relay/${home.serverId}`
+    const calls: RelayCall[] = []
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      const headers = new Headers(init?.headers)
+      calls.push({ url, authorization: headers.get('Authorization'), ticket: headers.get('X-Legato-Relay'), credentials: init?.credentials })
+      if (url === `${RELAY}/auth/relay-ticket`) {
+        if (options.ticketStatus) return Response.json({ error: 'no', reason: options.ticketReason }, { status: options.ticketStatus })
+        return Response.json({ ticket: 'relay.ticket.jws', expiresAt: '2026-10-11T00:00:00.000Z' })
+      }
+      // The relay itself: nothing gets through without the ticket.
+      if (url.startsWith(`${base}/`) && headers.get('X-Legato-Relay') !== 'relay.ticket.jws') {
+        return Response.json({ reason: 'relay_signed_out' }, { status: 401 })
+      }
+      if (url === `${base}/api/v1/auth/identity`) {
+        const { nonce } = JSON.parse(String(init!.body)) as { nonce: string }
+        return Response.json(home.prove(nonce))
+      }
+      if (url === `${RELAY}/auth/server-token`) return Response.json({ token: 'access.jws.token', scope: 'access' })
+      if (url === `${base}/api/v1/auth/legato/session`) {
+        return Response.json({ token: 'sess', mediaTicket: 'tkt', expiresAt: '2026-10-11T00:00:00.000Z' })
+      }
+      return new Response('not found', { status: 404 })
+    }) as typeof fetch
+    return { base, calls, fetchImpl }
+  }
+
+  it('gets a relay ticket first, then proves the server and opens its session through the relay with it', async () => {
+    const real = fakeServerKey()
+    const net = relayed(real)
+    const result = await signInWithLegato(net.base, real.serverId, { fetchImpl: net.fetchImpl, relayOrigin: RELAY, relayToken: 'relay-session' })
+    expect(result).toEqual({
+      ok: true,
+      session: { token: 'sess', mediaTicket: 'tkt', legato: { serverId: real.serverId, expiresAt: '2026-10-11T00:00:00.000Z' } },
+      relayTicket: { ticket: 'relay.ticket.jws', expiresAt: '2026-10-11T00:00:00.000Z' },
+    })
+    expect(net.calls.map((c) => c.url)).toEqual([
+      `${RELAY}/auth/relay-ticket`,
+      `${net.base}/api/v1/auth/identity`,
+      `${RELAY}/auth/server-token`,
+      `${net.base}/api/v1/auth/legato/session`,
+    ])
+    expect(net.calls[0]!.authorization).toBe('Bearer relay-session')
+    // Only requests to the server carry the ticket, never a cookie, and
+    // legato.fm's own session never goes to the server.
+    expect(net.calls.map((c) => c.ticket)).toEqual([null, 'relay.ticket.jws', null, 'relay.ticket.jws'])
+    expect(net.calls[1]!.credentials).toBe('omit')
+    expect(net.calls[3]!.authorization).toBe('Bearer access.jws.token')
+  })
+
+  it("says the server isn't linked when legato.fm won't give a ticket for it, and asks nothing else", async () => {
+    const real = fakeServerKey()
+    const net = relayed(real, { ticketStatus: 404, ticketReason: 'not_linked' })
+    const result = await signInWithLegato(net.base, real.serverId, { fetchImpl: net.fetchImpl, relayOrigin: RELAY, relayToken: 'relay-session' })
+    expect(result).toEqual({ ok: false, failure: { step: 'not-linked' } })
+    expect(net.calls).toHaveLength(1)
+
+    const ended = relayed(real, { ticketStatus: 401 })
+    expect(
+      await signInWithLegato(ended.base, real.serverId, { fetchImpl: ended.fetchImpl, relayOrigin: RELAY, relayToken: 'relay-session' }),
+    ).toEqual({ ok: false, failure: { step: 'signed-out' } })
+  })
+
+  it('renews the session and the ticket together, and the ticket on its own', async () => {
+    const real = fakeServerKey()
+    const net = relayed(real)
+    const storage = memoryStorage()
+    storeSession({ token: 'old', mediaTicket: 'old-tkt', legato: { serverId: real.serverId, expiresAt: '2026-10-10T12:00:00.000Z' } }, storage, net.base)
+    const deps = { storage, fetchImpl: net.fetchImpl, relayOrigin: RELAY, relayToken: 'relay-session' }
+    expect(await renewLegatoSession(net.base, deps)).toBe(true)
+    expect(readSession(storage, net.base)?.token).toBe('sess')
+    expect(readRelayTicket(storage, net.base)?.ticket).toBe('relay.ticket.jws')
+
+    const fresh = memoryStorage()
+    expect(await renewRelayTicket(net.base, { ...deps, storage: fresh })).toBe(true)
+    expect(readRelayTicket(fresh, net.base)).toEqual({ ticket: 'relay.ticket.jws', expiresAt: '2026-10-11T00:00:00.000Z' })
+    // Not a relay base: nothing to renew.
+    expect(await renewRelayTicket(HOME, { ...deps, storage: fresh })).toBe(false)
   })
 })

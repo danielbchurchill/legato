@@ -11,15 +11,19 @@ import type { KnownServers } from './knownServers'
  *     at the last LAN address this device reached it on, and proved it
  *     holds its id's key (identity.ts). An advertisement alone isn't enough:
  *     anything on the LAN can claim an id.
- *   - Offline since …: neither worked. The time is when this device last
+ *   - Through legato.fm (issue #365): not at home, but its tunnel to
+ *     legato.fm is up (GET /linked-servers says so, #310), so it can be
+ *     reached at auth.legato.fm/relay/<id>/. Not offered while the "never
+ *     use legato.fm" pin is set (connectionPath.ts).
+ *   - Offline since …: none of those. The time is when this device last
  *     reached it (knownServers.ts); a server never reached from here says
- *     so instead.
- *
- * "Through the relay" isn't here yet. No home server opens the relay's
- * tunnel, and the tunnel registry is keyed by account rather than server;
- * #310 adds both, and the per-server state this list will read. */
+ *     so instead. */
 
-export type LinkedServer = { serverId: string; linkedAt: string }
+export type LinkedServer = {
+  serverId: string
+  linkedAt: string
+  tunnel?: { connected: true; connectedAt: string } | { connected: false; lastSeenAt: string | null }
+}
 
 export type FoundServer = {
   instance: string
@@ -33,6 +37,7 @@ export type FoundServer = {
 export type Reach =
   | { kind: 'checking' }
   | { kind: 'home'; origin: string; via: 'mdns' | 'lan' }
+  | { kind: 'relay' }
   | { kind: 'offline'; since: string | null }
 
 export class LinkedServersError extends Error {
@@ -77,16 +82,19 @@ export function candidateOrigins(
   return out
 }
 
-/** The first candidate that proves it's `serverId`, or offline. */
+/** The first candidate that proves it's `serverId`; else the relay, when
+ * the server's tunnel is up and the relay may be used; else offline. */
 export async function reachServer(
   serverId: string,
   candidates: { origin: string; via: 'mdns' | 'lan' }[],
   known: KnownServers,
   verify: (origin: string, serverId: string) => Promise<IdentityResult> = verifyServerIdentity,
+  relay: { tunnelUp: boolean; allowed: boolean } = { tunnelUp: false, allowed: false },
 ): Promise<Reach> {
   for (const candidate of candidates) {
     if ((await verify(candidate.origin, serverId)).ok) return { kind: 'home', ...candidate }
   }
+  if (relay.tunnelUp && relay.allowed) return { kind: 'relay' }
   return { kind: 'offline', since: known[serverId]?.lastReachedAt ?? null }
 }
 

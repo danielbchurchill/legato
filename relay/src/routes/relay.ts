@@ -6,8 +6,9 @@ import { sanitizeHeaders } from "../headers.js";
 import { clientAddress } from "../rate-limit.js";
 import { isLinkedServer } from "../linked-servers.js";
 import type { RequestFrame } from "../protocol.js";
-import { SERVER_ID_PATTERN } from "../signing-keys.js";
+import { SERVER_ID_PATTERN, verifyRelayTicket, type SigningKeys } from "../signing-keys.js";
 import type { TunnelRegistry } from "../tunnel-registry.js";
+import { isAllowedAppOrigin } from "./auth.js";
 
 // ADDRESSING: which tunnel does a /relay/* request go to?
 //
@@ -16,15 +17,29 @@ import type { TunnelRegistry } from "../tunnel-registry.js";
 // (issue #310), each with a tunnel of its own (tunnel-registry.ts), so the
 // account alone can't say which one is meant.
 //
-// Who may use it: a caller signed in to a relay account the same way as
-// everything under /auth and /pair, with the relay_session cookie
-// routes/auth.ts sets, whose account has linked that server
-// (linked_servers, migration 0005). That's the same pair POST
+// Who may use it: an account that has linked that server (linked_servers,
+// migration 0005), checked on every request. That's the same pair POST
 // /auth/server-token checks before it signs an `access` token for a
 // server, so the relay carries requests exactly where legato.fm already
-// vouches for the account. An id the account hasn't linked is a 404 whether
-// or not that server is connected: the answer says nothing about servers
-// that aren't the caller's.
+// vouches for the account, and unlinking stops a device at its next
+// request. An id the account hasn't linked is a 404 whether or not that
+// server is connected: the answer says nothing about servers that aren't
+// the caller's.
+//
+// A device says which account it is with a relay ticket (issue #365,
+// signing-keys.ts) for that server: in the X-Legato-Relay header, or, for
+// what can't send a header (<img>, <audio>, the event stream), a `relay`
+// query parameter. A browser tab on legato.fm itself can still use the
+// relay_session cookie routes/auth.ts sets. The ticket is the relay's
+// alone: it's taken off before the request goes down the tunnel, so a home
+// server never sees it. The home server checks its own credential, which
+// the device sends beside the ticket as it would at home.
+//
+// Legato's own clients call this cross-origin: the desktop webview and a
+// loopback dev page (isAllowedAppOrigin in routes/auth.ts). The relay
+// answers their CORS itself, preflights included, and never with
+// Access-Control-Allow-Credentials, so no cookie of legato.fm's is ever
+// sent or read cross-site.
 //
 // Cookies stay on this side. legato.fm's own cookies (the relay session
 // among them) are never sent down a tunnel, and a home server's Set-Cookie
@@ -52,13 +67,37 @@ import type { TunnelRegistry } from "../tunnel-registry.js";
 // a playlist import stays under the server's 1 MiB default.
 export const REQUEST_BODY_LIMIT = 4 * 1024 * 1024;
 
-export function relayRoutes(registry: TunnelRegistry, db: Database) {
+export function relayRoutes(
+  registry: TunnelRegistry,
+  db: Database,
+  options: { signingKeys: SigningKeys | null; issuer: string | undefined },
+) {
+  const { signingKeys, issuer } = options;
+
+  // The account a request's credential belongs to: its relay ticket's, if it
+  // brought one, which has to be good for this server; otherwise its
+  // relay_session cookie's. Null when neither holds.
+  const accountFor = (request: FastifyRequest, serverId: string): number | null => {
+    const ticket = relayTicket(request);
+    if (ticket !== null) {
+      if (!signingKeys || !issuer) return null;
+      return verifyRelayTicket(signingKeys, ticket, { issuer, serverId })?.accountId ?? null;
+    }
+    const token = request.cookies[SESSION_COOKIE];
+    return (token ? getUserBySessionToken(db, token) : null)?.id ?? null;
+  };
+
   return async function routes(app: FastifyInstance) {
     // On the raw response, so it holds for replies Fastify sends (a 401,
     // a 413) and for the hijacked ones below alike.
-    app.addHook("onRequest", async (_request, reply) => {
+    app.addHook("onRequest", async (request, reply) => {
       reply.raw.setHeader("content-security-policy", SANDBOX);
       reply.raw.setHeader("x-content-type-options", "nosniff");
+      reply.raw.setHeader("vary", "Origin");
+      const origin = request.headers.origin;
+      if (!isAllowedAppOrigin(origin)) return;
+      reply.raw.setHeader("access-control-allow-origin", origin!);
+      reply.raw.setHeader("access-control-expose-headers", EXPOSED_HEADERS);
     });
 
     // Scoped to this plugin only — not the root app — so /auth/* and
@@ -87,15 +126,28 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
     app.addContentTypeParser("text/plain", rawBody, passThrough);
 
     const forward = async (request: FastifyRequest<{ Params: { serverId: string } }>, reply: FastifyReply) => {
-      const token = request.cookies[SESSION_COOKIE];
-      const user = token ? getUserBySessionToken(db, token) : null;
-      if (!user) {
-        reply.code(401).send({ error: "sign in first" });
+      // A CORS preflight carries no credentials, so the relay answers it
+      // itself, for every origin the hook above allows, and it never
+      // reaches a home server.
+      if (request.method === "OPTIONS") {
+        if (isAllowedAppOrigin(request.headers.origin)) {
+          reply.raw.setHeader("access-control-allow-methods", "GET, HEAD, POST, PUT, PATCH, DELETE");
+          reply.raw.setHeader("access-control-allow-headers", "Authorization, Content-Type, Range, X-Legato-Relay");
+          reply.raw.setHeader("access-control-max-age", "600");
+        }
+        reply.code(204).send();
         return;
       }
 
       const { serverId } = request.params;
-      if (!SERVER_ID_PATTERN.test(serverId) || !isLinkedServer(db, user.id, serverId)) {
+      const accountId = accountFor(request, serverId);
+      if (accountId === null) {
+        reply
+          .code(401)
+          .send({ error: "Sign in to legato.fm first, or get a fresh relay ticket for this server.", reason: "relay_signed_out" });
+        return;
+      }
+      if (!SERVER_ID_PATTERN.test(serverId) || !isLinkedServer(db, accountId, serverId)) {
         reply.code(404).send({ error: "no server with that id is linked to this account" });
         return;
       }
@@ -111,6 +163,7 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
       const bodyBuffer = request.body instanceof Buffer ? request.body : undefined;
       const headers = sanitizeHeaders(request.headers);
       delete headers.cookie;
+      delete headers[TICKET_HEADER];
 
       const frame: RequestFrame = {
         type: "request",
@@ -188,9 +241,44 @@ export function relayRoutes(registry: TunnelRegistry, db: Database) {
 const AFTER_ID = /^\/[^/?]*\/[^/?]*(.*)$/s;
 
 function pathOnServer(url: string): string {
-  const rest = AFTER_ID.exec(url)?.[1] ?? "";
+  const rest = withoutTicket(AFTER_ID.exec(url)?.[1] ?? "");
   return rest.startsWith("/") ? rest : `/${rest}`;
 }
+
+const TICKET_HEADER = "x-legato-relay";
+const TICKET_PARAM = "relay";
+
+function relayTicket(request: FastifyRequest): string | null {
+  const header = request.headers[TICKET_HEADER];
+  if (typeof header === "string" && header) return header;
+  const param = (request.query as Record<string, unknown> | undefined)?.[TICKET_PARAM];
+  return typeof param === "string" && param ? param : null;
+}
+
+// The query string with the relay ticket taken out, and every other
+// parameter left exactly as the device encoded it. A ticket is base64url
+// and dots, so it never needs decoding to be recognised.
+function withoutTicket(pathAndQuery: string): string {
+  const at = pathAndQuery.indexOf("?");
+  if (at < 0) return pathAndQuery;
+  const kept = pathAndQuery
+    .slice(at + 1)
+    .split("&")
+    .filter((part) => part.split("=", 1)[0] !== TICKET_PARAM);
+  return kept.length ? `${pathAndQuery.slice(0, at)}?${kept.join("&")}` : pathAndQuery.slice(0, at);
+}
+
+// For the relay's own request log (app.ts): a relay ticket, and a home
+// server's media ticket (server/src/auth/gate.ts), both ride in /relay/*
+// query strings. Replaces just the values.
+export function redactCredentials(url: string): string {
+  return url.replace(/([?&](?:relay|t)=)[^&]*/g, "$1[redacted]");
+}
+
+// What a cross-origin client may read beyond the CORS-safelisted headers:
+// the ones a client reads off a home server's answer (DEVICE_HEADERS
+// below), and the sign-in limiter's Retry-After.
+const EXPOSED_HEADERS = "Content-Range, Accept-Ranges, ETag, Retry-After, X-Cover-Source";
 
 const SANDBOX = "sandbox";
 
@@ -233,5 +321,8 @@ function forDevice(headers: Record<string, string>): Record<string, string | str
     if (!DEVICE_HEADERS.has(key)) continue;
     result[key] = key === "content-security-policy" ? [value, SANDBOX] : value;
   }
+  // The relay's answer depends on the Origin it was asked from (its CORS
+  // headers), so a server's own Vary keeps Origin beside it.
+  if (typeof result.vary === "string" && !/(^|,)\s*origin\s*(,|$)/i.test(result.vary)) result.vary = `${result.vary}, Origin`;
   return result;
 }

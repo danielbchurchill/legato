@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { readRelaySession } from '../auth/relaySession'
+import { readRelayTicket } from '../auth/relayTicket'
 import { readSession } from '../auth/session'
 import { IS_TAURI } from '../config/runtime'
-import { SERVER_ORIGIN } from '../config/serverHost'
+import { RELAY_SERVER_ID, SERVER_ORIGIN } from '../config/serverHost'
+import { neverUseRelay } from './connectionPath'
 import { readKnownServers, rememberServer, type KnownServers } from './knownServers'
-import { renewDelayMs, renewLegatoSession, RENEW_RETRY_MS } from './legatoSignIn'
+import { renewDelayMs, renewLegatoSession, renewRelayTicket, RENEW_RETRY_MS } from './legatoSignIn'
 import {
   candidateOrigins,
   fetchLinkedServers,
@@ -59,8 +61,13 @@ export type YourServers =
 
 /** The account's linked servers, each checked for a way to reach it. Waits
  * for the first discovery poll, so a server that's right here doesn't
- * flash "offline" first. */
-export function useYourServers(discovery: Discovery, relaySignedIn: boolean): { state: YourServers; reload: () => void } {
+ * flash "offline" first. `supported` is false where this client can't hold
+ * a legato.fm session. */
+export function useYourServers(
+  discovery: Discovery,
+  relaySignedIn: boolean,
+  supported: boolean = IS_TAURI,
+): { state: YourServers; reload: () => void } {
   const [linked, setLinked] = useState<LinkedServer[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [signedOut, setSignedOut] = useState(false)
@@ -69,7 +76,7 @@ export function useYourServers(discovery: Discovery, relaySignedIn: boolean): { 
   const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
-    if (!IS_TAURI || !relaySignedIn) return
+    if (!supported || !relaySignedIn) return
     const token = readRelaySession()?.token
     if (!token) return
     let cancelled = false
@@ -87,7 +94,7 @@ export function useYourServers(discovery: Discovery, relaySignedIn: boolean): { 
     return () => {
       cancelled = true
     }
-  }, [relaySignedIn, attempt])
+  }, [supported, relaySignedIn, attempt])
 
   const found = discovery.supported ? discovery.servers : null
   const discoveryReady = !discovery.supported || discovery.servers !== null || discovery.error !== null
@@ -96,9 +103,10 @@ export function useYourServers(discovery: Discovery, relaySignedIn: boolean): { 
   useEffect(() => {
     if (!linked || !discoveryReady) return
     let cancelled = false
-    for (const { serverId } of linked) {
+    for (const { serverId, tunnel } of linked) {
       const candidates = candidateOrigins(serverId, found, known)
-      void reachServer(serverId, candidates, known).then((result) => {
+      const relay = { tunnelUp: tunnel?.connected === true, allowed: !neverUseRelay() }
+      void reachServer(serverId, candidates, known, undefined, relay).then((result) => {
         if (cancelled) return
         if (result.kind === 'home') {
           setKnown(rememberServer(serverId, { origin: result.origin, name: serverName(serverId, found, known) }))
@@ -120,7 +128,7 @@ export function useYourServers(discovery: Discovery, relaySignedIn: boolean): { 
   }, [])
 
   let state: YourServers
-  if (!IS_TAURI) state = { kind: 'unsupported' }
+  if (!supported) state = { kind: 'unsupported' }
   else if (!relaySignedIn || signedOut) state = { kind: 'signed-out' }
   else if (error) state = { kind: 'error', message: error }
   else if (!linked) state = { kind: 'loading' }
@@ -158,4 +166,31 @@ export function useLegatoRenewal(signedIn: boolean): void {
       clearTimeout(timer)
     }
   }, [signedIn])
+}
+
+/** Renews the relay ticket this device reaches its server with (issue
+ * #365) before it ends, on the same schedule as a legato.fm session. A
+ * legato.fm session's renewal brings a fresh ticket too; this keeps one
+ * going under a password session, and while signed out, so the sign-in
+ * screen still loads. Nothing to do off the relay. */
+export function useRelayTicketRenewal(): void {
+  useEffect(() => {
+    if (!RELAY_SERVER_ID) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let cancelled = false
+    const schedule = (delay?: number) => {
+      const ticket = readRelayTicket(localStorage, SERVER_ORIGIN)
+      if (!ticket) return
+      timer = setTimeout(() => {
+        void renewRelayTicket(SERVER_ORIGIN).then((renewed) => {
+          if (!cancelled) schedule(renewed ? undefined : RENEW_RETRY_MS)
+        })
+      }, delay ?? renewDelayMs(ticket.expiresAt))
+    }
+    schedule()
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [])
 }
