@@ -9,10 +9,13 @@
 // unlinking with a stream playing answers and then closes the tunnel. No
 // real provider, and nothing sent to auth.legato.fm.
 //
-// Issue #115 adds two steps: a server back after more than 60 days off
+// Issue #115 adds four steps: a server back after more than 60 days off
 // swaps its credential for a 90-day one over the tunnel it just opened,
-// without reconnecting, and removing a server from the account (what
-// Settings' `remove` does) closes its tunnel and tells its owner.
+// without reconnecting; a copy of that credential signs a tunnel in but
+// can't renew itself; a rotation racing a link moves the server onto the
+// link's credential rather than past it; and removing a server from the
+// account (what Settings' `remove` does) closes its tunnel and tells its
+// owner.
 //
 // It starts everything itself, as child processes, so it can kill the
 // relay outright (SIGKILL, no goodbye) the way a crash or a deploy would:
@@ -31,6 +34,8 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { connect } from "node:net";
+import { createPublicKey, generateKeyPairSync } from "node:crypto";
+import { rotateProof, serverIdForPublicKey } from "../../../server/src/auth/serverKey.js";
 import { createSession, upsertUser } from "../accounts.js";
 import { openDb } from "../db.js";
 import { mintTunnelCredential } from "../pairing.js";
@@ -451,7 +456,7 @@ const serverADb = openSqlite(path.join(servers[0]!.dataDir, "legato.db"));
 serverADb.prepare("UPDATE tunnel_credential SET expires_at = ?").run(nearlyGone);
 serverADb.close();
 relayDb.prepare("UPDATE tunnel_credentials SET expires_at = datetime('now', '+20 days') WHERE token = ?").run(offline.credential);
-start("server-a", SERVER_DIR, {
+servers[0]!.child = start("server-a", SERVER_DIR, {
   LEGATO_PORT: PORTS[0]!,
   LEGATO_DATA_DIR: servers[0]!.dataDir,
   LEGATO_ID_ORIGIN: RELAY,
@@ -474,9 +479,112 @@ check(
   `server-a connected once after its restart, and rotating didn't reconnect it (${sinceRestart} connects in its log)`,
 );
 check(logOf("server-a").includes("replaced this server's tunnel credential"), "server-a says it replaced its credential");
+const keptAfter = () => {
+  const db = openSqlite(path.join(DIR, "server-a", "legato.db"));
+  const row = db.prepare("SELECT previous_credential FROM tunnel_credential").get() as { previous_credential: string | null } | null;
+  db.close();
+  return row?.previous_credential ?? null;
+};
+await until("server-a forgets the old credential once legato.fm accepts the new one", async () => keptAfter() === null);
 const afterRotation = await fetch(`${RELAY}/relay/${servers[0]!.id}/api/v1/auth/status`, { headers: { cookie } });
 check(afterRotation.ok, `server-a answers through its tunnel on the new credential (${afterRotation.status})`);
 step("server-a rotated after 60+ days off", `new credential good for ${daysLeft.toFixed(1)} days; the old one retired; same connection`);
+
+// 4c. Someone holds a copy of server-a's credential (the review's stolen
+// credential). It signs a tunnel in, as a bearer credential always could,
+// but asking for the next one takes server-a's own key: no proof, or one
+// from any other key, gets nothing, and server-a's credential is the only
+// one there is.
+const stolen = replacement.credential;
+const otherKey = (() => {
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const publicKey = (createPublicKey(privateKey).export({ format: "jwk" }) as { x: string }).x;
+  return { serverId: serverIdForPublicKey(publicKey), publicKey, privateKey };
+})();
+async function withStolenCredential(ask: object): Promise<string[]> {
+  const socket = new WebSocket(`${RELAY.replace(/^http/, "ws")}/tunnel`);
+  const types: string[] = [];
+  await new Promise<void>((resolve) => {
+    const done = setTimeout(() => {
+      socket.close();
+      resolve();
+    }, 1_000);
+    socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "auth", secret: stolen })));
+    socket.addEventListener("message", (event) => {
+      const { type } = JSON.parse(String(event.data)) as { type: string };
+      types.push(type);
+      if (type === "auth-ok") socket.send(JSON.stringify(ask));
+    });
+    socket.addEventListener("close", () => {
+      clearTimeout(done);
+      resolve();
+    });
+  });
+  return types;
+}
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+const asks = [
+  { type: "rotate" },
+  { type: "rotate", ...rotateProof(otherKey, { issuer: RELAY, credential: stolen, nowSeconds: nowSeconds() }) },
+];
+for (const ask of asks) {
+  const answered = await withStolenCredential(ask);
+  check(
+    answered.includes("auth-ok") && !answered.includes("credential"),
+    `a copy of the credential gets nothing for ${JSON.stringify(ask).slice(0, 40)}… (${answered})`,
+  );
+}
+check(
+  relayCredentials(servers[0]!.id).map((row) => row.token).join() === stolen,
+  "server-a's credential is still the only one legato.fm has for it",
+);
+const refusedAsk = (reason: string) => new RegExp(`refused server \\w+'s ask for a new credential \\(${reason}\\)`).test(logOf("relay"));
+check(refusedAsk("malformed"), "the relay logs the ask with no proof");
+check(refusedAsk("bad_signature"), "the relay logs the ask signed by another key");
+await until("server-a's tunnel is back from the copy", async () => (await tunnelOf(servers[0]!.id))?.connected);
+check(serverCredential("server-a")?.credential === stolen, "server-a still holds its own credential");
+step("a copy of server-a's credential signed in but couldn't renew it", "no proof, and another key's proof, both got nothing");
+
+// 4d. A link races a rotation (the review's race through
+// server/src/auth/legatoLink.ts): legato.fm has minted the link's
+// credential, and before server-a stores it, server-a asks to rotate.
+// legato.fm hands it the link's credential rather than minting past it,
+// so when the link's answer stores that same credential, it's the one
+// that works, and the only one there is.
+servers[0]!.child.kill("SIGTERM");
+await new Promise((resolve) => servers[0]!.child.once("exit", resolve));
+const beforeLink = serverCredential("server-a")!;
+const linksCredential = mintTunnelCredential(relayDb, account.id, servers[0]!.id).token;
+const dueDb = openSqlite(path.join(servers[0]!.dataDir, "legato.db"));
+dueDb.prepare("UPDATE tunnel_credential SET expires_at = ?").run(nearlyGone);
+dueDb.close();
+relayDb.prepare("UPDATE tunnel_credentials SET expires_at = datetime('now', '+20 days') WHERE token = ?").run(beforeLink.credential);
+servers[0]!.child = start("server-a", SERVER_DIR, {
+  LEGATO_PORT: PORTS[0]!,
+  LEGATO_DATA_DIR: servers[0]!.dataDir,
+  LEGATO_ID_ORIGIN: RELAY,
+  LEGATO_UPDATE_CHECK: "off",
+  LEGATO_MDNS: "off",
+  LEGATO_SERVER_NAME: "server-a",
+});
+await until(
+  "server-a rotates onto the link's credential",
+  async () => serverCredential("server-a")?.credential === linksCredential,
+  30_000,
+);
+await until("the relay retires the one before it", async () => relayCredentials(servers[0]!.id).length === 1);
+// The link's answer arrives and stores what it brought (legatoLink.ts:96).
+const answerDb = openSqlite(path.join(servers[0]!.dataDir, "legato.db"));
+answerDb.prepare("UPDATE tunnel_credential SET credential = ?").run(linksCredential);
+answerDb.close();
+check(
+  relayCredentials(servers[0]!.id).map((row) => row.token).join() === linksCredential,
+  "legato.fm has exactly one credential for server-a: the link's",
+);
+await until("server-a's tunnel is connected on it", async () => (await tunnelOf(servers[0]!.id))?.connected);
+const afterRace = await fetch(`${RELAY}/relay/${servers[0]!.id}/api/v1/auth/status`, { headers: { cookie } });
+check(afterRace.ok, `server-a answers through its tunnel after the race (${afterRace.status})`);
+step("a rotation raced a link", "legato.fm handed server-a the link's credential; one credential, stored and working");
 
 // 5. The account removes server-b, as Settings' `remove` does (issue
 // #115): the pair and its credential go, the relay closes the tunnel at
