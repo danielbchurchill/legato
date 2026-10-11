@@ -22,8 +22,10 @@ type Lists = { sessions: AccountSession[]; servers: AccountServer[] }
  * session can be signed out here; this device's own signs out with the
  * account row's `sign out`. Signing out ends the session on legato.fm, not
  * what that device already holds: a server access token (ten minutes,
- * relay/src/signing-keys.ts) and any server session made with one (twelve
- * hours, server/src/auth/sessions.ts). The note under the list says so. Removing a server takes the account's link to it
+ * relay/src/signing-keys.ts), any server session made with one (twelve
+ * hours, server/src/auth/sessions.ts), and any relay ticket that takes it
+ * through legato.fm to a server (twelve hours, signing-keys.ts). The note
+ * under the list says so. Removing a server takes the account's link to it
  * and its tunnel credential: the server shows it's disconnected from
  * legato.fm, and its owner links it again from its own Settings.
  *
