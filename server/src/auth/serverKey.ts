@@ -111,3 +111,35 @@ export function claimProof(key: ServerKey, input: { issuer: string; code: string
   const message = ["legato.fm claim proof", input.issuer, key.serverId, input.code, String(input.nowSeconds)].join("\n");
   return { code: input.code, publicKey: key.publicKey, issuedAt: input.nowSeconds, signature: signMessage(key, message) };
 }
+
+// What POST /api/v1/auth/legato/web-client answers (issue #365): this
+// server vouching that a page it served, at `origin`, may sign in to
+// legato.fm to reach it through the relay. legato.fm's /connect page checks
+// the signature against the key this server proved when it was linked, so
+// a page some other server served can't get a session for this one. The
+// PKCE challenge ties it to one attempt, whose one-time code legato.fm
+// spends once, and it lasts minutes. The name is last and shown, never
+// parsed. A newline or other control character in it is replaced, so the
+// message can't be read two ways.
+export const WEB_CLIENT_STATEMENT_TTL_SECONDS = 5 * 60;
+
+export function webClientStatementMessage(input: {
+  serverId: string;
+  origin: string;
+  codeChallenge: string;
+  expiresAt: number;
+  name: string;
+}): string {
+  return ["legato web client", input.serverId, input.origin, input.codeChallenge, String(input.expiresAt), input.name].join("\n");
+}
+
+export function webClientStatement(key: ServerKey, input: { origin: string; codeChallenge: string; name: string; nowSeconds: number }) {
+  const statement = {
+    serverId: key.serverId,
+    origin: input.origin,
+    codeChallenge: input.codeChallenge,
+    expiresAt: input.nowSeconds + WEB_CLIENT_STATEMENT_TTL_SECONDS,
+    name: input.name.replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 63),
+  };
+  return { ...statement, signature: signMessage(key, webClientStatementMessage(statement)) };
+}

@@ -8,7 +8,7 @@ import { isLinkedServer } from "../linked-servers.js";
 import type { RequestFrame } from "../protocol.js";
 import { SERVER_ID_PATTERN, verifyRelayTicket, type SigningKeys } from "../signing-keys.js";
 import type { TunnelRegistry } from "../tunnel-registry.js";
-import { isAllowedAppOrigin } from "./auth.js";
+import { isLegatoClientOrigin } from "./auth.js";
 
 // ADDRESSING: which tunnel does a /relay/* request go to?
 //
@@ -35,11 +35,12 @@ import { isAllowedAppOrigin } from "./auth.js";
 // server never sees it. The home server checks its own credential, which
 // the device sends beside the ticket as it would at home.
 //
-// Legato's own clients call this cross-origin: the desktop webview and a
-// loopback dev page (isAllowedAppOrigin in routes/auth.ts). The relay
-// answers their CORS itself, preflights included, and never with
-// Access-Control-Allow-Credentials, so no cookie of legato.fm's is ever
-// sent or read cross-site.
+// Legato's own clients call this cross-origin: the desktop webview, a
+// loopback dev page, and a web client a home server served, while it holds
+// a live web session for this server (isLegatoClientOrigin in
+// routes/auth.ts, issue #365). The relay answers their CORS itself,
+// preflights included, and never with Access-Control-Allow-Credentials, so
+// no cookie of legato.fm's is ever sent or read cross-site.
 //
 // Cookies stay on this side. legato.fm's own cookies (the relay session
 // among them) are never sent down a tunnel, and a home server's Set-Cookie
@@ -95,8 +96,9 @@ export function relayRoutes(
       reply.raw.setHeader("x-content-type-options", "nosniff");
       reply.raw.setHeader("vary", "Origin");
       const origin = request.headers.origin;
-      if (!isAllowedAppOrigin(origin)) return;
-      reply.raw.setHeader("access-control-allow-origin", origin!);
+      const { serverId } = request.params as { serverId?: string };
+      if (!isLegatoClientOrigin(db, signingKeys, origin, serverId)) return;
+      reply.raw.setHeader("access-control-allow-origin", origin);
       reply.raw.setHeader("access-control-expose-headers", EXPOSED_HEADERS);
     });
 
@@ -130,7 +132,7 @@ export function relayRoutes(
       // itself, for every origin the hook above allows, and it never
       // reaches a home server.
       if (request.method === "OPTIONS") {
-        if (isAllowedAppOrigin(request.headers.origin)) {
+        if (reply.raw.hasHeader("access-control-allow-origin")) {
           reply.raw.setHeader("access-control-allow-methods", "GET, HEAD, POST, PUT, PATCH, DELETE");
           reply.raw.setHeader("access-control-allow-headers", "Authorization, Content-Type, Range, X-Legato-Relay");
           reply.raw.setHeader("access-control-max-age", "600");

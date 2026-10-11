@@ -24,6 +24,7 @@ import { pruneBeyondMemberBoundIfDue } from "./enrich/members.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 import { startUpdateChecks } from "./update/check.js";
+import { loadServerKey } from "./auth/serverKey.js";
 
 // Checked before anything else touches disk (openDb below creates the data
 // dir and runs migrations) — `legato-server --version` should work without
@@ -213,7 +214,7 @@ await registerRoutes(app, db);
 // #116's web client and its SPA fallback. Registered after the gate like
 // everything else; auth/gate.ts lets plain GET/HEAD outside the API
 // prefixes through, so the sign-in screen loads before anyone is signed in.
-await app.register(webClientRoutes());
+await app.register(webClientRoutes(undefined, { serverId: loadServerKey(db).serverId }));
 
 // Resume watching every already-configured root across restarts — a root
 // added in a previous session shouldn't need a manual re-scan to notice

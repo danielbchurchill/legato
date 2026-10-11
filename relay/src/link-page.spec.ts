@@ -131,7 +131,7 @@ describe("linking from a web client, start to finish", () => {
     expect(ready.body).toContain("Link the Legato server at this address to Rowan (rowan@example.com)?");
     expect(ready.headers.location).toBeUndefined();
     // Cancel goes back saying so, with no code.
-    expect(ready.body).toContain(`const cancel = "${HOME}/#legato_link=cancelled";`);
+    expect(ready.body).toContain(`"cancel":"${HOME}/#legato_link=cancelled"`);
 
     const pressed = await h.press(session, query);
     expect(pressed.statusCode).toBe(200);

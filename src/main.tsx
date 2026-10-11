@@ -7,15 +7,17 @@ import { registerShellWorker } from './pwa/register'
 import { holdInstallPrompt } from './pwa/installOffer'
 import { ErrorBoundary, RenderError } from './ui/ErrorBoundary'
 import { takeLinkReturn } from './connect/legatoLinkReturn'
+import { takeConnectReturn } from './connect/legatoConnect'
 import { Centered } from './shell/Centered'
 import { Button } from './ui/Button'
 
 // Before the first render, so no component's first fetch goes out without
 // the owner session's bearer token (issue #112).
 installAuthFetch()
-// #325: legato.fm's one-time link code, out of the address bar before
-// anything renders or reads it.
+// #325 and #365: legato.fm's one-time link or sign-in code, out of the
+// address bar before anything renders or reads it.
 takeLinkReturn()
+takeConnectReturn()
 // #128: both no-ops in Tauri and in Vite dev; see register.ts. The install
 // event has to be claimed before Chrome shows its own banner on load.
 holdInstallPrompt()

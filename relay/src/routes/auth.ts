@@ -12,8 +12,11 @@ import {
   deleteSession,
   generateState,
   getUserById,
+  getSessionByToken,
   getUserBySessionToken,
+  hasWebSession,
   isValidState,
+  publicUser,
   SESSION_COOKIE,
   sessionToken,
   upsertUser,
@@ -34,7 +37,10 @@ import { isLinkedServer } from "../linked-servers.js";
 import { clientAddress, ExchangeLimiter, TokenLimiter } from "../rate-limit.js";
 import { SERVER_ID_PATTERN, signRelayTicket, signServerToken, type SigningKeys } from "../signing-keys.js";
 import type { TunnelRegistry } from "../tunnel-registry.js";
+import { originMacs } from "../link-codes.js";
+import { connectReturnPath } from "../web-sessions.js";
 import { claimPageRoutes, claimReturnPath } from "./claim-page.js";
+import { connectPageRoutes } from "./connect-page.js";
 import { linkPageRoutes, linkReturnPath } from "./link-page.js";
 import { linkedServerRoutes } from "./linked-servers.js";
 import { pairRoutes } from "./pair.js";
@@ -240,7 +246,7 @@ const RETURN_COOKIE = "relay_return_to";
 // Each page checks and rebuilds its own path, so this only ever answers one
 // of those two pages on this service.
 function returnPath(candidate: unknown): string | null {
-  return claimReturnPath(candidate) ?? linkReturnPath(candidate);
+  return claimReturnPath(candidate) ?? linkReturnPath(candidate) ?? connectReturnPath(candidate);
 }
 
 // Every cookie this relay sets or clears shares these attributes. Secure
@@ -298,16 +304,6 @@ function successPage(displayName: string | null): string {
 </html>`;
 }
 
-function publicUser(user: RelayUserRow) {
-  return {
-    id: user.id,
-    provider: user.provider,
-    email: user.email,
-    displayName: user.display_name,
-    avatarUrl: user.avatar_url,
-  };
-}
-
 // The endpoints a desktop webview calls directly. Its origin is
 // tauri://localhost (Linux, macOS), http(s)://tauri.localhost (Windows),
 // or a loopback Vite in development, all cross-origin to auth.legato.fm.
@@ -327,10 +323,26 @@ export function isAllowedAppOrigin(origin: string | undefined): boolean {
   return LOOPBACK_DEV_ORIGIN.test(origin);
 }
 
-function applyCors(request: FastifyRequest, reply: FastifyReply): void {
+// Legato's own client origins (issue #365): the desktop webview and
+// loopback dev, plus the origin of a web client a home server served,
+// while it holds a live web session (migration 0011), looked up by the
+// HMAC that session keeps. With `serverId`, only a web session for that
+// server counts (routes/relay.ts).
+export function isLegatoClientOrigin(
+  db: Database,
+  signingKeys: SigningKeys | null,
+  origin: string | undefined,
+  serverId?: string,
+): origin is string {
+  if (isAllowedAppOrigin(origin)) return true;
+  if (!origin || !signingKeys) return false;
+  return hasWebSession(db, originMacs(signingKeys.linkOriginKeys, origin), serverId);
+}
+
+function applyCors(request: FastifyRequest, reply: FastifyReply, db: Database, signingKeys: SigningKeys | null): void {
   reply.header("Vary", "Origin");
   const origin = request.headers.origin;
-  if (!isAllowedAppOrigin(origin)) return;
+  if (!isLegatoClientOrigin(db, signingKeys, origin)) return;
   reply.header("Access-Control-Allow-Origin", origin);
   reply.header("Access-Control-Allow-Methods", "GET, POST");
   reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
@@ -346,6 +358,8 @@ export interface AuthRoutesOptions {
   tokenLimiter?: TokenLimiter;
   // POST /link/redeem's own brake (routes/link-page.ts, issue #325).
   linkLimiter?: TokenLimiter;
+  // POST /connect/redeem's (routes/connect-page.ts, issue #365).
+  connectLimiter?: TokenLimiter;
   exchangeLimiter?: ExchangeLimiter;
   // Token signing keys (issue #114). buildApp resolves them, reading
   // RELAY_SIGNING_KEYS when its caller passes none; null is "signing off",
@@ -360,6 +374,23 @@ const SIGNING_NOT_CONFIGURED =
   "legato.fm can't sign server tokens yet: RELAY_SIGNING_KEYS isn't set on this relay. " +
   "Generate one with `bun relay/scripts/generate-signing-key.ts` and set it as a secret.";
 
+// A web session asking about a server other than its own, or about its own
+// once it's unlinked, which ends the session's use (issue #365).
+function webSessionRefusal(
+  db: Database,
+  sessionServerId: string,
+  relayUserId: number,
+  serverId: string,
+): { status: 403 | 404; body: { error: string; reason: string } } | null {
+  if (serverId !== sessionServerId) {
+    return { status: 403, body: { error: "This page's legato.fm sign-in only reaches the server that served it.", reason: "wrong_server" } };
+  }
+  if (!isLinkedServer(db, relayUserId, serverId)) {
+    return { status: 404, body: { error: "No server with that id is linked to this account.", reason: "not_linked" } };
+  }
+  return null;
+}
+
 export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
   const config = options.config ?? ENV_CONFIG;
   const cookie = cookieAttributes(config.callbackBaseUrl);
@@ -370,7 +401,7 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     const signingKeys = options.signingKeys ?? null;
 
     app.addHook("onRequest", async (request, reply) => {
-      if (CORS_ROUTES.has(request.routeOptions.url ?? "")) applyCors(request, reply);
+      if (CORS_ROUTES.has(request.routeOptions.url ?? "")) applyCors(request, reply, db, signingKeys);
     });
     // Here rather than in app.ts because recording a link means checking a
     // token this service signed, with the keys resolved just above, and
@@ -389,6 +420,14 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
         signingKeys,
         issuer: config.callbackBaseUrl,
         limiter: options.linkLimiter,
+      }),
+    );
+    app.register(
+      connectPageRoutes(db, {
+        providers: { google: isGoogleConfigured(config), github: isGithubConfigured(config) },
+        signingKeys,
+        issuer: config.callbackBaseUrl,
+        limiter: options.connectLimiter,
       }),
     );
     for (const url of CORS_ROUTES) {
@@ -541,13 +580,18 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     // does (issue #325): a server linked from Settings needs one as much as a
     // claimed one. It's minted only when the server reports the link
     // (linked-servers.ts), so a token nobody uses leaves nothing behind.
+    //
+    // A web session (issue #365) gets `access` tokens for its one server and
+    // nothing else: no `link` token, which would ask for a tunnel
+    // credential, and nothing for any other id.
     app.post<{ Body: { serverId?: unknown; scope?: unknown } | null }>("/auth/server-token", async (request, reply) => {
       const token = sessionToken(request);
-      const user = token ? getUserBySessionToken(db, token) : null;
-      if (!user) {
+      const session = token ? getSessionByToken(db, token) : null;
+      if (!session) {
         reply.code(401);
         return { error: "Sign in to legato.fm first.", reason: "signed_out" };
       }
+      const { user } = session;
       if (!signingKeys || !config.callbackBaseUrl) {
         reply.code(503);
         return { error: SIGNING_NOT_CONFIGURED, reason: "signing_not_configured" };
@@ -565,6 +609,17 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
         reply.code(400);
         return { error: 'scope must be "access" or "link", or left out.', reason: "bad_scope" };
       }
+      if (session.serverId !== null) {
+        const refused = webSessionRefusal(db, session.serverId, user.id, serverId);
+        if (refused) {
+          reply.code(refused.status);
+          return refused.body;
+        }
+        if (requested === "link") {
+          reply.code(403);
+          return { error: "This page's legato.fm sign-in can open its server, not link one.", reason: "web_session" };
+        }
+      }
       const scope = requested !== "link" && isLinkedServer(db, user.id, serverId) ? "access" : "link";
       const issued = signServerToken(signingKeys, { issuer: config.callbackBaseUrl, user, serverId, scope });
       return { token: issued.token, expiresAt: issued.expiresAt.toISOString(), scope: issued.scope };
@@ -574,13 +629,15 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
     // signing-keys.ts): what gets a device through /relay/<id>/. Only for a
     // linked server, as an access token is, and the relay checks the pair
     // again on every request, so unlinking ends a ticket's use at once.
+    // A web session (issue #365) gets them only for its one server.
     app.post<{ Body: { serverId?: unknown } | null }>("/auth/relay-ticket", async (request, reply) => {
       const token = sessionToken(request);
-      const user = token ? getUserBySessionToken(db, token) : null;
-      if (!user) {
+      const session = token ? getSessionByToken(db, token) : null;
+      if (!session) {
         reply.code(401);
         return { error: "Sign in to legato.fm first.", reason: "signed_out" };
       }
+      const { user } = session;
       if (!signingKeys || !config.callbackBaseUrl) {
         reply.code(503);
         return { error: SIGNING_NOT_CONFIGURED, reason: "signing_not_configured" };
@@ -592,6 +649,13 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
           error: "serverId must be the 32-character id from the server's GET /api/v1/auth/status (legato.serverId).",
           reason: "bad_server_id",
         };
+      }
+      if (session.serverId !== null) {
+        const refused = webSessionRefusal(db, session.serverId, user.id, serverId);
+        if (refused) {
+          reply.code(refused.status);
+          return refused.body;
+        }
       }
       if (!isLinkedServer(db, user.id, serverId)) {
         reply.code(404);
@@ -608,12 +672,15 @@ export function authRoutes(db: Database, options: AuthRoutesOptions = {}) {
       return { ok: true };
     });
 
+    // serverId says a web session (issue #365) can reach that one server
+    // only; null for a whole-account session.
     app.get("/auth/me", async (request) => {
       const token = sessionToken(request);
-      const user = token ? getUserBySessionToken(db, token) : null;
+      const session = token ? getSessionByToken(db, token) : null;
       return {
-        user: user ? publicUser(user) : null,
+        user: session ? publicUser(session.user) : null,
         configured: { google: isGoogleConfigured(config), github: isGithubConfigured(config) },
+        serverId: session?.serverId ?? null,
       };
     });
   };

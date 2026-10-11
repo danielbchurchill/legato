@@ -35,6 +35,8 @@ const DEFAULT_PORT = '8899'
 export interface PageContext {
   servedByServer: boolean
   origin: string
+  /** The server that served the page, from its legato-server-id marker. */
+  serverId?: string | null
 }
 
 export interface ServerEnv {
@@ -61,7 +63,14 @@ export function resolveServerOrigin(
   chosen: string | null = null,
   pin: RelayPin | null = null,
 ): string {
-  if (page?.servedByServer) return page.origin
+  if (page?.servedByServer) {
+    // A page a server served talks to that server and no other, since it
+    // runs that server's own build: at its own origin, or, picked on the
+    // connect screen, at its route through legato.fm's relay (#365), unless
+    // the relay is pinned off.
+    const ownRoute = Boolean(chosen && page.serverId && relayedServerId(chosen) === page.serverId)
+    return chosen && ownRoute && !pin ? chosen : page.origin
+  }
   // A server picked on the connect screen comes ahead of the default.
   // Choosing one reloads the page, so the constants below re-resolve
   // without every importer having to become a function call.
@@ -83,6 +92,7 @@ function currentPage(): PageContext | null {
   return {
     servedByServer: document.querySelector('meta[name="legato-server"]') !== null,
     origin: window.location.origin,
+    serverId: document.querySelector('meta[name="legato-server-id"]')?.getAttribute('content') ?? null,
   }
 }
 
@@ -90,6 +100,8 @@ function currentPage(): PageContext | null {
  * registering the service worker (src/pwa/register.ts): a Tauri bundle or a
  * Vite dev page is never one. */
 export const SERVED_BY_SERVER = currentPage()?.servedByServer ?? false
+/** The id of the server that served this page (#365), when it says. */
+export const SERVED_SERVER_ID = currentPage()?.serverId ?? null
 
 // The only places a server URL is assembled. Every other file imports one
 // of these rather than building its own.

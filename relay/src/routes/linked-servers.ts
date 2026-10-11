@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { getUserBySessionToken, sessionToken } from "../accounts.js";
+import { getSessionByToken, getUserBySessionToken, sessionToken } from "../accounts.js";
 import {
   acceptLinkProof,
   acceptUnlinkProof,
@@ -73,15 +73,18 @@ export function linkedServerRoutes(
     // with when legato.fm last heard from it (null if it never has). A
     // connected server is one this account can reach through the relay
     // (routes/relay.ts lets an account reach exactly the servers it linked).
+    //
+    // A web session (issue #365) sees only the one server it can reach.
     app.get("/linked-servers", async (request, reply) => {
       const token = sessionToken(request);
-      const user = token ? getUserBySessionToken(db, token) : null;
-      if (!user) {
+      const session = token ? getSessionByToken(db, token) : null;
+      if (!session) {
         reply.code(401);
         return { error: "Sign in to legato.fm first.", reason: "signed_out" };
       }
+      const servers = listLinkedServers(db, session.user.id).filter((s) => session.serverId === null || s.serverId === session.serverId);
       return {
-        servers: listLinkedServers(db, user.id).map(({ serverId, linkedAt, tunnelLastSeenAt }) => {
+        servers: servers.map(({ serverId, linkedAt, tunnelLastSeenAt }) => {
           const live = tunnels?.get(serverId);
           return {
             serverId,

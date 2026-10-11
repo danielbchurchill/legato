@@ -25,6 +25,7 @@ import { useDiscoveredServers, useYourServers, type Discovery, type YourServers 
 import { verifyServerIdentity } from './identity'
 import { readKnownServers, rememberServer } from './knownServers'
 import { formatSince } from './lastSeen'
+import { connectFailure, startBrowserConnect } from './legatoConnect'
 import { describeLegatoFailure, signInWithLegato } from './legatoSignIn'
 import type { ConnectReason } from './openConnect'
 import { probeAddress, type NativeProbe } from './probe'
@@ -82,6 +83,11 @@ export type ConnectScreenViewProps = {
   onConnectAddress: () => void
   onRelaySignIn: (provider: RelayProvider) => void
   onRelayCancel: () => void
+  /** A page a server served signs in through legato.fm's own page (#365),
+   * one button, rather than the desktop app's provider buttons. */
+  onBrowserSignIn?: (() => void) | null
+  /** Said under "your servers" where switching to legato.fm has a limit. */
+  relayNote?: string | null
   onRetryYours: () => void
   onUseDefault: (() => void) | null
   onClose: (() => void) | null
@@ -170,6 +176,8 @@ function YoursSection(props: {
   rows: Row[]
   onRelaySignIn: (provider: RelayProvider) => void
   onRelayCancel: () => void
+  onBrowserSignIn?: (() => void) | null
+  relayNote?: string | null
   onRetry: () => void
 }) {
   const { account, yours, rows } = props
@@ -194,7 +202,14 @@ function YoursSection(props: {
     const error = account.kind === 'signed-out' ? account.error : null
     body = (
       <>
-        {waiting ? (
+        {props.onBrowserSignIn ? (
+          <>
+            <Note>Sign in to legato.fm so this page can reach this server through legato.fm when you're away from home.</Note>
+            <div className="flex items-center gap-[var(--spacing-lg)]">
+              <Button onClick={props.onBrowserSignIn}>sign in to legato.fm</Button>
+            </div>
+          </>
+        ) : waiting ? (
           <div className="flex items-center justify-between gap-[12px]">
             <Note>Finish signing in with {PROVIDER_LABELS[waiting]} in your browser.</Note>
             <Button onClick={props.onRelayCancel}>cancel</Button>
@@ -202,7 +217,7 @@ function YoursSection(props: {
         ) : (
           <Note>Sign in to legato.fm to see the servers linked to your account, and open them without a password.</Note>
         )}
-        {!waiting && (
+        {!waiting && !props.onBrowserSignIn && (
           <div className="flex items-center gap-[var(--spacing-lg)]">
             {(['google', 'github'] as const).map((provider) => (
               <Button key={provider} disabled={configured?.[provider] === false} onClick={() => props.onRelaySignIn(provider)}>
@@ -234,11 +249,14 @@ function YoursSection(props: {
     )
   } else {
     body = (
-      <ul className="flex flex-col gap-[8px]">
-        {rows.map((row) => (
-          <ServerRow key={row.key} row={row} />
-        ))}
-      </ul>
+      <>
+        <ul className="flex flex-col gap-[8px]">
+          {rows.map((row) => (
+            <ServerRow key={row.key} row={row} />
+          ))}
+        </ul>
+        {props.relayNote && <Note>{props.relayNote}</Note>}
+      </>
     )
   }
   return (
@@ -282,6 +300,8 @@ export function ConnectScreenView(props: ConnectScreenViewProps) {
           rows={props.yourRows}
           onRelaySignIn={props.onRelaySignIn}
           onRelayCancel={props.onRelayCancel}
+          onBrowserSignIn={props.onBrowserSignIn}
+          relayNote={props.relayNote}
           onRetry={props.onRetryYours}
         />
 
@@ -380,9 +400,23 @@ function goTo(origin: string, session?: StoredSession, relayTicket?: StoredRelay
 
 const nativeProbe = IS_TAURI ? (origin: string) => invoke<NativeProbe>('probe_server', { origin }) : null
 
-// A browser can hold a legato.fm session only once it has one; signing in
-// to legato.fm from a browser isn't built yet.
-const ACCOUNT_SUPPORTED = IS_TAURI || readRelaySession() !== null
+// Where this client can hold a legato.fm session: the desktop app, a page
+// a server served (which signs in through legato.fm's own page, #365), and
+// any page that already holds one.
+const ACCOUNT_SUPPORTED = IS_TAURI || SERVED_BY_SERVER || readRelaySession() !== null
+// A page a server served signs in with its server's say-so, which only the
+// server's own address gives (legatoConnect.ts), so not on the relay path.
+const BROWSER_SIGN_IN = !IS_TAURI && SERVED_BY_SERVER && !RELAY_SERVER_ID
+
+// Switching to legato.fm reloads the page (serverHost.ts resolves the
+// server as it loads). Away from home a page a server served loads only
+// from an installed app's shell worker (#128), so a tab that has none says
+// so where the switch is offered.
+function relayNote(): string | null {
+  if (!SERVED_BY_SERVER || IS_TAURI) return null
+  if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller) return null
+  return `Switching to legato.fm reloads this page, which only loads from ${hostOf(window.location.origin)} while you're at home. To use Legato away from home, install it from this server over https.`
+}
 
 export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme; reason: ConnectReason; onClose: (() => void) | null }) {
   const network = useDiscoveredServers()
@@ -391,7 +425,7 @@ export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme
       ? { kind: 'unsupported' }
       : readRelaySession()
         ? { kind: 'checking' }
-        : { kind: 'signed-out', configured: null, waiting: null },
+        : { kind: 'signed-out', configured: null, waiting: null, error: connectFailure() },
   )
   const { state: yours, reload: reloadYours } = useYourServers(network, account.kind === 'signed-in', ACCOUNT_SUPPORTED)
   const [address, setAddress] = useState('')
@@ -404,6 +438,9 @@ export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme
     if (!ACCOUNT_SUPPORTED) return
     let cancelled = false
     const token = readRelaySession()?.token ?? null
+    // A page with no session has nothing to ask legato.fm, whose CORS
+    // answers a web client's page only once it holds one (#365).
+    if (!token && !IS_TAURI) return
     fetchRelayMe(token)
       .then((me) => {
         if (cancelled) return
@@ -511,6 +548,12 @@ export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme
     }
   }
 
+  const browserSignIn = async () => {
+    setAccount({ kind: 'signed-out', configured: null, waiting: null })
+    const problem = await startBrowserConnect()
+    if (problem) setAccount({ kind: 'signed-out', configured: null, waiting: null, error: problem })
+  }
+
   const relaySignIn = async (provider: RelayProvider) => {
     const configured = account.kind === 'signed-out' ? account.configured : null
     setAccount({ kind: 'signed-out', configured, waiting: provider })
@@ -591,6 +634,8 @@ export function ConnectScreen({ theme, reason, onClose }: { theme: ResolvedTheme
       onConnectAddress={() => void connectAddress()}
       onRelaySignIn={(provider) => void relaySignIn(provider)}
       onRelayCancel={() => void invoke('relay_sign_in_cancel')}
+      onBrowserSignIn={BROWSER_SIGN_IN ? () => void browserSignIn() : null}
+      relayNote={relayNote()}
       onRetryYours={reloadYours}
       onUseDefault={!SERVED_BY_SERVER && !usingDefault ? () => goTo(DEFAULT_SERVER_ORIGIN) : null}
       onClose={onClose}
