@@ -169,6 +169,7 @@ describe('the phone collections tab', () => {
       setValue.call(field, 'Late night')
       field.dispatchEvent(new Event('input', { bubbles: true }))
     })
+    expect(button(container, 'Create').className).toContain('touch-target')
     await act(async () => button(container, 'Create').click())
     await settle()
     expect(created).toEqual(['Late night'])
@@ -181,7 +182,10 @@ describe('the phone collections tab', () => {
     const { container } = await render()
     expect(container.textContent).toContain('No playlists yet')
     expect(container.querySelector('[aria-label="Collections"]')).toBeNull()
-    for (const name of ['New playlist', 'Import .m3u']) expect(button(container, name).className).toContain('h-[36px]')
+    for (const name of ['New playlist', 'Import .m3u']) {
+      expect(button(container, name).className).toContain('h-[36px]')
+      expect(button(container, name).className).toContain('touch-target')
+    }
     await act(async () => button(container, 'Import .m3u').click())
     await settle()
     expect(history.state).toMatchObject({ legatoSheetView: { kind: 'import' } })

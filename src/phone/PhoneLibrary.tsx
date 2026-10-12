@@ -5,6 +5,7 @@ import { Chip } from '../ui/Chip'
 import { CoverArt } from '../ui/CoverArt'
 import { Icon } from '../ui/Icon'
 import { Skeleton } from '../ui/Skeleton'
+import { TouchLayoutContext } from '../ui/touchLayout'
 import { NO_VALUE, formatDuration, plural } from '../ui/format'
 import { useGraph } from '../canvas/graphContext'
 import { useScanStatus } from '../hooks/useScanStatus'
@@ -67,11 +68,10 @@ const PERSON_ROW = 60
  * desktop's --library-* gaps, set for this grid alone. */
 const GRID_GAPS = { '--library-row-gap': '16px', '--library-column-gap': '14px' } as CSSProperties
 
-/* A 36px button's 44px target. */
-const TARGET = "relative before:absolute before:inset-x-0 before:-inset-y-[4px] before:content-['']"
-
 /* A chip's target: 13px above it, none below, 45px in all. A pixel over
- * 44, because the row under it takes the edge they share. */
+ * 44, because the row under it takes the edge they share. Not the shared,
+ * centred touch-target (touchLayout.ts): the frame leaves no room under
+ * the chips for its lower half without taking the sort line's. */
 const CHIP_TARGET = "relative before:absolute before:inset-x-0 before:-top-[13px] before:bottom-0 before:content-['']"
 
 /* Artists and people sort by name alone, as the desktop's artists do. */
@@ -97,26 +97,30 @@ export function PhoneLibrary({ onOpenNode, playback, noLibrary, onShowMap }: Pho
   // whose scan hasn't matched anything yet has no map either.
   const empty = !noLibrary && !loading && nodes.length === 0
   if (noLibrary || empty) {
+    // A touch layout, as the pushed pages are: its buttons take taps across
+    // 44px (touchLayout.ts).
     return (
-      <div className="absolute inset-0 overflow-y-auto overscroll-contain px-[20px]">
-        {noLibrary ? (
-          <LibraryEmpty title="Nothing here yet" body="Add a folder of music and your albums, artists and tracks collect here.">
-            <Button variant="primary" size="lg" icon="add" onClick={onShowMap} className={TARGET}>
-              Add your music
-            </Button>
-          </LibraryEmpty>
-        ) : scan.scanning ? (
-          <LibraryEmpty title="Reading your library" body="Albums appear here as tracks are matched." />
-        ) : scan.error ? (
-          <LibraryEmpty title="The scan stopped" body={scan.error}>
-            <Button variant="primary" size="lg" onClick={scan.retry} className={TARGET}>
-              Try again
-            </Button>
-          </LibraryEmpty>
-        ) : (
-          <LibraryEmpty title="No music found" body="Legato couldn't read anything in your folders. Check them in Settings." />
-        )}
-      </div>
+      <TouchLayoutContext.Provider value={true}>
+        <div className="absolute inset-0 overflow-y-auto overscroll-contain px-[20px]">
+          {noLibrary ? (
+            <LibraryEmpty title="Nothing here yet" body="Add a folder of music and your albums, artists and tracks collect here.">
+              <Button variant="primary" size="lg" icon="add" onClick={onShowMap}>
+                Add your music
+              </Button>
+            </LibraryEmpty>
+          ) : scan.scanning ? (
+            <LibraryEmpty title="Reading your library" body="Albums appear here as tracks are matched." />
+          ) : scan.error ? (
+            <LibraryEmpty title="The scan stopped" body={scan.error}>
+              <Button variant="primary" size="lg" onClick={scan.retry}>
+                Try again
+              </Button>
+            </LibraryEmpty>
+          ) : (
+            <LibraryEmpty title="No music found" body="Legato couldn't read anything in your folders. Check them in Settings." />
+          )}
+        </div>
+      </TouchLayoutContext.Provider>
     )
   }
 

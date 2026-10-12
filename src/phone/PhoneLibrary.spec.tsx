@@ -228,6 +228,7 @@ describe('the phone library tab', () => {
     expect(container.querySelector('[aria-label="Show"]')).toBeNull()
     expect(container.textContent).toContain('Nothing here yet')
     const add = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Add your music')!
+    expect(add.className).toContain('touch-target')
     await act(async () => add.click())
     expect(onShowMap).toHaveBeenCalled()
   })

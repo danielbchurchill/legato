@@ -7,6 +7,7 @@ import { Mosaic } from '../ui/Mosaic'
 import { Popover } from '../ui/Popover'
 import { TextField } from '../ui/TextField'
 import { plural } from '../ui/format'
+import { TouchLayoutContext } from '../ui/touchLayout'
 import { EmptyCollections } from '../panels/CollectionsPanel'
 import { ImportPlaylist } from '../panels/ImportPlaylist'
 import { PlaylistPage } from '../panels/PlaylistPage'
@@ -34,12 +35,13 @@ import { closeSheetView, openSheetView, useSheetView } from './navigation'
  * a new playlist opens once it's named.
  *
  * Like the library tab, the grid scrolls in its own scroller under the
- * count, over the sheet's whole body. */
+ * count, over the sheet's whole body.
+ *
+ * The tab is a touch layout (touchLayout.ts), as the pushed pages are, so
+ * every Button and Chip in it takes taps across 44px, the desktop's
+ * playlist and import pages' included. */
 
 type Playback = ReturnType<typeof usePlayback>
-
-/* A 36px button's 44px target. */
-const TARGET = "relative before:absolute before:inset-x-0 before:-inset-y-[4px] before:content-['']"
 
 type PhoneCollectionsProps = {
   onOpenNode: (id: number) => void
@@ -47,6 +49,14 @@ type PhoneCollectionsProps = {
 }
 
 export function PhoneCollections({ onOpenNode, playback }: PhoneCollectionsProps) {
+  return (
+    <TouchLayoutContext.Provider value={true}>
+      <CollectionsView onOpenNode={onOpenNode} playback={playback} />
+    </TouchLayoutContext.Provider>
+  )
+}
+
+function CollectionsView({ onOpenNode, playback }: PhoneCollectionsProps) {
   const view = useSheetView()
 
   if (view?.kind === 'playlist') {
@@ -118,7 +128,7 @@ function CollectionsHome() {
         onEscape={() => setNaming(false)}
         className="flex-1"
       />
-      <Button variant="primary" size="lg" type="submit" disabled={!newName.trim()} className={TARGET}>
+      <Button variant="primary" size="lg" type="submit" disabled={!newName.trim()}>
         Create
       </Button>
     </form>
@@ -159,7 +169,8 @@ function CollectionsHome() {
 }
 
 /* "new", the handoff's secondary pill: 36px on --color-wash-2, inside a
- * 44px target. It opens the desktop's add menu. */
+ * 44px target (the touch-target utility). It opens the desktop's add
+ * menu. */
 function NewMenu({ onNew, onImport }: { onNew: () => void; onImport: () => void }) {
   return (
     <Popover
@@ -171,7 +182,7 @@ function NewMenu({ onNew, onImport }: { onNew: () => void; onImport: () => void 
         <button
           type="button"
           {...props}
-          className={`relative inline-flex h-[36px] items-center gap-[6px] rounded-full pr-[14px] pl-[10px] text-[length:var(--text-secondary)] leading-none font-medium text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] before:absolute before:inset-x-0 before:-inset-y-[4px] before:content-[''] ${
+          className={`touch-target inline-flex h-[36px] items-center gap-[6px] rounded-full pr-[14px] pl-[10px] text-[length:var(--text-secondary)] leading-none font-medium text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] ${
             open ? 'bg-[var(--color-line-strong)]' : 'bg-[var(--color-wash-2)]'
           }`}
         >
