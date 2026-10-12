@@ -139,4 +139,19 @@ describe('Tabs with iconOnly', () => {
     expect(tabs()[1].querySelector('[aria-hidden="true"]')).toBeNull()
     expect(visibleText(list)).toEqual(['map', 'library'])
   })
+
+  it("underlined at md, draws the phone node detail's 14/500 tabs, 22px apart", () => {
+    const { list, tabs } = renderTabs({ variant: 'underline', size: 'md' })
+    expect(list.className).toContain('gap-[22px]')
+    expect(
+      tabs().every(
+        (tab) =>
+          tab.className.includes('text-[length:var(--text-body)]') &&
+          tab.className.includes('py-[10px]') &&
+          tab.className.includes('touch-target'),
+      ),
+    ).toBe(true)
+    // The 2px ink rule, not a raised segment.
+    expect(list.firstElementChild!.className).toContain('h-[2px]')
+  })
 })

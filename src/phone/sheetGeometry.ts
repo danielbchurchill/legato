@@ -15,8 +15,10 @@ export const DETENTS: readonly Detent[] = ['peek', 'medium', 'large']
 export type DetentHeights = Record<Detent, number>
 
 /* Large leaves this strip of map under the status bar (the handoff's
- * "status bar + 64"). */
+ * "status bar + 64"). Search's results leave a little more, under its
+ * field ("status bar + 70"). */
 export const LARGE_TOP_GAP = 64
+export const SEARCH_TOP_GAP = 70
 /* Medium puts the sheet's top edge this far down the viewport: the
  * handoff's node detail frame draws it at 40% of the screen's height. */
 export const MEDIUM_TOP_FRACTION = 0.4
@@ -26,14 +28,17 @@ export function detentHeights({
   safeTop,
   safeBottom,
   peekContent,
+  largeTopGap = LARGE_TOP_GAP,
 }: {
   viewportHeight: number
   safeTop: number
   safeBottom: number
   /** The header and the peek line, measured: what peek has to show. */
   peekContent: number
+  /** How much map large leaves under the status bar. */
+  largeTopGap?: number
 }): DetentHeights {
-  const large = Math.max(0, viewportHeight - safeTop - LARGE_TOP_GAP)
+  const large = Math.max(0, viewportHeight - safeTop - largeTopGap)
   // Peek clears the home indicator or gesture bar.
   const peek = Math.min(large, peekContent + safeBottom)
   const medium = Math.min(large, Math.max(peek, viewportHeight - Math.round(viewportHeight * MEDIUM_TOP_FRACTION)))

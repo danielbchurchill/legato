@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import { AppShell } from '../shell/AppShell'
 import { ShellLayoutContext, useWindowSize } from '../shell/layout'
 import type { NowPlayingTab } from '../shell/panels'
@@ -8,7 +9,6 @@ import { Tabs } from '../ui/Tabs'
 import { plural } from '../ui/format'
 import { useLibraryChanges, useLibraryStats } from '../library/useLibraryChanges'
 import { NowPlaying } from '../panels/NowPlaying'
-import { SearchPalette } from '../search/SearchPalette'
 import { ServerUnreachableOverShell, type UnreachableView } from '../connect/ServerUnreachable'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
@@ -18,11 +18,25 @@ import { MiniPlayer } from './MiniPlayer'
 import { PhoneCollections } from './PhoneCollections'
 import { PhoneLibrary } from './PhoneLibrary'
 import { PhonePages } from './PhonePages'
+import { NodeBody, NodeControls, NodeHeader } from './PhoneNode'
+import { SearchField, SearchResultsList } from './PhoneSearch'
 import { Sheet } from './Sheet'
-import { closeSheetView, openSheetView, pushPhonePage, usePhonePages, useSheetView } from './navigation'
+import {
+  closeSheetView,
+  popSheetOverlay,
+  pushPhonePage,
+  pushSheetOverlay,
+  replaceOverlaysWithView,
+  usePhonePages,
+  useSheetOverlays,
+  useSheetView,
+} from './navigation'
+import { NODE_CONTROLS_CLEARANCE, openPhoneNode, usePhoneNode } from './nodeDetail'
 import { phonePlatform, phoneShellLayout } from './phoneLayout'
+import { searchPeekLine, usePhoneSearch } from './searchState'
 import { useSafeArea } from './safeArea'
-import type { Detent, DetentHeights } from './sheetGeometry'
+import { SEARCH_TOP_GAP, type Detent, type DetentHeights } from './sheetGeometry'
+import { OVERLAY_DETENT, overlayTransition, type Depth } from './sheetOverlays'
 
 /* The phone layout (#389, Claude Design's Legato Mobile v2): the map edge to
  * edge as the ground, the search capsule and node-type chips floating over
@@ -31,10 +45,16 @@ import type { Detent, DetentHeights } from './sheetGeometry'
  * same state: the same queue, map, settings and search.
  *
  * The library and collections tabs are the handoff's own (PhoneLibrary,
- * PhoneCollections). Up next shows the desktop's now playing for now; later
- * steps of #389 draw it as the handoff does, and add node detail, search
- * and now playing. Settings and Library health are pushed pages
- * (PhonePages.tsx). */
+ * PhoneCollections). Up next shows the desktop's now playing for now; a
+ * later step of #389 draws it as the handoff does, and adds now playing.
+ * Settings and Library health are pushed pages (PhonePages.tsx).
+ *
+ * Search and a node's detail are overlays the sheet shows in place of its
+ * tabs (PhoneSearch.tsx, PhoneNode.tsx), kept in the history
+ * (navigation.ts) so back walks back through them. Each takes the sheet's
+ * header and covers its tabs, which stay where they were underneath; the
+ * controls over the map change with them. The node on top of that history
+ * is the map's selection, centred above the sheet as it opens. */
 
 type Playback = ReturnType<typeof usePlayback>
 
@@ -64,12 +84,17 @@ type PhoneShellProps = {
   onShuffleLibrary: () => void
   /** Select a node and fly the map to it. */
   onFocusNode: (id: number) => void
+  /** Select a node, or nothing, without moving the map. */
+  onSelectNode: (id: number | null) => void
+  /** Centre the map on a node above a sheet so tall (CanvasHandle). */
+  onCentreNode: (id: number, options: { bottomInset: number; topInset?: number }) => void
   selectedNodeId: number | null
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>
   themePreference: ThemePreference
   onSetThemePreference: (preference: ThemePreference) => void
-  /** The search palette's state is the workspace's: ⌘K and / open it. */
+  /** ⌘K and / ask for search: the workspace's palette state, which the
+   * phone answers by opening its own. */
   searchOpen: boolean
   onSearchOpenChange: (open: boolean) => void
   unreachable: UnreachableView | null
@@ -83,6 +108,8 @@ export function PhoneShell({
   canShuffle,
   onShuffleLibrary,
   onFocusNode,
+  onSelectNode,
+  onCentreNode,
   settings,
   updateSettings,
   themePreference,
@@ -91,35 +118,113 @@ export function PhoneShell({
   onSearchOpenChange,
   unreachable,
 }: PhoneShellProps) {
-  // A view open in the collections tab is in the history, so after a
-  // reload the sheet opens on it, as a pushed page stays open.
+  // An overlay, or a view open in the collections tab, is in the history,
+  // so after a reload the sheet opens on it, as a pushed page stays open.
+  const overlays = useSheetOverlays()
+  const overlay = overlays[overlays.length - 1] ?? null
   const sheetView = useSheetView()
-  const [detent, setDetent] = useState<Detent>(() => (sheetView ? 'large' : 'peek'))
+  const [detent, setDetent] = useState<Detent>(() => (overlay ? OVERLAY_DETENT[overlay.kind] : sheetView ? 'large' : 'peek'))
   const [tab, setTab] = useState<SheetTab>(() => (sheetView ? 'collections' : 'library'))
   const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('next')
-  const [peekHeight, setPeekHeight] = useState(0)
+  const [heights, setHeights] = useState<DetentHeights>({ peek: 0, medium: 0, large: 0 })
+  const peekHeight = heights.peek
   const pages = usePhonePages()
   const platform = useMemo(() => phonePlatform(), [])
 
+  // The detent the sheet goes to as its overlays change (sheetOverlays.ts).
+  const [overlaysShown, setOverlaysShown] = useState(overlays)
+  const [savedDetents, setSavedDetents] = useState<ReadonlyMap<Depth, Detent>>(new Map())
+  if (overlaysShown !== overlays) {
+    setOverlaysShown(overlays)
+    const transition = overlayTransition(overlaysShown, overlays, detent, savedDetents)
+    if (transition) {
+      setSavedDetents(transition.saved)
+      setDetent(transition.detent)
+    }
+  }
+  const searching = overlays.some((o) => o.kind === 'search')
+  const search = usePhoneSearch(searching)
+  const nodeId = overlay?.kind === 'node' ? overlay.id : null
+  const node = usePhoneNode(nodeId, playback)
+
+  const safe = useSafeArea()
   const windowSize = useWindowSize()
-  const mapTop = useSafeArea().top + MAP_CONTROLS_CLEARANCE
-  const layout = useMemo(
-    () => phoneShellLayout(windowSize.width, windowSize.height, peekHeight, mapTop),
-    [windowSize, peekHeight, mapTop],
-  )
-  const onHeightsChange = useCallback((heights: DetentHeights) => setPeekHeight(heights.peek), [])
+  const mapTop = safe.top + (overlay?.kind === 'node' ? NODE_CONTROLS_CLEARANCE : MAP_CONTROLS_CLEARANCE)
+  const layout = useMemo(() => phoneShellLayout(windowSize.width, windowSize.height, peekHeight, mapTop), [windowSize, peekHeight, mapTop])
 
   // The controls over the map fade as the sheet comes up to large, with
   // the dim, written as the sheet moves rather than rendered.
   const controlsRef = useRef<HTMLDivElement>(null)
+  const pillRef = useRef<HTMLDivElement>(null)
   const onExpansion = useCallback((progress: number, animate: boolean) => {
-    const controls = controlsRef.current
-    if (!controls) return
-    controls.style.transition = animate ? 'opacity var(--motion-spring) var(--ease-out)' : 'none'
-    controls.style.opacity = String(1 - progress)
+    for (const controls of [controlsRef.current, pillRef.current]) {
+      if (!controls) continue
+      controls.style.transition = animate ? 'opacity var(--motion-spring) var(--ease-out)' : 'none'
+      controls.style.opacity = String(1 - progress)
+    }
   }, [])
 
-  // Anything opened on the map shows the map: the sheet goes down to peek.
+  // The node on top is the map's selection, centred above the sheet: at
+  // medium as it opens, or lower if the sheet is. Going back from the last
+  // one selects nothing. A node opened from anywhere arrives the same way.
+  const centre = useCallback(
+    (id: number) => {
+      const bottomInset = Math.min(heights[detent], heights.medium)
+      if (bottomInset > 0) onCentreNode(id, { bottomInset, topInset: safe.top + NODE_CONTROLS_CLEARANCE })
+    },
+    [heights, detent, safe.top, onCentreNode],
+  )
+  const centreRef = useRef(centre)
+  centreRef.current = centre
+  const selectedRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (nodeId == null && selectedRef.current == null) return
+    selectedRef.current = nodeId
+    onSelectNode(nodeId)
+    if (nodeId != null) centreRef.current(nodeId)
+  }, [nodeId, heights.medium, onSelectNode])
+
+  // ⌘K or / on a phone with a keyboard opens the phone's search.
+  useEffect(() => {
+    if (!searchOpen) return
+    pushSheetOverlay({ kind: 'search' })
+    onSearchOpenChange(false)
+  }, [searchOpen, onSearchOpenChange])
+
+  // Escape goes back from an overlay, as back does. A field and a popover
+  // answer their own.
+  const hasOverlay = overlay != null
+  useEffect(() => {
+    if (!hasOverlay) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      const el = document.activeElement
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return
+      if (document.querySelector('[role="dialog"]')) return
+      e.preventDefault()
+      popSheetOverlay()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [hasOverlay])
+
+  // The search field takes the focus in the tap that opens it, so a phone
+  // brings its keyboard up: iOS only does that for a focus inside the tap.
+  const openSearch = () => flushSync(() => pushSheetOverlay({ kind: 'search' }))
+  const openNode = (id: number) => openPhoneNode(id)
+  const openFromSheet = (id: number) => openPhoneNode(id, { push: true })
+
+  // A playlist from search opens in the collections tab, at large, in
+  // search's place, so back from it goes where back from search would have.
+  const openPlaylist = (playlistId: number) => {
+    setTab('collections')
+    setSavedDetents((saved) => new Map(saved).set(-1, 'large'))
+    replaceOverlaysWithView({ kind: 'playlist', playlistId })
+  }
+  const openSearchResult = (item: { kind: string; id: number }) =>
+    item.kind === 'playlist' ? openPlaylist(item.id) : openFromSheet(item.id)
+
+  // "Show on map" shows the map: the sheet goes down to peek.
   const showOnMap = useCallback(
     (id: number) => {
       setDetent('peek')
@@ -137,12 +242,11 @@ export function PhoneShell({
 
   const stats = useLibraryStats(useLibraryChanges())
 
-  // Opening an album, an artist or a person selects it and shows it on the
-  // map, as a search result does, until node detail (#389, step 4).
-  // TODO(#389 step 4): open them with openPhoneNode(id), src/phone/nodeDetail.ts.
+  // An album, an artist or a person opens its detail over the tab, and back
+  // comes back to the tab as it was.
   const content: Record<SheetTab, ReactNode> = {
-    library: <PhoneLibrary onOpenNode={showOnMap} playback={playback} noLibrary={firstRun != null} onShowMap={() => setDetent('peek')} />,
-    collections: <PhoneCollections onOpenNode={showOnMap} playback={playback} />,
+    library: <PhoneLibrary onOpenNode={openNode} playback={playback} noLibrary={firstRun != null} onShowMap={() => setDetent('peek')} />,
+    collections: <PhoneCollections onOpenNode={openNode} playback={playback} />,
     next: (
       <div className="p-[12px]">
         <ErrorBoundary key={playback.status.currentRecordingNodeId} fallback={tabError}>
@@ -151,8 +255,8 @@ export function PhoneShell({
             tab={nowPlayingTab}
             onTabChange={setNowPlayingTab}
             playback={playback}
-            onFocusNode={showOnMap}
-            onOpenDetails={showOnMap}
+            onFocusNode={openNode}
+            onOpenDetails={openNode}
             onShuffleLibrary={onShuffleLibrary}
             onShowOnMap={showOnMap}
           />
@@ -174,46 +278,86 @@ export function PhoneShell({
               {firstRun}
             </div>
           )}
-          <MapControls
-            ref={controlsRef}
-            settings={settings}
-            updateSettings={updateSettings}
-            onOpenSearch={() => onSearchOpenChange(true)}
-            onOpenSettings={() => pushPhonePage('settings')}
-            hidden={detent === 'large'}
-          />
+          {overlay == null && (
+            <MapControls
+              ref={controlsRef}
+              settings={settings}
+              updateSettings={updateSettings}
+              onOpenSearch={openSearch}
+              onOpenSettings={() => pushPhonePage('settings')}
+              hidden={detent === 'large'}
+            />
+          )}
+          {overlay?.kind === 'node' && (
+            <NodeControls onBack={popSheetOverlay} onCentre={() => centre(overlay.id)} pillRef={pillRef} pillHidden={detent === 'large'} />
+          )}
+          {overlay?.kind === 'search' && (
+            <SearchField search={search} onCancel={popSheetOverlay} onSubmit={() => search.top && openSearchResult(search.top)} />
+          )}
           {/* Over the map, under the sheet, so whatever's buffered can
            * still be paused (#119). */}
           {unreachable && <ServerUnreachableOverShell view={unreachable} />}
           <Sheet
-            label="Library and player"
+            label={
+              overlay?.kind === 'search'
+                ? 'Search results'
+                : overlay?.kind === 'node'
+                  ? (node.details?.node.title ?? 'Details')
+                  : 'Library and player'
+            }
             detent={detent}
             onDetentChange={setDetent}
             onExpansion={onExpansion}
-            onHeightsChange={onHeightsChange}
-            header={
-              <>
-                <MiniPlayer
+            onHeightsChange={setHeights}
+            largeTopGap={overlay?.kind === 'search' ? SEARCH_TOP_GAP : undefined}
+            dim={overlay?.kind !== 'search'}
+            overlayKey={overlay?.kind === 'node' ? `node:${overlay.id}` : overlay?.kind}
+            overlay={
+              overlay?.kind === 'search' ? (
+                <SearchResultsList
+                  search={search}
                   playback={playback}
-                  artist={playingArtist}
-                  compact={detent === 'large'}
-                  canShuffle={canShuffle}
-                  onShuffleLibrary={onShuffleLibrary}
+                  onOpenNode={openFromSheet}
+                  onOpenPlaylist={openPlaylist}
+                  onPlayed={popSheetOverlay}
                 />
-                <div className="mt-[6px] border-b border-[var(--color-line)] px-[20px]">
-                  <Tabs label="sheet" variant="underline" size="lg" options={TABS} value={tab} onChange={changeTab} />
-                </div>
-              </>
+              ) : overlay?.kind === 'node' ? (
+                <NodeBody node={node} playback={playback} onOpenNode={openFromSheet} />
+              ) : undefined
+            }
+            header={
+              overlay?.kind === 'node' ? (
+                <NodeHeader node={node} playback={playback} onOpenNode={openFromSheet} />
+              ) : overlay?.kind === 'search' ? null : (
+                <>
+                  <MiniPlayer
+                    playback={playback}
+                    artist={playingArtist}
+                    compact={detent === 'large'}
+                    canShuffle={canShuffle}
+                    onShuffleLibrary={onShuffleLibrary}
+                  />
+                  <div className="mt-[6px] border-b border-[var(--color-line)] px-[20px]">
+                    <Tabs label="sheet" variant="underline" size="lg" options={TABS} value={tab} onChange={changeTab} />
+                  </div>
+                </>
+              )
             }
             peek={
-              <div className="flex items-center justify-between gap-[12px] px-[20px] pt-[12px] pb-[4px]">
-                <span className="truncate text-secondary text-[var(--color-ink-2)]">
-                  {stats && stats.albums > 0 ? `Swipe up for ${plural(stats.albums, 'album')}` : 'Swipe up for your library'}
-                </span>
-                {stats != null && stats.tracks > 0 && (
-                  <span className="mono shrink-0 text-mono text-[var(--color-ink-3)]">{plural(stats.tracks, 'track')}</span>
-                )}
-              </div>
+              overlay?.kind === 'node' ? undefined : overlay?.kind === 'search' ? (
+                <div className="px-[20px] pt-[4px] pb-[4px]">
+                  <span className="block truncate text-secondary text-[var(--color-ink-2)]">{searchPeekLine(search)}</span>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-[12px] px-[20px] pt-[12px] pb-[4px]">
+                  <span className="truncate text-secondary text-[var(--color-ink-2)]">
+                    {stats && stats.albums > 0 ? `Swipe up for ${plural(stats.albums, 'album')}` : 'Swipe up for your library'}
+                  </span>
+                  {stats != null && stats.tracks > 0 && (
+                    <span className="mono shrink-0 text-mono text-[var(--color-ink-3)]">{plural(stats.tracks, 'track')}</span>
+                  )}
+                </div>
+              )
             }
           >
             <div role="tabpanel" aria-label={TABS.find((t) => t.value === tab)?.label} className="h-full">
@@ -230,23 +374,6 @@ export function PhoneShell({
           onSetThemePreference={onSetThemePreference}
           onShowOnMap={showOnMap}
         />
-
-        {searchOpen && (
-          <SearchPalette
-            onClose={() => onSearchOpenChange(false)}
-            onOpen={(id) => {
-              onSearchOpenChange(false)
-              showOnMap(id)
-            }}
-            onOpenPlaylist={(playlistId) => {
-              onSearchOpenChange(false)
-              openSheetView({ kind: 'playlist', playlistId })
-              setTab('collections')
-              setDetent('large')
-            }}
-            playback={playback}
-          />
-        )}
       </AppShell>
     </ShellLayoutContext.Provider>
   )

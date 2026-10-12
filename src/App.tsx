@@ -54,6 +54,7 @@ import { IS_TAURI } from './config/runtime'
 import { useInstallOffer } from './pwa/installOffer'
 import { usePhoneLayout } from './phone/phoneLayout'
 import { PhoneShell } from './phone/PhoneShell'
+import { closePhoneNode, openPhoneNode } from './phone/nodeDetail'
 
 // #125: off -> all -> one -> off. The player's single repeat button cycles
 // through this rather than exposing three separate controls.
@@ -306,6 +307,13 @@ function Workspace({
     if (id == null) setRightView((current) => (current === 'details' ? null : current))
   }
 
+  // #389: on the phone a tap on a node opens its detail in the sheet, which
+  // selects it (PhoneShell), and a tap on the empty map goes back from it.
+  const selectOnPhoneMap = (id: number | null) => {
+    if (id != null) openPhoneNode(id)
+    else if (!closePhoneNode()) selectNode(null)
+  }
+
   // Escape unwinds one layer at a time: the right panel, then the
   // selection, then the left panel. The search palette and dialogs own
   // their own Escape and stop it before it gets here.
@@ -428,7 +436,7 @@ function Workspace({
       key={rebuildEpoch}
       ref={canvasRef}
       selectedNodeId={selectedNodeId}
-      onSelectNode={selectNode}
+      onSelectNode={phone ? selectOnPhoneMap : selectNode}
       onOpenDetails={() => selectedNodeId != null && openDetails(selectedNodeId)}
       playback={playback}
       dimOnHoverEnabled={dimOnHoverEnabled}
@@ -468,6 +476,8 @@ function Workspace({
           setSelectedNodeId(id)
           canvasRef.current?.flyToNode(id)
         }}
+        onSelectNode={setSelectedNodeId}
+        onCentreNode={(id, options) => canvasRef.current?.centreNodeAbove(id, options)}
         selectedNodeId={selectedNodeId}
         settings={settings}
         updateSettings={updateSettings}

@@ -56,4 +56,16 @@ describe('Button', () => {
     expect(xl.classList).toContain('text-[16px]')
     expect(xl.classList).not.toContain('text-[length:var(--text-secondary)]')
   })
+
+  it("is 44px with 15px words and an 18px icon at the phone sheet's size", () => {
+    const sheet = render(
+      <Button variant="primary" size="sheet" icon="play">
+        play
+      </Button>,
+    )
+    expect(sheet.classList).toContain('h-[44px]')
+    expect(sheet.classList).toContain('text-[15px]')
+    expect(sheet.classList).toContain('pl-[16px]')
+    expect(sheet.querySelector<HTMLElement>('[aria-hidden="true"]')!.style.width).toBe('18px')
+  })
 })

@@ -5,8 +5,9 @@ import type { Ref } from 'react'
  * value — a label, a date, a bpm, a path. Focus turns the border accent with a
  * 25% accent ring outside it (index.css's .focus-ring-well).
  *
- * `lg` is the phone's (#389): 44px, a tap target, with prose at 16px, under
- * which iOS Safari zooms the page into a field it focuses. */
+ * `lg` is the phone's (#389): 44px, a tap target, with its text at 16px,
+ * prose or mono, under which iOS Safari zooms the page into a field it
+ * focuses. */
 
 type TextFieldProps = {
   value: string
@@ -62,7 +63,11 @@ export function TextField({
           }
         }}
         className={`w-full min-w-0 bg-transparent text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-3)] ${
-          prose ? (size === 'lg' ? 'text-[16px]' : 'text-[length:var(--text-secondary)]') : 'mono text-[length:var(--text-mono)]'
+          size === 'lg'
+            ? `text-[16px] ${prose ? '' : 'mono'}`
+            : prose
+              ? 'text-[length:var(--text-secondary)]'
+              : 'mono text-[length:var(--text-mono)]'
         }`}
       />
     </div>

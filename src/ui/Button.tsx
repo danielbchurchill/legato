@@ -19,11 +19,12 @@ import { useTouchLayout } from './touchLayout'
  * filled, since an outline glyph on the gradient reads as a hole. An icon
  * with no label is a circle, named by aria-label. `xl` is the phone's page
  * action (#389), 50px and 16/500, such as Library health's Review and
- * Rescan. In the phone's touch layout (touchLayout.ts) every size takes taps
- * across at least 44px. */
+ * Rescan. `sheet` is the phone sheet's action (#389), 44px and 15/500 with
+ * an 18px icon, such as node detail's play and shuffle. In the phone's touch
+ * layout (touchLayout.ts) every size takes taps across at least 44px. */
 
 type ButtonVariant = 'primary' | 'secondary' | 'link' | 'destructive'
-type ButtonSize = 'sm' | 'md' | 'lg' | 'xl'
+type ButtonSize = 'sm' | 'md' | 'lg' | 'sheet' | 'xl'
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   primary: 'rounded-full bg-[image:var(--accent-fill)] text-[var(--color-on-accent)] hover:brightness-110 disabled:opacity-40',
@@ -36,6 +37,7 @@ const SIZE_CLASSES: Record<ButtonSize, string> = {
   sm: 'h-[28px]',
   md: 'h-[32px]',
   lg: 'h-[36px]',
+  sheet: 'h-[44px]',
   xl: 'h-[50px]',
 }
 
@@ -81,7 +83,20 @@ export function Button({
   const pill = variant !== 'link'
   const iconOnly = icon != null && children == null
   const xl = size === 'xl'
-  const padding = pill ? (iconOnly ? 'aspect-square' : icon ? 'pl-[10px] pr-[14px]' : xl ? 'px-[22px]' : 'px-[16px]') : ''
+  const sheet = size === 'sheet'
+  const padding = pill
+    ? iconOnly
+      ? 'aspect-square'
+      : icon
+        ? sheet
+          ? 'pl-[16px] pr-[20px]'
+          : 'pl-[10px] pr-[14px]'
+        : xl
+          ? 'px-[22px]'
+          : sheet
+            ? 'px-[20px]'
+            : 'px-[16px]'
+    : ''
   return (
     <button
       ref={ref}
@@ -89,11 +104,11 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       aria-label={ariaLabel}
-      className={`inline-flex shrink-0 items-center justify-center gap-[6px] ${xl ? 'text-[16px]' : 'text-[length:var(--text-secondary)]'} leading-none font-medium whitespace-nowrap transition-[color,background-color,filter] duration-[var(--motion-fast)] ease-[var(--ease-out)] disabled:pointer-events-none ${
+      className={`inline-flex shrink-0 items-center justify-center gap-[6px] ${xl ? 'text-[16px]' : sheet ? 'text-[15px]' : 'text-[length:var(--text-secondary)]'} leading-none font-medium whitespace-nowrap transition-[color,background-color,filter] duration-[var(--motion-fast)] ease-[var(--ease-out)] disabled:pointer-events-none ${
         pill ? SIZE_CLASSES[size] : ''
       } ${padding} ${VARIANT_CLASSES[variant]} ${touch ? 'touch-target' : ''} ${className}`}
     >
-      {icon && <Icon name={icon} size={16} filled={variant === 'primary'} />}
+      {icon && <Icon name={icon} size={sheet ? 18 : 16} filled={variant === 'primary'} />}
       {children}
     </button>
   )

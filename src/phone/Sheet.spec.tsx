@@ -124,3 +124,56 @@ describe('Sheet', () => {
     expect(changes).toEqual(['peek'])
   })
 })
+
+describe('Sheet, showing a view over its content', () => {
+  function renderOverlay({ overlay, dim = true, largeTopGap }: { overlay?: string; dim?: boolean; largeTopGap?: number }) {
+    function Harness() {
+      return (
+        <Sheet
+          label="Search results"
+          detent="large"
+          onDetentChange={() => undefined}
+          header={null}
+          overlay={overlay != null ? <p>{overlay}</p> : undefined}
+          overlayKey={overlay}
+          dim={dim}
+          largeTopGap={largeTopGap}
+        >
+          <p>the tab</p>
+        </Sheet>
+      )
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(Harness)))
+    return container
+  }
+
+  it('draws the overlay over the content, which stays mounted out of reach', () => {
+    const container = renderOverlay({ overlay: 'the results' })
+    const [body, overlay] = container.querySelectorAll<HTMLElement>('.overflow-y-auto')
+    expect(body.textContent).toBe('the tab')
+    expect(body.hasAttribute('inert')).toBe(true)
+    expect(body.style.visibility).toBe('hidden')
+    expect(overlay.textContent).toBe('the results')
+    expect(overlay.hasAttribute('inert')).toBe(false)
+  })
+
+  it('gives the content back with no overlay', () => {
+    const container = renderOverlay({})
+    const scrollers = container.querySelectorAll<HTMLElement>('.overflow-y-auto')
+    expect(scrollers).toHaveLength(1)
+    expect(scrollers[0].hasAttribute('inert')).toBe(false)
+    expect(scrollers[0].style.visibility).toBe('')
+  })
+
+  it("leaves search's 70px of map at large, and doesn't dim it", () => {
+    const container = renderOverlay({ overlay: 'the results', dim: false, largeTopGap: 70 })
+    expect(container.querySelector<HTMLElement>('section')!.style.height).toBe('774px')
+    const dim = container.querySelector<HTMLElement>('[aria-hidden="true"].absolute.inset-0')!
+    expect(dim.style.opacity).toBe('0')
+    expect(dim.style.pointerEvents).toBe('none')
+  })
+})

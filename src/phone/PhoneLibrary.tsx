@@ -48,9 +48,9 @@ import type { usePlayback } from '../playback/usePlayback'
  * sheet's whole body, under the home indicator too, so the layout scrolls
  * to the bottom edge, as the handoff's frame cuts its covers off there.
  *
- * Opening an album, an artist or a person selects it the way the map does
- * (PhoneShell's onOpenNode). A track plays: tapping a row is how a phone
- * plays a song. */
+ * Opening an album, an artist or a person opens its detail over the tab
+ * (PhoneShell's onOpenNode, openPhoneNode). A track plays: tapping a row is
+ * how a phone plays a song. */
 
 export type PhoneLibraryEntity = 'albums' | 'artists' | 'tracks' | 'credits'
 

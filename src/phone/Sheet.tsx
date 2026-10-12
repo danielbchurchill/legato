@@ -37,6 +37,10 @@ import {
  * the map behind dims. The caller owns the detent; a drag or the handle
  * asks for a new one through onDetentChange.
  *
+ * An overlay (search's results, a node's detail) covers the content in its
+ * place, with a scroll of its own, while the content stays mounted under it
+ * out of reach: back from the overlay finds the tab where it was left.
+ *
  * The header, under the handle, always drags the sheet. The content drags
  * it as a native sheet's does: up until the sheet is large, then the
  * content scrolls; down once the content is back at its top. So scrolling
@@ -63,6 +67,15 @@ type SheetProps = {
   /** The content, mounted the first time the sheet leaves peek. It scrolls
    * inside the sheet; a child with a scroller of its own works too. */
   children: ReactNode
+  /** Drawn over the content, in its place, scrolling on its own. */
+  overlay?: ReactNode
+  /** Names what the overlay shows: a new one starts at its top. */
+  overlayKey?: string
+  /** How much map large leaves under the status bar: 64px, or search's 70. */
+  largeTopGap?: number
+  /** Whether the map dims behind the sheet at large. Search's results
+   * don't: the handoff draws the map under its field as it is. */
+  dim?: boolean
   /** Live, as the sheet moves: 0 at medium or lower, 1 at large, the dim's
    * own progress. `animate` says whether the sheet is springing there or
    * following a finger. */
@@ -92,13 +105,27 @@ function scrolledToTop(target: EventTarget | null, root: HTMLElement): boolean {
   return true
 }
 
-export function Sheet({ label, detent, onDetentChange, header, peek, children, onExpansion, onHeightsChange }: SheetProps) {
+export function Sheet({
+  label,
+  detent,
+  onDetentChange,
+  header,
+  peek,
+  children,
+  overlay,
+  overlayKey,
+  largeTopGap,
+  dim = true,
+  onExpansion,
+  onHeightsChange,
+}: SheetProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const sheetRef = useRef<HTMLElement>(null)
   const headerRef = useRef<HTMLDivElement>(null)
   const peekRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const dimRef = useRef<HTMLDivElement>(null)
 
   const safe = useSafeArea()
@@ -106,8 +133,8 @@ export function Sheet({ label, detent, onDetentChange, header, peek, children, o
   const [viewportHeight, setViewportHeight] = useState(0)
   const [peekContent, setPeekContent] = useState(0)
   const heights = useMemo(
-    () => detentHeights({ viewportHeight, safeTop: safe.top, safeBottom: safe.bottom, peekContent }),
-    [viewportHeight, safe.top, safe.bottom, peekContent],
+    () => detentHeights({ viewportHeight, safeTop: safe.top, safeBottom: safe.bottom, peekContent, largeTopGap }),
+    [viewportHeight, safe.top, safe.bottom, peekContent, largeTopGap],
   )
 
   // The content waits for the first time it could be seen.
@@ -127,6 +154,8 @@ export function Sheet({ label, detent, onDetentChange, header, peek, children, o
   onDetentChangeRef.current = onDetentChange
   const onExpansionRef = useRef(onExpansion)
   onExpansionRef.current = onExpansion
+  const dimsRef = useRef(dim)
+  dimsRef.current = dim
 
   const apply = useCallback((height: number, animate: boolean) => {
     const sheet = sheetRef.current
@@ -139,9 +168,10 @@ export function Sheet({ label, detent, onDetentChange, header, peek, children, o
     sheet.style.transition = transition('transform')
     sheet.style.transform = `translate3d(0, ${hs.large - height}px, 0)`
     for (const [el, opacity] of [
-      [dimRef.current, expansion],
+      [dimRef.current, dimsRef.current ? expansion : 0],
       [peekRef.current, 1 - opened],
       [bodyRef.current, opened],
+      [overlayRef.current, opened],
     ] as const) {
       if (!el) continue
       el.style.transition = transition('opacity')
@@ -150,15 +180,17 @@ export function Sheet({ label, detent, onDetentChange, header, peek, children, o
     onExpansionRef.current?.(expansion, animate)
   }, [])
 
-  // The viewport, and what peek has to show. Peek is measured only while
-  // the sheet is at peek: the header is shorter at large.
+  // The viewport, and what peek has to show. Peek is measured at peek or
+  // medium, where the header is the height it is at peek, so a header that
+  // changes at medium (a node's detail in place of the player) brings peek
+  // with it. Not at large: the player's header is shorter there.
   useLayoutEffect(() => {
     const stage = stageRef.current
     const head = headerRef.current
     if (!stage || !head) return
     const measure = () => {
       setViewportHeight(stage.clientHeight)
-      if (detentRef.current === 'peek' && !dragRef.current?.active) {
+      if (detentRef.current !== 'large' && !dragRef.current?.active) {
         setPeekContent(head.offsetHeight + (peekRef.current?.offsetHeight ?? 0))
       }
     }
@@ -324,7 +356,7 @@ export function Sheet({ label, detent, onDetentChange, header, peek, children, o
         aria-hidden="true"
         onClick={() => onDetentChange('peek')}
         className="absolute inset-0 bg-[rgb(0_0_0/0.18)]"
-        style={{ opacity: 0, pointerEvents: detent === 'large' ? 'auto' : 'none' }}
+        style={{ opacity: 0, pointerEvents: detent === 'large' && dim ? 'auto' : 'none' }}
       />
       <section
         ref={sheetRef}
@@ -375,12 +407,23 @@ export function Sheet({ label, detent, onDetentChange, header, peek, children, o
           )}
           <div
             ref={bodyRef}
-            inert={atPeek}
+            inert={atPeek || overlay != null}
             className="absolute inset-0 overflow-y-auto overscroll-contain"
-            style={{ paddingBottom: 'env(safe-area-inset-bottom)', opacity: 0 }}
+            style={{ paddingBottom: 'env(safe-area-inset-bottom)', opacity: 0, visibility: overlay != null ? 'hidden' : undefined }}
           >
             {opened && children}
           </div>
+          {overlay != null && (
+            <div
+              key={overlayKey}
+              ref={overlayRef}
+              inert={atPeek}
+              className="absolute inset-0 overflow-y-auto overscroll-contain"
+              style={{ paddingBottom: 'env(safe-area-inset-bottom)', opacity: atPeek ? 0 : 1 }}
+            >
+              {overlay}
+            </div>
+          )}
         </div>
       </section>
     </div>
