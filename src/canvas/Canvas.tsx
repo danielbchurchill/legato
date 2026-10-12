@@ -21,6 +21,7 @@ import { FirstScanCard, MapNotice } from './MapStates'
 import { averageColors, hashCoverUrl, sampleCoverColor } from '../ui/coverColor'
 import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
+import { choosePhoneLabels, phoneLabelSize, placeGreedily, type LabelBox } from './labelDensity'
 import { usePhoneWidth } from './usePhoneWidth'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
@@ -669,12 +670,13 @@ type Props = {
   /** #136: tells the renderer to re-resolve every colour it draws. */
   theme: ResolvedTheme
   /** The phone layout (Legato Mobile v2): the map runs edge to edge under
-   * the shell's floating chrome and sheet, and draws no node card.
-   * Defaults to a (max-width: 600px) test. */
+   * the shell's floating chrome and sheet, takes touch, draws no node card,
+   * and draws fewer, smaller labels. Defaults to a (max-width: 600px) test. */
   phone?: boolean
   /** On a phone, what the shell's floating search and chips cover at the
    * top and its sheet at the bottom. Fits and flies keep nodes clear of
-   * them. Defaults to the safe-area insets. */
+   * them, and a label under them doesn't count towards the dozen. Defaults
+   * to the safe-area insets. */
   mapInsets?: MapInsets
 }
 
@@ -689,7 +691,8 @@ export type CanvasHandle = {
    * sheet `bottomInset` px tall, and below `topInset` (by default, the top
    * of the map the shell leaves showing). A phone's node detail calls it
    * with the medium detent's height, and "show on map" with whatever the
-   * sheet is at. Snaps under reduced motion. */
+   * sheet is at. On a phone the node's label then draws first. Snaps under
+   * reduced motion. */
   centreNodeAbove: (nodeId: number, options: { bottomInset: number; topInset?: number }) => void
 }
 
@@ -763,6 +766,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // A phone's map defaults to the safe-area insets, which only CSS knows:
   // read off this probe's padding when a fit or a fly needs them.
   const safeAreaProbeRef = useRef<HTMLDivElement>(null)
+  // The node centreNodeAbove last centred: on a phone its label draws first.
+  const centredKeyRef = useRef<string | null>(null)
 
   // The part of the map the shell leaves uncovered, by layout.
   const visibleArea = useCallback((renderer: Sigma): Area => {
@@ -790,6 +795,32 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   }, [clusters])
   const clustersRef = useRef(clusters)
   const clusterMembersRef = useRef(clusterMembers)
+  // What a phone ranks an unpinned label by: an artist's records and
+  // tracks; a record's tracks; a credit's connections. Only a phone ranks
+  // this way, so the desktop never pays for it.
+  const labelWeights = useMemo(() => {
+    const weights = new Map<string, { records: number; tracks: number }>()
+    if (!phone) return weights
+    const typeOf = new Map(nodes.map((n) => [n.id, n.type]))
+    const weight = (id: number) => {
+      const key = nodeKey(id)
+      let w = weights.get(key)
+      if (!w) weights.set(key, (w = { records: 0, tracks: 0 }))
+      return w
+    }
+    for (const [artist, releases] of clusters.releasesOf) weight(artist).records = releases.length
+    for (const [id, artist] of clusters.clusterOf) if (typeOf.get(id) === 'recording') weight(artist).tracks++
+    for (const edge of edges) {
+      if (edge.type === 'appears_on' && typeOf.get(edge.to_node) === 'release') weight(edge.to_node).tracks++
+      if (typeOf.get(edge.to_node) === 'credit') weight(edge.to_node).tracks++
+      if (typeOf.get(edge.from_node) === 'credit') weight(edge.from_node).tracks++
+    }
+    return weights
+  }, [phone, nodes, edges, clusters])
+  const labelWeightsRef = useRef(labelWeights)
+  useEffect(() => {
+    labelWeightsRef.current = labelWeights
+  }, [labelWeights])
   const selectionFocusRef = useRef<Focus | null>(null)
   // Set by the renderer effect: re-evaluates which focus applies after the
   // selection changes from outside it.
@@ -846,7 +877,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       if (!renderer) return
       const visible = visibleArea(renderer)
       const area = { ...visible, top: topInset ?? visible.top, bottom: renderer.getDimensions().height - bottomInset }
-      frameNode(nodeId, area, centreOf(area))
+      if (frameNode(nodeId, area, centreOf(area))) centredKeyRef.current = nodeKey(nodeId)
     },
     [frameNode, visibleArea],
   )
@@ -1034,6 +1065,12 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     reducedMotionForcedRef.current = reducedMotionForced
   })
 
+  // A centred node keeps its label first until something else is selected,
+  // or the selection is dropped.
+  useEffect(() => {
+    if (centredKeyRef.current !== (selectedNodeId != null ? nodeKey(selectedNodeId) : null)) centredKeyRef.current = null
+  }, [selectedNodeId])
+
   // A selection focuses its cluster. Recomputed when the selection or the
   // clusters change, then handed to the renderer effect's focus logic.
   useEffect(() => {
@@ -1096,19 +1133,30 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
      * artist node. So labels are placed greedily once per frame — focused
      * first, then artists before credits before records, bigger dots first
      * — and a label that would overlap one already placed is skipped. The
-     * map stays legible at every zoom, and zooming in reveals the rest. */
+     * map stays legible at every zoom, and zooming in reveals the rest.
+     *
+     * A phone draws them smaller and fewer (labelDensity.ts), and places
+     * them only once the camera settles rather than every frame: in between,
+     * the labels it placed ride along with their nodes, which costs nothing
+     * while a finger pans. */
     const LABEL_STYLE: Record<LabelKind, { size: number; weight: number; rank: number }> = {
       artist: { size: 13, weight: 500, rank: 0 },
       credit: { size: 11, weight: 400, rank: 1 },
       release: { size: 11, weight: 400, rank: 2 },
     }
+    const PHONE_LABEL_STYLE: Record<LabelKind, { size: number; weight: number; rank: number }> = {
+      artist: { ...LABEL_STYLE.artist, size: phoneLabelSize(LABEL_STYLE.artist.size) },
+      credit: { ...LABEL_STYLE.credit, size: phoneLabelSize(LABEL_STYLE.credit.size) },
+      release: { ...LABEL_STYLE.release, size: phoneLabelSize(LABEL_STYLE.release.size) },
+    }
+    const styleOf = (kind: LabelKind) => (phoneRef.current ? PHONE_LABEL_STYLE : LABEL_STYLE)[kind]
     const LABEL_PAD = 3
     const widthCache = new Map<string, number>()
     const measure = (context: CanvasRenderingContext2D, kind: LabelKind, label: string) => {
-      const cacheKey = `${kind}\u0000${label}`
+      const style = styleOf(kind)
+      const cacheKey = `${style.size}\u0000${kind}\u0000${label}`
       let width = widthCache.get(cacheKey)
       if (width == null) {
-        const style = LABEL_STYLE[kind]
         context.font = `${style.weight} ${style.size}px 'Rubik Variable', Rubik, system-ui, sans-serif`
         width = context.measureText(label).width
         widthCache.set(cacheKey, width)
@@ -1116,16 +1164,23 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       return width
     }
     const labelBox = (context: CanvasRenderingContext2D, kind: LabelKind, label: string, x: number, y: number, size: number) => {
-      const style = LABEL_STYLE[kind]
+      const style = styleOf(kind)
       const width = measure(context, kind, label)
       const gap = size + 6
       let left = x + gap
-      if (kind === 'artist') {
+      // A phone's screen is narrow enough that a record's label runs off
+      // the edge too, so there every label flips.
+      if (kind === 'artist' || phoneRef.current) {
         const limit = renderer.getDimensions().width - (phoneRef.current ? 0 : layoutRef.current.rightOccupancy) - 16
         if (left + width > limit) left = x - gap - width
       }
       return { left, baseline: y + style.size * 0.36, top: y - style.size * 0.6, width, height: style.size * 1.2 }
     }
+    const paddedBox = (context: CanvasRenderingContext2D, kind: LabelKind, label: string, x: number, y: number, size: number): LabelBox => {
+      const box = labelBox(context, kind, label, x, y, size)
+      return { left: box.left - LABEL_PAD, top: box.top - LABEL_PAD, right: box.left + box.width + LABEL_PAD, bottom: box.top + box.height + LABEL_PAD }
+    }
+    type LabelDisplay = ReturnType<typeof renderer.getNodeDisplayData> & { labelKind?: LabelKind }
 
     // Recomputed on the first label of each frame, dropped after the frame.
     let placedLabels: Set<string> | null = null
@@ -1136,32 +1191,85 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       const { width, height } = renderer.getDimensions()
       const candidates: { key: string; kind: LabelKind; label: string; x: number; y: number; size: number; focused: boolean }[] = []
       graph.forEachNode((key) => {
-        const display = renderer.getNodeDisplayData(key) as (ReturnType<typeof renderer.getNodeDisplayData> & { labelKind?: LabelKind }) | undefined
+        const display = renderer.getNodeDisplayData(key) as LabelDisplay | undefined
         if (!display || display.hidden || !display.labelKind || !display.label) return
         const { x, y } = renderer.framedGraphToViewport(display)
         if (x < -200 || x > width + 200 || y < -20 || y > height + 20) return
         candidates.push({ key, kind: display.labelKind, label: display.label, x, y, size: renderer.scaleSize(display.size), focused: display.zIndex > 0 && currentFocus != null && focusProgress > 0 })
       })
       candidates.sort((a, b) => Number(b.focused) - Number(a.focused) || LABEL_STYLE[a.kind].rank - LABEL_STYLE[b.kind].rank || b.size - a.size)
-      const placed = new Set<string>()
-      const boxes: { left: number; top: number; right: number; bottom: number }[] = []
-      for (const c of candidates) {
-        const box = labelBox(context, c.kind, c.label, c.x, c.y, c.size)
-        const rect = { left: box.left - LABEL_PAD, top: box.top - LABEL_PAD, right: box.left + box.width + LABEL_PAD, bottom: box.top + box.height + LABEL_PAD }
-        if (boxes.some((o) => rect.left < o.right && rect.right > o.left && rect.top < o.bottom && rect.bottom > o.top)) continue
-        boxes.push(rect)
-        placed.add(c.key)
-      }
-      return placed
+      return placeGreedily(candidates.map((c) => ({ key: c.key, box: paddedBox(context, c.kind, c.label, c.x, c.y, c.size) })))
     }
+
+    // Only a label whose node sits in the map the shell leaves uncovered is
+    // a candidate: one under the sheet or the search isn't on screen, and
+    // mustn't take one of the dozen places.
+    const placePhoneLabels = (context: CanvasRenderingContext2D): Set<string> => {
+      const area = visibleArea(renderer)
+      const selected = selectedNodeIdRef.current
+      const pinned = selected != null ? nodeKey(selected) : centredKeyRef.current
+      const candidates: Parameters<typeof choosePhoneLabels>[0][number][] = []
+      graph.forEachNode((key) => {
+        const display = renderer.getNodeDisplayData(key) as LabelDisplay | undefined
+        if (!display || display.hidden || !display.labelKind || !display.label) return
+        const { x, y } = renderer.framedGraphToViewport(display)
+        if (x < area.left || x > area.right || y < area.top || y > area.bottom) return
+        const weight = labelWeightsRef.current.get(key)
+        candidates.push({
+          key,
+          box: paddedBox(context, display.labelKind, display.label, x, y, renderer.scaleSize(display.size)),
+          rank: {
+            pinned: key === pinned,
+            focused: display.zIndex > 0 && currentFocus != null && focusProgress > 0,
+            kindRank: LABEL_STYLE[display.labelKind].rank,
+            records: weight?.records ?? 0,
+            tracks: weight?.tracks ?? 0,
+            title: display.label,
+          },
+        })
+      })
+      return choosePhoneLabels(candidates)
+    }
+
+    // A phone's placement, kept between frames. Anything that reprocesses
+    // the graph (a sync, a physics tick, the focus fading, a setting) makes
+    // it stale, and so does a camera move; it's placed again on the first
+    // frame the camera isn't moving, at most LABEL_SETTLE_MS after it stops.
+    const LABEL_SETTLE_MS = 120
+    let phonePlaced: Set<string> | null = null
+    let phonePlacedStale = true
+    let cameraSettling = false
+    let cameraSettleTimer: ReturnType<typeof setTimeout> | null = null
+    const phoneLabels = (context: CanvasRenderingContext2D): Set<string> => {
+      if (phonePlaced == null || (phonePlacedStale && !cameraSettling)) {
+        phonePlaced = placePhoneLabels(context)
+        phonePlacedStale = false
+      }
+      return phonePlaced
+    }
+    renderer.on('afterProcess', () => {
+      phonePlacedStale = true
+    })
+    const settleLabelsAfterCameraMove = () => {
+      if (!phoneRef.current) return
+      phonePlacedStale = true
+      cameraSettling = true
+      if (cameraSettleTimer != null) clearTimeout(cameraSettleTimer)
+      cameraSettleTimer = setTimeout(() => {
+        cameraSettleTimer = null
+        cameraSettling = false
+        renderer.scheduleRender()
+      }, LABEL_SETTLE_MS)
+    }
+    renderer.getCamera().on('updated', settleLabelsAfterCameraMove)
 
     const drawLabel: NodeLabelDrawingFunction = (context, data) => {
       const kind = (data as unknown as { labelKind?: LabelKind }).labelKind
       if (!kind || !data.label) return
-      placedLabels ??= placeLabels(context)
-      if (!placedLabels.has(data.key)) return
+      const placed = phoneRef.current ? phoneLabels(context) : (placedLabels ??= placeLabels(context))
+      if (!placed.has(data.key)) return
       const colors = themeColorsRef.current
-      const style = LABEL_STYLE[kind]
+      const style = styleOf(kind)
       const box = labelBox(context, kind, data.label, data.x, data.y, data.size)
       context.font = `${style.weight} ${style.size}px 'Rubik Variable', Rubik, system-ui, sans-serif`
       context.globalAlpha = (data as unknown as { labelAlpha?: number }).labelAlpha ?? 1
@@ -1333,13 +1441,17 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       const colors = themeColorsRef.current
       const color = t > 0 ? mixToward(data.color as string, colors.canvas, (1 - UNFOCUSED_NODE_ALPHA) * t) : (data.color as string)
 
-      // The selected node is named by its card, so it gets no label of its own.
+      // The selected node is named by its card, so it gets no label of its
+      // own. A phone has no card: there the selected node keeps a label,
+      // and the density rule draws it first. A track borrows a record's.
       const selectedId = selectedNodeIdRef.current
       let labelKind: LabelKind | null = null
       if (selectedId == null || node !== nodeKey(selectedId)) {
         if (type === 'artist') labelKind = live.showArtistLabels ? 'artist' : null
         else if (type === 'credit') labelKind = 'credit'
         else if (type === 'release' && currentFocus != null && focusProgress > 0 && currentFocus.keys.has(node)) labelKind = 'release'
+      } else if (phoneRef.current) {
+        labelKind = type === 'artist' || type === 'credit' ? type : 'release'
       }
 
       return {
@@ -1794,12 +1906,14 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     return () => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
+      if (cameraSettleTimer != null) clearTimeout(cameraSettleTimer)
       cancelFocusAnim?.()
       cancelSettleFitAnimRef.current?.()
       applyFocusRef.current = () => {}
       sim.simulation.stop()
       simulationRef.current = null
       renderer.getCamera().off('updated', refreshOnZoom)
+      renderer.getCamera().off('updated', settleLabelsAfterCameraMove)
       renderer.kill()
       rendererRef.current = null
       graphRef.current = null
