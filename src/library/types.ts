@@ -35,6 +35,14 @@ export type ArtistRow = {
   releases: number
 }
 
+/** A producer or engineer (GET /library/credits), on how many tracks. */
+export type CreditRow = {
+  id: number
+  name: string
+  roles: ('producer' | 'engineer')[]
+  tracks: number
+}
+
 export type AlbumSort = 'artist' | 'title' | 'year' | 'dateAdded' | 'recentlyPlayed'
 export type TrackSort = 'title' | 'artist' | 'album' | 'duration' | 'format' | 'dateAdded'
 export type SortDir = 'asc' | 'desc'
@@ -55,3 +63,31 @@ export const TRACK_SORT_OPTIONS: { id: TrackSort; label: string }[] = [
   { id: 'format', label: 'format' },
   { id: 'dateAdded', label: 'date added' },
 ]
+
+/* Words for each direction, by what the field is: names run A–Z, numbers
+ * low to high, dates oldest or newest first. The sort pill and the phone's
+ * sort line both say them. */
+export type SortKind = 'text' | 'number' | 'date'
+
+export function directionLabel(kind: SortKind, dir: SortDir): string {
+  if (kind === 'text') return dir === 'asc' ? 'A–Z' : 'Z–A'
+  if (kind === 'date') return dir === 'asc' ? 'oldest first' : 'newest first'
+  return dir === 'asc' ? 'low to high' : 'high to low'
+}
+
+export const ALBUM_SORT_KIND: Record<AlbumSort, SortKind> = {
+  artist: 'text',
+  title: 'text',
+  year: 'number',
+  dateAdded: 'date',
+  recentlyPlayed: 'date',
+}
+
+export const TRACK_SORT_KIND: Record<TrackSort, SortKind> = {
+  title: 'text',
+  artist: 'text',
+  album: 'text',
+  duration: 'number',
+  format: 'text',
+  dateAdded: 'date',
+}

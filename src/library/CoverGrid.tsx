@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode, type RefObject } from 'react'
-import { useCoverGrid } from './useCoverGrid'
+import { useCoverGrid, type CoverGridOptions } from './useCoverGrid'
 import { CellSkeleton } from './LibrarySkeleton'
 
 /* The albums and artists grids' rows, one copy for both (#302). Each
@@ -9,7 +9,7 @@ import { CellSkeleton } from './LibrarySkeleton'
  * the items there are. What a cell looks like is the caller's: an album's
  * square cover, an artist's round photo. */
 
-type CoverGridProps<Row extends { id: number }> = {
+type CoverGridProps<Row extends { id: number }> = Pick<CoverGridOptions, 'columns' | 'textBlock'> & {
   scrollRef: RefObject<HTMLDivElement | null>
   /** useLibraryPage's sparse rows, `total` long. */
   rows: (Row | undefined)[]
@@ -18,13 +18,31 @@ type CoverGridProps<Row extends { id: number }> = {
   /** Round skeletons, under round photos. */
   round?: boolean
   renderCell: (row: Row) => ReactNode
+  /** The space above the grid: 14px under the desktop's "All albums". */
+  className?: string
 }
 
-export function CoverGrid<Row extends { id: number }>({ scrollRef, rows, total, ensureRange, round, renderCell }: CoverGridProps<Row>) {
-  const { gridRef, columns, items, height, scrollMargin } = useCoverGrid({ scrollRef, total, ensureRange })
+export function CoverGrid<Row extends { id: number }>({
+  scrollRef,
+  rows,
+  total,
+  ensureRange,
+  round,
+  renderCell,
+  columns: fixedColumns,
+  textBlock,
+  className = 'mt-[14px]',
+}: CoverGridProps<Row>) {
+  const { gridRef, columns, items, height, scrollMargin } = useCoverGrid({
+    scrollRef,
+    total,
+    ensureRange,
+    columns: fixedColumns,
+    textBlock,
+  })
 
   return (
-    <div ref={gridRef} className="relative mt-[14px] w-full" style={{ height }}>
+    <div ref={gridRef} className={`relative w-full ${className}`} style={{ height }}>
       {items.map((item) => {
         const start = item.index * columns
         return (

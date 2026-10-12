@@ -13,8 +13,17 @@ import { AlbumsGrid } from './AlbumsGrid'
 import { ArtistsGrid } from './ArtistsGrid'
 import { TracksTable } from './TracksTable'
 import { LibraryEmpty } from './LibraryEmpty'
-import { SortPill, type SortKind } from './SortPill'
-import { ALBUM_SORT_OPTIONS, TRACK_SORT_OPTIONS, type AlbumSort, type SortDir, type TrackRow, type TrackSort } from './types'
+import { SortPill } from './SortPill'
+import {
+  ALBUM_SORT_KIND,
+  ALBUM_SORT_OPTIONS,
+  TRACK_SORT_KIND,
+  TRACK_SORT_OPTIONS,
+  type AlbumSort,
+  type SortDir,
+  type TrackRow,
+  type TrackSort,
+} from './types'
 
 /* The library: the map's other view of the same music, as covers and rows.
  * Issue #126's map/library switch, now in the capsule; laid out from
@@ -50,16 +59,6 @@ const ENTITIES = [
 ] as const satisfies readonly { value: LibraryEntity; label: string }[]
 
 const ARTIST_SORT = [{ id: 'name', label: 'name' }] as const
-
-const ALBUM_KIND: Record<AlbumSort, SortKind> = { artist: 'text', title: 'text', year: 'number', dateAdded: 'date', recentlyPlayed: 'date' }
-const TRACK_KIND: Record<TrackSort, SortKind> = {
-  title: 'text',
-  artist: 'text',
-  album: 'text',
-  duration: 'number',
-  format: 'text',
-  dateAdded: 'date',
-}
 
 type LibraryViewProps = {
   selectedNodeId: number | null
@@ -135,7 +134,7 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
                 options={ALBUM_SORT_OPTIONS}
                 value={albumSort.sort}
                 dir={albumSort.dir}
-                kindOf={(id) => ALBUM_KIND[id]}
+                kindOf={(id) => ALBUM_SORT_KIND[id]}
                 onChange={(sort, dir) => setAlbumSort({ sort, dir })}
               />
             )}
@@ -144,7 +143,7 @@ export function LibraryView({ onOpenNode, playback, settings, updateSettings, fi
                 options={TRACK_SORT_OPTIONS}
                 value={trackSort.sort}
                 dir={trackSort.dir}
-                kindOf={(id) => TRACK_KIND[id]}
+                kindOf={(id) => TRACK_SORT_KIND[id]}
                 onChange={(sort, dir) => setTrackSort({ sort, dir })}
               />
             )}
