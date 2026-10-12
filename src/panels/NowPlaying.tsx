@@ -17,7 +17,7 @@ import { formatBitrate, formatFormat } from './format'
 import { currentLyricIndex, parseSyncedLyrics } from './lyrics'
 import { useFavourite } from './useFavourite'
 import { useLyrics } from './useLyrics'
-import { API, useNodeDetail, type NodeDetail } from './useNodeDetail'
+import { API, performer, release, useNodeDetail, type NodeDetail } from './useNodeDetail'
 import { useReconnectEpoch } from '../connect/reconnect'
 
 /* The right panel while it shows what's playing: the cover, the title, a few
@@ -45,14 +45,6 @@ type NowPlayingProps = {
   onOpenDetails: (id: number) => void
   onShuffleLibrary: () => void
   onShowOnMap: (id: number) => void
-}
-
-function performer(node: NodeDetail) {
-  return node.edges.find((e) => e.direction === 'out' && e.type === 'performed_by') ?? null
-}
-
-function release(node: NodeDetail) {
-  return node.edges.find((e) => e.direction === 'out' && e.type === 'appears_on') ?? null
 }
 
 export function NowPlaying({

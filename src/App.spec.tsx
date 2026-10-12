@@ -198,6 +198,7 @@ describe('App across an outage', () => {
         if (url.endsWith('/auth/status')) return json(200, SIGNED_IN)
         if (url.endsWith('/library-roots')) return json(libraryRoots.status, libraryRoots.body)
         if (url.endsWith('/settings')) return json(200, {})
+        if (url.endsWith('/stats')) return json(200, { albums: 8, artists: 4, tracks: 40 })
         if (url.endsWith('/nodes')) return json(200, graphNodes)
         if (url.endsWith('/edges') || url.endsWith('/scan-jobs')) return json(200, [])
         return json(200, {})
@@ -426,5 +427,30 @@ describe('App across an outage', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // #389: at phone width the same workspace draws the phone layout instead
+  // of the desktop shell, and past it the desktop shell again.
+  it('draws the phone shell at phone width, and the desktop shell past it', async () => {
+    let phone = true
+    const listeners = new Set<() => void>()
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      get matches() {
+        return phone && query === '(max-width: 600px)'
+      },
+      media: query,
+      addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+    }))
+    await mount()
+    expect(container.querySelector('[data-phone-shell]')).not.toBeNull()
+    expect(container.textContent).toContain('Swipe up for 8 albums')
+    expect(harness.railMounts).toBe(0)
+
+    phone = false
+    await act(async () => listeners.forEach((listener) => listener()))
+    await settle()
+    expect(container.querySelector('[data-phone-shell]')).toBeNull()
+    expect(harness.railMounts).toBe(1)
   })
 })

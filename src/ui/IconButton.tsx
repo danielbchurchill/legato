@@ -11,6 +11,12 @@ import type { Placement } from './floating'
  * The label is both the accessible name and the tooltip, so an icon-only
  * control is never unnamed. */
 
+const TONE_CLASSES = {
+  ink: 'text-[var(--color-ink)]',
+  'ink-2': 'text-[var(--color-ink-2)]',
+  'ink-3': 'text-[var(--color-ink-3)]',
+} as const
+
 type IconButtonProps = {
   icon: IconName
   label: string
@@ -20,8 +26,12 @@ type IconButtonProps = {
   /** Solid glyph for an on state that needs more than the wash (a favourite). */
   filled?: boolean
   disabled?: boolean
-  /** Colour of the glyph at rest. Most sit in ink-2; a few quiet ones in ink-3. */
-  tone?: 'ink-2' | 'ink-3'
+  /** Colour of the glyph at rest. Most sit in ink-2; a few quiet ones in
+   * ink-3, and the phone's transport in ink. */
+  tone?: 'ink' | 'ink-2' | 'ink-3'
+  /** The glyph's size, where 0.6 × size would crowd it: the phone's 44px
+   * targets carry the handoff's 20–22px glyphs. */
+  iconSize?: number
   tooltip?: boolean
   tooltipPlacement?: Placement
   shortcut?: string
@@ -42,6 +52,7 @@ export function IconButton({
   filled = false,
   disabled,
   tone = 'ink-2',
+  iconSize,
   tooltip = true,
   tooltipPlacement,
   shortcut,
@@ -60,11 +71,11 @@ export function IconButton({
       className={`inline-flex shrink-0 items-center justify-center transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] disabled:pointer-events-none disabled:opacity-40 ${
         active
           ? 'bg-[var(--color-wash-2)] text-[var(--color-ink)]'
-          : `${tone === 'ink-3' ? 'text-[var(--color-ink-3)]' : 'text-[var(--color-ink-2)]'} hover:bg-[var(--color-wash)] hover:text-[var(--color-ink)]`
+          : `${TONE_CLASSES[tone]} hover:bg-[var(--color-wash)] hover:text-[var(--color-ink)]`
       } ${className}`}
       style={{ width: size, height: size, borderRadius: size / 3.2 }}
     >
-      <Icon name={icon} size={Math.round(size * 0.6)} filled={filled} />
+      <Icon name={icon} size={iconSize ?? Math.round(size * 0.6)} filled={filled} />
     </button>
   )
   return tooltip ? (

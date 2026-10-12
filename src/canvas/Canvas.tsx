@@ -646,6 +646,9 @@ type Props = {
   onRestoreDefaults?: () => void
   /** The map options popover's content, opened from the map toolbar. */
   mapOptions: ReactNode
+  /** The zoom, fit and map options toolbar. The phone layout has none:
+   * pinch and double tap zoom there (#389). */
+  toolbar?: boolean
   /** #136: tells the renderer to re-resolve every colour it draws. */
   theme: ResolvedTheme
 }
@@ -703,6 +706,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     linkDistance,
     onRestoreDefaults,
     mapOptions,
+    toolbar = true,
     theme,
   },
   ref,
@@ -1898,7 +1902,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         )}
       </div>
 
-      {!showEmptyState && <MapToolbar onZoomIn={() => zoomBy('in')} onZoomOut={() => zoomBy('out')} onFit={fitMap} options={mapOptions} />}
+      {!showEmptyState && toolbar && <MapToolbar onZoomIn={() => zoomBy('in')} onZoomOut={() => zoomBy('out')} onFit={fitMap} options={mapOptions} />}
 
       {building ? (
         <FirstScanCard progress={scanStatus.progress} />

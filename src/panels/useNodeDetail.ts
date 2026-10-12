@@ -130,3 +130,13 @@ export function useNodeDetail(nodeId: number | null): NodeDetailState {
 
   return { node, reload: load }
 }
+
+/** A recording's performer: the artist it's performed by. */
+export function performer(node: NodeDetail): Edge | null {
+  return node.edges.find((e) => e.direction === 'out' && e.type === 'performed_by') ?? null
+}
+
+/** A recording's release: the album it appears on. */
+export function release(node: NodeDetail): Edge | null {
+  return node.edges.find((e) => e.direction === 'out' && e.type === 'appears_on') ?? null
+}

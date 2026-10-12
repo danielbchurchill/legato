@@ -173,6 +173,17 @@ The frame's columns are `36px 40px 3fr 2fr 2fr 64px 56px 92px` (#, cover, title,
 
 Still open: switching back to the map doesn't fly the camera to what was opened in the library. The selection carries over, but `flyToNode` does nothing while the map is unmounted. The frame doesn't cover it, so it stays a follow-up.
 
+### The phone layout
+
+Claude Design's "Legato Mobile v2" handoff (#389) is the web client at phone width: 600px or narrower (`src/phone/phoneLayout.ts`). The desktop app's narrowest window is 1100px, so only a browser, or the installed web app on a phone, ever sees it. It's one design for iOS and Android; only system chrome differs, chosen from the user agent. It's being built in steps, and this is what the first one put in place.
+
+- **The map is the ground**, edge to edge, and everything else lives in one glass sheet headed by the mini player. App.tsx draws `PhoneShell` instead of the desktop shell from the same workspace, so crossing the width keeps the queue and whatever is playing.
+- **Over the map:** the search capsule and a settings button, 6px under the status bar, and the node-type chips under them. The chips toggle the map options' own "show" settings, so the map is the same on both layouts. There's no map toolbar: pinch and double tap zoom, and the map options popover is desktop-only for now.
+- **The sheet** (`src/phone/Sheet.tsx`) has three detents. Peek is the header and the line under it. Medium puts the sheet's top 40% of the way down the screen, where the handoff's node frame draws it. Large leaves 64px of map under the status bar, and the map dims under black at 18%, the same in both themes. The header always drags the sheet, and the content drags it as a native sheet's does: up until the sheet is large, then it scrolls; down once the content is back at its top. A release lands on the nearest detent, projected 150ms on at its speed, and anything faster than 0.5px/ms is a flick, which goes to the next detent. It settles on `--ease-spring`, and under reduced motion it snaps. The handle is a button that steps through the detents, and a tap on the dim goes back to peek. The controls over the map fade as the dim comes in, and leave the tab order at large.
+- **Safe areas** come from `env(safe-area-inset-*)`, never a hardcoded status bar, which is why `index.html` sets `viewport-fit=cover`. The installed iOS app keeps its opaque status bar: `black-translucent` would run the map under it too, but it forces white status-bar text in both themes, unreadable on paper.
+- **Pushed pages** (Settings, Library health) go through the browser's history (`src/phone/navigation.ts`), so Android's back gesture and a browser's back button pop them as the page's own back does.
+- **Every tap target is at least 44px.** The 32px chips and the 36px Shuffle library pill each sit in a 44px target.
+
 ### What v2 asked for that isn't built
 
 - **Hover previews.** The handoff assumes an existing preview path; the player has none. The map & motion card keeps the hover setting that exists — focus on hover — under its real name, rather than a switch that does nothing.

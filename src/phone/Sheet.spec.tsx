@@ -1,0 +1,126 @@
+// @vitest-environment jsdom
+import { act, createElement, useState } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Sheet } from './Sheet'
+import type { Detent } from './sheetGeometry'
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const roots: Root[] = []
+
+beforeEach(() => {
+  // jsdom lays nothing out: no ResizeObserver, and every box is 0 tall.
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  )
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({ matches: false, addEventListener: () => undefined, removeEventListener: () => undefined })),
+  )
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(844)
+})
+
+afterEach(() => {
+  act(() => roots.splice(0).forEach((root) => root.unmount()))
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  document.body.innerHTML = ''
+})
+
+function renderSheet(initial: Detent = 'peek') {
+  const changes: Detent[] = []
+  let mounts = 0
+  function Content() {
+    mounts++
+    return <p>the content</p>
+  }
+  function Harness() {
+    const [detent, setDetent] = useState<Detent>(initial)
+    return (
+      <Sheet
+        label="Library and player"
+        detent={detent}
+        onDetentChange={(next) => {
+          changes.push(next)
+          setDetent(next)
+        }}
+        header={<div>the header</div>}
+        peek={<div>the peek line</div>}
+      >
+        <Content />
+      </Sheet>
+    )
+  }
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  roots.push(root)
+  act(() => root.render(createElement(Harness)))
+  return {
+    container,
+    changes,
+    mounts: () => mounts,
+    handle: () => container.querySelector<HTMLButtonElement>('section > div > button')!,
+    sheet: () => container.querySelector<HTMLElement>('section')!,
+  }
+}
+
+describe('Sheet', () => {
+  it('names the sheet, and the handle after it with the detent it is at', () => {
+    const { sheet, handle } = renderSheet()
+    expect(sheet().getAttribute('aria-label')).toBe('Library and player')
+    expect(handle().getAttribute('aria-label')).toBe('Library and player, collapsed')
+  })
+
+  it('steps through the detents from the handle, for a keyboard or a screen reader', () => {
+    const { handle, changes } = renderSheet()
+    act(() => handle().click())
+    expect(handle().getAttribute('aria-label')).toBe('Library and player, half height')
+    act(() => handle().click())
+    expect(handle().getAttribute('aria-label')).toBe('Library and player, full height')
+    act(() => handle().click())
+    expect(changes).toEqual(['medium', 'large', 'peek'])
+  })
+
+  it('waits to mount the content until the sheet first leaves peek, then keeps it', () => {
+    const { container, handle, mounts } = renderSheet()
+    expect(container.textContent).not.toContain('the content')
+    act(() => handle().click())
+    expect(container.textContent).toContain('the content')
+    act(() => handle().click())
+    act(() => handle().click())
+    expect(container.textContent).toContain('the content')
+    expect(mounts()).toBeGreaterThan(0)
+  })
+
+  it('shows the peek line at peek and takes the content out of reach, and the other way round above it', () => {
+    const { container, handle } = renderSheet()
+    const peek = () => container.querySelector<HTMLElement>('section .absolute.inset-x-0.top-0')!
+    const body = () => container.querySelector<HTMLElement>('.overflow-y-auto')!
+    expect(peek().getAttribute('aria-hidden')).toBe('false')
+    expect(body().hasAttribute('inert')).toBe(true)
+    act(() => handle().click())
+    expect(peek().getAttribute('aria-hidden')).toBe('true')
+    expect(body().hasAttribute('inert')).toBe(false)
+  })
+
+  it('places the sheet at its large height and slides it down to the detent', () => {
+    const { sheet } = renderSheet('large')
+    // 844 tall with no safe areas: large leaves 64px of map at the top.
+    expect(sheet().style.height).toBe('780px')
+    expect(sheet().style.transform).toBe('translate3d(0, 0px, 0)')
+  })
+
+  it('lets a tap on the dim at large go back to the map', () => {
+    const { container, changes } = renderSheet('large')
+    const dim = container.querySelector<HTMLElement>('[aria-hidden="true"].absolute.inset-0')!
+    expect(dim.style.pointerEvents).toBe('auto')
+    act(() => dim.click())
+    expect(changes).toEqual(['peek'])
+  })
+})

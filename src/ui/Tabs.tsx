@@ -64,7 +64,8 @@ type TabsProps<T extends string> = {
   bare?: boolean
   /** Segmented heights, overall: 24 (xs), 28 (sm, default), 34 (md — the
    * library header), 36 (lg — the capsule's map/library switch). Underline
-   * tabs ignore it. */
+   * tabs only know lg: the phone sheet's 44px tabs, 15/500 and 24px apart
+   * (#389). At any other size they're the panels' 13px labels. */
   size?: TabsSize
   /** `segmented` only: each option's icon alone, its label kept for screen
    * readers and shown in a tooltip. An option without an icon keeps its
@@ -150,6 +151,8 @@ export function Tabs<T extends string>({
 
   const segmented = variant === 'segmented'
   const iconSize = size === 'lg' ? 18 : 14
+  const sheetTabs = !segmented && size === 'lg'
+  const underlineGap = sheetTabs ? 'gap-[24px]' : 'gap-[20px]'
 
   return (
     <div
@@ -157,7 +160,7 @@ export function Tabs<T extends string>({
       role="tablist"
       aria-label={label}
       className={`relative inline-flex shrink-0 items-center ${
-        segmented ? (bare ? 'gap-[2px] p-[2px]' : 'gap-[2px] rounded-full bg-[var(--color-sunken)] p-[2px]') : 'gap-[20px]'
+        segmented ? (bare ? 'gap-[2px] p-[2px]' : 'gap-[2px] rounded-full bg-[var(--color-sunken)] p-[2px]') : underlineGap
       } ${className}`}
     >
       {indicator && (
@@ -188,9 +191,9 @@ export function Tabs<T extends string>({
             tabIndex={index === focusIndex ? 0 : -1}
             onClick={() => onChange(option.value)}
             onKeyDown={handleKeyDown}
-            className={`relative z-[1] flex items-center gap-[6px] text-[length:var(--text-secondary)] leading-none font-medium whitespace-nowrap transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
-              segmented ? `rounded-full ${iconAlone ? SEGMENT_SQUARE[size] : SEGMENT_HEIGHT[size]}` : 'pb-[9px]'
-            } ${active ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-ink-2)] hover:text-[var(--color-ink)]'}`}
+            className={`relative z-[1] flex items-center gap-[6px] whitespace-nowrap transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
+              sheetTabs ? 'text-heading' : 'text-[length:var(--text-secondary)] leading-none font-medium'
+            } ${segmented ? `rounded-full ${iconAlone ? SEGMENT_SQUARE[size] : SEGMENT_HEIGHT[size]}` : sheetTabs ? 'py-[12px]' : 'pb-[9px]'} ${active ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-ink-2)] hover:text-[var(--color-ink)]'}`}
           >
             {option.icon && <Icon name={option.icon} size={iconSize} />}
             {iconAlone ? <span className="sr-only">{option.label}</span> : option.label}

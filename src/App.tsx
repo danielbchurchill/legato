@@ -52,6 +52,8 @@ import { useReconnectEpoch } from './connect/reconnect'
 import { UnreachableContext, useUnreachableInShell, type UnreachableSurface } from './connect/unreachableSurface'
 import { IS_TAURI } from './config/runtime'
 import { useInstallOffer } from './pwa/installOffer'
+import { usePhoneLayout } from './phone/phoneLayout'
+import { PhoneShell } from './phone/PhoneShell'
 
 // #125: off -> all -> one -> off. The player's single repeat button cycles
 // through this rather than exposing three separate controls.
@@ -198,6 +200,8 @@ function Workspace({
   const canvasRef = useRef<CanvasHandle>(null)
 
   const windowSize = useWindowSize()
+  // #389: at phone width the same workspace draws the phone layout instead.
+  const phone = usePhoneLayout()
   const playerVisible = playback.currentTitle != null
   const layout = useMemo(
     () =>
@@ -417,6 +421,65 @@ function Workspace({
     />
   )
 
+  // The map, for either shell. The phone's has no toolbar: pinch and double
+  // tap zoom it.
+  const renderMap = (toolbar: boolean) => (
+    <Canvas
+      key={rebuildEpoch}
+      ref={canvasRef}
+      selectedNodeId={selectedNodeId}
+      onSelectNode={selectNode}
+      onOpenDetails={() => selectedNodeId != null && openDetails(selectedNodeId)}
+      playback={playback}
+      dimOnHoverEnabled={dimOnHoverEnabled}
+      reducedMotionForced={reducedMotionForced}
+      showArtists={showArtists}
+      showReleases={showReleases}
+      showTracks={showTracks}
+      showCreditNodes={showCreditNodes}
+      showArtistLabels={showArtistLabels}
+      colourEdgesByType={colourEdgesByType}
+      nodeSizeMultipliers={nodeSizeMultipliers}
+      edgeColorOverrides={edgeColorOverrides}
+      nodesLocked={nodesLocked}
+      forceCenterStrength={forceCenterStrength}
+      forceRepelStrength={forceRepelStrength}
+      forceLinkStrength={forceLinkStrength}
+      linkDistance={linkDistance}
+      onRestoreDefaults={mapPresets.restoreDefaults}
+      mapOptions={mapOptions}
+      toolbar={toolbar}
+      theme={resolvedTheme}
+    />
+  )
+
+  if (phone) {
+    // The map is always the phone's ground; the library is a tab in its
+    // sheet. Its first run is the map's: "Add your music" on the bare stage.
+    return (
+      <PhoneShell
+        stage={settingsLoaded && hasLibrary ? renderMap(false) : null}
+        firstRun={settingsLoaded && !hasLibrary ? addMusic : undefined}
+        playback={playback}
+        playingArtist={playingArtist}
+        canShuffle={!unreachable && graph.nodes.some((n) => n.type === 'recording')}
+        onShuffleLibrary={shuffleLibrary}
+        onFocusNode={(id) => {
+          setSelectedNodeId(id)
+          canvasRef.current?.flyToNode(id)
+        }}
+        selectedNodeId={selectedNodeId}
+        settings={settings}
+        updateSettings={updateSettings}
+        themePreference={themePreference}
+        onSetThemePreference={onSetThemePreference}
+        searchOpen={searchOpen}
+        onSearchOpenChange={setSearchOpen}
+        unreachable={unreachable}
+      />
+    )
+  }
+
   return (
     <ShellLayoutContext.Provider value={layout}>
       <AppShell>
@@ -442,32 +505,7 @@ function Workspace({
             </div>
           )
         ) : viewMode === 'map' ? (
-          <Canvas
-            key={rebuildEpoch}
-            ref={canvasRef}
-            selectedNodeId={selectedNodeId}
-            onSelectNode={selectNode}
-            onOpenDetails={() => selectedNodeId != null && openDetails(selectedNodeId)}
-            playback={playback}
-            dimOnHoverEnabled={dimOnHoverEnabled}
-            reducedMotionForced={reducedMotionForced}
-            showArtists={showArtists}
-            showReleases={showReleases}
-            showTracks={showTracks}
-            showCreditNodes={showCreditNodes}
-            showArtistLabels={showArtistLabels}
-            colourEdgesByType={colourEdgesByType}
-            nodeSizeMultipliers={nodeSizeMultipliers}
-            edgeColorOverrides={edgeColorOverrides}
-            nodesLocked={nodesLocked}
-            forceCenterStrength={forceCenterStrength}
-            forceRepelStrength={forceRepelStrength}
-            forceLinkStrength={forceLinkStrength}
-            linkDistance={linkDistance}
-            onRestoreDefaults={mapPresets.restoreDefaults}
-            mapOptions={mapOptions}
-            theme={resolvedTheme}
-          />
+          renderMap(true)
         ) : (
           <LibraryView
             selectedNodeId={selectedNodeId}
