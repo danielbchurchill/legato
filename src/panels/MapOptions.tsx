@@ -7,6 +7,7 @@ import { Button } from '../ui/Button'
 import { MAP_PRESET_IDS, MAP_PRESET_LABELS, type MapPresetId } from '../canvas/mapPresets'
 import type { MapPresetHistory } from '../hooks/useMapPresetHistory'
 import type { Settings } from '../hooks/useSettings'
+import { SHOW, isOn } from './mapShow'
 
 /* The map options popover, opened from the map toolbar. It replaces the
  * shipped Music Map settings panel with the handful of choices that change
@@ -20,25 +21,11 @@ import type { Settings } from '../hooks/useSettings'
 
 const LAYOUTS = MAP_PRESET_IDS.map((id) => ({ value: id, label: MAP_PRESET_LABELS[id] }))
 
-/* The "show" chips. Producers are stored under their older key: hiding
- * them takes them out of the physics as well, which the other three don't. */
-const SHOW = [
-  { key: 'showArtists', label: 'artists', defaultOn: true },
-  { key: 'showReleases', label: 'albums', defaultOn: true },
-  { key: 'showTracks', label: 'tracks', defaultOn: true },
-  { key: 'showCreditNodes', label: 'producers', defaultOn: false },
-] as const
-
 const SWITCHES = [
   { key: 'showArtistLabels', label: 'Artist labels', defaultOn: true },
   { key: 'colourEdgesByType', label: 'Colour edges by type', defaultOn: false },
   { key: 'nodePositionsLocked', label: 'Lock layout', defaultOn: false },
 ] as const
-
-function isOn(settings: Settings, key: string, defaultOn: boolean): boolean {
-  const raw = settings[key]
-  return raw == null ? defaultOn : raw === 'true'
-}
 
 type MapOptionsProps = {
   settings: Settings
