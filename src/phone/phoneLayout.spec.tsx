@@ -102,13 +102,14 @@ describe('phonePlatform', () => {
 })
 
 describe('phoneShellLayout', () => {
-  it('leaves the whole width free and keeps the map clear of the sheet at peek', () => {
-    const layout = phoneShellLayout(390, 844, 205)
+  it('leaves the whole width free and keeps the map clear of the controls and the sheet at peek', () => {
+    const layout = phoneShellLayout(390, 844, 205, 166)
     expect(layout.leftOccupancy).toBe(0)
     expect(layout.rightOccupancy).toBe(0)
     expect(layout.free).toBe(390)
     expect(layout.cx).toBe(195)
     expect(layout.floatingBottom).toBe(205)
+    expect(layout.mapTop).toBe(166)
     // The search palette opens across the phone, 12px in from each side.
     expect(layout.paletteWidth).toBe(366)
     expect(layout.paletteCx).toBe(195)

@@ -23,7 +23,7 @@ import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
 import { choosePhoneLabels, phoneLabelSize, placeGreedily, type LabelBox } from './labelDensity'
 import { TapGuard, isTouchEvent, pinchCameraState, type CameraState, type Point as ScreenPoint } from './touchGestures'
-import { usePhoneWidth } from './usePhoneWidth'
+import { usePhoneLayout } from '../phone/phoneLayout'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
 
@@ -401,6 +401,10 @@ function phoneArea(renderer: Sigma, insets: MapInsets): Area {
   return { left: 0, right: dims.width, top: insets.top, bottom: dims.height - insets.bottom }
 }
 
+function phoneInsets(layout: ShellLayout): MapInsets {
+  return { top: layout.mapTop ?? 0, bottom: layout.floatingBottom }
+}
+
 function centreOf(area: Area): { x: number; y: number } {
   return { x: (area.left + area.right) / 2, y: (area.top + area.bottom) / 2 }
 }
@@ -672,12 +676,12 @@ type Props = {
   theme: ResolvedTheme
   /** The phone layout (Legato Mobile v2): the map runs edge to edge under
    * the shell's floating chrome and sheet, takes touch, draws no node card,
-   * and draws fewer, smaller labels. Defaults to a (max-width: 600px) test. */
+   * and draws fewer, smaller labels. Defaults to usePhoneLayout(). */
   phone?: boolean
   /** On a phone, what the shell's floating search and chips cover at the
    * top and its sheet at the bottom. Fits and flies keep nodes clear of
    * them, and a label under them doesn't count towards the dozen. Defaults
-   * to the safe-area insets. */
+   * to what the phone shell's layout says: its mapTop and floatingBottom. */
   mapInsets?: MapInsets
 }
 
@@ -760,26 +764,18 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const scanStatus = useScanStatus()
   const layout = useShellLayout()
   const layoutRef = useRef(layout)
-  const phoneWidth = usePhoneWidth()
-  const phone = phoneProp ?? phoneWidth
+  const phoneLayout = usePhoneLayout()
+  const phone = phoneProp ?? phoneLayout
   const phoneRef = useRef(phone)
   const mapInsetsRef = useRef(mapInsets)
-  // A phone's map defaults to the safe-area insets, which only CSS knows:
-  // read off this probe's padding when a fit or a fly needs them.
-  const safeAreaProbeRef = useRef<HTMLDivElement>(null)
   // The node centreNodeAbove last centred: on a phone its label draws first.
   const centredKeyRef = useRef<string | null>(null)
 
   // The part of the map the shell leaves uncovered, by layout.
   const visibleArea = useCallback((renderer: Sigma): Area => {
-    if (!phoneRef.current) return freeArea(renderer, layoutRef.current)
-    let insets = mapInsetsRef.current
-    if (!insets) {
-      const probe = safeAreaProbeRef.current
-      const style = probe ? getComputedStyle(probe) : null
-      insets = { top: Number.parseFloat(style?.paddingTop ?? '') || 0, bottom: Number.parseFloat(style?.paddingBottom ?? '') || 0 }
-    }
-    return phoneArea(renderer, insets)
+    const layout = layoutRef.current
+    if (!phoneRef.current) return freeArea(renderer, layout)
+    return phoneArea(renderer, mapInsetsRef.current ?? phoneInsets(layout))
   }, [])
 
   // Cluster membership, recomputed only when the data changes, and the
@@ -2083,23 +2079,12 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const showEmptyState = !loading && nodes.length === 0
   const building = scanStatus.scanning && scanStatus.firstScan
   // On a phone, the map's cards centre in the map the shell leaves showing.
-  const noticeTop = !phone
-    ? undefined
-    : mapInsets
-      ? `calc(50% + ${(mapInsets.top - mapInsets.bottom) / 2}px)`
-      : 'calc(50% + (env(safe-area-inset-top) - env(safe-area-inset-bottom)) / 2)'
-  const noticePlacement = noticeTop != null ? { top: noticeTop } : undefined
+  const insets = mapInsets ?? phoneInsets(layout)
+  const noticePlacement = phone ? { top: `calc(50% + ${(insets.top - insets.bottom) / 2}px)` } : undefined
 
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="absolute inset-0" />
-      {phone && (
-        <div
-          ref={safeAreaProbeRef}
-          aria-hidden="true"
-          className="pointer-events-none invisible absolute top-0 left-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
-        />
-      )}
 
       {/* Above the map's own notices and chrome (z-10): a selection's card
        * must never sit under the first-scan card. */}

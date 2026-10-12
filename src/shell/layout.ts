@@ -332,6 +332,9 @@ export type ShellLayout = {
   paletteCx: number
   /** Where the map's toolbar and legend sit: above the player's row. */
   floatingBottom: number
+  /** The phone's map only: where the controls floating over its top end.
+   * The desktop's map keeps clear of the capsule instead. */
+  mapTop?: number
 }
 
 export function computeShellLayout(

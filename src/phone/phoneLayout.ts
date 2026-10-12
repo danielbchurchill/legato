@@ -40,9 +40,9 @@ export function phonePlatform(userAgent: string = navigator.userAgent): PhonePla
 /* The shell geometry the map's camera, its card, the search palette and the
  * library read (shell/layout.ts), for the phone. Nothing occupies either
  * side, the palette spans the screen less the inset, and the map keeps what
- * it fits clear of the sheet at peek. The camera's top margin is still the
- * desktop capsule's: the map at phone width is step 2's. */
-export function phoneShellLayout(width: number, height: number, sheetPeek: number): ShellLayout {
+ * it fits between the controls floating over its top (mapTop) and the sheet
+ * at peek. */
+export function phoneShellLayout(width: number, height: number, sheetPeek: number, mapTop: number): ShellLayout {
   const desktop = computeShellLayout(width, height, { leftOpen: false, rightOpen: false })
   return {
     ...desktop,
@@ -53,5 +53,6 @@ export function phoneShellLayout(width: number, height: number, sheetPeek: numbe
     paletteWidth: width - 2 * INSET,
     paletteCx: width / 2,
     floatingBottom: sheetPeek,
+    mapTop,
   }
 }
