@@ -22,6 +22,7 @@ import { averageColors, hashCoverUrl, sampleCoverColor } from '../ui/coverColor'
 import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
 import { choosePhoneLabels, phoneLabelSize, placeGreedily, type LabelBox } from './labelDensity'
+import { TapGuard, isTouchEvent, pinchCameraState, type CameraState, type Point as ScreenPoint } from './touchGestures'
 import { usePhoneWidth } from './usePhoneWidth'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
@@ -1564,7 +1565,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     }
     renderer.on('afterRender', drawGlows)
 
-    renderer.on('enterNode', ({ node }) => {
+    // Hover is a mouse's: a finger resting on a node is the start of a tap
+    // or a pan, and nothing would ever end the "hover" it reports.
+    renderer.on('enterNode', ({ node, event }) => {
+      if (isTouchEvent(event.original)) return
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
       const keys = new Set(graph.neighbors(node))
       keys.add(node)
@@ -1631,6 +1635,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     }
 
     renderer.on('downNode', (e) => {
+      // A finger on a node pans the map, as anywhere else; only a mouse
+      // drags a node.
+      if (isTouchEvent(e.event.original)) return
       draggedNode = e.node
       didDrag = false
       downAt = { x: e.event.x, y: e.event.y }
@@ -1654,6 +1661,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     renderer.on('clickNode', (e) => {
       if (didDrag) return
+      if (isTouchEvent(e.event.original) && !tapGuard.allowsTap()) return
       // A real marquee drag that happened to release over a node — see
       // marqueeActive below. Consumed here so the click that sigma still
       // synthesizes for it (its own drag-distance tracking never saw the
@@ -1679,8 +1687,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // node has any other meaning here — panning is a drag, and sigma reports
     // that separately (and a marquee drag is claimed before it ever reaches
     // sigma's own drag tracking — see marqueeActive below).
-    renderer.on('clickStage', () => {
+    renderer.on('clickStage', (e) => {
       if (marqueeActive) return
+      if (isTouchEvent(e.event.original) && !tapGuard.allowsTap()) return
       if (selectedNodeIdRef.current != null) onSelectNodeRef.current(null)
       if (multiSelectedRef.current.length > 0) setMultiSelected([])
     })
@@ -1903,6 +1912,35 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     mouseCaptor.on('mouseup', handleMouseUp)
     mouseCaptor.on('mousedown', handleMouseDown)
 
+    /* Touch (touchGestures.ts). Sigma's captor keeps one-finger panning,
+     * taps, and blocking the page's own scroll and zoom (its canvas is
+     * touch-action: none). Two fingers are taken over here: zoom about the
+     * point between them, no rotation. */
+    const touchCaptor = renderer.getTouchCaptor()
+    const tapGuard = new TapGuard()
+    let pinch: { camera: CameraState; from: [ScreenPoint, ScreenPoint] } | null = null
+    touchCaptor.on('touchdown', (e) => {
+      if (!renderer.getCustomBBox()) renderer.setCustomBBox(renderer.getBBox())
+      // Fresh when every finger on the glass just landed; sigma also
+      // reports a touchdown for the finger left behind when one lifts.
+      tapGuard.down(e.touches, e.original.type === 'touchstart' && e.original.touches.length === e.original.changedTouches.length)
+      pinch = e.touches.length === 2 ? { camera: renderer.getCamera().getState(), from: [e.touches[0], e.touches[1]] } : null
+    })
+    touchCaptor.on('touchmove', (e) => {
+      tapGuard.move(e.touches)
+      if (!pinch || e.touches.length !== 2) return
+      e.preventSigmaDefault()
+      const camera = renderer.getCamera()
+      camera.setState(
+        pinchCameraState(
+          pinch.camera,
+          pinch.from,
+          [e.touches[0], e.touches[1]],
+          (point, cameraState) => renderer.viewportToFramedGraph(point, { cameraState }),
+          (ratio) => camera.getBoundedRatio(ratio),
+        ),
+      )
+    })
 
     return () => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
