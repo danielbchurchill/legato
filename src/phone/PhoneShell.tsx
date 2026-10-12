@@ -6,7 +6,6 @@ import { Button } from '../ui/Button'
 import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { Tabs } from '../ui/Tabs'
 import { plural } from '../ui/format'
-import { LibraryView } from '../library/LibraryView'
 import { useLibraryChanges, useLibraryStats } from '../library/useLibraryChanges'
 import { CollectionsPanel } from '../panels/CollectionsPanel'
 import { NowPlaying } from '../panels/NowPlaying'
@@ -17,6 +16,7 @@ import type { ThemePreference } from '../hooks/useTheme'
 import type { usePlayback } from '../playback/usePlayback'
 import { MAP_CONTROLS_CLEARANCE, MapControls } from './MapControls'
 import { MiniPlayer } from './MiniPlayer'
+import { PhoneLibrary } from './PhoneLibrary'
 import { PhonePages } from './PhonePages'
 import { Sheet } from './Sheet'
 import { pushPhonePage, usePhonePages } from './navigation'
@@ -30,10 +30,11 @@ import type { Detent, DetentHeights } from './sheetGeometry'
  * App.tsx draws this instead of the desktop shell at phone width, from the
  * same state: the same queue, map, settings and search.
  *
- * The sheet's tabs show the desktop's own library view, collections panel
- * and now playing for now; later steps of #389 draw them as the handoff
- * does, and add node detail, search and now playing. Settings and Library
- * health are pushed pages (PhonePages.tsx). */
+ * The library tab is the handoff's own (PhoneLibrary). Collections and up
+ * next show the desktop's collections panel and now playing for now; later
+ * steps of #389 draw them as the handoff does, and add node detail, search
+ * and now playing. Settings and Library health are pushed pages
+ * (PhonePages.tsx). */
 
 type Playback = ReturnType<typeof usePlayback>
 
@@ -82,7 +83,6 @@ export function PhoneShell({
   canShuffle,
   onShuffleLibrary,
   onFocusNode,
-  selectedNodeId,
   settings,
   updateSettings,
   themePreference,
@@ -128,16 +128,10 @@ export function PhoneShell({
 
   const stats = useLibraryStats(useLibraryChanges())
 
+  // Opening an album, an artist or a person selects it and shows it on the
+  // map, as a search result does, until node detail (#389, step 4).
   const content: Record<SheetTab, ReactNode> = {
-    library: (
-      <LibraryView
-        selectedNodeId={selectedNodeId}
-        onOpenNode={showOnMap}
-        playback={playback}
-        settings={settings}
-        updateSettings={updateSettings}
-      />
-    ),
+    library: <PhoneLibrary onOpenNode={showOnMap} playback={playback} noLibrary={firstRun != null} onShowMap={() => setDetent('peek')} />,
     collections: (
       <div className="px-[20px] pt-[14px] pb-[20px]">
         <CollectionsPanel
