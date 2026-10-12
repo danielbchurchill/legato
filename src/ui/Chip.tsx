@@ -9,7 +9,8 @@ import { useTouchLayout } from './touchLayout'
  * in the phone's touch layout (touchLayout.ts).
  *
  * `lg` is the phone library's chip (#389, Legato Mobile v2): 32px with 14px
- * sides, its target stretched to 44px over the gaps around it. */
+ * sides. Its row places its 44px target, since where there's room for one
+ * depends on what's around the row. */
 
 type ChipProps = {
   children: ReactNode
@@ -24,7 +25,7 @@ type ChipProps = {
 
 const SIZE = {
   md: 'h-[28px] px-[12px]',
-  lg: "relative h-[32px] px-[14px] before:absolute before:inset-x-0 before:-inset-y-[6px] before:content-['']",
+  lg: 'h-[32px] px-[14px]',
 }
 
 export function Chip({ children, active = false, count, onClick, className = '', title, size = 'md' }: ChipProps) {

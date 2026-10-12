@@ -70,6 +70,10 @@ const GRID_GAPS = { '--library-row-gap': '16px', '--library-column-gap': '14px' 
 /* A 36px button's 44px target. */
 const TARGET = "relative before:absolute before:inset-x-0 before:-inset-y-[4px] before:content-['']"
 
+/* A chip's target: 13px above it, none below, 45px in all. A pixel over
+ * 44, because the row under it takes the edge they share. */
+const CHIP_TARGET = "relative before:absolute before:inset-x-0 before:-top-[13px] before:bottom-0 before:content-['']"
+
 /* Artists and people sort by name alone, as the desktop's artists do. */
 const BY_NAME = [{ id: 'name', label: 'name' }] as const
 
@@ -118,13 +122,14 @@ export function PhoneLibrary({ onOpenNode, playback, noLibrary, onShowMap }: Pho
 
   return (
     <div className="absolute inset-0 flex flex-col">
-      {/* A row that scrolls sideways if a narrow phone can't fit all four,
-       * padded so each chip's 44px target isn't clipped. The frame's row is
-       * 14px under the tabs and 34px tall, its outlined chips' borders
-       * outside their 32px, so the chips sit 1px into it. */}
-      <div role="group" aria-label="Show" className="scrollbar-none flex shrink-0 gap-[6px] overflow-x-auto px-[16px] pt-[15px] pb-[7px]">
+      {/* A row that scrolls sideways if a narrow phone can't fit all four.
+       * The frame's chips are 15px under the tabs (its outlined ones are
+       * 34px, their borders outside the 32). Each chip's target takes 13px
+       * of that gap, so the sort line under it has a whole row of its own:
+       * the frame leaves 43px between the chips and the grid. */}
+      <div role="group" aria-label="Show" className="scrollbar-none flex shrink-0 gap-[6px] overflow-x-auto px-[16px] pt-[15px]">
         {ENTITIES.map((value) => (
-          <Chip key={value} size="lg" active={value === entity} onClick={() => setEntity(value)}>
+          <Chip key={value} size="lg" active={value === entity} onClick={() => setEntity(value)} className={CHIP_TARGET}>
             {value}
           </Chip>
         ))}
@@ -139,9 +144,11 @@ export function PhoneLibrary({ onOpenNode, playback, noLibrary, onShowMap }: Pho
 
 /* "312 albums · recently added", with the sort glyph at the end, as the
  * frame draws it. The line opens the desktop's sort list (SortPill), and
- * choosing the active order again flips it, as there. Its target reaches
- * 6px up, to meet the chips' own, and 20px down into the layout's top, so
- * it's 44px tall without taking any of theirs. */
+ * choosing the active order again flips it, as there. It's a 45px row,
+ * a pixel over 44 for the edge the grid's scroller takes, with the text
+ * where the frame centres it. The frame's 12px over the grid is inside
+ * it, so the grid starts 2px lower than the frame's, and no target
+ * covers another. */
 function SortLine<T extends string>({
   count,
   options,
@@ -160,7 +167,7 @@ function SortLine<T extends string>({
   const label = options.find((o) => o.id === value)?.label ?? ''
   const text = `${count} · ${orderWords(label, kindOf(value), dir)}`
   return (
-    <div className="flex shrink-0 px-[20px] pt-[6px]">
+    <div className="flex shrink-0 px-[20px]">
       <SortPill
         large
         options={options}
@@ -173,7 +180,7 @@ function SortLine<T extends string>({
             type="button"
             {...props}
             aria-label={`Sort: ${text}`}
-            className={`relative z-[1] flex h-[18px] w-full items-center justify-between gap-[12px] text-small before:absolute before:inset-x-0 before:-top-[6px] before:-bottom-[20px] before:content-[''] ${
+            className={`flex h-[45px] w-full items-center justify-between gap-[12px] text-small ${
               open ? 'text-[var(--color-ink)]' : 'text-[var(--color-ink-2)]'
             }`}
           >
@@ -193,14 +200,14 @@ function orderWords(label: string, kind: SortKind, dir: SortDir): string {
   return `${label} ${directionLabel(kind, dir)}`
 }
 
-/* The layout's scroller, under the sort line. Its 12px top padding is the
- * frame's; the bottom clears the home indicator and a little more. */
+/* The layout's scroller, under the sort line. Its bottom clears the home
+ * indicator and a little more. */
 function Scroller({ scrollRef, label, children }: { scrollRef: RefObject<HTMLDivElement | null>; label: string; children: ReactNode }) {
   return (
     <div
       ref={scrollRef}
       aria-label={label}
-      className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-[16px] pt-[12px] pb-[calc(env(safe-area-inset-bottom)+24px)]"
+      className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-[16px] pb-[calc(env(safe-area-inset-bottom)+24px)]"
     >
       {children}
     </div>
