@@ -11,7 +11,6 @@ import { MOD_KEY_LABEL } from '../shell/keys'
 import { Progress } from '../ui/Progress'
 import { Skeleton, Shimmer } from '../ui/Skeleton'
 import { AlertDialog } from '../ui/Dialog'
-import { useToast } from '../ui/toastContext'
 import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
@@ -29,6 +28,7 @@ import { StreamQualityRow } from './StreamQualityRow'
 import { NeverRelayRow } from './NeverRelayRow'
 import { LegatoAccountRow } from './LegatoAccountRow'
 import { ServingGroup } from './ServingGroup'
+import { useRebuildMap } from './useRebuildMap'
 import { deviceForSaved, type AudioDevice } from '../playback/audioDevices'
 
 /* Settings, as v2's stack of cards: appearance, library, playback, map &
@@ -281,9 +281,7 @@ export function LegatoSettings({
   // Outside Tauri there's no native output to list, so it starts empty
   // instead of being emptied by the effect below.
   const [devices, setDevices] = useState<AudioDevice[] | null>(IS_TAURI ? null : [])
-  const [confirmingRebuild, setConfirmingRebuild] = useState(false)
-  const [rebuilding, setRebuilding] = useState(false)
-  const toast = useToast()
+  const rebuildMap = useRebuildMap()
 
   const loadRoots = () => {
     fetch(`${API}/library-roots`)
@@ -435,35 +433,6 @@ export function LegatoSettings({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ libraryRootId: id, mode: 'incremental' }),
     })
-  }
-
-  // #46 — regenerates the whole graph's layout (fresh seed jitter, every
-  // manually-placed node's pin cleared) without touching the library on
-  // disk. The server broadcasts "layout:rebuilt" when it's done, which is
-  // what actually moves the running canvas (App.tsx remounts it) — this
-  // just fires the request and clears the local "in progress" state once
-  // the response comes back, same division of labor rescanRoot above
-  // already has with scan:done.
-  //
-  // The outcome is a toast (gpui-kit port): the button's own "rebuilding…"
-  // shimmer says the work is under way, but once it stops there was nothing
-  // saying whether it worked — the canvas remounting behind a panel reads
-  // the same as nothing happening.
-  const rebuildMap = async () => {
-    setConfirmingRebuild(false)
-    setRebuilding(true)
-    try {
-      const res = await fetch(`${API}/layout/rebuild`, { method: 'POST' })
-      toast.show(
-        res.ok
-          ? { title: 'map rebuilt', description: 'every node has a fresh place on the canvas.' }
-          : { title: "couldn't rebuild the map", description: `legato-server answered ${res.status}.` },
-      )
-    } catch {
-      toast.show({ title: "couldn't rebuild the map", description: "couldn't reach legato-server." })
-    } finally {
-      setRebuilding(false)
-    }
   }
 
   // Key/semantics match server/src/enrich/queue.ts's isEnrichmentEnabled —
@@ -747,21 +716,14 @@ export function LegatoSettings({
         </SettingsRow>
         <div className="pt-[2px]">
           {/* The rebuild confirmation was an inline paragraph in this row;
-           * an AlertDialog since the gpui-kit port, same sentence. While it
-           * runs, the label shimmers — an indeterminate, often multi-second
-           * wait (DESIGN.md Motion, "Indeterminate and long"). */}
-          <Button variant="secondary" onClick={() => setConfirmingRebuild(true)} disabled={rebuilding}>
-            {rebuilding ? <Shimmer>Rebuilding…</Shimmer> : 'Rebuild map layout'}
+           * an AlertDialog since the gpui-kit port, same sentence
+           * (useRebuildMap.tsx). While it runs, the label shimmers — an
+           * indeterminate, often multi-second wait (DESIGN.md Motion,
+           * "Indeterminate and long"). */}
+          <Button variant="secondary" onClick={rebuildMap.ask} disabled={rebuildMap.rebuilding}>
+            {rebuildMap.rebuilding ? <Shimmer>Rebuilding…</Shimmer> : 'Rebuild map layout'}
           </Button>
-          <AlertDialog
-            open={confirmingRebuild}
-            onCancel={() => setConfirmingRebuild(false)}
-            onConfirm={() => void rebuildMap()}
-            title="rebuild the map"
-            description="Every node gets freshly placed, including anywhere you've dragged one — that placement is gone. Your library on disk is untouched."
-            confirmLabel="Rebuild"
-            destructive
-          />
+          {rebuildMap.dialog}
         </div>
       </SettingsGroup>
 
