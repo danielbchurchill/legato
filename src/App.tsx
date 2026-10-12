@@ -9,7 +9,7 @@ import { GraphDataProvider } from './canvas/graphData'
 import { useGraph } from './canvas/graphContext'
 import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
 import { resolveNodeSizeMultipliers } from './canvas/nodeTypes'
-import { usePlayback } from './playback/usePlayback'
+import { NEXT_REPEAT_MODE, usePlayback } from './playback/usePlayback'
 import { AppShell } from './shell/AppShell'
 import { Rail } from './shell/Rail'
 import { ConnectionIndicator } from './shell/ConnectionIndicator'
@@ -55,14 +55,6 @@ import { useInstallOffer } from './pwa/installOffer'
 import { usePhoneLayout } from './phone/phoneLayout'
 import { PhoneShell } from './phone/PhoneShell'
 import { closePhoneNode, openPhoneNode } from './phone/nodeDetail'
-
-// #125: off -> all -> one -> off. The player's single repeat button cycles
-// through this rather than exposing three separate controls.
-const NEXT_REPEAT_MODE: Record<RepeatMode, RepeatMode> = {
-  off: 'all',
-  all: 'one',
-  one: 'off',
-}
 
 /* "Shuffle library" queues this many tracks at most. The whole library would
  * mean resolving thousands of files before the first note; a few hundred is
