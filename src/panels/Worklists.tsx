@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { CoverArt } from '../ui/CoverArt'
 import { StatusDot, type Status } from '../ui/StatusDot'
 import { TextField } from '../ui/TextField'
+import { useTouchLayout } from '../ui/touchLayout'
 import { formatCount, formatDuration, NO_VALUE } from '../ui/format'
 import { BackRow } from '../shell/SidePanel'
 import type { WorklistKind } from '../shell/panels'
@@ -34,24 +35,42 @@ type WorklistProps = {
   kind: WorklistKind
   gapField: GapField
   onGapFieldChange: (field: GapField) => void
-  onBack: () => void
+  /** Omitted on the phone (#389), where a worklist is a pushed page whose
+   * top bar carries the way back and the title, so neither is drawn here. */
+  onBack?: () => void
   onFocusNode: (id: number) => void
 }
 
+/* False when the page around the worklist already names it. */
+const TitledContext = createContext(true)
+
 export function Worklist({ kind, gapField, onGapFieldChange, onBack, onFocusNode }: WorklistProps) {
   return (
-    <div className="flex flex-col">
-      <BackRow label="Library health" onBack={onBack} />
-      {kind === 'duplicates' && <Duplicates onFocusNode={onFocusNode} />}
-      {kind === 'missing' && <MissingFiles onFocusNode={onFocusNode} />}
-      {kind === 'enrichment' && <EnrichmentToConfirm onFocusNode={onFocusNode} />}
-      {kind === 'tag-writes' && <TagWrites />}
-      {kind === 'gaps' && <MetadataGaps field={gapField} onFieldChange={onGapFieldChange} onFocusNode={onFocusNode} />}
-    </div>
+    <TitledContext.Provider value={onBack != null}>
+      <div className="flex flex-col">
+        {onBack && <BackRow label="Library health" onBack={onBack} />}
+        {kind === 'duplicates' && <Duplicates onFocusNode={onFocusNode} />}
+        {kind === 'missing' && <MissingFiles onFocusNode={onFocusNode} />}
+        {kind === 'enrichment' && <EnrichmentToConfirm onFocusNode={onFocusNode} />}
+        {kind === 'tag-writes' && <TagWrites />}
+        {kind === 'gaps' && <MetadataGaps field={gapField} onFieldChange={onGapFieldChange} onFocusNode={onFocusNode} />}
+      </div>
+    </TitledContext.Provider>
   )
 }
 
 function Heading({ title, count, children }: { title: string; count: number | null; children: ReactNode }) {
+  const titled = useContext(TitledContext)
+  if (!titled) {
+    return (
+      <div className="mt-[4px] mb-[14px] flex items-start justify-between gap-[12px]">
+        <p className="text-[length:var(--text-secondary)] leading-[18px] [text-wrap:pretty] text-[var(--color-ink-2)]">{children}</p>
+        {count != null && (
+          <span className="mono pt-[1px] text-[length:var(--text-mono)] text-[var(--color-ink-2)]">{formatCount(count)}</span>
+        )}
+      </div>
+    )
+  }
   return (
     <>
       <div className="flex min-h-[36px] items-start justify-between gap-[8px]">
@@ -163,6 +182,7 @@ function Duplicates({ onFocusNode }: { onFocusNode: (id: number) => void }) {
 type LibraryRoot = { id: number; path: string }
 
 function MissingFiles({ onFocusNode }: { onFocusNode: (id: number) => void }) {
+  const touch = useTouchLayout()
   const { data } = useWorklist()
   const [roots, setRoots] = useState<LibraryRoot[]>([])
   const [rescanned, setRescanned] = useState<number | null>(null)
@@ -203,9 +223,10 @@ function MissingFiles({ onFocusNode }: { onFocusNode: (id: number) => void }) {
               <button
                 type="button"
                 onClick={() => onFocusNode(item.nodeId)}
-                className="min-w-0 flex-1 truncate text-left text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]"
+                className={`min-w-0 flex-1 text-left text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)] ${touch ? 'touch-target' : ''}`}
               >
-                {item.nodeTitle}
+                {/* Truncated inside, so the touch target isn't clipped. */}
+                <span className="block truncate">{item.nodeTitle}</span>
               </button>
               <span className="shrink-0 text-small text-[var(--color-ink-2)]">
                 {item.type === 'missing_file' ? `since ${formatWhen(item.missingSince) ?? NO_VALUE}` : "won't decode"}
@@ -260,6 +281,7 @@ function EnrichmentItem({
   onDone: () => void
   onFocusNode: (id: number) => void
 }) {
+  const touch = useTouchLayout()
   const graph = useGraph()
   const [candidates, setCandidates] = useState<Candidate[] | null>(null)
   const [chosen, setChosen] = useState<string | null>(null)
@@ -286,7 +308,11 @@ function EnrichmentItem({
   const subtitle = graph.byId.get(item.nodeId)?.subtitle
   return (
     <Card>
-      <button type="button" onClick={() => onFocusNode(item.nodeId)} className="flex min-w-0 flex-col text-left">
+      <button
+        type="button"
+        onClick={() => onFocusNode(item.nodeId)}
+        className={`flex min-w-0 flex-col text-left ${touch ? 'touch-target' : ''}`}
+      >
         <span className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">{item.nodeTitle}</span>
         {(subtitle || item.note) && (
           <span className="text-small [overflow-wrap:anywhere] text-[var(--color-ink-2)]">{subtitle ?? item.note}</span>
@@ -540,6 +566,7 @@ function MetadataGaps({
   onFieldChange: (f: GapField) => void
   onFocusNode: (id: number) => void
 }) {
+  const touch = useTouchLayout()
   const counts = useGapCounts()
   const { data: rows, reload } = useGapRows(field)
   const [editing, setEditing] = useState<number | null>(null)
@@ -584,7 +611,9 @@ function MetadataGaps({
       <Heading title="Metadata gaps" count={rows ? rows.length : null}>
         Tracks missing a tag the map and the library use. Anything you add waits under Tag writes until you write it.
       </Heading>
-      <div className="flex flex-wrap gap-[6px]">
+      {/* Rows of chips far enough apart that their 44px targets don't
+       * overlap, in the phone's touch layout. */}
+      <div className={`flex flex-wrap ${touch ? 'gap-x-[6px] gap-y-[16px]' : 'gap-[6px]'}`}>
         {GAP_FIELDS.map((gap) => (
           <Chip key={gap.field} active={gap.field === field} count={counts?.[gap.field]} onClick={() => onFieldChange(gap.field)}>
             {gap.chip}
@@ -598,7 +627,11 @@ function MetadataGaps({
             className={`flex flex-col rounded-[var(--radius-control)] px-[8px] ${editing === row.id ? 'bg-[var(--color-wash)] pb-[10px]' : ''}`}
           >
             <div className="flex h-[48px] items-center gap-[10px]">
-              <button type="button" onClick={() => onFocusNode(row.id)} className="flex min-w-0 flex-1 flex-col text-left">
+              <button
+                type="button"
+                onClick={() => onFocusNode(row.id)}
+                className={`flex min-w-0 flex-1 flex-col text-left ${touch ? 'touch-target' : ''}`}
+              >
                 <span
                   title={row.title}
                   className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]"
