@@ -12,7 +12,7 @@
 // covers all five compile targets including both Linux ones (a headless
 // install from the install script, #108, has no apt/system ffmpeg
 // guarantee the way the Docker image does), and writes to a different destination. Some sources overlap
-// (evermeet.cx, osxexperts.net, gyan.dev, chromaprint's GitHub releases)
+// (osxexperts.net, gyan.dev, chromaprint's GitHub releases)
 // but each fetch here is independent so neither script can break the
 // other by being edited.
 //
@@ -28,8 +28,18 @@
 //   evermeet.cx exists). sha256-checked against a pinned reference, soft
 //   warning only on mismatch — this source's URL is unversioned and drifts.
 //
-// ffmpeg / darwin-x64-baseline — evermeet.cx, GPG-signed against the
-//   maintainer's published key, same as fetch-media-binaries.mjs.
+// ffmpeg / darwin-x64-baseline — osxexperts.net's Intel build
+//   (ffmpeg80intel.zip, ffmpeg 8.0), sha256-checked against the hash the
+//   site publishes for the extracted binary, which is pinned below and was
+//   matched by hand on 2026-10-12. Unlike the arm64 build, a mismatch here
+//   fails the release: this URL names its version, so a different hash
+//   means a different file, not a newer build.
+//   It was evermeet.cx, GPG-signed, as fetch-media-binaries.mjs still uses
+//   for local packaging. The first v0.1.0 release run failed three times on
+//   it: evermeet.cx redirects downloads to a mirror that answers a second
+//   request from the same address with HTTP 429 for minutes on end, and the
+//   signature is always the second request. A release runner can't wait
+//   that out, so the release takes the source it can rely on.
 //
 // ffmpeg / windows-x64-baseline — gyan.dev's release-essentials build,
 //   sha256-checked against its own published checksum, same as
@@ -61,20 +71,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const OUT_DIR = path.join(REPO_ROOT, "server", "dist");
 
-const EVERMEET_KEY_FINGERPRINT = "20F6EA3E0CFD6B4C53447A73476C4B611A660874";
 
 // Same reference hash and same reasoning as fetch-media-binaries.mjs — see
 // that file's header comment for how/when this was captured.
 const OSXEXPERTS_FFMPEG_ARM64_URL = "https://www.osxexperts.net/ffmpeg9arm.zip";
 const OSXEXPERTS_FFMPEG_ARM64_SHA256 = "591260c945d0eef150e3bf82b0ef988bd36a9cecc18ff05d6679617159f0a95e";
+// The hash osxexperts.net publishes for ffmpeg80intel.zip's extracted
+// binary, matched against a real download on 2026-10-12.
+const OSXEXPERTS_FFMPEG_X64_URL = "https://www.osxexperts.net/ffmpeg80intel.zip";
+const OSXEXPERTS_FFMPEG_X64_SHA256 = "df3f1e3facdc1ae0ad0bd898cdfb072fbc9641bf47b11f172844525a05db8d11";
 
 const RELEASE_TARGETS = ["linux-x64-baseline", "linux-arm64", "darwin-arm64", "darwin-x64-baseline", "windows-x64-baseline"];
 const WINDOWS_TARGETS = new Set(["windows-x64-baseline"]);
 const exeSuffix = (target) => (WINDOWS_TARGETS.has(target) ? ".exe" : "");
-
-function haveCommand(cmd) {
-  return !spawnSync(cmd, ["--version"], { stdio: "ignore" }).error;
-}
 
 // The release's first run (v0.1.0) died on one HTTP 429 from evermeet.cx:
 // these hosts rate-limit GitHub's shared runner addresses, and a single
@@ -149,60 +158,20 @@ async function findFile(root, basename) {
   return null;
 }
 
-async function verifyEvermeetSignature(zipPath, sigPath, workDir) {
-  if (!haveCommand("gpg")) {
-    console.warn("  [warn] gpg not found on PATH — skipping signature verification for the evermeet.cx build.");
-    return;
-  }
-  const gnupgHome = path.join(workDir, "gnupg");
-  await mkdir(gnupgHome, { recursive: true, mode: 0o700 });
-  const recv = spawnSync(
-    "gpg",
-    ["--batch", "--homedir", gnupgHome, "--keyserver", "hkps://keys.openpgp.org", "--recv-keys", EVERMEET_KEY_FINGERPRINT],
-    { encoding: "utf8" },
-  );
-  if (recv.status !== 0) {
-    console.warn(`  [warn] could not fetch evermeet.cx's signing key — skipping signature verification. ${(recv.stderr ?? "").trim()}`);
-    return;
-  }
-  const verify = spawnSync("gpg", ["--batch", "--status-fd", "1", "--homedir", gnupgHome, "--verify", sigPath, zipPath], {
-    encoding: "utf8",
-  });
-  const output = `${verify.stdout ?? ""}${verify.stderr ?? ""}`;
-  const good = verify.status === 0 && output.includes("GOODSIG") && output.includes(EVERMEET_KEY_FINGERPRINT);
-  if (!good) throw new Error(`evermeet.cx GPG signature verification FAILED — refusing to use this download.\n${output}`);
-  console.log("  [ok] evermeet.cx GPG signature verified against pinned key fingerprint");
-}
-
-async function fetchFfmpegEvermeet(workDir) {
-  console.log("  source: evermeet.cx (official, GPG-signed)");
-  const info = JSON.parse(await fetchText("https://evermeet.cx/ffmpeg/info/ffmpeg/release"));
-  const zipUrl = info.download.zip.url;
-  const sigUrl = info.download.zip.sig;
-  console.log(`  fetching ffmpeg ${info.version} from ${zipUrl}`);
-  const zipPath = path.join(workDir, "ffmpeg-evermeet.zip");
-  const sigPath = `${zipPath}.sig`;
-  await download(zipUrl, zipPath);
-  await download(sigUrl, sigPath);
-  await verifyEvermeetSignature(zipPath, sigPath, workDir);
-  const extractDir = path.join(workDir, "extracted");
-  await extractArchive(zipPath, extractDir);
-  const bin = await findFile(extractDir, "ffmpeg");
-  if (!bin) throw new Error("evermeet.cx zip did not contain an 'ffmpeg' binary");
-  return bin;
-}
-
-async function fetchFfmpegOsxExperts(workDir) {
+async function fetchFfmpegOsxExperts(workDir, { url, sha256, strict }) {
   console.log("  source: osxexperts.net (community, sha256-checked)");
+  console.log(`  fetching ${url}`);
   const zipPath = path.join(workDir, "ffmpeg-osxexperts.zip");
-  await download(OSXEXPERTS_FFMPEG_ARM64_URL, zipPath);
+  await download(url, zipPath);
   const extractDir = path.join(workDir, "extracted");
   await extractArchive(zipPath, extractDir);
   const bin = await findFile(extractDir, "ffmpeg");
   if (!bin) throw new Error("osxexperts.net zip did not contain an 'ffmpeg' binary");
   const actual = await hashFile("sha256", bin);
-  if (actual === OSXEXPERTS_FFMPEG_ARM64_SHA256) {
+  if (actual === sha256) {
     console.log("  [ok] sha256 matches the reference");
+  } else if (strict) {
+    throw new Error(`${url}: the extracted ffmpeg's sha256 is ${actual}, not the published ${sha256}`);
   } else {
     console.warn(`  [warn] sha256 mismatch against the pinned reference — osxexperts.net's unversioned URL likely shipped a newer build.`);
   }
@@ -269,8 +238,10 @@ async function place(sourcePath, target, binaryName) {
 }
 
 const FFMPEG_FETCHERS = {
-  "darwin-arm64": fetchFfmpegOsxExperts,
-  "darwin-x64-baseline": fetchFfmpegEvermeet,
+  "darwin-arm64": (workDir) =>
+    fetchFfmpegOsxExperts(workDir, { url: OSXEXPERTS_FFMPEG_ARM64_URL, sha256: OSXEXPERTS_FFMPEG_ARM64_SHA256, strict: false }),
+  "darwin-x64-baseline": (workDir) =>
+    fetchFfmpegOsxExperts(workDir, { url: OSXEXPERTS_FFMPEG_X64_URL, sha256: OSXEXPERTS_FFMPEG_X64_SHA256, strict: true }),
   "windows-x64-baseline": fetchFfmpegGyan,
   "linux-x64-baseline": (workDir) => fetchFfmpegJohnVanSickle(workDir, "amd64"),
   "linux-arm64": (workDir) => fetchFfmpegJohnVanSickle(workDir, "arm64"),
