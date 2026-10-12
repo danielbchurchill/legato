@@ -280,7 +280,10 @@ function FavouriteTile({ item, onOpen }: { item: Favourite; onOpen: () => void }
   )
 }
 
-function EmptyCollections({ onNew, onImport }: { onNew: () => void; onImport: () => void }) {
+/* Shared with the phone's collections tab (#389), whose buttons are 36px
+ * (`large`), in the tab's touch layout. */
+export function EmptyCollections({ onNew, onImport, large = false }: { onNew: () => void; onImport: () => void; large?: boolean }) {
+  const size = large ? 'lg' : 'md'
   return (
     <div className="flex flex-col items-center gap-[10px] px-[12px] pt-[48px] text-center">
       <span aria-hidden="true" className="grid size-[64px] grid-cols-2 overflow-hidden rounded-[10px] shadow-[var(--shadow-art-edge)]">
@@ -295,10 +298,10 @@ function EmptyCollections({ onNew, onImport }: { onNew: () => void; onImport: ()
         <Icon name="heart" size={13} className="relative top-[2px]" /> and it collects here.
       </span>
       <div className="mt-[6px] flex gap-[8px]">
-        <Button variant="primary" onClick={onNew}>
+        <Button variant="primary" size={size} onClick={onNew}>
           New playlist
         </Button>
-        <Button variant="secondary" onClick={onImport}>
+        <Button variant="secondary" size={size} onClick={onImport}>
           Import .m3u
         </Button>
       </div>

@@ -1,14 +1,12 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AppShell } from '../shell/AppShell'
 import { ShellLayoutContext, useWindowSize } from '../shell/layout'
-import type { LeftView, NowPlayingTab } from '../shell/panels'
+import type { NowPlayingTab } from '../shell/panels'
 import { Button } from '../ui/Button'
 import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { Tabs } from '../ui/Tabs'
 import { plural } from '../ui/format'
-import { LibraryView } from '../library/LibraryView'
 import { useLibraryChanges, useLibraryStats } from '../library/useLibraryChanges'
-import { CollectionsPanel } from '../panels/CollectionsPanel'
 import { NowPlaying } from '../panels/NowPlaying'
 import { SearchPalette } from '../search/SearchPalette'
 import { ServerUnreachableOverShell, type UnreachableView } from '../connect/ServerUnreachable'
@@ -17,9 +15,11 @@ import type { ThemePreference } from '../hooks/useTheme'
 import type { usePlayback } from '../playback/usePlayback'
 import { MAP_CONTROLS_CLEARANCE, MapControls } from './MapControls'
 import { MiniPlayer } from './MiniPlayer'
+import { PhoneCollections } from './PhoneCollections'
+import { PhoneLibrary } from './PhoneLibrary'
 import { PhonePages } from './PhonePages'
 import { Sheet } from './Sheet'
-import { pushPhonePage, usePhonePages } from './navigation'
+import { closeSheetView, openSheetView, pushPhonePage, usePhonePages, useSheetView } from './navigation'
 import { phonePlatform, phoneShellLayout } from './phoneLayout'
 import { useSafeArea } from './safeArea'
 import type { Detent, DetentHeights } from './sheetGeometry'
@@ -30,10 +30,11 @@ import type { Detent, DetentHeights } from './sheetGeometry'
  * App.tsx draws this instead of the desktop shell at phone width, from the
  * same state: the same queue, map, settings and search.
  *
- * The sheet's tabs show the desktop's own library view, collections panel
- * and now playing for now; later steps of #389 draw them as the handoff
- * does, and add node detail, search and now playing. Settings and Library
- * health are pushed pages (PhonePages.tsx). */
+ * The library and collections tabs are the handoff's own (PhoneLibrary,
+ * PhoneCollections). Up next shows the desktop's now playing for now; later
+ * steps of #389 draw it as the handoff does, and add node detail, search
+ * and now playing. Settings and Library health are pushed pages
+ * (PhonePages.tsx). */
 
 type Playback = ReturnType<typeof usePlayback>
 
@@ -82,7 +83,6 @@ export function PhoneShell({
   canShuffle,
   onShuffleLibrary,
   onFocusNode,
-  selectedNodeId,
   settings,
   updateSettings,
   themePreference,
@@ -91,9 +91,11 @@ export function PhoneShell({
   onSearchOpenChange,
   unreachable,
 }: PhoneShellProps) {
-  const [detent, setDetent] = useState<Detent>('peek')
-  const [tab, setTab] = useState<SheetTab>('library')
-  const [collectionsView, setCollectionsView] = useState<LeftView>({ kind: 'collections' })
+  // A view open in the collections tab is in the history, so after a
+  // reload the sheet opens on it, as a pushed page stays open.
+  const sheetView = useSheetView()
+  const [detent, setDetent] = useState<Detent>(() => (sheetView ? 'large' : 'peek'))
+  const [tab, setTab] = useState<SheetTab>(() => (sheetView ? 'collections' : 'library'))
   const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('next')
   const [peekHeight, setPeekHeight] = useState(0)
   const pages = usePhonePages()
@@ -126,28 +128,21 @@ export function PhoneShell({
     [onFocusNode],
   )
 
+  // Leaving the collections tab leaves whatever was open in it, so the
+  // system back never closes something out of sight.
+  const changeTab = (next: SheetTab) => {
+    if (next !== 'collections') closeSheetView()
+    setTab(next)
+  }
+
   const stats = useLibraryStats(useLibraryChanges())
 
+  // Opening an album, an artist or a person selects it and shows it on the
+  // map, as a search result does, until node detail (#389, step 4).
+  // TODO(#389 step 4): open them with openPhoneNode(id), src/phone/nodeDetail.ts.
   const content: Record<SheetTab, ReactNode> = {
-    library: (
-      <LibraryView
-        selectedNodeId={selectedNodeId}
-        onOpenNode={showOnMap}
-        playback={playback}
-        settings={settings}
-        updateSettings={updateSettings}
-      />
-    ),
-    collections: (
-      <div className="px-[20px] pt-[14px] pb-[20px]">
-        <CollectionsPanel
-          view={collectionsView}
-          onNavigate={(view) => setCollectionsView(view ?? { kind: 'collections' })}
-          onFocusNode={showOnMap}
-          playback={playback}
-        />
-      </div>
-    ),
+    library: <PhoneLibrary onOpenNode={showOnMap} playback={playback} noLibrary={firstRun != null} onShowMap={() => setDetent('peek')} />,
+    collections: <PhoneCollections onOpenNode={showOnMap} playback={playback} />,
     next: (
       <div className="p-[12px]">
         <ErrorBoundary key={playback.status.currentRecordingNodeId} fallback={tabError}>
@@ -206,7 +201,7 @@ export function PhoneShell({
                   onShuffleLibrary={onShuffleLibrary}
                 />
                 <div className="mt-[6px] border-b border-[var(--color-line)] px-[20px]">
-                  <Tabs label="sheet" variant="underline" size="lg" options={TABS} value={tab} onChange={setTab} />
+                  <Tabs label="sheet" variant="underline" size="lg" options={TABS} value={tab} onChange={changeTab} />
                 </div>
               </>
             }
@@ -245,7 +240,7 @@ export function PhoneShell({
             }}
             onOpenPlaylist={(playlistId) => {
               onSearchOpenChange(false)
-              setCollectionsView({ kind: 'playlist', playlistId })
+              openSheetView({ kind: 'playlist', playlistId })
               setTab('collections')
               setDetent('large')
             }}

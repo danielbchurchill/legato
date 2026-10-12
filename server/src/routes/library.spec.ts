@@ -440,12 +440,94 @@ describe("GET /library/artists", () => {
   });
 });
 
+describe("GET /library/credits", () => {
+  async function getCredits(query = "") {
+    const res = await app.inject({ method: "GET", url: `/api/v1/library/credits${query}` });
+    return res.json();
+  }
+
+  async function names(query = "") {
+    return (await getCredits(query)).items.map((c: { name: string }) => c.name);
+  }
+
+  it("lists each producer and engineer once, with what they did and on how many tracks", async () => {
+    const producer = makeNode("credit", "Tom Wilson");
+    const engineer = makeNode("credit", "Roy Halee");
+    const both = makeNode("credit", "Jeff Lynne");
+    for (let i = 0; i < 3; i++) edge(makeRecording("Track"), producer, "produced_by");
+    const one = makeRecording("Track");
+    edge(one, engineer, "engineered_by");
+    edge(one, both, "produced_by");
+    edge(one, both, "engineered_by");
+    edge(makeRecording("Track"), both, "engineered_by");
+
+    expect(await getCredits()).toEqual({
+      items: [
+        { id: both, name: "Jeff Lynne", roles: ["producer", "engineer"], tracks: 2 },
+        { id: engineer, name: "Roy Halee", roles: ["engineer"], tracks: 1 },
+        { id: producer, name: "Tom Wilson", roles: ["producer"], tracks: 3 },
+      ],
+      total: 3,
+    });
+  });
+
+  it("leaves out artists, other kinds of credit, and tracks without a file", async () => {
+    // A producer who also performs is the artist node (#273), listed under artists.
+    edge(makeRecording("Track"), makeNode("artist", "Performer"), "produced_by");
+    edge(makeRecording("Track"), makeNode("credit", "Session Player"), "performed_credit");
+    const left = makeNode("recording", "Left Behind");
+    db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(left);
+    edge(left, makeNode("credit", "Orphaned"), "produced_by");
+    const missing = makeRecording("Track");
+    db.prepare("UPDATE files SET missing_since = datetime('now') WHERE recording_node_id = ?").run(missing);
+    edge(missing, makeNode("credit", "Still Drawn"), "produced_by");
+
+    expect(await names()).toEqual(["Still Drawn"]);
+  });
+
+  it("sorts by name without regard to case or accents, either way, and pages with the whole count", async () => {
+    const track = makeRecording("Track");
+    for (const name of ["zed", "Ólafur", "alpha", "Beta"]) edge(track, makeNode("credit", name), "produced_by");
+
+    expect(await names()).toEqual(["alpha", "Beta", "Ólafur", "zed"]);
+    expect(await names("?dir=desc")).toEqual(["zed", "Ólafur", "Beta", "alpha"]);
+    const page = await getCredits("?limit=2&offset=1");
+    expect(page.items.map((c: { name: string }) => c.name)).toEqual(["Beta", "Ólafur"]);
+    expect(page.total).toBe(4);
+  });
+
+  // Enrichment adds MusicBrainz credits one job at a time, without a new
+  // revision, so a newer edge reads the list again too.
+  it("reads the list once per revision, for every page and order, until the library changes or a newer edge arrives", async () => {
+    libraryChanged();
+    const track = makeRecording("Track");
+    for (let i = 0; i < 4; i++) edge(track, makeNode("credit", `Credit ${i}`), "produced_by");
+    const prepare = spyOn(db, "prepare");
+    const reads = () => prepare.mock.calls.filter(([sql]) => sql.includes("MAX(e.type = 'produced_by')")).length;
+
+    for (let offset = 0; offset < 4; offset += 2) await getCredits(`?limit=2&offset=${offset}`);
+    await getCredits("?dir=desc");
+    expect(reads()).toBe(1);
+
+    edge(track, makeNode("credit", "From MusicBrainz"), "produced_by");
+    expect((await getCredits()).total).toBe(5);
+    expect(reads()).toBe(2);
+
+    makeNode("credit", "Not Yet Credited");
+    libraryChanged();
+    expect((await getCredits()).total).toBe(5);
+    expect(reads()).toBe(3);
+    prepare.mockRestore();
+  });
+});
+
 // A sort key a plain object inherits isn't a sort: `sort in SORTS` let
 // "constructor" through, and the route answered 500 with the SQL error.
 describe("a sort key every object inherits", () => {
   for (const [route, fallback] of [
     ["albums", "title"],
     ["artists", "name"],
+    ["credits", "name"],
     ["tracks", "title"],
   ] as const) {
     it(`falls back to the default sort on /library/${route}`, async () => {

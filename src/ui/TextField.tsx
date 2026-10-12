@@ -3,7 +3,10 @@ import type { Ref } from 'react'
 /* The v2 input well: 34px, --radius-control, sunk into the surface
  * (--color-sunken with a 1px line), mono 12 because what goes in one is a
  * value — a label, a date, a bpm, a path. Focus turns the border accent with a
- * 25% accent ring outside it (index.css's .focus-ring-well). */
+ * 25% accent ring outside it (index.css's .focus-ring-well).
+ *
+ * `lg` is the phone's (#389): 44px, a tap target, with prose at 16px, under
+ * which iOS Safari zooms the page into a field it focuses. */
 
 type TextFieldProps = {
   value: string
@@ -18,6 +21,7 @@ type TextFieldProps = {
   className?: string
   inputMode?: 'text' | 'numeric' | 'decimal'
   ref?: Ref<HTMLInputElement>
+  size?: 'md' | 'lg'
 }
 
 export function TextField({
@@ -32,10 +36,11 @@ export function TextField({
   className = '',
   inputMode,
   ref,
+  size = 'md',
 }: TextFieldProps) {
   return (
     <div
-      className={`focus-ring-well flex h-[34px] min-w-0 items-center rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-sunken)] px-[10px] transition-[border-color] duration-[var(--motion-fast)] ${className}`}
+      className={`focus-ring-well flex ${size === 'lg' ? 'h-[44px]' : 'h-[34px]'} min-w-0 items-center rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-sunken)] px-[10px] transition-[border-color] duration-[var(--motion-fast)] ${className}`}
     >
       <input
         ref={ref}
@@ -57,7 +62,7 @@ export function TextField({
           }
         }}
         className={`w-full min-w-0 bg-transparent text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-3)] ${
-          prose ? 'text-[length:var(--text-secondary)]' : 'mono text-[length:var(--text-mono)]'
+          prose ? (size === 'lg' ? 'text-[16px]' : 'text-[length:var(--text-secondary)]') : 'mono text-[length:var(--text-mono)]'
         }`}
       />
     </div>

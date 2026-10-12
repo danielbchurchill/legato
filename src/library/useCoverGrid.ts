@@ -17,18 +17,22 @@ import { readPx } from './tokens'
 /* Under a grid cover: the frame's 10px gap, then a text-body line (20) and a
  * text-small line (16) — an album's title and "Artist · Year", an artist's
  * name and album count. The cover's own width, this, and the row gap make
- * one virtualised row. */
+ * one virtualised row. The phone's cells set their own (#389). */
 const TEXT_BLOCK = 10 + 20 + 16
 
 type Geometry = { columns: number; cell: number; rowGap: number; offset: number }
 
-type CoverGridOptions = {
+export type CoverGridOptions = {
   scrollRef: RefObject<HTMLDivElement | null>
   total: number
   ensureRange: (startIndex: number, endIndex: number) => void
+  /** A fixed number of columns, in place of as many as fit: the phone's two. */
+  columns?: number
+  /** The height under each cover, when it isn't TEXT_BLOCK. */
+  textBlock?: number
 }
 
-export function useCoverGrid({ scrollRef, total, ensureRange }: CoverGridOptions) {
+export function useCoverGrid({ scrollRef, total, ensureRange, columns: fixedColumns, textBlock = TEXT_BLOCK }: CoverGridOptions) {
   const gridRef = useRef<HTMLDivElement>(null)
   const [geometry, setGeometry] = useState<Geometry | null>(null)
 
@@ -46,7 +50,7 @@ export function useCoverGrid({ scrollRef, total, ensureRange }: CoverGridOptions
       const rowGap = readPx(grid, '--library-row-gap')
       if (min == null || columnGap == null || rowGap == null) return
       const width = grid.clientWidth
-      const columns = Math.max(1, Math.floor((width + columnGap) / (min + columnGap)))
+      const columns = fixedColumns ?? Math.max(1, Math.floor((width + columnGap) / (min + columnGap)))
       const cell = (width - columnGap * (columns - 1)) / columns
       const offset = grid.offsetTop
       setGeometry((g) =>
@@ -58,10 +62,10 @@ export function useCoverGrid({ scrollRef, total, ensureRange }: CoverGridOptions
     observer.observe(grid)
     if (grid.parentElement) observer.observe(grid.parentElement)
     return () => observer.disconnect()
-  }, [])
+  }, [fixedColumns])
 
   const columns = geometry?.columns ?? 1
-  const rowHeight = geometry ? geometry.cell + TEXT_BLOCK + geometry.rowGap : 0
+  const rowHeight = geometry ? geometry.cell + textBlock + geometry.rowGap : 0
   const virtualizer = useVirtualizer({
     // Nothing until the geometry is known: a row height of zero would
     // put every row on screen at once.

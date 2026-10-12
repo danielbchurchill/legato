@@ -59,16 +59,17 @@ export type LibraryPage<Row> = {
   ensureRange: (startIndex: number, endIndex: number) => void
 }
 
-/** `entity` is a URL segment (`library/albums`, `library/artists` or
- * `library/tracks`), not a free string, so a typo here fails at compile time
- * rather than as a 404 nobody notices until the view stays empty.
+/** `entity` is a URL segment (`library/albums`, `library/artists`,
+ * `library/tracks`, or the phone's `library/credits`), not a free string, so
+ * a typo here fails at compile time rather than as a 404 nobody notices
+ * until the view stays empty.
  *
  * `revision` is a count that goes up when the server's library has changed
  * (LibraryView's useLibraryChanges). Each step fetches page 0 and the range
  * on screen again, and keeps showing the rows it has until theirs land, so
  * the grid neither blanks nor jumps back to the top. */
 export function useLibraryPage<Row>(
-  entity: 'library/albums' | 'library/artists' | 'library/tracks',
+  entity: 'library/albums' | 'library/artists' | 'library/tracks' | 'library/credits',
   query: string,
   sort: string,
   dir: SortDir,
