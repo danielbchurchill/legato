@@ -76,15 +76,35 @@ function haveCommand(cmd) {
   return !spawnSync(cmd, ["--version"], { stdio: "ignore" }).error;
 }
 
+// The release's first run (v0.1.0) died on one HTTP 429 from evermeet.cx:
+// these hosts rate-limit GitHub's shared runner addresses, and a single
+// refusal used to fail the whole release. A 429 or a 5xx is retried up to
+// four more times, waiting as long as Retry-After asks (capped at a minute)
+// or 5, 15, 30 and 60 seconds; anything else fails at once, as before.
+const RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000];
+
+async function fetchWithRetry(url) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url);
+    const retryable = res.status === 429 || res.status >= 500;
+    if (!retryable || attempt >= RETRY_DELAYS_MS.length) return res;
+    const asked = Number(res.headers.get("retry-after"));
+    const waitMs = Number.isFinite(asked) && asked > 0 ? Math.min(asked * 1000, 60_000) : RETRY_DELAYS_MS[attempt];
+    console.log(`  [retry] GET ${url} -> HTTP ${res.status}; trying again in ${Math.round(waitMs / 1000)} s`);
+    await res.body?.cancel();
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+}
+
 async function download(url, destPath) {
-  const res = await fetch(url);
+  const res = await fetchWithRetry(url);
   if (!res.ok || !res.body) throw new Error(`GET ${url} -> HTTP ${res.status}`);
   await mkdir(path.dirname(destPath), { recursive: true });
   await pipeline(Readable.fromWeb(res.body), createWriteStream(destPath));
 }
 
 async function fetchText(url) {
-  const res = await fetch(url);
+  const res = await fetchWithRetry(url);
   if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`);
   return res.text();
 }
