@@ -17,8 +17,8 @@ import { AddToPlaylistButton } from './AddToPlaylistButton'
 import { DetailRows } from './DetailRows'
 import { formatBitrate, formatFormat } from './format'
 import { useFavourite } from './useFavourite'
-import { API, useNodeDetail, type NodeDetail } from './useNodeDetail'
-import { useReconnectEpoch } from '../connect/reconnect'
+import { API, type NodeDetail } from './useNodeDetail'
+import { TYPE_WORD, useJson, useNodeDetails, type CreditedPerson, type Summary, type TracklistEntry } from './nodeDetailsData'
 import { LABELS, useTagEdit, type EditableKey } from './useTagEdit'
 import { formatWhen } from './healthData'
 
@@ -29,64 +29,24 @@ import { formatWhen } from './healthData'
  *
  * The overview leads with the cover; the other tabs — tracks, credits,
  * metadata — are reading and editing views, so they shrink the header to a
- * 96px cover and give the room to their content. */
+ * 96px cover and give the room to their content.
+ *
+ * The phone's node detail (#389, src/phone/PhoneNode.tsx) is the same
+ * thing in its sheet: it reads the node through useNodeDetails and draws
+ * these tabs with `sheet` set, inside the phone's touch layout
+ * (ui/touchLayout.ts). There every button and chip takes taps across 44px;
+ * `sheet` makes the rows the handoff's 44 and 60px, the few controls the
+ * touch layout doesn't reach 44px, and every field 16px, where iOS doesn't
+ * zoom to type in it. */
 
 type Playback = ReturnType<typeof usePlayback>
-type TracklistEntry = { id: number; title: string; track_no: number | null; canonical_duration_ms: number | null }
-type Summary =
-  | { kind: 'artist'; releases: number; tracks: number }
-  | { kind: 'release'; tracks: number; totalDurationMs: number; releaseDate: string | null }
-  | { kind: 'recording'; trackNo: number | null; durationMs: number | null; releaseDate: string | null }
-  | { kind: 'other' }
-
-const TYPE_WORD: Record<string, string> = { artist: 'artist', release: 'album', recording: 'track', credit: 'producer' }
-
 const OVERVIEW_TRACKS = 5
-
-// `version` refetches the same path when it changes: the Metadata tab passes
-// the node, which is a new object after every reload.
-// Each loads again after an outage (#119), keeping what it showed until then.
-function useJson<T>(path: string | null, version?: unknown): T | null {
-  const [state, setState] = useState<{ path: string; version: unknown; value: T | null } | null>(null)
-  const reconnects = useReconnectEpoch()
-  useEffect(() => {
-    if (!path) return
-    let cancelled = false
-    fetch(`${API}${path}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((value: T | null) => !cancelled && setState({ path, version, value }))
-      .catch(() => !cancelled && setState({ path, version, value: null }))
-    return () => {
-      cancelled = true
-    }
-  }, [path, version, reconnects])
-  return state && state.path === path && state.version === version ? state.value : null
-}
-
-function shuffle<T>(items: T[]): T[] {
-  const out = [...items]
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[out[i], out[j]] = [out[j], out[i]]
-  }
-  return out
-}
 
 function formatAdded(value: string | undefined): string {
   if (!value) return NO_VALUE
   const date = new Date(`${value.replace(' ', 'T')}Z`)
   return Number.isNaN(date.getTime()) ? NO_VALUE : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
-
-/* Who made a node and what it's made of, from GET /nodes/:id/credits
- * (server/src/nodeCredits.ts): a record's tracks, an artist's tracks, or a
- * track itself, and everyone credited on them with how many tracks each is
- * on. Names come with it. The map's graph only has nodes with a position,
- * and most performer and mixing credits have none, so looking names up
- * there showed them as "?". */
-type CreditedPerson = { id: number; title: string; type: string; role: string; count: number }
-type NodeCredits = { tracks: number[]; people: CreditedPerson[] }
-const NO_CREDITS: NodeCredits = { tracks: [], people: [] }
 
 type NodeDetailsProps = {
   nodeId: number
@@ -97,38 +57,9 @@ type NodeDetailsProps = {
 }
 
 export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }: NodeDetailsProps) {
-  const { node, reload } = useNodeDetail(nodeId)
-  const graph = useGraph()
-  const summary = useJson<Summary>(`/nodes/${nodeId}/summary`)
-  const tracklist = useJson<TracklistEntry[]>(node?.type === 'release' ? `/nodes/${nodeId}/tracklist` : null)
-  const credits = useJson<NodeCredits>(`/nodes/${nodeId}/credits`) ?? NO_CREDITS
-
-  if (!node || node.id !== nodeId) return <DetailsSkeleton />
-
-  const artistEdge = node.edges.find((e) => e.direction === 'out' && e.type === 'performed_by')
-  const artistName = node.type === 'artist' ? null : (artistEdge?.other_title ?? graph.byId.get(node.id)?.subtitle ?? null)
-  const artistId = artistEdge?.other_id ?? null
-  const year = summary && (summary.kind === 'release' || summary.kind === 'recording') ? summary.releaseDate?.slice(0, 4) : null
-  const releaseType = node.files[0]?.release_type?.toLowerCase()
-  const kindLine = [node.type === 'release' ? (releaseType ?? 'album') : (TYPE_WORD[node.type] ?? node.type), year]
-    .filter(Boolean)
-    .join(' · ')
-
-  const play = () => {
-    if (node.type === 'release') void playback.playAlbum(node.id)
-    else if (node.type === 'recording') void playback.playNode(node.id, node.title)
-    else if (credits.tracks.length) void playback.playTracks(credits.tracks, 0, '')
-  }
-  const shuffleAll = () => {
-    const ids = node.type === 'release' && tracklist ? tracklist.map((t) => t.id) : credits.tracks
-    if (ids.length) void playback.playTracks(shuffle(ids), 0, '', node.type === 'release' ? { kind: 'release', nodeId: node.id } : null)
-  }
-  const tabs = [
-    { value: 'overview', label: 'overview' },
-    { value: 'tracks', label: node.type === 'artist' ? 'albums' : 'tracks' },
-    { value: 'credits', label: 'credits' },
-    { value: 'metadata', label: 'metadata' },
-  ] as const satisfies readonly { value: DetailsTab; label: string }[]
+  const details = useNodeDetails(nodeId, playback)
+  if (!details) return <DetailsSkeleton />
+  const { node, reload, summary, tracklist, credits, kindLine, artistName, artistId, tabs } = details
 
   return (
     <div className="flex flex-col">
@@ -165,13 +96,13 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
       )}
 
       <div className="mt-[12px] flex items-center gap-[8px]">
-        {(node.type === 'release' || node.type === 'recording' || credits.tracks.length > 0) && (
-          <Button variant="primary" icon="play" onClick={play} disabled={playback.queueBusy}>
+        {details.canPlay && (
+          <Button variant="primary" icon="play" onClick={details.play} disabled={playback.queueBusy}>
             play
           </Button>
         )}
-        {node.type !== 'recording' && credits.tracks.length > 1 && (
-          <Button variant="secondary" icon="arrow-swap" onClick={shuffleAll} disabled={playback.queueBusy}>
+        {details.canShuffle && (
+          <Button variant="secondary" icon="arrow-swap" onClick={details.shuffle} disabled={playback.queueBusy}>
             shuffle
           </Button>
         )}
@@ -225,7 +156,7 @@ function ArtistLink({ name, id, onFocusNode }: { name: string; id: number | null
   )
 }
 
-function FavouriteButton({ node }: { node: NodeDetail }) {
+export function FavouriteButton({ node, sheet = false }: { node: NodeDetail; sheet?: boolean }) {
   const [isFavourite, toggle] = useFavourite(node.id, node.is_favourite)
   return (
     <IconButton
@@ -235,9 +166,17 @@ function FavouriteButton({ node }: { node: NodeDetail }) {
       active={isFavourite}
       aria-pressed={isFavourite}
       onClick={toggle}
+      // The sheet's ghost: 44px, the handoff's 21px glyph, no tooltip on
+      // touch.
+      {...(sheet ? { size: 44, iconSize: 21, tooltip: false } : {})}
     />
   )
 }
+
+/* In the phone's sheet, a track is the handoff's 44px row: the number in a
+ * 20px column, the title at 15px, 12px apart. */
+const SHEET_TRACK_ROW = 'h-[44px] grid-cols-[20px_minmax(0,1fr)_auto] gap-[12px] px-[4px]'
+const SHEET_TRACK_TITLE = 'text-[15px] leading-[20px]'
 
 function Section({
   label,
@@ -271,7 +210,7 @@ function Stat({ value, label }: { value: string; label: string }) {
 
 /* ---- Overview ------------------------------------------------------------- */
 
-function Overview({
+export function Overview({
   node,
   summary,
   tracklist,
@@ -279,6 +218,7 @@ function Overview({
   onShowTracks,
   playback,
   onFocusNode,
+  sheet = false,
 }: {
   node: NodeDetail
   summary: Summary | null
@@ -287,7 +227,11 @@ function Overview({
   onShowTracks: () => void
   playback: Playback
   onFocusNode: (id: number) => void
+  sheet?: boolean
 }) {
+  // The phone's sheet lists a producer's or engineer's tracks, as it does a
+  // record's (nodeDetailsData.ts).
+  const listsTracks = node.type === 'release' || (sheet && node.type === 'credit')
   // Plays are counted per track; a record or an artist shows its size instead.
   const stats: [string, string][] =
     node.type === 'recording'
@@ -308,7 +252,13 @@ function Overview({
               [formatCount(summary.tracks), 'tracks'],
               [formatAdded(node.created_at), 'added'],
             ]
-          : []
+          : listsTracks && tracklist
+            ? [
+                [formatCount(tracklist.length), 'tracks'],
+                [formatClock(tracklist.reduce((n, t) => n + (t.canonical_duration_ms ?? 0), 0)), 'length'],
+                [formatAdded(node.created_at), 'added'],
+              ]
+            : []
 
   // Connection chips: who made it and what it's part of, from the graph's
   // own edges. A person on most of a record's tracks leads. An artist who
@@ -327,19 +277,19 @@ function Overview({
   return (
     <>
       {stats.length > 0 && (
-        <dl className="mt-[16px] grid grid-cols-3 gap-[10px]">
+        <dl className={`grid grid-cols-3 ${sheet ? 'mt-[14px] gap-[12px]' : 'mt-[16px] gap-[10px]'}`}>
           {stats.map(([value, label]) => (
             <Stat key={label} value={value} label={label} />
           ))}
         </dl>
       )}
 
-      {node.type === 'release' && tracklist && tracklist.length > 0 && (
+      {listsTracks && tracklist && tracklist.length > 0 && (
         <Section
           label="tracks"
           action={tracklist.length > OVERVIEW_TRACKS ? <Button onClick={onShowTracks}>all {tracklist.length}</Button> : undefined}
         >
-          <ol className="-mx-[6px] mt-[4px] flex flex-col">
+          <ol className={`mt-[4px] flex flex-col ${sheet ? '-mx-[4px]' : '-mx-[6px]'}`}>
             {tracklist.slice(0, OVERVIEW_TRACKS).map((track, i) => (
               <li key={track.id}>
                 <button
@@ -349,15 +299,21 @@ function Overview({
                       tracklist.map((t) => t.id),
                       i,
                       '',
-                      { kind: 'release', nodeId: node.id },
+                      node.type === 'release' ? { kind: 'release', nodeId: node.id } : null,
                     )
                   }
-                  className="grid h-[34px] w-full grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-[10px] rounded-[8px] px-[6px] text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)]"
+                  className={`grid w-full items-center rounded-[8px] text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] ${
+                    sheet ? SHEET_TRACK_ROW : 'h-[34px] grid-cols-[18px_minmax(0,1fr)_auto] gap-[10px] px-[6px]'
+                  }`}
                 >
                   <span className="mono text-right text-[length:var(--text-mono)] text-[var(--color-ink-3)]">
                     {track.track_no ?? i + 1}
                   </span>
-                  <span className="truncate text-[length:var(--text-body)] leading-[20px] text-[var(--color-ink)]">{track.title}</span>
+                  <span
+                    className={`truncate text-[var(--color-ink)] ${sheet ? SHEET_TRACK_TITLE : 'text-[length:var(--text-body)] leading-[20px]'}`}
+                  >
+                    {track.title}
+                  </span>
                   <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-2)]">
                     {formatDuration(track.canonical_duration_ms)}
                   </span>
@@ -373,7 +329,7 @@ function Overview({
           label="albums"
           action={node.releases.length > OVERVIEW_TRACKS ? <Button onClick={onShowTracks}>all {node.releases.length}</Button> : undefined}
         >
-          <ReleaseRows releases={node.releases.slice(0, OVERVIEW_TRACKS)} onFocusNode={onFocusNode} />
+          <ReleaseRows releases={node.releases.slice(0, OVERVIEW_TRACKS)} onFocusNode={onFocusNode} sheet={sheet} />
         </Section>
       )}
 
@@ -402,7 +358,9 @@ function Overview({
               href={node.description.source_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-[6px] inline-block text-small text-[var(--color-ink-3)] hover:text-[var(--color-ink)]"
+              className={`text-small text-[var(--color-ink-3)] hover:text-[var(--color-ink)] ${
+                sheet ? 'inline-flex h-[44px] items-center' : 'mt-[6px] inline-block'
+              }`}
             >
               from {node.description.source}
             </a>
@@ -413,22 +371,38 @@ function Overview({
   )
 }
 
-function ReleaseRows({ releases, onFocusNode }: { releases: NodeDetail['releases']; onFocusNode: (id: number) => void }) {
+/* In the sheet, a record is the handoff's album row: 60px, a 48px cover,
+ * the title at 15/500 over 13px. */
+function ReleaseRows({
+  releases,
+  onFocusNode,
+  sheet = false,
+}: {
+  releases: NodeDetail['releases']
+  onFocusNode: (id: number) => void
+  sheet?: boolean
+}) {
   return (
-    <ul className="-mx-[6px] mt-[4px] flex flex-col">
+    <ul className={`mt-[4px] flex flex-col ${sheet ? '-mx-[4px]' : '-mx-[6px]'}`}>
       {releases.map((release) => (
         <li key={release.id}>
           <button
             type="button"
             onClick={() => onFocusNode(release.id)}
-            className="grid h-[48px] w-full grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-[10px] rounded-[var(--radius-control)] px-[6px] text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)]"
+            className={`grid w-full items-center rounded-[var(--radius-control)] text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] ${
+              sheet
+                ? 'h-[60px] grid-cols-[48px_minmax(0,1fr)_auto] gap-[12px] px-[4px]'
+                : 'h-[48px] grid-cols-[36px_minmax(0,1fr)_auto] gap-[10px] px-[6px]'
+            }`}
           >
-            <CoverArt nodeId={release.id} size="thumb" radius="sm" className="size-[36px]" />
+            <CoverArt nodeId={release.id} size="thumb" radius={sheet ? 'art' : 'sm'} className={sheet ? 'size-[48px]' : 'size-[36px]'} />
             <span className="flex min-w-0 flex-col">
-              <span className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
+              <span
+                className={`truncate text-[var(--color-ink)] ${sheet ? 'text-heading' : 'text-[length:var(--text-body)] leading-[20px] font-medium'}`}
+              >
                 {release.title}
               </span>
-              <span className="text-small text-[var(--color-ink-2)]">
+              <span className={`text-[var(--color-ink-2)] ${sheet ? 'text-secondary' : 'text-small'}`}>
                 {[release.yearMin, plural(release.trackCount, 'track')].filter(Boolean).join(' · ')}
               </span>
             </span>
@@ -442,25 +416,27 @@ function ReleaseRows({ releases, onFocusNode }: { releases: NodeDetail['releases
 
 /* ---- Tracks ----------------------------------------------------------------- */
 
-function TracksTab({
+export function TracksTab({
   node,
   tracklist,
   playback,
   onFocusNode,
+  sheet = false,
 }: {
   node: NodeDetail
   tracklist: TracklistEntry[] | null
   playback: Playback
   onFocusNode: (id: number) => void
+  sheet?: boolean
 }) {
   if (node.type === 'artist')
     return (
       <div className="mt-[8px]">
-        <ReleaseRows releases={node.releases} onFocusNode={onFocusNode} />
+        <ReleaseRows releases={node.releases} onFocusNode={onFocusNode} sheet={sheet} />
       </div>
     )
   const tracks =
-    node.type === 'release'
+    node.type === 'release' || (sheet && node.type === 'credit')
       ? (tracklist ?? [])
       : [
           {
@@ -473,7 +449,7 @@ function TracksTab({
   const total = tracks.reduce((n, t) => n + (t.canonical_duration_ms ?? 0), 0)
   return (
     <>
-      <ol className="-mx-[6px] mt-[8px] flex flex-col">
+      <ol className={`mt-[8px] flex flex-col ${sheet ? '-mx-[4px]' : '-mx-[6px]'}`}>
         {tracks.map((track, i) => (
           <li key={track.id}>
             <button
@@ -486,7 +462,9 @@ function TracksTab({
                   node.type === 'release' ? { kind: 'release', nodeId: node.id } : null,
                 )
               }
-              className="group grid h-[42px] w-full grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-[10px] rounded-[var(--radius-control)] px-[6px] text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)]"
+              className={`group grid w-full items-center rounded-[var(--radius-control)] text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] ${
+                sheet ? SHEET_TRACK_ROW : 'h-[42px] grid-cols-[20px_minmax(0,1fr)_auto] gap-[10px] px-[6px]'
+              }`}
             >
               <span className="flex justify-end">
                 <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-3)] group-hover:hidden">
@@ -496,7 +474,11 @@ function TracksTab({
                   <Icon name="play" size={14} filled />
                 </span>
               </span>
-              <span className="truncate text-[length:var(--text-body)] leading-[20px] text-[var(--color-ink)]">{track.title}</span>
+              <span
+                className={`truncate text-[var(--color-ink)] ${sheet ? SHEET_TRACK_TITLE : 'text-[length:var(--text-body)] leading-[20px]'}`}
+              >
+                {track.title}
+              </span>
               <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-2)]">
                 {formatDuration(track.canonical_duration_ms)}
               </span>
@@ -523,16 +505,18 @@ const ROLE_GROUP: Record<string, string> = {
   performer: 'performed by',
 }
 
-function CreditsTab({
+export function CreditsTab({
   node,
   people,
   reload,
   onFocusNode,
+  sheet = false,
 }: {
   node: NodeDetail
   people: CreditedPerson[]
   reload: () => void
   onFocusNode: (id: number) => void
+  sheet?: boolean
 }) {
   const groups = new Map<string, typeof people>()
   for (const person of people) {
@@ -600,9 +584,13 @@ function CreditsTab({
               <IconButton
                 icon="cancel"
                 label="Remove connection"
-                size={26}
+                // A touch has no hover to reveal it: in the sheet it's
+                // always there, at 44px.
+                size={sheet ? 44 : 26}
+                iconSize={sheet ? 18 : undefined}
+                tooltip={!sheet}
                 tone="ink-3"
-                className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
+                className={sheet ? '' : 'opacity-0 group-focus-within:opacity-100 group-hover:opacity-100'}
                 onClick={async () => {
                   await fetch(`${API}/edges/${edge.id}`, { method: 'DELETE' })
                   reload()
@@ -613,6 +601,7 @@ function CreditsTab({
         </ul>
         {adding && (
           <NewConnection
+            sheet={sheet}
             fromId={node.id}
             onDone={() => {
               setAdding(false)
@@ -628,7 +617,17 @@ function CreditsTab({
 
 /* A connection the listener makes: pick what this led to, say how, and
  * optionally why. Stored as a 'personal' edge (routes/edges.ts). */
-function NewConnection({ fromId, onDone, onCancel }: { fromId: number; onDone: () => void; onCancel: () => void }) {
+function NewConnection({
+  fromId,
+  onDone,
+  onCancel,
+  sheet = false,
+}: {
+  fromId: number
+  onDone: () => void
+  onCancel: () => void
+  sheet?: boolean
+}) {
   const graph = useGraph()
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<{ id: number; type: string; title: string }[]>([])
@@ -689,6 +688,7 @@ function NewConnection({ fromId, onDone, onCancel }: { fromId: number; onDone: (
           <TextField
             prose
             autoFocus
+            size={sheet ? 'lg' : 'md'}
             label="Connect to"
             placeholder="Search for an artist, album or track"
             value={query}
@@ -701,7 +701,9 @@ function NewConnection({ fromId, onDone, onCancel }: { fromId: number; onDone: (
                   <button
                     type="button"
                     onClick={() => setTarget(hit)}
-                    className="flex h-[36px] w-full items-center gap-[8px] rounded-[8px] px-[6px] text-left hover:bg-[var(--color-wash)]"
+                    className={`flex w-full items-center gap-[8px] rounded-[8px] px-[6px] text-left hover:bg-[var(--color-wash)] ${
+                      sheet ? 'h-[44px]' : 'h-[36px]'
+                    }`}
                   >
                     <span className="min-w-0 flex-1 truncate text-[length:var(--text-secondary)] text-[var(--color-ink)]">{hit.title}</span>
                     <span className="text-small text-[var(--color-ink-3)]">{TYPE_WORD[hit.type] ?? hit.type}</span>
@@ -712,8 +714,8 @@ function NewConnection({ fromId, onDone, onCancel }: { fromId: number; onDone: (
           )}
         </>
       )}
-      <TextField prose label="Relation" placeholder="led me to" value={relation} onChange={setRelation} />
-      <TextField prose label="Note" placeholder="note (optional)" value={note} onChange={setNote} />
+      <TextField prose size={sheet ? 'lg' : 'md'} label="Relation" placeholder="led me to" value={relation} onChange={setRelation} />
+      <TextField prose size={sheet ? 'lg' : 'md'} label="Note" placeholder="note (optional)" value={note} onChange={setNote} />
       <div className="flex gap-[8px]">
         <Button variant="primary" disabled={!target || !relation.trim()} onClick={() => void add()}>
           Add connection
@@ -745,7 +747,17 @@ function metadataValue(entry: MetadataValue | null): ReactNode {
   )
 }
 
-function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Summary | null; reload: () => void }) {
+export function MetadataTab({
+  node,
+  summary,
+  reload,
+  sheet = false,
+}: {
+  node: NodeDetail
+  summary: Summary | null
+  reload: () => void
+  sheet?: boolean
+}) {
   const edit = useTagEdit(node, reload)
   const file = node.files[0]
   const editable: EditableKey[] =
@@ -826,6 +838,7 @@ function MetadataTab({ node, summary, reload }: { node: NodeDetail; summary: Sum
               {edit.pending[key] && <StatusDot status="accent" size={6} />}
             </span>
             <TextField
+              size={sheet ? 'lg' : 'md'}
               label={LABELS[key]}
               value={edit.draft[key] ?? ''}
               onChange={(v) => edit.update(key, v)}
