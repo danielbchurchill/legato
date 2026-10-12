@@ -18,6 +18,7 @@ import info from '../assets/icons/info.svg?raw'
 import library from '../assets/icons/library.svg?raw'
 import list from '../assets/icons/list.svg?raw'
 import map from '../assets/icons/map.svg?raw'
+import more from '../assets/icons/more.svg?raw'
 import panelLeftCollapse from '../assets/icons/panel-left-collapse.svg?raw'
 import pause from '../assets/icons/pause.svg?raw'
 import pencil from '../assets/icons/pencil.svg?raw'
@@ -30,6 +31,7 @@ import sliders from '../assets/icons/sliders.svg?raw'
 import spinner from '../assets/icons/spinner.svg?raw'
 import subtract from '../assets/icons/subtract.svg?raw'
 import tag from '../assets/icons/tag.svg?raw'
+import target from '../assets/icons/target.svg?raw'
 import volume from '../assets/icons/volume.svg?raw'
 import volumeMute from '../assets/icons/volume-mute.svg?raw'
 
@@ -95,7 +97,12 @@ import volumeMute from '../assets/icons/volume-mute.svg?raw'
  * the phone (#389). iOS's back is the chevron, as each platform draws it.
  *
  * `filter` (proicons "Filter", three narrowing lines) is the phone
- * library's sort line (#389), the glyph Legato Mobile v2 draws there. */
+ * library's sort line (#389), the glyph Legato Mobile v2 draws there.
+ *
+ * `more` (proicons "More", three dots) and `target` (proicons "Target")
+ * arrived with the phone's node detail (#389): its "more" menu, and the
+ * "centre on map" pill over the map. Both are drawn with filled dots, so
+ * they're whole as they are, and not FILLABLE. */
 const GLYPHS = {
   add,
   'arrow-left': arrowLeft,
@@ -117,6 +124,7 @@ const GLYPHS = {
   library,
   list,
   map,
+  more,
   'panel-left-collapse': panelLeftCollapse,
   pause,
   pencil,
@@ -129,6 +137,7 @@ const GLYPHS = {
   spinner,
   subtract,
   tag,
+  target,
   volume,
   'volume-mute': volumeMute,
 } as const

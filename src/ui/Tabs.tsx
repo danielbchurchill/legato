@@ -75,9 +75,10 @@ type TabsProps<T extends string> = {
    * library header), 36 (lg — the capsule's map/library switch), 48 (xl —
    * the phone's settings, #389: 40px segments in a 4px well, its corners
    * 12px rather than round, the segments sharing its width equally and
-   * labelled 14/500, each taking taps across 44px). Underline
-   * tabs only know lg: the phone sheet's 44px tabs, 15/500 and 24px apart
-   * (#389). At any other size they're the panels' 13px labels. */
+   * labelled 14/500, each taking taps across 44px). Underline tabs know
+   * two sizes of their own: lg, the phone sheet's 44px tabs, 15/500 and
+   * 24px apart, and md, its node detail's 40px tabs, 14/500 and 22px apart,
+   * each taking taps across 44px (#389). At any other size they're the panels' 13px labels. */
   size?: TabsSize
   /** `segmented` only: each option's icon alone, its label kept for screen
    * readers and shown in a tooltip. An option without an icon keeps its
@@ -165,7 +166,8 @@ export function Tabs<T extends string>({
   const phone = segmented && size === 'xl'
   const iconSize = size === 'lg' ? 18 : 14
   const sheetTabs = !segmented && size === 'lg'
-  const underlineGap = sheetTabs ? 'gap-[24px]' : 'gap-[20px]'
+  const nodeTabs = !segmented && size === 'md'
+  const underlineGap = sheetTabs ? 'gap-[24px]' : nodeTabs ? 'gap-[22px]' : 'gap-[20px]'
 
   return (
     <div
@@ -215,8 +217,10 @@ export function Tabs<T extends string>({
                 ? 'text-heading'
                 : phone
                   ? 'text-[14px] leading-none font-medium'
-                  : 'text-[length:var(--text-secondary)] leading-none font-medium'
-            } ${segmented ? `${phone ? 'touch-target rounded-[9px]' : 'rounded-full'} ${iconAlone ? SEGMENT_SQUARE[size] : SEGMENT_HEIGHT[size]}` : sheetTabs ? 'py-[12px]' : 'pb-[9px]'} ${active ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-ink-2)] hover:text-[var(--color-ink)]'}`}
+                  : nodeTabs
+                    ? 'text-[length:var(--text-body)] leading-[20px] font-medium'
+                    : 'text-[length:var(--text-secondary)] leading-none font-medium'
+            } ${segmented ? `${phone ? 'touch-target rounded-[9px]' : 'rounded-full'} ${iconAlone ? SEGMENT_SQUARE[size] : SEGMENT_HEIGHT[size]}` : sheetTabs ? 'py-[12px]' : nodeTabs ? 'touch-target py-[10px]' : 'pb-[9px]'} ${active ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-ink-2)] hover:text-[var(--color-ink)]'}`}
           >
             {option.swatch && (
               <span
