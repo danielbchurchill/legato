@@ -42,6 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       build: ${{ steps.diff.outputs.build }}
+      docker: ${{ steps.diff.outputs.docker }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,6 +57,10 @@ jobs:
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.sha }}
           BUILD_PATHS: '^(src-tauri/|src/|server/|package\.json$|package-lock\.json$|scripts/build-server-sidecar\.mjs$|\.github/workflows/build\.yml$)'
+          # What server/Dockerfile reads (issue #376): server/, and the web
+          # client's build inputs its web stage copies by name. Keep this in
+          # step with that stage's COPY lines.
+          DOCKER_PATHS: '^(server/|src/|public/|index\.html$|vite\.config\.ts$|tsconfig[^/]*\.json$|scripts/vite-shell-worker\.ts$|scripts/check-built-css\.mjs$|package\.json$|package-lock\.json$|\.github/workflows/build\.yml$)'
         run: |
           case "$EVENT" in
             pull_request) range="$PR_BASE...$PR_HEAD" ;;
@@ -69,6 +74,7 @@ jobs:
           if [ -z "$range" ] || ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
             echo "no usable diff range; building"
             echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "docker=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           changed=$(git diff --name-only "$range")
@@ -78,6 +84,12 @@ jobs:
           else
             echo "nothing the bundle depends on changed; skipping build"
             echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+          if printf '%s\n' "$changed" | grep -qE "$DOCKER_PATHS"; then
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "nothing the image depends on changed; skipping docker"
+            echo "docker=false" >> "$GITHUB_OUTPUT"
           fi
 
   build:
@@ -183,8 +195,36 @@ jobs:
   # The one check branch protection requires from this workflow. It always
   # runs, so a PR that skipped the build still gets a result. It fails
   # closed: if `changes` itself broke, nothing was proven, so it fails.
+  # Builds server/Dockerfile for linux/amd64 without pushing it (issue
+  # #376). Only release.yml built the image, so a Dockerfile that stopped
+  # building went unnoticed for nine days (#377). One platform is enough to
+  # catch a broken copy list or build step; the release builds arm64 too.
+  docker:
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: build the image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: server
+          file: server/Dockerfile
+          build-contexts: |
+            client=.
+          platforms: linux/amd64
+          push: false
+          # GitHub's cache, scoped to this job, so a PR that only touches
+          # src/ reuses the server stages' layers.
+          cache-from: type=gha,scope=docker-ci
+          cache-to: type=gha,mode=max,scope=docker-ci
+
   build-result:
-    needs: [changes, build]
+    needs: [changes, build, docker]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -192,10 +232,15 @@ jobs:
         env:
           CHANGES: ${{ needs.changes.result }}
           BUILD: ${{ needs.build.result }}
+          DOCKER: ${{ needs.docker.result }}
         run: |
-          echo "changes: $CHANGES, build: $BUILD"
+          echo "changes: $CHANGES, build: $BUILD, docker: $DOCKER"
           [ "$CHANGES" = success ] || { echo "the changes job didn't succeed"; exit 1; }
           case "$BUILD" in
-            success|skipped) exit 0 ;;
+            success|skipped) ;;
             *) echo "build $BUILD"; exit 1 ;;
+          esac
+          case "$DOCKER" in
+            success|skipped) ;;
+            *) echo "docker $DOCKER"; exit 1 ;;
           esac
