@@ -139,6 +139,7 @@ export function PhoneShell({
 
   // Opening an album, an artist or a person selects it and shows it on the
   // map, as a search result does, until node detail (#389, step 4).
+  // TODO(#389 step 4): open them with openPhoneNode(id), src/phone/nodeDetail.ts.
   const content: Record<SheetTab, ReactNode> = {
     library: <PhoneLibrary onOpenNode={showOnMap} playback={playback} noLibrary={firstRun != null} onShowMap={() => setDetent('peek')} />,
     collections: <PhoneCollections onOpenNode={showOnMap} playback={playback} />,
