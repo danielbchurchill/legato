@@ -3,11 +3,11 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { FastifyInstance } from "fastify";
 // The home server's real proof signer, not a copy: the point is that what a
 // server sends is exactly what this relay accepts, and nothing else is.
-import { linkProof, unlinkProof, serverIdForPublicKey as serverSideId, type ServerKey } from "../../server/src/auth/serverKey.js";
+import { linkProof, rotateProof, unlinkProof, serverIdForPublicKey as serverSideId, type ServerKey } from "../../server/src/auth/serverKey.js";
 import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
-import { acceptUnlinkProof, isLinkedServer, serverIdForPublicKey, UNLINK_PROOF_WINDOW_SECONDS } from "./linked-servers.js";
+import { acceptRotateProof, acceptUnlinkProof, isLinkedServer, serverIdForPublicKey, UNLINK_PROOF_WINDOW_SECONDS } from "./linked-servers.js";
 import { signInWithTunnelCredential, tunnelCredentialHolder } from "./pairing.js";
 import { parseSigningKeys, signServerToken, type SigningKeys } from "./signing-keys.js";
 import type { Database } from "./sqlite.js";
@@ -144,7 +144,7 @@ describe("a link token from /auth/server-token mints a tunnel credential when it
     expect(res.statusCode).toBe(200);
     const body = res.json() as { tunnel: { credential: string; expiresAt: string } };
     expect(body.tunnel.credential).toMatch(/^[0-9a-f]{64}$/);
-    expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 300 * 24 * 3600 * 1000);
+    expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 89 * 24 * 3600 * 1000);
     expect(tunnelCredentialHolder(h.db, body.tunnel.credential)).toEqual({ relayUserId: user.id, serverId: server.serverId });
     expect(credentials(h.db)).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
   });
@@ -319,6 +319,40 @@ describe("a link proof works once", () => {
   });
 });
 
+// Issue #115: the account's settings show how old each server's credential
+// is: the one it opens its tunnel with, not a replacement it hasn't used.
+describe("GET /linked-servers says when each server's credential was minted", () => {
+  type Listed = { serverId: string; credentialIssuedAt: string | null };
+  const list = async (h: ReturnType<typeof setup>, headers: Record<string, string>) =>
+    ((await h.app.inject({ url: "/linked-servers", headers })).json() as { servers: Listed[] }).servers;
+
+  it("gives the oldest live credential's time, and null once there's none", async () => {
+    const h = setup();
+    const { user, headers } = h.signIn();
+    const server = homeServer();
+    await h.link(headers, server);
+    h.db.prepare("UPDATE tunnel_credentials SET created_at = '2026-09-01 12:00:00'").run();
+    // A replacement the server hasn't moved onto yet.
+    await h.link(headers, server);
+    expect(await list(h, headers)).toMatchObject([{ serverId: server.serverId, credentialIssuedAt: "2026-09-01T12:00:00.000Z" }]);
+
+    h.db.prepare("DELETE FROM tunnel_credentials WHERE relay_user_id = ?").run(user.id);
+    expect(await list(h, headers)).toMatchObject([{ serverId: server.serverId, credentialIssuedAt: null }]);
+  });
+
+  it("counts only this account's credentials for the server", async () => {
+    const h = setup();
+    const owner = h.signIn("owner");
+    const other = h.signIn("other");
+    const server = homeServer();
+    await h.link(owner.headers, server);
+    h.db.prepare("DELETE FROM tunnel_credentials").run();
+    await h.link(other.headers, server);
+    expect((await list(h, owner.headers))[0]!.credentialIssuedAt).toBeNull();
+    expect((await list(h, other.headers))[0]!.credentialIssuedAt).not.toBeNull();
+  });
+});
+
 describe("unlinking and revoking remove the pair", () => {
   const credential = async (res: Promise<{ json(): unknown }>) =>
     ((await res).json() as { tunnel: { credential: string } }).tunnel.credential;
@@ -452,5 +486,27 @@ describe("spent proofs", () => {
     const proof = unlinkProof(server, { issuer: ISSUER, accountId: String(user.id), nowSeconds: later });
     expect(acceptUnlinkProof(h.db, ISSUER, proof, later)).toMatchObject({ ok: true, changed: true });
     expect(count(h.db)).toBe(1);
+  });
+});
+
+// Issue #115: renewing a tunnel credential takes the server's own key, as
+// routes/tunnel.ts asks for it. tunnel.spec.ts drives it over a tunnel.
+describe("a rotate proof", () => {
+  it("renews a credential for the server that signed it, for this service only", async () => {
+    const h = setup();
+    const { user, headers } = h.signIn();
+    const server = homeServer();
+    const { tunnel } = (await h.link(headers, server)).json() as { tunnel: { credential: string } };
+
+    const elsewhere = rotateProof(server, { issuer: "https://auth.elsewhere.test", credential: tunnel.credential, nowSeconds: now() });
+    expect(acceptRotateProof(h.db, ISSUER, tunnel.credential, elsewhere)).toEqual({ ok: false, reason: "bad_signature" });
+    const unlink = unlinkProof(server, { issuer: ISSUER, accountId: String(user.id), nowSeconds: now() });
+    expect(acceptRotateProof(h.db, ISSUER, tunnel.credential, unlink)).toEqual({ ok: false, reason: "bad_signature" });
+
+    const own = rotateProof(server, { issuer: ISSUER, credential: tunnel.credential, nowSeconds: now() });
+    const rotated = acceptRotateProof(h.db, ISSUER, tunnel.credential, own);
+    const token = rotated.ok ? rotated.credential?.token : undefined;
+    expect(typeof token).toBe("string");
+    expect(tunnelCredentialHolder(h.db, token!)).toEqual({ relayUserId: user.id, serverId: server.serverId });
   });
 });

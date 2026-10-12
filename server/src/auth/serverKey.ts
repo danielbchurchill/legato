@@ -143,3 +143,13 @@ export function webClientStatement(key: ServerKey, input: { origin: string; code
   };
   return { ...statement, signature: signMessage(key, webClientStatementMessage(statement)) };
 }
+
+// What the tunnel's rotate frame carries (issue #115): the tunnel
+// credential it's signed in with, signed, so a copy of that credential
+// can't get the next one. Names the service and the time, like an unlink
+// proof, and has its own prefix. legato.fm checks it against the key it
+// recorded when the server linked, so it needs no public key.
+export function rotateProof(key: ServerKey, input: { issuer: string; credential: string; nowSeconds: number }) {
+  const message = ["legato.fm rotate proof", input.issuer, key.serverId, input.credential, String(input.nowSeconds)].join("\n");
+  return { issuedAt: input.nowSeconds, signature: signMessage(key, message) };
+}

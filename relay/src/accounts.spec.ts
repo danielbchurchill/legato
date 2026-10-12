@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "./sqlite.js";
 import {
   createSession,
@@ -8,6 +8,7 @@ import {
   getUserBySessionToken,
   isValidState,
   upsertUser,
+  describeClient,
   type OAuthProfile,
 } from "./accounts.js";
 import { openDb } from "./db.js";
@@ -122,6 +123,23 @@ describe("sessions", () => {
     expect(getUserBySessionToken(db, "not-a-real-token")).toBeNull();
   });
 
+  // Issue #115's review: last_seen_at is best effort, and a write that
+  // fails (the database locked, the disk full) mustn't sign anyone out.
+  it("still signs the session in when last seen can't be written, and says so once", () => {
+    const user = upsertUser(db, "google", googleProfile);
+    const { token } = createSession(db, user.id);
+    db.exec("CREATE TRIGGER locked BEFORE UPDATE OF last_seen_at ON relay_sessions BEGIN SELECT RAISE(ABORT, 'database is locked'); END");
+    const warned = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(getUserBySessionToken(db, token)?.id).toBe(user.id);
+      expect(getUserBySessionToken(db, token)?.id).toBe(user.id);
+      expect(warned).toHaveBeenCalledTimes(1);
+      expect(String(warned.mock.calls[0]![0])).toContain("database is locked");
+    } finally {
+      warned.mockRestore();
+    }
+  });
+
   it("returns null for an expired session", () => {
     const user = upsertUser(db, "google", googleProfile);
     const token = "expired-token";
@@ -151,3 +169,22 @@ describe("sessions", () => {
     expect(getUserBySessionToken(db, token)).toBeNull();
   });
 });
+
+// Issue #115: the label an account's settings show for each session.
+describe("describeClient", () => {
+  it("names the app or the browser, and the system, from the User-Agent", () => {
+    const cases: [string | undefined, "app" | "browser", string][] = [
+      ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)", "app", "Legato app on macOS"],
+      ["Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", "app", "Legato app on Linux"],
+      ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Edg/130.0", "app", "Legato app on Windows"],
+      ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 Edg/130.0", "browser", "Edge on Windows"],
+      ["Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0", "browser", "Firefox on Linux"],
+      ["Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", "browser", "Safari on iOS"],
+      ["Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36", "browser", "Chrome on Android"],
+      ["curl/8.7.1", "browser", "A browser"],
+      [undefined, "app", "Legato app"],
+    ];
+    for (const [ua, kind, label] of cases) expect(describeClient(ua, kind)).toBe(label);
+  });
+});
+

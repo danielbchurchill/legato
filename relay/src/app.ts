@@ -91,7 +91,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   app.get("/health", async () => ({ status: "ok" }));
 
   app.register(websocketPlugin);
-  app.register(tunnelRoutes(registry, options.db, { heartbeatMs: options.tunnelHeartbeatMs }));
+  app.register(tunnelRoutes(registry, options.db, { heartbeatMs: options.tunnelHeartbeatMs, issuer }));
   app.register(relayRoutes(registry, options.db, { signingKeys, issuer }));
   // Also registers the pairing, claim and linked-server routes, which need
   // the signing keys, and the tunnels for GET /linked-servers.

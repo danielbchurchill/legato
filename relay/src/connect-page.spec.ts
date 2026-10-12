@@ -269,22 +269,68 @@ describe("a web session", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  // Issue #115: a web session is one of the account's sessions, so Settings
+  // lists it, says when it was last used, and can sign it out. It can't
+  // list or sign out the account's other sessions itself.
+  it("is in its account's sessions, labelled and last seen, and the account can sign it out", async () => {
+    const h = setup();
+    const mine = homeServer();
+    const account = h.signIn();
+    h.link(account.user.id, mine);
+    const flow = h.start(mine);
+    const pressed = await h.press(account.cookie, flow.query);
+    const redeemed = await h.app.inject({
+      method: "POST",
+      url: "/connect/redeem",
+      headers: {
+        origin: HOME,
+        "content-type": "application/json",
+        "user-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
+      },
+      payload: JSON.stringify({ code: h.codeFrom((pressed.json() as { redirect: string }).redirect), code_verifier: flow.verifier }),
+    });
+    const web = (redeemed.json() as { token: string }).token;
+    const desktop = createSession(h.db, account.user.id, "Legato app on macOS").token;
+    type Listed = { id: string; client: string | null; lastSeenAt: string | null; current: boolean };
+    const sessions = (token: string) => h.app.inject({ url: "/auth/sessions", headers: { authorization: `Bearer ${token}` } });
+    const listed = async () => ((await sessions(desktop)).json() as { sessions: Listed[] }).sessions.find((s) => s.client === "Firefox on Linux");
+
+    expect((await sessions(web)).statusCode).toBe(401);
+    expect(await listed()).toMatchObject({ client: "Firefox on Linux", lastSeenAt: null, current: false });
+    expect((await listed())!.id).toMatch(/^[0-9a-f]{32}$/);
+
+    // What a web session uses (/auth/me, its tickets and tokens) notes it.
+    await h.app.inject({ url: "/auth/me", headers: { authorization: `Bearer ${web}` } });
+    expect((await listed())!.lastSeenAt).not.toBeNull();
+
+    const revoked = await h.app.inject({
+      method: "DELETE",
+      url: `/auth/sessions/${(await listed())!.id}`,
+      headers: { authorization: `Bearer ${desktop}` },
+    });
+    expect(revoked.json()).toEqual({ revoked: true });
+    expect((await h.app.inject({ url: "/auth/me", headers: { authorization: `Bearer ${web}` } })).json()).toMatchObject({ user: null });
+  });
+
   it("makes its page one of Legato's own origins, for its server, while it lasts", async () => {
     const h = setup();
     const mine = homeServer();
     const other = homeServer();
     const account = h.signIn();
     h.link(account.user.id, mine);
-    const preflight = (url: string, origin: string) =>
-      h.app.inject({ method: "OPTIONS", url, headers: { origin, "access-control-request-method": "POST" } });
-    const allowed = async (url: string, origin = HOME) => (await preflight(url, origin)).headers["access-control-allow-origin"];
+    // Each preflight asks for the method the web client calls the route
+    // with: legato.fm answers only those (issue #115's review).
+    const preflight = (url: string, origin: string, method: string) =>
+      h.app.inject({ method: "OPTIONS", url, headers: { origin, "access-control-request-method": method } });
+    const allowed = async (url: string, origin = HOME, method = "POST") =>
+      (await preflight(url, origin, method)).headers["access-control-allow-origin"];
 
     expect(await allowed("/auth/relay-ticket")).toBeUndefined();
     expect(await allowed(`/relay/${mine.serverId}/api/v1/stats`)).toBeUndefined();
 
     const { token } = await h.webSession(mine, account);
     expect(await allowed("/auth/relay-ticket")).toBe(HOME);
-    expect(await allowed("/linked-servers")).toBe(HOME);
+    expect(await allowed("/linked-servers", HOME, "GET")).toBe(HOME);
     expect(await allowed(`/relay/${mine.serverId}/api/v1/stats`)).toBe(HOME);
     // Not for another server's relay route, nor another page.
     expect(await allowed(`/relay/${other.serverId}/api/v1/stats`)).toBeUndefined();

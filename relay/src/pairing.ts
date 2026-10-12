@@ -32,11 +32,14 @@ import { parseSqliteDatetime } from "./sqlite-datetime.js";
 // short enough that a code nobody redeemed isn't a standing liability.
 const PAIRING_CODE_TTL_SQL = "+10 minutes";
 
-// ~1 year: this replaces what used to be a permanent, never-rotated
-// RELAY_SHARED_SECRET, so it's deliberately long-lived — a home server
-// pairs once and stays paired. Real rotation/revocation is a follow-up,
-// not something this prototype needs yet.
-const TUNNEL_CREDENTIAL_TTL_SQL = "+1 year";
+// 90 days (issue #115). A server doesn't have to be claimed or linked again
+// when it runs out: it swaps it for a new one over its tunnel well before
+// then (rotateTunnelCredential), so a credential that leaks is good for
+// weeks, not a year. The account can revoke it any time, by removing the
+// server (linked-servers.ts, removeLinkedServer). Credentials minted for a
+// year before this keep their expiry, and their servers rotate them as
+// they near the end of it, like any other.
+const TUNNEL_CREDENTIAL_TTL_SQL = "+90 days";
 
 export interface TunnelCredentialMinted {
   token: string;
@@ -239,13 +242,59 @@ export function tunnelCredentialHolder(db: Database, token: string): { relayUser
 // Mint order is rowid order. tunnel_credentials has no INTEGER PRIMARY
 // KEY, so its rowid is SQLite's own, and a new row's is always above every
 // row already there. Only VACUUM could renumber it, and nothing runs one.
-export function signInWithTunnelCredential(db: Database, token: string): { relayUserId: number; serverId: string | null } | null {
+//
+// A tunnel already signed in, moving onto another credential (issue #115),
+// names its server as forServer, and a credential for any other server is
+// refused, retiring nothing: checked in the same transaction, so nothing
+// can come between the check and the retiring.
+export function signInWithTunnelCredential(
+  db: Database,
+  token: string,
+  forServer?: string,
+): { relayUserId: number; serverId: string | null } | null {
   return db.transaction(() => {
-    const row = db
-      .prepare(`SELECT rowid, relay_user_id, server_id FROM tunnel_credentials WHERE token = ? AND expires_at > datetime('now')`)
-      .get(token) as { rowid: number; relay_user_id: number; server_id: string | null } | undefined;
-    if (!row) return null;
-    if (row.server_id) db.prepare("DELETE FROM tunnel_credentials WHERE server_id = ? AND rowid < ?").run(row.server_id, row.rowid);
-    return { relayUserId: row.relay_user_id, serverId: row.server_id };
+    const row = liveTunnelCredential(db, token);
+    if (!row || (forServer !== undefined && row.serverId !== forServer)) return null;
+    if (row.serverId) db.prepare("DELETE FROM tunnel_credentials WHERE server_id = ? AND rowid < ?").run(row.serverId, row.rowid);
+    return { relayUserId: row.relayUserId, serverId: row.serverId };
   })();
+}
+
+// A live credential, and its place in mint order (rowid, as above).
+export type LiveTunnelCredential = { rowid: number; relayUserId: number; serverId: string | null };
+
+export function liveTunnelCredential(db: Database, token: string): LiveTunnelCredential | null {
+  const row = db
+    .prepare(`SELECT rowid, relay_user_id, server_id FROM tunnel_credentials WHERE token = ? AND expires_at > datetime('now')`)
+    .get(token) as { rowid: number; relay_user_id: number; server_id: string | null } | undefined;
+  return row ? { rowid: row.rowid, relayUserId: row.relay_user_id, serverId: row.server_id } : null;
+}
+
+// What a tunnel signed in with `current` moves onto next (issue #115), once
+// its server has proved it asked (linked-servers.ts, acceptRotateProof).
+// The server moves its tunnel onto it with an auth frame (routes/tunnel.ts),
+// and that first sign-in retires `current` and everything else before it,
+// as above.
+//
+// It mints only when the server has nothing newer. If it has, that's a
+// replacement an earlier ask was sent and the server never moved onto (the
+// answer was lost, or couldn't be stored), or a link's, whose answer is on
+// its way to the server. Either way it's sent again rather than outranked:
+// minting past a link's credential would retire it on first use, and the
+// link's answer would then store a dead one over the working one. And a
+// server whose answers keep getting lost gets the same replacement each
+// time, rather than a pile of them. A newer one for another account is a
+// link to that account under way: its answer brings the server that
+// credential, which the server files under that account, so nothing is
+// sent, and the link's first sign-in retires this one.
+export function rotateTunnelCredential(db: Database, current: LiveTunnelCredential & { serverId: string }): TunnelCredentialMinted | null {
+  const newest = db
+    .prepare(
+      `SELECT token, relay_user_id, expires_at FROM tunnel_credentials
+       WHERE server_id = ? AND rowid > ? AND expires_at > datetime('now') ORDER BY rowid DESC LIMIT 1`,
+    )
+    .get(current.serverId, current.rowid) as { token: string; relay_user_id: number; expires_at: string } | undefined;
+  if (!newest) return mintTunnelCredential(db, current.relayUserId, current.serverId);
+  if (newest.relay_user_id !== current.relayUserId) return null;
+  return { token: newest.token, expiresAt: parseSqliteDatetime(newest.expires_at) };
 }

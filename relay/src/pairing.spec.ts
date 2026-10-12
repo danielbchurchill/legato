@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "./sqlite.js";
 import { upsertUser } from "./accounts.js";
 import { openDb } from "./db.js";
-import { claimServerCode, mintTunnelCredential, redeemPairingCode, tunnelCredentialHolder } from "./pairing.js";
+import { claimServerCode, mintTunnelCredential, redeemPairingCode, signInWithTunnelCredential, tunnelCredentialHolder } from "./pairing.js";
 
 let db: Database;
 let userId: number;
@@ -18,13 +18,14 @@ beforeEach(() => {
 });
 
 describe("mintTunnelCredential", () => {
-  it("mints a credential tied to the given account, expiring about a year out", () => {
+  // Issue #115: 90 days, and the server rotates it before then.
+  it("mints a credential tied to the given account, expiring 90 days out", () => {
     const { token, expiresAt } = mintTunnelCredential(db, userId);
 
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     const daysOut = (expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000);
-    expect(daysOut).toBeGreaterThan(360);
-    expect(daysOut).toBeLessThan(370);
+    expect(daysOut).toBeGreaterThan(89);
+    expect(daysOut).toBeLessThanOrEqual(90);
   });
 });
 
@@ -48,6 +49,28 @@ describe("tunnelCredentialHolder", () => {
       "INSERT INTO tunnel_credentials (token, relay_user_id, expires_at) VALUES (?, ?, datetime('now', '-1 minute'))",
     ).run("expired-token", userId);
     expect(tunnelCredentialHolder(db, "expired-token")).toBeNull();
+  });
+});
+
+// Issue #115: a signed-in tunnel moving onto another credential
+// (routes/tunnel.ts) names the server it's signed in for, and the check and
+// the retiring are one transaction.
+describe("signInWithTunnelCredential", () => {
+  const SERVER = "a".repeat(32);
+  const OTHER = "b".repeat(32);
+
+  it("retires the server's earlier credentials", () => {
+    const older = mintTunnelCredential(db, userId, SERVER).token;
+    const newer = mintTunnelCredential(db, userId, SERVER).token;
+    expect(signInWithTunnelCredential(db, newer, SERVER)).toEqual({ relayUserId: userId, serverId: SERVER });
+    expect(tunnelCredentialHolder(db, older)).toBeNull();
+  });
+
+  it("refuses a credential for another server than the one named, and retires nothing", () => {
+    const theirs = mintTunnelCredential(db, userId, OTHER).token;
+    const theirNewer = mintTunnelCredential(db, userId, OTHER).token;
+    expect(signInWithTunnelCredential(db, theirNewer, SERVER)).toBeNull();
+    expect(tunnelCredentialHolder(db, theirs)).toEqual({ relayUserId: userId, serverId: OTHER });
   });
 });
 

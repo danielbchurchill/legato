@@ -53,7 +53,9 @@ function serverSays(legato: Record<string, unknown>) {
 // mounted keeps its timers and listeners: the confirm dialog's exit fade
 // (useMountFade) then unmounts its portal after the clear took it away, and
 // React's NotFoundError lands in whichever test runs next (#362 fixed the
-// same in the link-return spec).
+// same in the link-return spec). A signed-in row also lists the account's
+// sessions and servers (#115), whose fetches would otherwise answer into
+// nodes that are gone.
 const roots: Root[] = []
 
 async function render() {
@@ -113,6 +115,23 @@ describe('linking this server from Settings', () => {
     await act(async () => button('link again').click())
     expect(linkWithLegato).toHaveBeenCalledWith(SERVER_ID)
     expect(document.body.textContent).not.toContain('link a different account')
+  })
+
+  // Issue #115: the account removed the server on legato.fm, or its
+  // credential ran out, and a new link is the way back.
+  it('says the server was disconnected from legato.fm, and offers to link it again', async () => {
+    serverSays({ linked: true, linkedAccountId: '7', tunnel: 'refused' })
+    const container = await render()
+    expect(container.textContent).toContain('Disconnected from legato.fm. Link it again to reach it through legato.fm.')
+    await act(async () => button('link again').click())
+    expect(linkWithLegato).toHaveBeenCalledWith(SERVER_ID)
+  })
+
+  it('says nothing about a tunnel that is only reconnecting', async () => {
+    serverSays({ linked: true, linkedAccountId: '7', tunnel: 'waiting' })
+    const container = await render()
+    expect(container.textContent).toContain('This server is linked to legato.fm.')
+    expect(container.textContent).not.toContain('Disconnected')
   })
 
   it('says why instead of offering a link the desktop app would get refused', async () => {

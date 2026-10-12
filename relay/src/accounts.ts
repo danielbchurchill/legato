@@ -82,16 +82,87 @@ const SESSION_TTL_SQL = "+30 days";
 // account's.
 export type SessionScope = { serverId: string; originMac: string };
 
-export function createSession(db: Database, userId: number, scope?: SessionScope): { token: string; expiresAt: Date } {
+// client is describeClient()'s label for what signed in (issue #115), and
+// public_id what the account's settings call it (migration 0010).
+export function createSession(
+  db: Database,
+  userId: number,
+  client: string | null = null,
+  scope?: SessionScope,
+): { token: string; expiresAt: Date } {
   const token = randomBytes(32).toString("hex");
   const row = db
     .prepare(
-      `INSERT INTO relay_sessions (id, user_id, expires_at, server_id, origin_mac)
-       VALUES (?, ?, datetime('now', ?), ?, ?)
+      `INSERT INTO relay_sessions (id, user_id, client, public_id, expires_at, server_id, origin_mac)
+       VALUES (?, ?, ?, ?, datetime('now', ?), ?, ?)
        RETURNING expires_at`,
     )
-    .get(token, userId, SESSION_TTL_SQL, scope?.serverId ?? null, scope?.originMac ?? null) as { expires_at: string };
+    .get(token, userId, client, randomBytes(16).toString("hex"), SESSION_TTL_SQL, scope?.serverId ?? null, scope?.originMac ?? null) as {
+    expires_at: string;
+  };
   return { token, expiresAt: parseSqliteDatetime(row.expires_at) };
+}
+
+// What an account's settings call a session (issue #115): the app or the
+// browser, and the system it runs on, read once from the User-Agent at
+// sign-in. Only this label is stored. "app" is the desktop app's own
+// sign-in (POST /auth/token), whose User-Agent is its webview's.
+export function describeClient(userAgent: string | undefined, kind: "app" | "browser"): string {
+  const ua = userAgent ?? "";
+  const system = /iPhone|iPad|iPod/.test(ua)
+    ? "iOS"
+    : /Android/.test(ua)
+      ? "Android"
+      : /CrOS/.test(ua)
+        ? "ChromeOS"
+        : /Macintosh|Mac OS X/.test(ua)
+          ? "macOS"
+          : /Windows/.test(ua)
+            ? "Windows"
+            : /Linux|X11/.test(ua)
+              ? "Linux"
+              : null;
+  const what =
+    kind === "app"
+      ? "Legato app"
+      : /Edg\//.test(ua)
+        ? "Edge"
+        : /Firefox\/|FxiOS/.test(ua)
+          ? "Firefox"
+          : /Chrome\/|CriOS/.test(ua)
+            ? "Chrome"
+            : /Safari\//.test(ua)
+              ? "Safari"
+              : "A browser";
+  return system ? `${what} on ${system}` : what;
+}
+
+export type SessionListing = { id: string; client: string | null; createdAt: Date; lastSeenAt: Date | null; current: boolean };
+
+// The account's live sessions, newest first, for its settings (issue #115).
+// A session's id here is its public_id, never its token: the token is what
+// signs it in. current marks the one asking.
+export function listSessions(db: Database, userId: number, currentToken: string): SessionListing[] {
+  const rows = db
+    .prepare(
+      `SELECT id, public_id, client, created_at, last_seen_at FROM relay_sessions
+       WHERE user_id = ? AND expires_at > datetime('now') ORDER BY created_at DESC, rowid DESC`,
+    )
+    .all(userId) as { id: string; public_id: string; client: string | null; created_at: string; last_seen_at: string | null }[];
+  return rows.map((row) => ({
+    id: row.public_id,
+    client: row.client,
+    createdAt: parseSqliteDatetime(row.created_at),
+    lastSeenAt: row.last_seen_at ? parseSqliteDatetime(row.last_seen_at) : null,
+    current: row.id === currentToken,
+  }));
+}
+
+// Signs one of the account's own sessions out. False for an id that isn't
+// one of them.
+export function revokeSession(db: Database, userId: number, id: string): boolean {
+  if (!/^[0-9a-f]{32}$/.test(id)) return false;
+  return db.prepare("DELETE FROM relay_sessions WHERE public_id = ? AND user_id = ?").run(id, userId).changes > 0;
 }
 
 // Null when the account is gone, so a caller holding an id from a code or
@@ -101,18 +172,42 @@ export function getUserById(db: Database, id: number): RelayUserRow | null {
   return row ?? null;
 }
 
+// How stale a session's last_seen_at may get before a request writes it
+// again (issue #115): "last seen" to the nearest few minutes, without a
+// write on every request. Both lookups below note it, so a web session's
+// (issue #365) is kept like any other. The write is best effort: one that
+// fails (the database locked, the disk full) still signs the session in,
+// and is logged the first time, not on every request after.
+const LAST_SEEN_EVERY_SQL = "-5 minutes";
+let lastSeenWarned = false;
+
+function noteSeen(db: Database, token: string, stale: number): void {
+  if (!stale) return;
+  try {
+    db.prepare("UPDATE relay_sessions SET last_seen_at = datetime('now') WHERE id = ?").run(token);
+  } catch (err) {
+    if (!lastSeenWarned)
+      console.warn(`accounts: couldn't note when a session was last used (${err instanceof Error ? err.message : String(err)})`);
+    lastSeenWarned = true;
+  }
+}
+
 // The account a whole-account session belongs to. A web session, scoped to
 // one server, is null here, so every route refuses one unless it asks for
 // it by name, through getSessionByToken.
 export function getUserBySessionToken(db: Database, token: string): RelayUserRow | null {
   const row = db
     .prepare(
-      `SELECT u.* FROM relay_sessions s
+      `SELECT u.*, s.last_seen_at IS NULL OR s.last_seen_at < datetime('now', ?) AS session_stale
+       FROM relay_sessions s
        JOIN relay_users u ON u.id = s.user_id
        WHERE s.id = ? AND s.expires_at > datetime('now') AND s.server_id IS NULL`,
     )
-    .get(token) as RelayUserRow | undefined;
-  return row ?? null;
+    .get(LAST_SEEN_EVERY_SQL, token) as (RelayUserRow & { session_stale: number }) | undefined;
+  if (!row) return null;
+  const { session_stale, ...user } = row;
+  noteSeen(db, token, session_stale);
+  return user;
 }
 
 // Any live session, with the one server it's scoped to, or null when it's
@@ -122,13 +217,16 @@ export function getUserBySessionToken(db: Database, token: string): RelayUserRow
 export function getSessionByToken(db: Database, token: string): { user: RelayUserRow; serverId: string | null } | null {
   const row = db
     .prepare(
-      `SELECT u.*, s.server_id AS session_server_id FROM relay_sessions s
+      `SELECT u.*, s.server_id AS session_server_id,
+         s.last_seen_at IS NULL OR s.last_seen_at < datetime('now', ?) AS session_stale
+       FROM relay_sessions s
        JOIN relay_users u ON u.id = s.user_id
        WHERE s.id = ? AND s.expires_at > datetime('now')`,
     )
-    .get(token) as (RelayUserRow & { session_server_id: string | null }) | undefined;
+    .get(LAST_SEEN_EVERY_SQL, token) as (RelayUserRow & { session_server_id: string | null; session_stale: number }) | undefined;
   if (!row) return null;
-  const { session_server_id: serverId, ...user } = row;
+  const { session_server_id: serverId, session_stale, ...user } = row;
+  noteSeen(db, token, session_stale);
   return { user, serverId };
 }
 

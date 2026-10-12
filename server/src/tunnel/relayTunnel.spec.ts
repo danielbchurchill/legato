@@ -1,12 +1,12 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, setSystemTime, spyOn } from "bun:test";
 import { openDb } from "../db.js";
 import { installLegatoIdentity, LegatoIdentity } from "../auth/legatoIdentity.js";
 import { fakeLegatoFetch, makeTestKey, signTestToken, testClaims, type LegatoReport } from "../auth/legato-test-keys.js";
 import { buildTestApp, createOwnerForTest } from "../auth/test-app.js";
-import { readTunnelCredential, storeTunnelCredential } from "../auth/tunnelCredential.js";
+import { previousTunnelCredential, readTunnelCredential, storeTunnelCredential } from "../auth/tunnelCredential.js";
 import type { Database } from "../sqlite.js";
 import type { TunnelState } from "./client.js";
-import { startFakeRelay } from "./fake-relay.js";
+import { startFakeRelay, type FakeRotation } from "./fake-relay.js";
 import { installRelayTunnel, RelayTunnel, tunnelUrl } from "./relayTunnel.js";
 
 // Issue #310: when this server keeps a tunnel open to legato.fm, and with
@@ -19,12 +19,27 @@ afterEach(async () => {
 });
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const NEXT_YEAR = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString();
+const DAY_MS = 24 * 3600 * 1000;
+const NEXT_YEAR = new Date(Date.now() + 365 * DAY_MS).toISOString();
+const inDays = (days: number) => new Date(Date.now() + days * DAY_MS).toISOString();
 
 async function setup(
-  options: { answer?: (report: LegatoReport) => Response | Error; listen?: boolean; replace?: boolean; slowAnswerTo?: string } = {},
+  options: {
+    answer?: (report: LegatoReport) => Response | Error;
+    listen?: boolean;
+    replace?: boolean;
+    slowAnswerTo?: string;
+    rotate?: () => FakeRotation;
+    rotateCheckMs?: number;
+    ignoreMoves?: boolean;
+  } = {},
 ) {
-  const fake = startFakeRelay({ accept: (credential) => credential.startsWith("live-"), replace: options.replace });
+  const fake = startFakeRelay({
+    accept: (credential) => credential.startsWith("live-"),
+    replace: options.replace,
+    rotate: options.rotate,
+    ignoreMoves: options.ignoreMoves,
+  });
   cleanups.push(() => fake.stop());
   const db = openDb(":memory:");
   const key = makeTestKey();
@@ -47,6 +62,7 @@ async function setup(
     port,
     log: (level, message) => lines.push({ level, message }),
     client: { backoff: { baseMs: 20, capMs: 80 } },
+    rotateCheckMs: options.rotateCheckMs,
   });
   installRelayTunnel(db, tunnel);
   cleanups.push(() => tunnel.stop());
@@ -300,5 +316,302 @@ describe("RelayTunnel", () => {
     await until(() => h.tunnel.state, "connected");
     expect(h.fake.auths).toEqual(["revoked-1", "revoked-1", "live-2"]);
     expect(h.lines.filter((line) => line.level === "warn")).toHaveLength(1);
+  });
+});
+
+// Issue #115: a credential lasts 90 days, and the server swaps it for the
+// next one over the tunnel it has open, well before it runs out.
+describe("RelayTunnel rotation", () => {
+  it("asks for a replacement once less than 60 days are left, stores it, and moves the open tunnel onto it", async () => {
+    const expiresAt = inDays(90);
+    const h = await setup({ rotate: () => ({ credential: "live-2", expiresAt }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(59));
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+    while (h.fake.auths.length < 2) await sleep(10);
+
+    expect(h.fake.auths).toEqual(["live-1", "live-2"]);
+    expect(readTunnelCredential(h.db, h.fake.origin)).toEqual({ origin: h.fake.origin, accountId: "42", credential: "live-2", expiresAt });
+    // No reconnect: a stream playing through the tunnel plays on.
+    expect(h.fake.opened).toBe(1);
+    expect(h.tunnel.state).toBe("connected");
+    expect(h.tunnel.current?.credential).toBe("live-2");
+    // Already replaced, so it doesn't ask again, and a sync keeps the tunnel.
+    h.tunnel.sync();
+    await sleep(100);
+    expect(h.fake.rotates).toBe(1);
+    expect(h.fake.opened).toBe(1);
+  });
+
+  it("doesn't ask while more than 60 days are left", async () => {
+    const h = await setup({ rotate: () => ({ credential: "live-2", expiresAt: inDays(90) }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(61));
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+    await sleep(100);
+    expect(h.fake.rotates).toBe(0);
+  });
+
+  it("asks once an hour at most when legato.fm doesn't answer, as one from before rotation won't", async () => {
+    const h = await setup({ rotate: () => null });
+    h.link("42");
+    h.store("42", "live-1", inDays(10));
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+    while (h.fake.rotates < 1) await sleep(10);
+    // A reconnect is a moment to ask, but not within the hour.
+    h.tunnel.stop();
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+    await sleep(100);
+    expect(h.fake.rotates).toBe(1);
+    expect(stored(h.db, h.fake.origin)).toBe("live-1");
+  });
+
+  it("takes a replacement that arrives on the connection whenever it comes", async () => {
+    const h = await setup();
+    h.link("42");
+    h.store("42", "live-1");
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+
+    h.fake.send({ type: "credential", credential: "live-2", expiresAt: inDays(90) });
+    while (h.fake.auths.length < 2) await sleep(10);
+    expect(h.fake.auths).toEqual(["live-1", "live-2"]);
+    expect(stored(h.db, h.fake.origin)).toBe("live-2");
+    expect(h.lines.map((line) => line.message)).toContainEqual(expect.stringContaining("replaced this server's tunnel credential"));
+  });
+
+  // The coordinator's review asks: a server that was off for longer than
+  // 60 days comes back with a credential nearly gone, and one off for
+  // longer than 90 comes back with one that's gone.
+  it("rotates as soon as the tunnel connects after more than 60 days offline", async () => {
+    const h = await setup({ rotate: () => ({ credential: "live-2", expiresAt: inDays(90) }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(3));
+    h.tunnel.sync();
+    while (h.fake.auths.length < 2) await sleep(10);
+    expect(h.fake.auths).toEqual(["live-1", "live-2"]);
+    expect(stored(h.db, h.fake.origin)).toBe("live-2");
+  });
+
+  it("doesn't connect or ask after more than 90 days offline, and Settings says it's expired", async () => {
+    const h = await setup({ rotate: () => ({ credential: "live-2", expiresAt: inDays(90) }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(-1));
+    h.tunnel.sync();
+    await sleep(100);
+    expect(h.fake.opened).toBe(0);
+    expect(h.fake.rotates).toBe(0);
+    expect(h.tunnel.status).toBe("expired");
+  });
+
+  it("comes back on the replacement it stored when the tunnel drops before it could move onto it", async () => {
+    const h = await setup({ rotate: () => ({ credential: "live-2", expiresAt: inDays(90), then: "drop" }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(30));
+    h.tunnel.sync();
+    while (h.fake.auths.length < 2) await sleep(10);
+    await until(() => h.tunnel.state, "connected");
+    // The new connection signs in with the replacement, and that first
+    // sign-in is what retires the old one on legato.fm.
+    expect(h.fake.auths).toEqual(["live-1", "live-2"]);
+    expect(h.fake.opened).toBe(2);
+    expect(stored(h.db, h.fake.origin)).toBe("live-2");
+    expect(h.fake.rotates).toBe(1);
+  });
+
+  it("comes back on the old credential when the tunnel drops before the replacement arrives, and asks again an hour later", async () => {
+    let answers = 0;
+    const h = await setup({
+      rotateCheckMs: 20,
+      rotate: () => (answers++ === 0 ? "drop" : { credential: "live-2", expiresAt: inDays(90) }),
+    });
+    h.link("42");
+    h.store("42", "live-1", inDays(30));
+    h.tunnel.sync();
+    while (h.fake.opened < 2) await sleep(10);
+    await until(() => h.tunnel.state, "connected");
+    await sleep(100);
+    expect(h.fake.auths).toEqual(["live-1", "live-1"]);
+    expect(h.fake.rotates).toBe(1);
+
+    setSystemTime(new Date(Date.now() + 61 * 60_000));
+    try {
+      while (h.fake.auths.length < 3) await sleep(10);
+    } finally {
+      setSystemTime();
+    }
+    expect(h.fake.auths).toEqual(["live-1", "live-1", "live-2"]);
+    expect(stored(h.db, h.fake.origin)).toBe("live-2");
+    expect(h.fake.opened).toBe(2);
+  });
+
+  // The review: an expiry that isn't a date was stored, and sync() read it
+  // back as NaN.
+  it("refuses a replacement whose expiry isn't a date in the future, says so, and never stores it", async () => {
+    const h = await setup();
+    h.link("42");
+    h.store("42", "live-1");
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+
+    for (const expiresAt of ["not a date", inDays(-1), 1767225600000, null])
+      h.fake.send({ type: "credential", credential: "live-2", expiresAt });
+    await sleep(100);
+    expect(h.fake.auths).toEqual(["live-1"]);
+    expect(stored(h.db, h.fake.origin)).toBe("live-1");
+    expect(h.tunnel.state).toBe("connected");
+    expect(h.lines.filter((line) => line.level === "warn").map((line) => line.message)).toEqual(
+      Array(4).fill(expect.stringContaining("isn't a date in the future")),
+    );
+
+    // One with a real expiry is taken as before, its expiry written the one way.
+    h.fake.send({ type: "credential", credential: "live-2", expiresAt: "2099-01-01T00:00:00Z" });
+    while (h.fake.auths.length < 2) await sleep(10);
+    expect(readTunnelCredential(h.db, h.fake.origin)?.expiresAt).toBe("2099-01-01T00:00:00.000Z");
+  });
+
+  it("drops a replacement for a credential it no longer holds, and keeps the tunnel on the one it has", async () => {
+    const h = await setup();
+    h.link("42");
+    h.store("42", "live-1");
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+
+    // A link stored another credential, and the sync that acts on it hasn't run yet.
+    h.store("42", "live-from-link");
+    h.fake.send({ type: "credential", credential: "live-2", expiresAt: inDays(90) });
+    await sleep(100);
+    expect(h.fake.auths).toEqual(["live-1"]);
+    expect(stored(h.db, h.fake.origin)).toBe("live-from-link");
+    expect(h.tunnel.current?.credential).toBe("live-1");
+  });
+
+  it("keeps the credential it has when the replacement can't be stored", async () => {
+    const h = await setup();
+    h.link("42");
+    h.store("42", "live-1");
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+
+    // The recompute Worker holding the write lock past busy_timeout.
+    h.db.exec("CREATE TRIGGER locked BEFORE UPDATE ON tunnel_credential BEGIN SELECT RAISE(ABORT, 'database is locked'); END");
+    h.fake.send({ type: "credential", credential: "live-2", expiresAt: inDays(90) });
+    await sleep(100);
+    expect(h.fake.auths).toEqual(["live-1"]);
+    expect(stored(h.db, h.fake.origin)).toBe("live-1");
+    expect(h.tunnel.state).toBe("connected");
+    expect(h.lines.filter((line) => line.level === "warn").map((line) => line.message)).toEqual([
+      expect.stringContaining("couldn't store this server's new tunnel credential"),
+    ]);
+  });
+
+  // The review: the replacement was stored over the only credential before
+  // legato.fm had accepted it, so a refusal left the server with nothing
+  // that worked. A restored legato.fm database, or a link racing the
+  // rotation, is refused like this.
+  it("goes back to the credential it replaced when legato.fm refuses the new one, and stays connected", async () => {
+    const h = await setup({ rotate: () => ({ credential: "revoked-2", expiresAt: inDays(90) }) });
+    const expiresAt = inDays(30);
+    h.link("42");
+    h.store("42", "live-1", expiresAt);
+    h.tunnel.sync();
+    while (h.fake.auths.length < 3) await sleep(10);
+    await until(() => h.tunnel.state, "connected");
+
+    expect(h.fake.auths).toEqual(["live-1", "revoked-2", "live-1"]);
+    expect(readTunnelCredential(h.db, h.fake.origin)).toEqual({ origin: h.fake.origin, accountId: "42", credential: "live-1", expiresAt });
+    expect(previousTunnelCredential(h.db, h.fake.origin)).toBeNull();
+    expect(h.tunnel.status).toBe("connected");
+    expect(h.lines.map((line) => line.message)).toContainEqual(expect.stringContaining("went back to the one before it"));
+  });
+
+  it("keeps the credential it replaced until legato.fm accepts the new one, through a restart", async () => {
+    const h = await setup({ ignoreMoves: true, rotate: () => ({ credential: "live-2", expiresAt: inDays(90) }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(30));
+    h.tunnel.sync();
+    while (h.fake.rotates < 1) await sleep(10);
+    while (stored(h.db, h.fake.origin) !== "live-2") await sleep(10);
+
+    // Stored, moved onto, and not answered yet: the old one is still kept.
+    expect(previousTunnelCredential(h.db, h.fake.origin)?.credential).toBe("live-1");
+    // A restart signs in with the new one, and legato.fm's answer is what lets the old one go.
+    h.tunnel.stop();
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+    expect(h.fake.auths).toEqual(["live-1", "live-2"]);
+    expect(previousTunnelCredential(h.db, h.fake.origin)).toBeNull();
+  });
+
+  it("goes back after a restart too, when legato.fm refuses a replacement it never accepted", async () => {
+    // What a rotation leaves when the server restarts before legato.fm answers.
+    const h = await setup();
+    h.link("42");
+    h.store("42", "revoked-2", inDays(90));
+    h.db.prepare("UPDATE tunnel_credential SET previous_credential = 'live-1', previous_expires_at = ?").run(inDays(30));
+    h.tunnel.sync();
+    while (h.fake.auths.length < 2) await sleep(10);
+    await until(() => h.tunnel.state, "connected");
+    expect(h.fake.auths).toEqual(["revoked-2", "live-1"]);
+    expect(stored(h.db, h.fake.origin)).toBe("live-1");
+  });
+
+  it("is refused like any other credential once legato.fm has accepted it", async () => {
+    const h = await setup({ rotate: () => ({ credential: "live-2", expiresAt: inDays(90) }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(30));
+    h.tunnel.sync();
+    while (previousTunnelCredential(h.db, h.fake.origin) || stored(h.db, h.fake.origin) !== "live-2") await sleep(10);
+
+    // Revoked on legato.fm, which retired live-1 when live-2 was first used.
+    h.fake.send({ type: "auth-error", message: "this tunnel credential was revoked or has expired" });
+    await until(() => h.tunnel.state, "refused");
+    expect(h.fake.auths).toEqual(["live-1", "live-2"]);
+  });
+
+  it("forgets the credential a rotation replaced when a link stores another", async () => {
+    const h = await setup({ ignoreMoves: true, rotate: () => ({ credential: "live-2", expiresAt: inDays(90) }) });
+    h.link("42");
+    h.store("42", "live-1", inDays(30));
+    h.tunnel.sync();
+    while (stored(h.db, h.fake.origin) !== "live-2") await sleep(10);
+    h.store("42", "live-from-link");
+    expect(previousTunnelCredential(h.db, h.fake.origin)).toBeNull();
+  });
+});
+
+describe("RelayTunnel status", () => {
+  // Issue #115: a server whose credential legato.fm revoked says so in its
+  // owner's Settings, where linking again is the way back.
+  it("tells the owner, and only the owner, that legato.fm refused the tunnel", async () => {
+    const h = await setup();
+    h.link("42");
+    h.store("42", "live-1");
+    h.tunnel.sync();
+    await until(() => h.tunnel.state, "connected");
+    const status = async (headers: Record<string, string>) =>
+      (await h.app.inject({ method: "GET", url: "/api/v1/auth/status", headers })).json().legato;
+    expect((await status({ authorization: `Bearer ${h.owner.token}` })).tunnel).toBe("connected");
+
+    // Revoked on legato.fm: the next answer is a refusal.
+    h.fake.send({ type: "auth-error", message: "this tunnel credential was revoked or has expired" });
+    await until(() => h.tunnel.state, "refused");
+    expect((await status({ authorization: `Bearer ${h.owner.token}` })).tunnel).toBe("refused");
+    expect(await status({})).not.toHaveProperty("tunnel");
+  });
+
+  it("says expired for a stored credential that ran out, and stopped once there's none", async () => {
+    const h = await setup();
+    h.link("42");
+    h.store("42", "live-1", "2026-01-01T00:00:00.000Z");
+    h.tunnel.sync();
+    expect(h.tunnel.status).toBe("expired");
+    h.db.prepare("DELETE FROM tunnel_credential").run();
+    h.tunnel.sync();
+    expect(h.tunnel.status).toBe("stopped");
   });
 });
