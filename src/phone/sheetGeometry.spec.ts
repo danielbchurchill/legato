@@ -25,6 +25,14 @@ describe('detentHeights', () => {
     expect(IPHONE.peek).toBe(171 + 34)
   })
 
+  it("leaves search's 70px of map at large when asked, with medium and peek where they were", () => {
+    expect(detentHeights({ viewportHeight: 844, safeTop: 54, safeBottom: 34, peekContent: 150, largeTopGap: 70 })).toEqual({
+      peek: 184,
+      medium: 506,
+      large: 720,
+    })
+  })
+
   it('keeps the detents in order on a short screen', () => {
     const short = detentHeights({ viewportHeight: 320, safeTop: 0, safeBottom: 0, peekContent: 200 })
     expect(short.peek).toBeLessThanOrEqual(short.medium)
