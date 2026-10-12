@@ -1,5 +1,6 @@
 import type { ReactNode, Ref } from 'react'
 import { Icon, type IconName } from './Icon'
+import { useTouchLayout } from './touchLayout'
 
 /* Text buttons, v2. Four shapes, by how much the action matters:
  *
@@ -16,10 +17,13 @@ import { Icon, type IconName } from './Icon'
  *
  * Pills at 32px (28 inside a dense row, 36 for a hero action), 13/500, with an optional 16px icon —
  * filled, since an outline glyph on the gradient reads as a hole. An icon
- * with no label is a circle, named by aria-label. */
+ * with no label is a circle, named by aria-label. `xl` is the phone's page
+ * action (#389), 50px and 16/500, such as Library health's Review and
+ * Rescan. In the phone's touch layout (touchLayout.ts) every size takes taps
+ * across at least 44px. */
 
 type ButtonVariant = 'primary' | 'secondary' | 'link' | 'destructive'
-type ButtonSize = 'sm' | 'md' | 'lg'
+type ButtonSize = 'sm' | 'md' | 'lg' | 'xl'
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   primary: 'rounded-full bg-[image:var(--accent-fill)] text-[var(--color-on-accent)] hover:brightness-110 disabled:opacity-40',
@@ -32,6 +36,7 @@ const SIZE_CLASSES: Record<ButtonSize, string> = {
   sm: 'h-[28px]',
   md: 'h-[32px]',
   lg: 'h-[36px]',
+  xl: 'h-[50px]',
 }
 
 /* A button always has a name: a label, or else an icon and an aria-label.
@@ -72,9 +77,11 @@ export function Button({
   'aria-label': ariaLabel,
   ref,
 }: ButtonProps) {
+  const touch = useTouchLayout()
   const pill = variant !== 'link'
   const iconOnly = icon != null && children == null
-  const padding = pill ? (iconOnly ? 'aspect-square' : icon ? 'pl-[10px] pr-[14px]' : 'px-[16px]') : ''
+  const xl = size === 'xl'
+  const padding = pill ? (iconOnly ? 'aspect-square' : icon ? 'pl-[10px] pr-[14px]' : xl ? 'px-[22px]' : 'px-[16px]') : ''
   return (
     <button
       ref={ref}
@@ -82,9 +89,9 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       aria-label={ariaLabel}
-      className={`inline-flex shrink-0 items-center justify-center gap-[6px] text-[length:var(--text-secondary)] leading-none font-medium whitespace-nowrap transition-[color,background-color,filter] duration-[var(--motion-fast)] ease-[var(--ease-out)] disabled:pointer-events-none ${
+      className={`inline-flex shrink-0 items-center justify-center gap-[6px] ${xl ? 'text-[16px]' : 'text-[length:var(--text-secondary)]'} leading-none font-medium whitespace-nowrap transition-[color,background-color,filter] duration-[var(--motion-fast)] ease-[var(--ease-out)] disabled:pointer-events-none ${
         pill ? SIZE_CLASSES[size] : ''
-      } ${padding} ${VARIANT_CLASSES[variant]} ${className}`}
+      } ${padding} ${VARIANT_CLASSES[variant]} ${touch ? 'touch-target' : ''} ${className}`}
     >
       {icon && <Icon name={icon} size={16} filled={variant === 'primary'} />}
       {children}

@@ -3,6 +3,7 @@ import { act, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Button } from './Button'
+import { TouchLayoutContext } from './touchLayout'
 
 const roots: Root[] = []
 
@@ -33,5 +34,26 @@ describe('Button', () => {
     expect(iconAlone.getAttribute('aria-label')).toBe('Shuffle library')
     // A circle: as wide as the pill is tall.
     expect(iconAlone.classList).toContain('aspect-square')
+  })
+
+  it('takes taps across 44px in the touch layout, however small it is drawn', () => {
+    expect(render(<Button>clear</Button>).classList).not.toContain('touch-target')
+    const touch = render(
+      <TouchLayoutContext.Provider value={true}>
+        <Button>clear</Button>
+      </TouchLayoutContext.Provider>,
+    )
+    expect(touch.classList).toContain('touch-target')
+  })
+
+  it("is 50px with 16px words at the phone's page size", () => {
+    const xl = render(
+      <Button variant="primary" size="xl">
+        Review 3 fixes
+      </Button>,
+    )
+    expect(xl.classList).toContain('h-[50px]')
+    expect(xl.classList).toContain('text-[16px]')
+    expect(xl.classList).not.toContain('text-[length:var(--text-secondary)]')
   })
 })

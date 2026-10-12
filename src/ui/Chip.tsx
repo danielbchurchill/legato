@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react'
+import { useTouchLayout } from './touchLayout'
 
 /* A filter or connection chip: 28px pill, 13/500 ink-2 inside a
  * --color-line-strong border. Active inverts to an ink fill with canvas text,
  * the strongest "this one" the palette has short of the accent. The optional
  * count rides at 70% in mono 11, so it reads as a property of the label
- * rather than a second label. */
+ * rather than a second label. A chip that's a button takes taps across 44px
+ * in the phone's touch layout (touchLayout.ts). */
 
 type ChipProps = {
   children: ReactNode
@@ -17,6 +19,7 @@ type ChipProps = {
 }
 
 export function Chip({ children, active = false, count, onClick, className = '', title }: ChipProps) {
+  const touch = useTouchLayout()
   const classes = `inline-flex h-[28px] shrink-0 items-center gap-[6px] rounded-full border px-[12px] text-[length:var(--text-secondary)] leading-none font-medium whitespace-nowrap transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
     active
       ? 'border-[var(--color-ink)] bg-[var(--color-ink)] text-[var(--color-canvas)]'
@@ -36,7 +39,7 @@ export function Chip({ children, active = false, count, onClick, className = '',
     )
   }
   return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={classes} title={title}>
+    <button type="button" onClick={onClick} aria-pressed={active} className={`${classes} ${touch ? 'touch-target' : ''}`} title={title}>
       {content}
     </button>
   )

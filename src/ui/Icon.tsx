@@ -1,4 +1,5 @@
 import add from '../assets/icons/add.svg?raw'
+import arrowLeft from '../assets/icons/arrow-left.svg?raw'
 import arrowSwap from '../assets/icons/arrow-swap.svg?raw'
 import cancel from '../assets/icons/cancel.svg?raw'
 import checkmark from '../assets/icons/checkmark.svg?raw'
@@ -87,9 +88,13 @@ import volumeMute from '../assets/icons/volume-mute.svg?raw'
  *
  * `computer`, `home`, `cloud` and `globe` are the rail's connection
  * indicator (#118), one per path: this computer, the home network, through
- * legato.fm, and a custom address. */
+ * legato.fm, and a custom address.
+ *
+ * `arrow-left` is Android's back, in the top app bar of a pushed page on
+ * the phone (#389). iOS's back is the chevron, as each platform draws it. */
 const GLYPHS = {
   add,
+  'arrow-left': arrowLeft,
   'arrow-swap': arrowSwap,
   cancel,
   checkmark,
