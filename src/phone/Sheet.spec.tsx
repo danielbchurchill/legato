@@ -116,6 +116,73 @@ describe('Sheet', () => {
     expect(sheet().style.transform).toBe('translate3d(0, 0px, 0)')
   })
 
+  it('says what a drag started on, so the mini player dragged up can open up next', () => {
+    HTMLElement.prototype.setPointerCapture = vi.fn()
+    const asked: { detent: Detent; origin: Element | null | undefined }[] = []
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() =>
+      root.render(
+        <Sheet
+          label="Library and player"
+          detent="peek"
+          onDetentChange={(detent, origin) => asked.push({ detent, origin })}
+          header={<p data-mini>the mini player</p>}
+          wash="linear-gradient(red, transparent)"
+        >
+          <p>the content</p>
+        </Sheet>,
+      ),
+    )
+    const mini = container.querySelector('[data-mini]')!
+    const handle = container.querySelector<HTMLButtonElement>('section > div > button')!
+    const drag = (from: Element) => {
+      for (const [type, y] of [
+        ['pointerdown', 800],
+        ['pointermove', 700],
+        ['pointermove', 500],
+        ['pointerup', 500],
+      ] as const) {
+        const event = new MouseEvent(type, { bubbles: true, clientX: 195, clientY: y, button: 0 })
+        Object.defineProperty(event, 'pointerId', { value: 1 })
+        act(() => from.dispatchEvent(event))
+      }
+    }
+    drag(mini)
+    expect(asked).toEqual([{ detent: 'medium', origin: mini }])
+
+    // The handle's target lies over the top of the header: a drag that
+    // starts on it started on what it covers.
+    document.elementsFromPoint = () => [handle, mini, container]
+    drag(handle)
+    expect(asked[1].origin).toBe(mini)
+  })
+
+  it('draws a wash over the glass from its top edge, under everything in it', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() =>
+      root.render(
+        <Sheet
+          label="Library and player"
+          detent="large"
+          onDetentChange={() => undefined}
+          header={null}
+          wash="linear-gradient(red, transparent)"
+        >
+          <p>the content</p>
+        </Sheet>,
+      ),
+    )
+    const wash = container.querySelector<HTMLElement>('section')!.firstElementChild as HTMLElement
+    expect(wash.style.background).toContain('linear-gradient')
+    expect(wash.className).toContain('pointer-events-none')
+  })
+
   it('lets a tap on the dim at large go back to the map', () => {
     const { container, changes } = renderSheet('large')
     const dim = container.querySelector<HTMLElement>('[aria-hidden="true"].absolute.inset-0')!

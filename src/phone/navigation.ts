@@ -2,9 +2,10 @@ import { useSyncExternalStore } from 'react'
 import type { WorklistKind } from '../shell/panels'
 
 /* Where the phone is (#389): the pushed pages, full-screen over the map,
- * such as Settings and Library health, each with the platform's own back;
- * the overlays the sheet shows in place of its tabs, search and node
- * detail; and a view open in its collections tab (below).
+ * such as Settings and Library health, each with the platform's own back,
+ * and Now playing, with its collapse chevron for one; the overlays the
+ * sheet shows in place of its tabs, search and node detail; and a view
+ * open in its collections tab (below).
  *
  * All three live in the browser's history, so Android's back gesture, the
  * browser's back button and the app's own back all go back the same way:
@@ -15,13 +16,13 @@ import type { WorklistKind } from '../shell/panels'
  * only carry state. */
 
 /* Library health's lists each push as a page of their own. */
-export type PhonePage = 'settings' | 'health' | `worklist:${WorklistKind}`
+export type PhonePage = 'settings' | 'health' | `worklist:${WorklistKind}` | 'now-playing'
 
 /** What the sheet shows over its tabs: search, or a node's detail. */
 export type SheetOverlay = { kind: 'search' } | { kind: 'node'; id: number }
 
 const WORKLISTS: readonly WorklistKind[] = ['duplicates', 'missing', 'enrichment', 'tag-writes', 'gaps']
-const PAGES: readonly PhonePage[] = ['settings', 'health', ...WORKLISTS.map((list) => `worklist:${list}` as const)]
+const PAGES: readonly PhonePage[] = ['settings', 'health', ...WORKLISTS.map((list) => `worklist:${list}` as const), 'now-playing']
 
 /** The list a worklist page shows; null for any other page. */
 export function worklistOf(page: PhonePage): WorklistKind | null {
@@ -110,6 +111,18 @@ export function pushPhonePage(page: PhonePage) {
  * nothing, rather than leaving the app. */
 export function popPhonePage() {
   if (place.pages.length === 0) return
+  history.back()
+}
+
+/** Closes the top page, then runs `then` once the history is back where it
+ * was. Something that goes somewhere new as a page closes, such as Now
+ * playing's go to album opening the album's detail, has to wait: a back is
+ * answered later, so an entry pushed straight away would be the one it
+ * leaves. With no page open, `then` runs now. */
+export function popPhonePageThen(then: () => void) {
+  if (place.pages.length === 0) return then()
+  // After onPopState, which subscribe added first, so `place` is current.
+  window.addEventListener('popstate', () => then(), { once: true })
   history.back()
 }
 

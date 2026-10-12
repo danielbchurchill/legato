@@ -4,8 +4,8 @@ import { CoverArt } from '../ui/CoverArt'
 import { IconButton } from '../ui/IconButton'
 import { PlayCircle } from '../ui/PlayCircle'
 import { formatDuration } from '../ui/format'
-import { performer, release, useNodeDetail } from '../panels/useNodeDetail'
 import type { usePlayback } from '../playback/usePlayback'
+import { usePlayingTrack } from './usePlayingTrack'
 
 /* The mini player (#389, Legato Mobile v2 "Mini player row"): the sheet's
  * header at peek. The cover, the title over "artist · album" on one line,
@@ -16,7 +16,10 @@ import type { usePlayback } from '../playback/usePlayback'
  * It reads the same playback state the desktop's player does, so it drives
  * the native player in the desktop app and the stream in a browser alike.
  * With nothing loaded it says what the desktop's idle pill says, "Nothing
- * playing" and Shuffle library, in the same row. */
+ * playing" and Shuffle library, in the same row.
+ *
+ * Tapping the cover opens Now playing (screen 7); dragging the row up opens
+ * up next (PhoneShell). */
 
 type Playback = ReturnType<typeof usePlayback>
 
@@ -29,15 +32,12 @@ type MiniPlayerProps = {
    * map is empty or the server can't be reached. */
   canShuffle: boolean
   onShuffleLibrary: () => void
+  onOpenNowPlaying: () => void
 }
 
-export function MiniPlayer({ playback, artist, compact, canShuffle, onShuffleLibrary }: MiniPlayerProps) {
+export function MiniPlayer({ playback, artist, compact, canShuffle, onShuffleLibrary, onOpenNowPlaying }: MiniPlayerProps) {
   const { status, currentTitle, problem, queueBusy } = playback
-  const nodeId = status.currentRecordingNodeId
-  const { node } = useNodeDetail(currentTitle != null ? nodeId : null)
-  const detail = node != null && node.id === nodeId ? node : null
-  const artistName = (detail && performer(detail)?.other_title) ?? artist
-  const album = detail ? (release(detail)?.other_title ?? null) : null
+  const { nodeId, artist: artistName, album } = usePlayingTrack(playback, artist)
 
   if (currentTitle == null) {
     return (
@@ -70,14 +70,22 @@ export function MiniPlayer({ playback, artist, compact, canShuffle, onShuffleLib
   return (
     <div role="region" aria-label="Player">
       <Row columns={compact ? 'grid-cols-[40px_minmax(0,1fr)_44px]' : 'grid-cols-[48px_minmax(0,1fr)_44px_44px]'}>
-        <CoverArt
-          nodeId={nodeId}
-          size="thumb"
-          alt=""
-          radius={compact ? 'none' : 'art'}
-          className={compact ? 'rounded-[5px]' : ''}
-          style={{ width: compact ? 40 : 48, height: compact ? 40 : 48 }}
-        />
+        {/* The 40px cover takes taps across 44px. */}
+        <button
+          type="button"
+          aria-label="Open now playing"
+          onClick={onOpenNowPlaying}
+          className={`flex ${compact ? 'touch-target rounded-[5px]' : 'rounded-[var(--radius-art)]'}`}
+        >
+          <CoverArt
+            nodeId={nodeId}
+            size="thumb"
+            alt=""
+            radius={compact ? 'none' : 'art'}
+            className={compact ? 'rounded-[5px]' : ''}
+            style={{ width: compact ? 40 : 48, height: compact ? 40 : 48 }}
+          />
+        </button>
         <div className="flex min-w-0 flex-col">
           <span title={currentTitle} className={`truncate text-[var(--color-ink)] ${compact ? 'text-body font-medium' : 'text-heading'}`}>
             {currentTitle}

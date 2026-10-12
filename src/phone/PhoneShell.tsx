@@ -2,27 +2,31 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { flushSync } from 'react-dom'
 import { AppShell } from '../shell/AppShell'
 import { ShellLayoutContext, useWindowSize } from '../shell/layout'
-import type { NowPlayingTab } from '../shell/panels'
 import { Button } from '../ui/Button'
 import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { Tabs } from '../ui/Tabs'
 import { plural } from '../ui/format'
+import { useCoverColor, withAlpha } from '../ui/coverColor'
 import { useLibraryChanges, useLibraryStats } from '../library/useLibraryChanges'
-import { NowPlaying } from '../panels/NowPlaying'
 import { ServerUnreachableOverShell, type UnreachableView } from '../connect/ServerUnreachable'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
-import type { usePlayback } from '../playback/usePlayback'
+import { NEXT_REPEAT_MODE, type RepeatMode, type usePlayback } from '../playback/usePlayback'
 import { MAP_CONTROLS_CLEARANCE, MapControls } from './MapControls'
 import { MiniPlayer } from './MiniPlayer'
+import { NowPlayingScreen } from './NowPlayingScreen'
 import { PhoneCollections } from './PhoneCollections'
 import { PhoneLibrary } from './PhoneLibrary'
 import { PhonePages } from './PhonePages'
 import { NodeBody, NodeControls, NodeHeader } from './PhoneNode'
 import { SearchField, SearchResultsList } from './PhoneSearch'
 import { Sheet } from './Sheet'
+import { UpNextList } from './UpNextList'
+import { UpNextTransport } from './UpNextTransport'
 import {
   closeSheetView,
+  popPhonePage,
+  popPhonePageThen,
   popSheetOverlay,
   pushPhonePage,
   pushSheetOverlay,
@@ -35,8 +39,9 @@ import { NODE_CONTROLS_CLEARANCE, openPhoneNode, usePhoneNode } from './nodeDeta
 import { phonePlatform, phoneShellLayout } from './phoneLayout'
 import { searchPeekLine, usePhoneSearch } from './searchState'
 import { useSafeArea } from './safeArea'
-import { SEARCH_TOP_GAP, type Detent, type DetentHeights } from './sheetGeometry'
+import { SEARCH_TOP_GAP, dragOpensUpNext, type Detent, type DetentHeights } from './sheetGeometry'
 import { OVERLAY_DETENT, overlayTransition, type Depth } from './sheetOverlays'
+import { usePlayingFrom, usePlayingTrack } from './usePlayingTrack'
 
 /* The phone layout (#389, Claude Design's Legato Mobile v2): the map edge to
  * edge as the ground, the search capsule and node-type chips floating over
@@ -45,9 +50,13 @@ import { OVERLAY_DETENT, overlayTransition, type Depth } from './sheetOverlays'
  * same state: the same queue, map, settings and search.
  *
  * The library and collections tabs are the handoff's own (PhoneLibrary,
- * PhoneCollections). Up next shows the desktop's now playing for now; a
- * later step of #389 draws it as the handoff does, and adds now playing.
- * Settings and Library health are pushed pages (PhonePages.tsx).
+ * PhoneCollections). Settings and Library health are pushed pages
+ * (PhonePages.tsx).
+ *
+ * Up next is the handoff's screen 6: dragging the mini player up opens it
+ * at large, and while it's open the header is the full transport in place
+ * of the mini player. A tap on either's cover opens Now playing (screen 7)
+ * over everything, as a pushed page of its own.
  *
  * Search and a node's detail are overlays the sheet shows in place of its
  * tabs (PhoneSearch.tsx, PhoneNode.tsx), kept in the history
@@ -125,7 +134,6 @@ export function PhoneShell({
   const sheetView = useSheetView()
   const [detent, setDetent] = useState<Detent>(() => (overlay ? OVERLAY_DETENT[overlay.kind] : sheetView ? 'large' : 'peek'))
   const [tab, setTab] = useState<SheetTab>(() => (sheetView ? 'collections' : 'library'))
-  const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('next')
   const [heights, setHeights] = useState<DetentHeights>({ peek: 0, medium: 0, large: 0 })
   const peekHeight = heights.peek
   const pages = usePhonePages()
@@ -146,6 +154,27 @@ export function PhoneShell({
   const search = usePhoneSearch(searching)
   const nodeId = overlay?.kind === 'node' ? overlay.id : null
   const node = usePhoneNode(nodeId, playback)
+
+  const track = usePlayingTrack(playback, playingArtist)
+  const playingFrom = usePlayingFrom(playback, track.album)
+  const repeatMode = (settings.repeatMode as RepeatMode) || 'off'
+  const cycleRepeat = () => void updateSettings({ repeatMode: NEXT_REPEAT_MODE[repeatMode] })
+  // Up next's full transport replaces the mini player above peek, where
+  // the mini player heads the sheet: under no overlay.
+  const upNextOpen = overlay == null && tab === 'next' && detent !== 'peek' && playback.currentTitle != null
+  const coverColor = useCoverColor(upNextOpen ? track.nodeId : null)
+
+  // Now playing stays mounted while it slides away.
+  const nowPlayingOpen = pages[pages.length - 1] === 'now-playing'
+  const [nowPlayingShown, setNowPlayingShown] = useState(nowPlayingOpen)
+  if (nowPlayingOpen && !nowPlayingShown) setNowPlayingShown(true)
+  const openNowPlaying = useCallback(() => pushPhonePage('now-playing'), [])
+  // With nothing playing there's nothing to show: a reload, or the queue
+  // running out.
+  const nothingPlaying = playback.currentTitle == null
+  useEffect(() => {
+    if (nowPlayingOpen && nothingPlaying) popPhonePage()
+  }, [nowPlayingOpen, nothingPlaying])
 
   const safe = useSafeArea()
   const windowSize = useWindowSize()
@@ -240,6 +269,19 @@ export function PhoneShell({
     setTab(next)
   }
 
+  // Dragging the mini player up opens up next, at large: the handoff's
+  // screen 6. A drag anywhere else in the sheet keeps its tab.
+  const miniPlayerRef = useRef<HTMLDivElement>(null)
+  const onDetentChange = (next: Detent, origin?: Element | null) => {
+    const fromMiniPlayer = origin != null && miniPlayerRef.current?.contains(origin) === true
+    if (dragOpensUpNext({ current: detent, next, fromMiniPlayer })) {
+      changeTab('next')
+      setDetent('large')
+      return
+    }
+    setDetent(next)
+  }
+
   const stats = useLibraryStats(useLibraryChanges())
 
   // An album, an artist or a person opens its detail over the tab, and back
@@ -248,20 +290,9 @@ export function PhoneShell({
     library: <PhoneLibrary onOpenNode={openNode} playback={playback} noLibrary={firstRun != null} onShowMap={() => setDetent('peek')} />,
     collections: <PhoneCollections onOpenNode={openNode} playback={playback} />,
     next: (
-      <div className="p-[12px]">
-        <ErrorBoundary key={playback.status.currentRecordingNodeId} fallback={tabError}>
-          <NowPlaying
-            nodeId={playback.status.currentRecordingNodeId}
-            tab={nowPlayingTab}
-            onTabChange={setNowPlayingTab}
-            playback={playback}
-            onFocusNode={openNode}
-            onOpenDetails={openNode}
-            onShuffleLibrary={onShuffleLibrary}
-            onShowOnMap={showOnMap}
-          />
-        </ErrorBoundary>
-      </div>
+      <ErrorBoundary fallback={tabError}>
+        <UpNextList playback={playback} from={playingFrom} onShuffleLibrary={onShuffleLibrary} />
+      </ErrorBoundary>
     ),
   }
 
@@ -306,12 +337,15 @@ export function PhoneShell({
                   : 'Library and player'
             }
             detent={detent}
-            onDetentChange={setDetent}
+            onDetentChange={onDetentChange}
             onExpansion={onExpansion}
             onHeightsChange={setHeights}
             largeTopGap={overlay?.kind === 'search' ? SEARCH_TOP_GAP : undefined}
             dim={overlay?.kind !== 'search'}
             overlayKey={overlay?.kind === 'node' ? `node:${overlay.id}` : overlay?.kind}
+            // The cover's colour over the top 300px, as the handoff's up
+            // next frame draws it.
+            wash={upNextOpen && coverColor ? `linear-gradient(180deg, ${withAlpha(coverColor, 0.38)} 0%, transparent 300px)` : undefined}
             overlay={
               overlay?.kind === 'search' ? (
                 <SearchResultsList
@@ -330,14 +364,29 @@ export function PhoneShell({
                 <NodeHeader node={node} playback={playback} onOpenNode={openFromSheet} />
               ) : overlay?.kind === 'search' ? null : (
                 <>
-                  <MiniPlayer
-                    playback={playback}
-                    artist={playingArtist}
-                    compact={detent === 'large'}
-                    canShuffle={canShuffle}
-                    onShuffleLibrary={onShuffleLibrary}
-                  />
-                  <div className="mt-[6px] border-b border-[var(--color-line)] px-[20px]">
+                  {upNextOpen ? (
+                    <UpNextTransport
+                      playback={playback}
+                      track={track}
+                      repeatMode={repeatMode}
+                      onCycleRepeat={cycleRepeat}
+                      onOpenNowPlaying={openNowPlaying}
+                    />
+                  ) : (
+                    <div ref={miniPlayerRef}>
+                      <MiniPlayer
+                        playback={playback}
+                        artist={playingArtist}
+                        compact={detent === 'large'}
+                        canShuffle={canShuffle}
+                        onShuffleLibrary={onShuffleLibrary}
+                        onOpenNowPlaying={openNowPlaying}
+                      />
+                    </div>
+                  )}
+                  {/* Under up next's transport the tabs sit inside its 20px
+                   * margins, hairline and all. */}
+                  <div className={`border-b border-[var(--color-line)] ${upNextOpen ? 'mx-[20px] mt-[10px]' : 'mt-[6px] px-[20px]'}`}>
                     <Tabs label="sheet" variant="underline" size="lg" options={TABS} value={tab} onChange={changeTab} />
                   </div>
                 </>
@@ -374,6 +423,30 @@ export function PhoneShell({
           onSetThemePreference={onSetThemePreference}
           onShowOnMap={showOnMap}
         />
+
+        {/* Each way out closes it first, a back in the history, and only
+         * then goes on: opening a node adds an entry of its own. */}
+        {nowPlayingShown && (
+          <NowPlayingScreen
+            open={nowPlayingOpen}
+            onClose={popPhonePage}
+            onClosed={() => setNowPlayingShown(false)}
+            playback={playback}
+            track={track}
+            from={playingFrom}
+            platform={platform}
+            repeatMode={repeatMode}
+            onCycleRepeat={cycleRepeat}
+            onShowOnMap={(id) => popPhonePageThen(() => showOnMap(id))}
+            onOpenNode={(id) => popPhonePageThen(() => openPhoneNode(id))}
+            onOpenUpNext={() =>
+              popPhonePageThen(() => {
+                changeTab('next')
+                setDetent('large')
+              })
+            }
+          />
+        )}
       </AppShell>
     </ShellLayoutContext.Provider>
   )

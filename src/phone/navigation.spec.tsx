@@ -8,6 +8,7 @@ import {
   currentSheetOverlays,
   openSheetView,
   popPhonePage,
+  popPhonePageThen,
   popSheetOverlay,
   pushPhonePage,
   pushSheetOverlay,
@@ -100,6 +101,46 @@ describe('phone navigation', () => {
     history.back()
     await back
     expect(seen.at(-1)).toEqual(['settings'])
+  })
+
+  it("keeps Now playing in the history too, so Android's back closes it", async () => {
+    mount()
+    act(() => pushPhonePage('now-playing'))
+    expect(seen.at(-1)).toEqual(['now-playing'])
+    const back = popped()
+    history.back()
+    await back
+    expect(seen.at(-1)).toEqual([])
+  })
+
+  it('closes a page, then goes on once the back has landed: a node opened from Now playing', async () => {
+    mount()
+    act(() => pushPhonePage('now-playing'))
+    const back = popped()
+    // The entry it goes on from: the one under Now playing.
+    let pagesThen: unknown = null
+    popPhonePageThen(() => {
+      pagesThen = (history.state as { legatoPhonePages?: unknown } | null)?.legatoPhonePages
+      pushSheetOverlay({ kind: 'node', id: 7 })
+    })
+    // Nothing happens until the back is answered.
+    expect(currentSheetOverlays()).toEqual([])
+    await back
+    expect(pagesThen ?? []).toEqual([])
+    expect(currentSheetOverlays()).toEqual([{ kind: 'node', id: 7 }])
+    // The node took the closed page's place: back from it is the map.
+    const second = popped()
+    history.back()
+    await second
+    expect(currentSheetOverlays()).toEqual([])
+    expect(seen.at(-1)).toEqual([])
+  })
+
+  it('goes on at once with no page to close', () => {
+    mount()
+    let ran = false
+    popPhonePageThen(() => (ran = true))
+    expect(ran).toBe(true)
   })
 
   it("pops a page with the page's own back, through the history", async () => {

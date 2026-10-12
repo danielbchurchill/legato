@@ -59,7 +59,9 @@ type SheetProps = {
   /** The sheet's accessible name; the handle is named after it. */
   label: string
   detent: Detent
-  onDetentChange: (detent: Detent) => void
+  /** A drag asks with the element it started on, so where it began can
+   * decide where it goes: the mini player dragged up opens up next. */
+  onDetentChange: (detent: Detent, origin?: Element | null) => void
   /** Under the handle, and always on screen: the part that drags. */
   header: ReactNode
   /** Under the header at peek only, in place of the content. */
@@ -82,17 +84,31 @@ type SheetProps = {
   onExpansion?: (progress: number, animate: boolean) => void
   /** Each detent's height, whenever they change. */
   onHeightsChange?: (heights: DetentHeights) => void
+  /** A background over the glass from the sheet's top edge, under
+   * everything in it: up next's cover-colour wash. */
+  wash?: string
 }
 
 type Drag = {
   source: 'pointer' | 'touch'
   id: number
+  /** What the drag started on. */
+  origin: Element | null
   startX: number
   startY: number
   startHeight: number
   samples: Sample[]
   /** The drag is moving the sheet. */
   active: boolean
+}
+
+/* What a drag started on. The handle's 44px target lies over the top of the
+ * header, the mini player's included, so a drag that starts on the handle
+ * started on whatever it covers. */
+function dragOrigin(target: EventTarget | null, x: number, y: number, handle: HTMLElement | null): Element | null {
+  const el = target instanceof Element ? target : null
+  if (!el || !handle?.contains(el) || typeof document.elementsFromPoint !== 'function') return el
+  return document.elementsFromPoint(x, y).find((under) => !handle.contains(under)) ?? null
 }
 
 /* Whether everything between a touch and the content's root is scrolled to
@@ -118,10 +134,12 @@ export function Sheet({
   dim = true,
   onExpansion,
   onHeightsChange,
+  wash,
 }: SheetProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const sheetRef = useRef<HTMLElement>(null)
   const headerRef = useRef<HTMLDivElement>(null)
+  const handleRef = useRef<HTMLButtonElement>(null)
   const peekRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -238,7 +256,7 @@ export function Sheet({
       const hs = heightsRef.current
       const target = snapDetent(hs, heightRef.current, cancelled ? 0 : releaseVelocity(drag.samples, t))
       apply(hs[target], !reducedRef.current)
-      if (target !== detentRef.current) onDetentChangeRef.current(target)
+      if (target !== detentRef.current) onDetentChangeRef.current(target, drag.origin)
     },
     [apply],
   )
@@ -251,6 +269,7 @@ export function Sheet({
     dragRef.current = {
       source: 'pointer',
       id: e.pointerId,
+      origin: dragOrigin(e.target, e.clientX, e.clientY, handleRef.current),
       startX: e.clientX,
       startY: e.clientY,
       startHeight: heightRef.current,
@@ -298,6 +317,7 @@ export function Sheet({
       dragRef.current = {
         source: 'touch',
         id: touch.identifier,
+        origin: e.target instanceof Element ? e.target : null,
         startX: touch.clientX,
         startY: touch.clientY,
         startHeight: heightRef.current,
@@ -373,6 +393,7 @@ export function Sheet({
           visibility: heights.large > 0 ? undefined : 'hidden',
         }}
       >
+        {wash && <div aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-t-[28px]" style={{ background: wash }} />}
         <div
           ref={headerRef}
           className="relative shrink-0 touch-none pt-[23px] select-none"
@@ -385,6 +406,7 @@ export function Sheet({
            * detents, for a keyboard or a screen reader; its target is 44px
            * tall, over the top of the header. */}
           <button
+            ref={handleRef}
             type="button"
             aria-label={`${label}, ${DETENT_NAME[detent]}`}
             onClick={() => onDetentChange(nextDetent(detent))}
