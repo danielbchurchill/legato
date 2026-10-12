@@ -20,6 +20,9 @@ import { Icon } from './Icon'
 
 type PlayCircleProps = {
   size?: number
+  /** The glyph's size, where 0.45 × size would be too big: the phone's
+   * 64 and 76px transport carry the handoff's 26 and 30px glyphs. */
+  iconSize?: number
   variant?: 'accent' | 'ink'
   playing?: boolean
   label: string
@@ -28,7 +31,16 @@ type PlayCircleProps = {
   className?: string
 }
 
-export function PlayCircle({ size = 40, variant = 'accent', playing = false, label, onClick, disabled, className = '' }: PlayCircleProps) {
+export function PlayCircle({
+  size = 40,
+  iconSize,
+  variant = 'accent',
+  playing = false,
+  label,
+  onClick,
+  disabled,
+  className = '',
+}: PlayCircleProps) {
   const accent = variant === 'accent'
   return (
     <button
@@ -43,7 +55,7 @@ export function PlayCircle({ size = 40, variant = 'accent', playing = false, lab
       } ${className}`}
       style={{ width: size, height: size }}
     >
-      <Icon name={playing ? 'pause' : 'play'} size={Math.round(size * 0.45)} filled />
+      <Icon name={playing ? 'pause' : 'play'} size={iconSize ?? Math.round(size * 0.45)} filled />
     </button>
   )
 }

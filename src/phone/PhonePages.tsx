@@ -22,7 +22,10 @@ import type { PhonePlatform } from './phoneLayout'
  * (TouchLayoutContext): the desktop controls a page borrows, its worklists
  * and the legato.fm account group, take 44px targets there. */
 
-const PAGE_TITLE: Record<PhonePage, string> = {
+/* Now playing draws itself (NowPlayingScreen.tsx); these are the rest. */
+type PushedPage = Exclude<PhonePage, 'now-playing'>
+
+const PAGE_TITLE: Record<PushedPage, string> = {
   settings: 'Settings',
   health: 'Library health',
   'worklist:duplicates': 'Possible duplicates',
@@ -48,8 +51,9 @@ export function PhonePages({ platform, settings, updateSettings, themePreference
   // survives the list being popped and pushed again, as the desktop's does.
   const [gapField, setGapField] = useState<GapField>('unmatched')
   const page = pages[pages.length - 1]
-  if (page == null) return null
-  const back = pages.length > 1 ? PAGE_TITLE[pages[pages.length - 2]] : 'Map'
+  if (page == null || page === 'now-playing') return null
+  const below = pages[pages.length - 2]
+  const back = below == null || below === 'now-playing' ? 'Map' : PAGE_TITLE[below]
 
   // Anything a list opens on the map shows the map: every page closes.
   const showOnMap = (id: number) => {
@@ -92,7 +96,7 @@ export function PhonePages({ platform, settings, updateSettings, themePreference
   )
 }
 
-function PageFrame({ page, platform, back, children }: { page: PhonePage; platform: PhonePlatform; back: string; children: ReactNode }) {
+function PageFrame({ page, platform, back, children }: { page: PushedPage; platform: PhonePlatform; back: string; children: ReactNode }) {
   const title = PAGE_TITLE[page]
   const ref = useRef<HTMLElement>(null)
   const ios = platform === 'ios'

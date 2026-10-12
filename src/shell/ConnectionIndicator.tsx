@@ -1,11 +1,9 @@
-import { useSyncExternalStore } from 'react'
-import { neverUseRelay, useConnectionPath } from '../connect/connectionPath'
-import { describeQuality, PATH_LABEL, pathSentence } from '../connect/describeConnection'
+import { neverUseRelay } from '../connect/connectionPath'
+import { PATH_LABEL, pathSentence } from '../connect/describeConnection'
 import { readLastSeen } from '../connect/lastSeen'
-import { serverPathOf, type ServerPath } from '../connect/serverPath'
-import { IS_TAURI } from '../config/runtime'
+import type { ServerPath } from '../connect/serverPath'
 import { SERVER_ORIGIN } from '../config/serverHost'
-import { nextStreamQuality, streamQualitySnapshot, subscribeStreamQuality } from '../playback/quality'
+import { useStreamQuality } from '../playback/useStreamQuality'
 import { Button } from '../ui/Button'
 import { Icon, type IconName } from '../ui/Icon'
 import { Popover } from '../ui/Popover'
@@ -20,10 +18,10 @@ import { railButtonClass } from './railButton'
  * the quality is and why, and this device's "never use the relay".
  *
  * The path and the quality come from the connection-path store
- * (connect/connectionPath.ts) and quality.ts's state, so the indicator
- * changes as they do: a new track, a drop, a new pick in Settings, or a
- * move to another path. The popover reads the rest (the server's name, the
- * pin) as it opens. */
+ * (connect/connectionPath.ts) and quality.ts's state, through
+ * useStreamQuality, so the indicator changes as they do: a new track, a
+ * drop, a new pick in Settings, or a move to another path. The popover
+ * reads the rest (the server's name, the pin) as it opens. */
 
 const PATH_ICON: Record<ServerPath, IconName> = {
   embedded: 'computer',
@@ -45,23 +43,7 @@ type ConnectionIndicatorProps = {
 }
 
 export function ConnectionIndicator({ embedded, currentFileId, streaming, onOpenSettings }: ConnectionIndicatorProps) {
-  const connection = useConnectionPath()
-  const path = serverPathOf(connection, embedded)
-  const stream = useSyncExternalStore(subscribeStreamQuality, streamQualitySnapshot)
-  const quality = describeQuality(
-    path,
-    // The desktop app plays files from disk (playback.rs), or the original
-    // of one that isn't here, never a rung of the ladder.
-    IS_TAURI
-      ? null
-      : {
-          playing: stream.last?.fileId === currentFileId ? stream.last.quality : null,
-          next: nextStreamQuality(connection),
-          preference: stream.preference,
-          drops: stream.drops,
-        },
-    streaming,
-  )
+  const { path, ...quality } = useStreamQuality({ embedded, currentFileId, streaming })
   const label = `${PATH_LABEL[path]} · ${quality.label}`
   // The address is data worth showing where it's the server's own. The
   // desktop app's server and the relay's are implementation details.

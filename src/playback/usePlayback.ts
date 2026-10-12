@@ -39,6 +39,15 @@ export type ReplayGainMode = 'track' | 'album' | 'off'
 // entirely in playSequence/originalOrder below.
 export type RepeatMode = 'off' | 'all' | 'one'
 
+// #125: off -> all -> one -> off. The player's single repeat button cycles
+// through this rather than exposing three separate controls, the phone's
+// transport as well as the desktop's.
+export const NEXT_REPEAT_MODE: Record<RepeatMode, RepeatMode> = {
+  off: 'all',
+  all: 'one',
+  one: 'off',
+}
+
 // 'album' falls back to track gain when a recording's release has none
 // (an untagged single, a compilation with mixed source masters) — "no
 // adjustment at all" is a worse default than "adjust some other way" for

@@ -4,6 +4,7 @@ import {
   LARGE_TOP_GAP,
   contentDragMovesSheet,
   detentHeights,
+  dragOpensUpNext,
   largeProgress,
   nextDetent,
   peekProgress,
@@ -191,5 +192,18 @@ describe('contentDragMovesSheet', () => {
     expect(contentDragMovesSheet({ detent: 'large', dy: 10, scrolledToTop: true })).toBe(true)
     expect(contentDragMovesSheet({ detent: 'large', dy: 10, scrolledToTop: false })).toBe(false)
     expect(contentDragMovesSheet({ detent: 'medium', dy: 10, scrolledToTop: false })).toBe(false)
+  })
+})
+
+describe('dragOpensUpNext', () => {
+  it('opens up next when the mini player is dragged up, to whichever detent', () => {
+    expect(dragOpensUpNext({ current: 'peek', next: 'medium', fromMiniPlayer: true })).toBe(true)
+    expect(dragOpensUpNext({ current: 'peek', next: 'large', fromMiniPlayer: true })).toBe(true)
+    expect(dragOpensUpNext({ current: 'medium', next: 'large', fromMiniPlayer: true })).toBe(true)
+  })
+
+  it('keeps the tab for a drag down, or one that starts anywhere else', () => {
+    expect(dragOpensUpNext({ current: 'large', next: 'peek', fromMiniPlayer: true })).toBe(false)
+    expect(dragOpensUpNext({ current: 'peek', next: 'large', fromMiniPlayer: false })).toBe(false)
   })
 })

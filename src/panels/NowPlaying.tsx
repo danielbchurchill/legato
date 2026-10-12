@@ -10,15 +10,15 @@ import { MOD_KEY_LABEL } from '../shell/keys'
 import { formatDuration, NO_VALUE } from '../ui/format'
 import { useGraph } from '../canvas/graphContext'
 import type { NowPlayingTab } from '../shell/panels'
-import type { QueueEntry, QueueSource, usePlayback } from '../playback/usePlayback'
+import type { QueueEntry, usePlayback } from '../playback/usePlayback'
 import { AddToPlaylistButton } from './AddToPlaylistButton'
 import { DetailRows } from './DetailRows'
 import { formatBitrate, formatFormat } from './format'
 import { currentLyricIndex, parseSyncedLyrics } from './lyrics'
 import { useFavourite } from './useFavourite'
 import { useLyrics } from './useLyrics'
-import { API, performer, release, useNodeDetail, type NodeDetail } from './useNodeDetail'
-import { useReconnectEpoch } from '../connect/reconnect'
+import { sourceLabel, usePlaylistName } from './queueSource'
+import { performer, release, useNodeDetail, type NodeDetail } from './useNodeDetail'
 
 /* The right panel while it shows what's playing: the cover, the title, a few
  * actions, then up next / lyrics / details as underline tabs. It opens from
@@ -179,33 +179,6 @@ export function Empty({ title, body, icon, children }: { title: string; body: Re
 }
 
 /* ---- Up next ------------------------------------------------------------- */
-
-function sourceLabel(source: QueueSource | null, albumTitle: string | null, playlistNames: Map<number, string>): string | null {
-  if (source == null) return null
-  if (source.kind === 'library') return 'your library, shuffled'
-  if (source.kind === 'playlist') return playlistNames.get(source.playlistId) ?? 'a playlist'
-  return albumTitle
-}
-
-function usePlaylistName(source: QueueSource | null): Map<number, string> {
-  const [names, setNames] = useState(new Map<number, string>())
-  const playlistId = source?.kind === 'playlist' ? source.playlistId : null
-  const reconnects = useReconnectEpoch()
-  useEffect(() => {
-    if (playlistId == null || names.has(playlistId)) return
-    let cancelled = false
-    fetch(`${API}/playlists`)
-      .then((r) => r.json())
-      .then((list: { id: number; name: string }[]) => {
-        if (!cancelled) setNames(new Map(list.map((p) => [p.id, p.name])))
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [playlistId, names, reconnects])
-  return names
-}
 
 function UpNext({
   playback,
@@ -383,7 +356,9 @@ function UpNextRow({
 
 /* ---- Lyrics -------------------------------------------------------------- */
 
-function Lyrics({ nodeId, positionMs }: { nodeId: number; positionMs: number }) {
+/** The track's lyrics, the sung line kept in view. The phone's Now playing
+ * shows them in place of the cover. */
+export function Lyrics({ nodeId, positionMs }: { nodeId: number; positionMs: number }) {
   const { lyrics, lyricsWaitVisible } = useLyrics(nodeId, true)
   const synced = useMemo(
     () => (lyrics && lyrics !== 'loading' && lyrics.syncedLyrics ? parseSyncedLyrics(lyrics.syncedLyrics) : null),

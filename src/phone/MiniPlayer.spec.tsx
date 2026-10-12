@@ -66,7 +66,10 @@ function fakePlayback(patch: Partial<Playback> = {}, status: Partial<Playback['s
   } as unknown as Playback
 }
 
-function render(playback: Playback, props: { compact?: boolean; canShuffle?: boolean; onShuffleLibrary?: () => void } = {}) {
+function render(
+  playback: Playback,
+  props: { compact?: boolean; canShuffle?: boolean; onShuffleLibrary?: () => void; onOpenNowPlaying?: () => void } = {},
+) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -79,6 +82,7 @@ function render(playback: Playback, props: { compact?: boolean; canShuffle?: boo
         compact: props.compact ?? false,
         canShuffle: props.canShuffle ?? true,
         onShuffleLibrary: props.onShuffleLibrary ?? (() => undefined),
+        onOpenNowPlaying: props.onOpenNowPlaying ?? (() => undefined),
       }),
     ),
   )
@@ -95,6 +99,7 @@ function render(playback: Playback, props: { compact?: boolean; canShuffle?: boo
             compact: props.compact ?? false,
             canShuffle: true,
             onShuffleLibrary: () => undefined,
+            onOpenNowPlaying: () => undefined,
           }),
         ),
       ),
@@ -182,6 +187,15 @@ describe('MiniPlayer', () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("Can't find this file")
     act(() => button('Skip track')!.click())
     expect(playback.resolveProblem).toHaveBeenCalledOnce()
+  })
+
+  it('opens Now playing from its cover, at either size', () => {
+    for (const compact of [false, true]) {
+      const onOpenNowPlaying = vi.fn()
+      const { button } = render(fakePlayback(), { compact, onOpenNowPlaying })
+      act(() => button('Open now playing')!.click())
+      expect(onOpenNowPlaying).toHaveBeenCalledOnce()
+    }
   })
 
   it('makes every control a 44px target', () => {

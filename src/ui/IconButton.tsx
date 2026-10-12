@@ -15,6 +15,7 @@ const TONE_CLASSES = {
   ink: 'text-[var(--color-ink)]',
   'ink-2': 'text-[var(--color-ink-2)]',
   'ink-3': 'text-[var(--color-ink-3)]',
+  accent: 'text-[var(--color-accent)]',
 } as const
 
 type IconButtonProps = {
@@ -27,11 +28,15 @@ type IconButtonProps = {
   filled?: boolean
   disabled?: boolean
   /** Colour of the glyph at rest. Most sit in ink-2; a few quiet ones in
-   * ink-3, and the phone's transport in ink. */
-  tone?: 'ink' | 'ink-2' | 'ink-3'
+   * ink-3, and the phone's transport in ink, with its shuffle and repeat in
+   * the accent while they're on. */
+  tone?: keyof typeof TONE_CLASSES
   /** The glyph's size, where 0.6 × size would crowd it: the phone's 44px
    * targets carry the handoff's 20–22px glyphs. */
   iconSize?: number
+  /** A circle rather than the rounded square: the phone's Now playing
+   * heart, on its wash. */
+  round?: boolean
   tooltip?: boolean
   tooltipPlacement?: Placement
   shortcut?: string
@@ -53,6 +58,7 @@ export function IconButton({
   disabled,
   tone = 'ink-2',
   iconSize,
+  round = false,
   tooltip = true,
   tooltipPlacement,
   shortcut,
@@ -73,7 +79,7 @@ export function IconButton({
           ? 'bg-[var(--color-wash-2)] text-[var(--color-ink)]'
           : `${TONE_CLASSES[tone]} hover:bg-[var(--color-wash)] hover:text-[var(--color-ink)]`
       } ${className}`}
-      style={{ width: size, height: size, borderRadius: size / 3.2 }}
+      style={{ width: size, height: size, borderRadius: round ? size / 2 : size / 3.2 }}
     >
       <Icon name={icon} size={iconSize ?? Math.round(size * 0.6)} filled={filled} />
     </button>

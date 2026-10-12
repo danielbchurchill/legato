@@ -132,3 +132,10 @@ export function contentDragMovesSheet({ detent, dy, scrolledToTop }: { detent: D
   if (dy < 0) return detent !== 'large'
   return scrolledToTop
 }
+
+/** Whether a drag that asks for `next` from `current` opens up next at
+ * large instead: dragging the mini player up does, as the handoff's screen 6
+ * has it. A drag that starts anywhere else, or goes down, keeps its tab. */
+export function dragOpensUpNext({ current, next, fromMiniPlayer }: { current: Detent; next: Detent; fromMiniPlayer: boolean }): boolean {
+  return fromMiniPlayer && DETENTS.indexOf(next) > DETENTS.indexOf(current)
+}
