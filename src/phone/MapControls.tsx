@@ -19,6 +19,11 @@ const CHIP: Record<ShowKey, { label: string; color: string }> = {
   showCreditNodes: { label: 'credits', color: 'var(--color-node-credit)' },
 }
 
+/* How far under the status bar the controls end (6 + 48 + 10 + 32), and
+ * 16px more: where anything laid out on the map under them starts. The
+ * map's camera keeps what it fits below this. */
+export const MAP_CONTROLS_CLEARANCE = 112
+
 type MapControlsProps = {
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>

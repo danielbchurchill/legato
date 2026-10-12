@@ -18,12 +18,13 @@ import { ServerUnreachableOverShell, type UnreachableView } from '../connect/Ser
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
 import type { usePlayback } from '../playback/usePlayback'
-import { MapControls } from './MapControls'
+import { MAP_CONTROLS_CLEARANCE, MapControls } from './MapControls'
 import { MiniPlayer } from './MiniPlayer'
 import { PhonePages } from './PhonePages'
 import { Sheet } from './Sheet'
 import { pushPhonePage, usePhonePages } from './navigation'
 import { phonePlatform, phoneShellLayout } from './phoneLayout'
+import { useSafeArea } from './safeArea'
 import type { Detent, DetentHeights } from './sheetGeometry'
 
 /* The phone layout (#389, Claude Design's Legato Mobile v2): the map edge to
@@ -103,7 +104,11 @@ export function PhoneShell({
   const platform = useMemo(() => phonePlatform(), [])
 
   const windowSize = useWindowSize()
-  const layout = useMemo(() => phoneShellLayout(windowSize.width, windowSize.height, peekHeight), [windowSize, peekHeight])
+  const mapTop = useSafeArea().top + MAP_CONTROLS_CLEARANCE
+  const layout = useMemo(
+    () => phoneShellLayout(windowSize.width, windowSize.height, peekHeight, mapTop),
+    [windowSize, peekHeight, mapTop],
+  )
   const onHeightsChange = useCallback((heights: DetentHeights) => setPeekHeight(heights.peek), [])
 
   // The controls over the map fade as the sheet comes up to large, with
@@ -201,7 +206,7 @@ export function PhoneShell({
           {/* Between the controls over the map and the sheet at peek, so
            * nothing of it starts under either. */}
           {firstRun != null && (
-            <div className="absolute inset-x-0 top-[calc(env(safe-area-inset-top)+112px)]" style={{ bottom: peekHeight }}>
+            <div className="absolute inset-x-0" style={{ top: mapTop, bottom: peekHeight }}>
               {firstRun}
             </div>
           )}

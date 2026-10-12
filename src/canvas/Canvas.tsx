@@ -21,6 +21,9 @@ import { FirstScanCard, MapNotice } from './MapStates'
 import { averageColors, hashCoverUrl, sampleCoverColor } from '../ui/coverColor'
 import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
+import { choosePhoneLabels, phoneLabelSize, placeGreedily, type LabelBox } from './labelDensity'
+import { TapGuard, isTouchEvent, pinchCameraState, type CameraState, type Point as ScreenPoint } from './touchGestures'
+import { usePhoneLayout } from '../phone/phoneLayout'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
 
@@ -366,6 +369,12 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
 }
 
 
+type Area = { left: number; right: number; top: number; bottom: number }
+
+/** On a phone, how much of the top and bottom of the screen the shell's
+ * floating chrome and its sheet cover, in px. */
+export type MapInsets = { top: number; bottom: number }
+
 /* The rectangle of the window the shell leaves uncovered, in viewport px:
  * between the left and right occupancy, below the capsule, above the
  * player's row. The camera has to know it — sigma has no idea the glass is
@@ -373,7 +382,7 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
  *
  * Read from the live shell layout (through a ref), so opening a panel moves
  * where the next fit or fly lands without rebuilding the renderer. */
-function freeArea(renderer: Sigma, layout: ShellLayout): { left: number; right: number; top: number; bottom: number } {
+function freeArea(renderer: Sigma, layout: ShellLayout): Area {
   const dims = renderer.getDimensions()
   return {
     left: layout.leftOccupancy,
@@ -383,12 +392,28 @@ function freeArea(renderer: Sigma, layout: ShellLayout): { left: number; right: 
   }
 }
 
+/* A phone's map runs edge to edge, under the status bar, the floating
+ * search and the sheet (Legato Mobile v2). There's no rail or panel beside
+ * it: what's uncovered is the full width, between the insets the shell says
+ * its chrome covers. */
+function phoneArea(renderer: Sigma, insets: MapInsets): Area {
+  const dims = renderer.getDimensions()
+  return { left: 0, right: dims.width, top: insets.top, bottom: dims.height - insets.bottom }
+}
+
+function phoneInsets(layout: ShellLayout): MapInsets {
+  return { top: layout.mapTop ?? 0, bottom: layout.floatingBottom }
+}
+
+function centreOf(area: Area): { x: number; y: number } {
+  return { x: (area.left + area.right) / 2, y: (area.top + area.bottom) / 2 }
+}
+
 /* Where a selected node should land: placed so the node and its card,
  * which opens NODE_CARD_OFFSET to the node's right and above it, sit
  * together in the middle of the free space. Clamped left when the free
  * strip is narrower than the pair. */
-function flyLandingPoint(renderer: Sigma, layout: ShellLayout): { x: number; y: number } {
-  const area = freeArea(renderer, layout)
+function flyLandingPoint(area: Area): { x: number; y: number } {
   const pairWidth = NODE_CARD_OFFSET.x + NODE_CARD_WIDTH_PX
   const freeWidth = area.right - area.left
   const x = freeWidth >= pairWidth + 80 ? area.left + (freeWidth - pairWidth) / 2 : area.left + 40
@@ -402,7 +427,7 @@ function flyLandingPoint(renderer: Sigma, layout: ShellLayout): { x: number; y: 
  * one framed unit spans k/r viewport pixels — k measured here by asking
  * sigma to convert two points at ratio 1, so it stays right through sigma's
  * own padding and aspect handling. */
-function ratioToFit(renderer: Sigma, graph: Graph, keys: Iterable<string>, layout: ShellLayout): number {
+function ratioToFit(renderer: Sigma, graph: Graph, keys: Iterable<string>, area: Area): number {
   const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
   const normalize = createNormalizationFunction(bbox)
   let minX = Infinity
@@ -423,7 +448,6 @@ function ratioToFit(renderer: Sigma, graph: Graph, keys: Iterable<string>, layou
   const b = renderer.viewportToFramedGraph({ x: 100, y: 100 }, unit)
   const pxPerUnitX = 100 / Math.max(1e-9, Math.abs(b.x - a.x))
   const pxPerUnitY = 100 / Math.max(1e-9, Math.abs(b.y - a.y))
-  const area = freeArea(renderer, layout)
   const needed = Math.max(
     ((maxX - minX) * pxPerUnitX) / (FOCUS_FILL * Math.max(1, area.right - area.left)),
     ((maxY - minY) * pxPerUnitY) / (FOCUS_FILL * Math.max(1, area.bottom - area.top)),
@@ -437,10 +461,9 @@ function ratioToFit(renderer: Sigma, graph: Graph, keys: Iterable<string>, layou
 function insetForShell(
   renderer: Sigma,
   bbox: { x: [number, number]; y: [number, number] },
-  layout: ShellLayout,
+  area: Area,
 ): { x: [number, number]; y: [number, number] } {
   const dims = renderer.getDimensions()
-  const area = freeArea(renderer, layout)
   const innerW = area.right - area.left
   const innerH = area.bottom - area.top
   if (innerW <= 0 || innerH <= 0) return bbox
@@ -651,6 +674,15 @@ type Props = {
   toolbar?: boolean
   /** #136: tells the renderer to re-resolve every colour it draws. */
   theme: ResolvedTheme
+  /** The phone layout (Legato Mobile v2): the map runs edge to edge under
+   * the shell's floating chrome and sheet, takes touch, draws no node card,
+   * and draws fewer, smaller labels. Defaults to usePhoneLayout(). */
+  phone?: boolean
+  /** On a phone, what the shell's floating search and chips cover at the
+   * top and its sheet at the bottom. Fits and flies keep nodes clear of
+   * them, and a label under them doesn't count towards the dozen. Defaults
+   * to what the phone shell's layout says: its mapTop and floatingBottom. */
+  mapInsets?: MapInsets
 }
 
 export type CanvasHandle = {
@@ -659,6 +691,14 @@ export type CanvasHandle = {
    * connection chips and worklist rows all come through here, so arriving
    * from anywhere leaves the map in the same place. */
   flyToNode: (nodeId: number) => void
+  /** Selects nothing itself either. Frames the node's cluster as
+   * flyToNode does, with the node centred in the map left showing above a
+   * sheet `bottomInset` px tall, and below `topInset` (by default, the top
+   * of the map the shell leaves showing). A phone's node detail calls it
+   * with the medium detent's height, and "show on map" with whatever the
+   * sheet is at. On a phone the node's label then draws first. Snaps under
+   * reduced motion. */
+  centreNodeAbove: (nodeId: number, options: { bottomInset: number; topInset?: number }) => void
 }
 
 type LabelKind = 'artist' | 'release' | 'credit'
@@ -708,6 +748,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     mapOptions,
     toolbar = true,
     theme,
+    phone: phoneProp,
+    mapInsets,
   },
   ref,
 ) {
@@ -722,6 +764,19 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const scanStatus = useScanStatus()
   const layout = useShellLayout()
   const layoutRef = useRef(layout)
+  const phoneLayout = usePhoneLayout()
+  const phone = phoneProp ?? phoneLayout
+  const phoneRef = useRef(phone)
+  const mapInsetsRef = useRef(mapInsets)
+  // The node centreNodeAbove last centred: on a phone its label draws first.
+  const centredKeyRef = useRef<string | null>(null)
+
+  // The part of the map the shell leaves uncovered, by layout.
+  const visibleArea = useCallback((renderer: Sigma): Area => {
+    const layout = layoutRef.current
+    if (!phoneRef.current) return freeArea(renderer, layout)
+    return phoneArea(renderer, mapInsetsRef.current ?? phoneInsets(layout))
+  }, [])
 
   // Cluster membership, recomputed only when the data changes, and the
   // reverse index (artist → member keys) the focus and the glows read.
@@ -737,6 +792,32 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   }, [clusters])
   const clustersRef = useRef(clusters)
   const clusterMembersRef = useRef(clusterMembers)
+  // What a phone ranks an unpinned label by: an artist's records and
+  // tracks; a record's tracks; a credit's connections. Only a phone ranks
+  // this way, so the desktop never pays for it.
+  const labelWeights = useMemo(() => {
+    const weights = new Map<string, { records: number; tracks: number }>()
+    if (!phone) return weights
+    const typeOf = new Map(nodes.map((n) => [n.id, n.type]))
+    const weight = (id: number) => {
+      const key = nodeKey(id)
+      let w = weights.get(key)
+      if (!w) weights.set(key, (w = { records: 0, tracks: 0 }))
+      return w
+    }
+    for (const [artist, releases] of clusters.releasesOf) weight(artist).records = releases.length
+    for (const [id, artist] of clusters.clusterOf) if (typeOf.get(id) === 'recording') weight(artist).tracks++
+    for (const edge of edges) {
+      if (edge.type === 'appears_on' && typeOf.get(edge.to_node) === 'release') weight(edge.to_node).tracks++
+      if (typeOf.get(edge.to_node) === 'credit') weight(edge.to_node).tracks++
+      if (typeOf.get(edge.from_node) === 'credit') weight(edge.from_node).tracks++
+    }
+    return weights
+  }, [phone, nodes, edges, clusters])
+  const labelWeightsRef = useRef(labelWeights)
+  useEffect(() => {
+    labelWeightsRef.current = labelWeights
+  }, [labelWeights])
   const selectionFocusRef = useRef<Focus | null>(null)
   // Set by the renderer effect: re-evaluates which focus applies after the
   // selection changes from outside it.
@@ -744,21 +825,20 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // Artist id → its cluster's glow colour, filled in as covers are sampled.
   const glowColorsRef = useRef(new Map<number, string>())
 
-  // Shared by the imperative handle and a click on the map — both mean "go
-  // look at this", and must land in the same place at the same zoom.
-  const flyTo = useCallback((nodeId: number) => {
+  // Frames a node's cluster in `area`, the node landing at `landing`.
+  // False when the node isn't on the map.
+  const frameNode = useCallback((nodeId: number, area: Area, landing: { x: number; y: number }): boolean => {
     const graph = graphRef.current
     const renderer = rendererRef.current
     const key = nodeKey(nodeId)
-    if (!graph || !renderer || !graph.hasNode(key)) return
+    if (!graph || !renderer || !graph.hasNode(key)) return false
 
     const attrs = graph.getNodeAttributes(key)
     const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
     const { x, y } = createNormalizationFunction(bbox)({ x: attrs.x as number, y: attrs.y as number })
 
     const focus = focusFor(nodeId, graph, clustersRef.current.clusterOf, clusterMembersRef.current)
-    const ratio = ratioToFit(renderer, graph, focus.keys, layoutRef.current)
-    const landing = flyLandingPoint(renderer, layoutRef.current)
+    const ratio = ratioToFit(renderer, graph, focus.keys, area)
 
     // Distance in on-screen pixels, so a fly means the same at every zoom.
     const currentViewport = renderer.graphToViewport({ x: attrs.x as number, y: attrs.y as number })
@@ -772,9 +852,34 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     const camera = renderer.getCamera()
     const atLanding = renderer.viewportToFramedGraph(landing, { cameraState: { x, y, ratio, angle: camera.angle } })
     void camera.animate({ x: 2 * x - atLanding.x, y: 2 * y - atLanding.y, ratio }, { duration })
+    return true
   }, [])
 
-  useImperativeHandle(ref, () => ({ flyToNode: flyTo }), [flyTo])
+  // Shared by the imperative handle and a click on the map — both mean "go
+  // look at this", and must land in the same place at the same zoom. A
+  // phone draws no card beside the node, so the node takes the centre.
+  const flyTo = useCallback(
+    (nodeId: number) => {
+      const renderer = rendererRef.current
+      if (!renderer) return
+      const area = visibleArea(renderer)
+      frameNode(nodeId, area, phoneRef.current ? centreOf(area) : flyLandingPoint(area))
+    },
+    [frameNode, visibleArea],
+  )
+
+  const centreNodeAbove = useCallback(
+    (nodeId: number, { bottomInset, topInset }: { bottomInset: number; topInset?: number }) => {
+      const renderer = rendererRef.current
+      if (!renderer) return
+      const visible = visibleArea(renderer)
+      const area = { ...visible, top: topInset ?? visible.top, bottom: renderer.getDimensions().height - bottomInset }
+      if (frameNode(nodeId, area, centreOf(area))) centredKeyRef.current = nodeKey(nodeId)
+    },
+    [frameNode, visibleArea],
+  )
+
+  useImperativeHandle(ref, () => ({ flyToNode: flyTo, centreNodeAbove }), [flyTo, centreNodeAbove])
 
   // Held in refs so effects below don't list them as dependencies — a parent
   // re-render must never tear down the renderer or reset the camera.
@@ -832,6 +937,15 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     rendererRef.current?.refresh()
   }, [layout])
 
+  // The phone layout, and the shell's insets on it, move the same things.
+  useEffect(() => {
+    phoneRef.current = phone
+    mapInsetsRef.current = mapInsets
+    rendererRef.current?.refresh()
+    // The insets' numbers, not the object a parent may rebuild every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phone, mapInsets?.top, mapInsets?.bottom])
+
   const nodesLockedRef = useRef(nodesLocked)
   useEffect(() => {
     nodesLockedRef.current = nodesLocked
@@ -866,7 +980,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     if (!graph || !renderer) return
     const bbox = robustBBox(graph)
     if (!bbox) return
-    const target = insetForShell(renderer, bbox, layoutRef.current)
+    const target = insetForShell(renderer, bbox, visibleArea(renderer))
     const from = renderer.getCustomBBox() ?? renderer.getBBox()
     cancelSettleFitAnimRef.current?.()
     cancelSettleFitAnimRef.current = animateBBox(
@@ -877,7 +991,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       osPrefersReducedMotion() || reducedMotionForcedRef.current,
     )
     setMapOutOfView(false)
-  }, [])
+  }, [visibleArea])
 
   // #23: shift+drag rectangle multiselect. The ref is what the renderer
   // effect's gesture handlers below actually read/write (mount-once effect,
@@ -948,6 +1062,12 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     reducedMotionForcedRef.current = reducedMotionForced
   })
 
+  // A centred node keeps its label first until something else is selected,
+  // or the selection is dropped.
+  useEffect(() => {
+    if (centredKeyRef.current !== (selectedNodeId != null ? nodeKey(selectedNodeId) : null)) centredKeyRef.current = null
+  }, [selectedNodeId])
+
   // A selection focuses its cluster. Recomputed when the selection or the
   // clusters change, then handed to the renderer effect's focus logic.
   useEffect(() => {
@@ -1010,19 +1130,30 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
      * artist node. So labels are placed greedily once per frame — focused
      * first, then artists before credits before records, bigger dots first
      * — and a label that would overlap one already placed is skipped. The
-     * map stays legible at every zoom, and zooming in reveals the rest. */
+     * map stays legible at every zoom, and zooming in reveals the rest.
+     *
+     * A phone draws them smaller and fewer (labelDensity.ts), and places
+     * them only once the camera settles rather than every frame: in between,
+     * the labels it placed ride along with their nodes, which costs nothing
+     * while a finger pans. */
     const LABEL_STYLE: Record<LabelKind, { size: number; weight: number; rank: number }> = {
       artist: { size: 13, weight: 500, rank: 0 },
       credit: { size: 11, weight: 400, rank: 1 },
       release: { size: 11, weight: 400, rank: 2 },
     }
+    const PHONE_LABEL_STYLE: Record<LabelKind, { size: number; weight: number; rank: number }> = {
+      artist: { ...LABEL_STYLE.artist, size: phoneLabelSize(LABEL_STYLE.artist.size) },
+      credit: { ...LABEL_STYLE.credit, size: phoneLabelSize(LABEL_STYLE.credit.size) },
+      release: { ...LABEL_STYLE.release, size: phoneLabelSize(LABEL_STYLE.release.size) },
+    }
+    const styleOf = (kind: LabelKind) => (phoneRef.current ? PHONE_LABEL_STYLE : LABEL_STYLE)[kind]
     const LABEL_PAD = 3
     const widthCache = new Map<string, number>()
     const measure = (context: CanvasRenderingContext2D, kind: LabelKind, label: string) => {
-      const cacheKey = `${kind}\u0000${label}`
+      const style = styleOf(kind)
+      const cacheKey = `${style.size}\u0000${kind}\u0000${label}`
       let width = widthCache.get(cacheKey)
       if (width == null) {
-        const style = LABEL_STYLE[kind]
         context.font = `${style.weight} ${style.size}px 'Rubik Variable', Rubik, system-ui, sans-serif`
         width = context.measureText(label).width
         widthCache.set(cacheKey, width)
@@ -1030,16 +1161,23 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       return width
     }
     const labelBox = (context: CanvasRenderingContext2D, kind: LabelKind, label: string, x: number, y: number, size: number) => {
-      const style = LABEL_STYLE[kind]
+      const style = styleOf(kind)
       const width = measure(context, kind, label)
       const gap = size + 6
       let left = x + gap
-      if (kind === 'artist') {
-        const limit = renderer.getDimensions().width - layoutRef.current.rightOccupancy - 16
+      // A phone's screen is narrow enough that a record's label runs off
+      // the edge too, so there every label flips.
+      if (kind === 'artist' || phoneRef.current) {
+        const limit = renderer.getDimensions().width - (phoneRef.current ? 0 : layoutRef.current.rightOccupancy) - 16
         if (left + width > limit) left = x - gap - width
       }
       return { left, baseline: y + style.size * 0.36, top: y - style.size * 0.6, width, height: style.size * 1.2 }
     }
+    const paddedBox = (context: CanvasRenderingContext2D, kind: LabelKind, label: string, x: number, y: number, size: number): LabelBox => {
+      const box = labelBox(context, kind, label, x, y, size)
+      return { left: box.left - LABEL_PAD, top: box.top - LABEL_PAD, right: box.left + box.width + LABEL_PAD, bottom: box.top + box.height + LABEL_PAD }
+    }
+    type LabelDisplay = ReturnType<typeof renderer.getNodeDisplayData> & { labelKind?: LabelKind }
 
     // Recomputed on the first label of each frame, dropped after the frame.
     let placedLabels: Set<string> | null = null
@@ -1050,32 +1188,85 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       const { width, height } = renderer.getDimensions()
       const candidates: { key: string; kind: LabelKind; label: string; x: number; y: number; size: number; focused: boolean }[] = []
       graph.forEachNode((key) => {
-        const display = renderer.getNodeDisplayData(key) as (ReturnType<typeof renderer.getNodeDisplayData> & { labelKind?: LabelKind }) | undefined
+        const display = renderer.getNodeDisplayData(key) as LabelDisplay | undefined
         if (!display || display.hidden || !display.labelKind || !display.label) return
         const { x, y } = renderer.framedGraphToViewport(display)
         if (x < -200 || x > width + 200 || y < -20 || y > height + 20) return
         candidates.push({ key, kind: display.labelKind, label: display.label, x, y, size: renderer.scaleSize(display.size), focused: display.zIndex > 0 && currentFocus != null && focusProgress > 0 })
       })
       candidates.sort((a, b) => Number(b.focused) - Number(a.focused) || LABEL_STYLE[a.kind].rank - LABEL_STYLE[b.kind].rank || b.size - a.size)
-      const placed = new Set<string>()
-      const boxes: { left: number; top: number; right: number; bottom: number }[] = []
-      for (const c of candidates) {
-        const box = labelBox(context, c.kind, c.label, c.x, c.y, c.size)
-        const rect = { left: box.left - LABEL_PAD, top: box.top - LABEL_PAD, right: box.left + box.width + LABEL_PAD, bottom: box.top + box.height + LABEL_PAD }
-        if (boxes.some((o) => rect.left < o.right && rect.right > o.left && rect.top < o.bottom && rect.bottom > o.top)) continue
-        boxes.push(rect)
-        placed.add(c.key)
-      }
-      return placed
+      return placeGreedily(candidates.map((c) => ({ key: c.key, box: paddedBox(context, c.kind, c.label, c.x, c.y, c.size) })))
     }
+
+    // Only a label whose node sits in the map the shell leaves uncovered is
+    // a candidate: one under the sheet or the search isn't on screen, and
+    // mustn't take one of the dozen places.
+    const placePhoneLabels = (context: CanvasRenderingContext2D): Set<string> => {
+      const area = visibleArea(renderer)
+      const selected = selectedNodeIdRef.current
+      const pinned = selected != null ? nodeKey(selected) : centredKeyRef.current
+      const candidates: Parameters<typeof choosePhoneLabels>[0][number][] = []
+      graph.forEachNode((key) => {
+        const display = renderer.getNodeDisplayData(key) as LabelDisplay | undefined
+        if (!display || display.hidden || !display.labelKind || !display.label) return
+        const { x, y } = renderer.framedGraphToViewport(display)
+        if (x < area.left || x > area.right || y < area.top || y > area.bottom) return
+        const weight = labelWeightsRef.current.get(key)
+        candidates.push({
+          key,
+          box: paddedBox(context, display.labelKind, display.label, x, y, renderer.scaleSize(display.size)),
+          rank: {
+            pinned: key === pinned,
+            focused: display.zIndex > 0 && currentFocus != null && focusProgress > 0,
+            kindRank: LABEL_STYLE[display.labelKind].rank,
+            records: weight?.records ?? 0,
+            tracks: weight?.tracks ?? 0,
+            title: display.label,
+          },
+        })
+      })
+      return choosePhoneLabels(candidates)
+    }
+
+    // A phone's placement, kept between frames. Anything that reprocesses
+    // the graph (a sync, a physics tick, the focus fading, a setting) makes
+    // it stale, and so does a camera move; it's placed again on the first
+    // frame the camera isn't moving, at most LABEL_SETTLE_MS after it stops.
+    const LABEL_SETTLE_MS = 120
+    let phonePlaced: Set<string> | null = null
+    let phonePlacedStale = true
+    let cameraSettling = false
+    let cameraSettleTimer: ReturnType<typeof setTimeout> | null = null
+    const phoneLabels = (context: CanvasRenderingContext2D): Set<string> => {
+      if (phonePlaced == null || (phonePlacedStale && !cameraSettling)) {
+        phonePlaced = placePhoneLabels(context)
+        phonePlacedStale = false
+      }
+      return phonePlaced
+    }
+    renderer.on('afterProcess', () => {
+      phonePlacedStale = true
+    })
+    const settleLabelsAfterCameraMove = () => {
+      if (!phoneRef.current) return
+      phonePlacedStale = true
+      cameraSettling = true
+      if (cameraSettleTimer != null) clearTimeout(cameraSettleTimer)
+      cameraSettleTimer = setTimeout(() => {
+        cameraSettleTimer = null
+        cameraSettling = false
+        renderer.scheduleRender()
+      }, LABEL_SETTLE_MS)
+    }
+    renderer.getCamera().on('updated', settleLabelsAfterCameraMove)
 
     const drawLabel: NodeLabelDrawingFunction = (context, data) => {
       const kind = (data as unknown as { labelKind?: LabelKind }).labelKind
       if (!kind || !data.label) return
-      placedLabels ??= placeLabels(context)
-      if (!placedLabels.has(data.key)) return
+      const placed = phoneRef.current ? phoneLabels(context) : (placedLabels ??= placeLabels(context))
+      if (!placed.has(data.key)) return
       const colors = themeColorsRef.current
-      const style = LABEL_STYLE[kind]
+      const style = styleOf(kind)
       const box = labelBox(context, kind, data.label, data.x, data.y, data.size)
       context.font = `${style.weight} ${style.size}px 'Rubik Variable', Rubik, system-ui, sans-serif`
       context.globalAlpha = (data as unknown as { labelAlpha?: number }).labelAlpha ?? 1
@@ -1247,13 +1438,17 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       const colors = themeColorsRef.current
       const color = t > 0 ? mixToward(data.color as string, colors.canvas, (1 - UNFOCUSED_NODE_ALPHA) * t) : (data.color as string)
 
-      // The selected node is named by its card, so it gets no label of its own.
+      // The selected node is named by its card, so it gets no label of its
+      // own. A phone has no card: there the selected node keeps a label,
+      // and the density rule draws it first. A track borrows a record's.
       const selectedId = selectedNodeIdRef.current
       let labelKind: LabelKind | null = null
       if (selectedId == null || node !== nodeKey(selectedId)) {
         if (type === 'artist') labelKind = live.showArtistLabels ? 'artist' : null
         else if (type === 'credit') labelKind = 'credit'
         else if (type === 'release' && currentFocus != null && focusProgress > 0 && currentFocus.keys.has(node)) labelKind = 'release'
+      } else if (phoneRef.current) {
+        labelKind = type === 'artist' || type === 'credit' ? type : 'release'
       }
 
       return {
@@ -1366,7 +1561,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     }
     renderer.on('afterRender', drawGlows)
 
-    renderer.on('enterNode', ({ node }) => {
+    // Hover is a mouse's: a finger resting on a node is the start of a tap
+    // or a pan, and nothing would ever end the "hover" it reports.
+    renderer.on('enterNode', ({ node, event }) => {
+      if (isTouchEvent(event.original)) return
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
       const keys = new Set(graph.neighbors(node))
       keys.add(node)
@@ -1433,6 +1631,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     }
 
     renderer.on('downNode', (e) => {
+      // A finger on a node pans the map, as anywhere else; only a mouse
+      // drags a node.
+      if (isTouchEvent(e.event.original)) return
       draggedNode = e.node
       didDrag = false
       downAt = { x: e.event.x, y: e.event.y }
@@ -1456,6 +1657,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     renderer.on('clickNode', (e) => {
       if (didDrag) return
+      if (isTouchEvent(e.event.original) && !tapGuard.allowsTap()) return
       // A real marquee drag that happened to release over a node — see
       // marqueeActive below. Consumed here so the click that sigma still
       // synthesizes for it (its own drag-distance tracking never saw the
@@ -1481,8 +1683,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // node has any other meaning here — panning is a drag, and sigma reports
     // that separately (and a marquee drag is claimed before it ever reaches
     // sigma's own drag tracking — see marqueeActive below).
-    renderer.on('clickStage', () => {
+    renderer.on('clickStage', (e) => {
       if (marqueeActive) return
+      if (isTouchEvent(e.event.original) && !tapGuard.allowsTap()) return
       if (selectedNodeIdRef.current != null) onSelectNodeRef.current(null)
       if (multiSelectedRef.current.length > 0) setMultiSelected([])
     })
@@ -1705,14 +1908,46 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     mouseCaptor.on('mouseup', handleMouseUp)
     mouseCaptor.on('mousedown', handleMouseDown)
 
+    /* Touch (touchGestures.ts). Sigma's captor keeps one-finger panning,
+     * taps, and blocking the page's own scroll and zoom (its canvas is
+     * touch-action: none). Two fingers are taken over here: zoom about the
+     * point between them, no rotation. */
+    const touchCaptor = renderer.getTouchCaptor()
+    const tapGuard = new TapGuard()
+    let pinch: { camera: CameraState; from: [ScreenPoint, ScreenPoint] } | null = null
+    touchCaptor.on('touchdown', (e) => {
+      if (!renderer.getCustomBBox()) renderer.setCustomBBox(renderer.getBBox())
+      // Fresh when every finger on the glass just landed; sigma also
+      // reports a touchdown for the finger left behind when one lifts.
+      tapGuard.down(e.touches, e.original.type === 'touchstart' && e.original.touches.length === e.original.changedTouches.length)
+      pinch = e.touches.length === 2 ? { camera: renderer.getCamera().getState(), from: [e.touches[0], e.touches[1]] } : null
+    })
+    touchCaptor.on('touchmove', (e) => {
+      tapGuard.move(e.touches)
+      if (!pinch || e.touches.length !== 2) return
+      e.preventSigmaDefault()
+      const camera = renderer.getCamera()
+      camera.setState(
+        pinchCameraState(
+          pinch.camera,
+          pinch.from,
+          [e.touches[0], e.touches[1]],
+          (point, cameraState) => renderer.viewportToFramedGraph(point, { cameraState }),
+          (ratio) => camera.getBoundedRatio(ratio),
+        ),
+      )
+    })
+
     return () => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
+      if (cameraSettleTimer != null) clearTimeout(cameraSettleTimer)
       cancelFocusAnim?.()
       cancelSettleFitAnimRef.current?.()
       applyFocusRef.current = () => {}
       sim.simulation.stop()
       simulationRef.current = null
       renderer.getCamera().off('updated', refreshOnZoom)
+      renderer.getCamera().off('updated', settleLabelsAfterCameraMove)
       renderer.kill()
       rendererRef.current = null
       graphRef.current = null
@@ -1772,9 +2007,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // background refresh must never move the view out from under the user.
     if (hadNoNodes) {
       const bbox = robustBBox(graph)
-      if (bbox) renderer.setCustomBBox(insetForShell(renderer, bbox, layoutRef.current))
+      if (bbox) renderer.setCustomBBox(insetForShell(renderer, bbox, visibleArea(renderer)))
     }
-  }, [nodes, edges, loading, showCreditNodes, clusters])
+  }, [nodes, edges, loading, showCreditNodes, clusters, visibleArea])
 
   // Each artist's glow colour: the average of its records' cover colours
   // (eight at most — enough to find the mean), or its own photo's for an
@@ -1843,6 +2078,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // back empty is the fallback.
   const showEmptyState = !loading && nodes.length === 0
   const building = scanStatus.scanning && scanStatus.firstScan
+  // On a phone, the map's cards centre in the map the shell leaves showing.
+  const insets = mapInsets ?? phoneInsets(layout)
+  const noticePlacement = phone ? { top: `calc(50% + ${(insets.top - insets.bottom) / 2}px)` } : undefined
 
   return (
     <div className="absolute inset-0">
@@ -1874,7 +2112,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
             subtitle={hoveredNode.subtitle}
           />
         )}
-        {selectedNode && (
+        {/* A phone has no room for the card beside its node; its sheet
+         * shows the node instead. */}
+        {selectedNode && !phone && (
           <div className="pointer-events-auto">
             {/* A card that fails to draw shows why in its own corner, below
              * the capsule, instead of taking the map down with it. */}
@@ -1905,15 +2145,21 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       {!showEmptyState && toolbar && <MapToolbar onZoomIn={() => zoomBy('in')} onZoomOut={() => zoomBy('out')} onFit={fitMap} options={mapOptions} />}
 
       {building ? (
-        <FirstScanCard progress={scanStatus.progress} />
+        <FirstScanCard progress={scanStatus.progress} phone={noticePlacement} />
       ) : scanStatus.error && showEmptyState ? (
-        <MapNotice title="The scan stopped" body={scanStatus.error} actions={[{ label: 'Try again', onClick: scanStatus.retry, primary: true }]} />
+        <MapNotice
+          title="The scan stopped"
+          body={scanStatus.error}
+          actions={[{ label: 'Try again', onClick: scanStatus.retry, primary: true }]}
+          phone={noticePlacement}
+        />
       ) : showEmptyState ? (
-        <MapNotice title={scanStatus.scanning ? 'Reading your library' : 'Nothing on the map yet'} body={
+        <MapNotice phone={noticePlacement} title={scanStatus.scanning ? 'Reading your library' : 'Nothing on the map yet'} body={
           scanStatus.scanning ? 'Nodes appear here as tracks are matched.' : 'Add a music folder in Settings and Legato draws the map from it.'
         } />
       ) : mapOutOfView ? (
         <MapNotice
+          phone={noticePlacement}
           title="The map spread out of view"
           body="The layout pushed everything past the edge of the window."
           actions={[
