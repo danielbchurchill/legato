@@ -5,12 +5,19 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   closePhonePages,
   closeSheetView,
+  currentSheetOverlays,
   openSheetView,
   popPhonePage,
+  popSheetOverlay,
   pushPhonePage,
+  pushSheetOverlay,
+  replaceOverlaysWithView,
+  replaceSheetOverlay,
   usePhonePages,
+  useSheetOverlays,
   useSheetView,
   type PhonePage,
+  type SheetOverlay,
   type SheetView,
 } from './navigation'
 
@@ -200,5 +207,99 @@ describe('a view in the sheet', () => {
     history.replaceState({ legatoSheetView: { kind: 'playlist', playlistId: 'x' } }, '')
     mount()
     expect(views.at(-1)).toBeNull()
+  })
+})
+
+describe("the sheet's overlays", () => {
+  let overlays: (readonly SheetOverlay[])[] = []
+
+  function OverlaysProbe() {
+    overlays.push(useSheetOverlays())
+    seen.push(usePhonePages())
+    return null
+  }
+
+  function mountOverlays() {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push(root)
+    act(() => root.render(createElement(OverlaysProbe)))
+  }
+
+  beforeEach(() => {
+    overlays = []
+  })
+
+  it('starts on the tabs, with no overlay', () => {
+    mountOverlays()
+    expect(overlays.at(-1)).toEqual([])
+  })
+
+  it('pushes an overlay onto the history beside the pages, and back pops it', async () => {
+    mountOverlays()
+    act(() => pushSheetOverlay({ kind: 'search' }))
+    act(() => pushSheetOverlay({ kind: 'node', id: 4 }))
+    expect(overlays.at(-1)).toEqual([{ kind: 'search' }, { kind: 'node', id: 4 }])
+    expect(history.state).toMatchObject({ legatoPhonePages: [], legatoSheetOverlays: [{ kind: 'search' }, { kind: 'node', id: 4 }] })
+    const back = popped()
+    popSheetOverlay()
+    await back
+    expect(overlays.at(-1)).toEqual([{ kind: 'search' }])
+  })
+
+  it("doesn't push the overlay that's already on top", () => {
+    mountOverlays()
+    act(() => pushSheetOverlay({ kind: 'node', id: 4 }))
+    const once = history.length
+    act(() => pushSheetOverlay({ kind: 'node', id: 4 }))
+    expect(history.length).toBe(once)
+    expect(currentSheetOverlays()).toEqual([{ kind: 'node', id: 4 }])
+  })
+
+  it('replaces the overlay on top without a new history entry', () => {
+    mountOverlays()
+    act(() => pushSheetOverlay({ kind: 'node', id: 4 }))
+    const before = history.length
+    act(() => replaceSheetOverlay({ kind: 'node', id: 5 }))
+    expect(history.length).toBe(before)
+    expect(overlays.at(-1)).toEqual([{ kind: 'node', id: 5 }])
+  })
+
+  it('keeps the overlays when a page is pushed over them, and the pages when an overlay is', () => {
+    mountOverlays()
+    act(() => pushSheetOverlay({ kind: 'node', id: 4 }))
+    act(() => pushPhonePage('settings'))
+    expect(history.state).toMatchObject({ legatoPhonePages: ['settings'], legatoSheetOverlays: [{ kind: 'node', id: 4 }] })
+    expect(overlays.at(-1)).toEqual([{ kind: 'node', id: 4 }])
+    expect(seen.at(-1)).toEqual(['settings'])
+  })
+
+  it('does nothing with no overlay, rather than leaving the app', () => {
+    mountOverlays()
+    const before = history.length
+    popSheetOverlay()
+    expect(history.length).toBe(before)
+  })
+
+  it("leaves the overlays for a view in one step, so back from it goes where the overlay's back would", async () => {
+    history.replaceState({ tab: true }, '')
+    mount()
+    mountOverlays()
+    act(() => pushSheetOverlay({ kind: 'search' }))
+    act(() => replaceOverlaysWithView({ kind: 'playlist', playlistId: 7 }))
+    expect(overlays.at(-1)).toEqual([])
+    expect(views.at(-1)).toEqual({ kind: 'playlist', playlistId: 7 })
+    const back = popped()
+    closeSheetView()
+    await back
+    expect(history.state).toEqual({ tab: true })
+    expect(views.at(-1)).toBeNull()
+  })
+
+  it('reads the overlays already in the history, as after a reload, dropping anything else', () => {
+    history.replaceState({ legatoSheetOverlays: [{ kind: 'search' }, { kind: 'node', id: 'x' }, { kind: 'node', id: 9 }, 'nonsense'] }, '')
+    mountOverlays()
+    expect(overlays.at(-1)).toEqual([{ kind: 'search' }, { kind: 'node', id: 9 }])
   })
 })

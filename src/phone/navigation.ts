@@ -1,19 +1,24 @@
 import { useSyncExternalStore } from 'react'
 import type { WorklistKind } from '../shell/panels'
 
-/* Pushed pages on the phone (#389): full-screen pages over the map, such as
- * Settings and Library health, each with the platform's own back.
+/* Where the phone is (#389): the pushed pages, full-screen over the map,
+ * such as Settings and Library health, each with the platform's own back;
+ * the overlays the sheet shows in place of its tabs, search and node
+ * detail; and a view open in its collections tab (below).
  *
- * The stack lives in the browser's history, so Android's back gesture, the
- * browser's back button and the page's own back all pop it the same way:
- * pushing a page adds a history entry carrying the whole stack, and going
- * back to an entry restores the stack it carries. Forward works the same
- * way, and a reload keeps the page that was showing, so the history and
- * what's on screen never disagree. The URL never changes; the entries only
- * carry state. */
+ * All three live in the browser's history, so Android's back gesture, the
+ * browser's back button and the app's own back all go back the same way:
+ * opening a page or an overlay adds a history entry carrying where the phone
+ * now is, and going back to an entry restores what it carries. Forward
+ * works the same way, and a reload keeps what was showing, so the history
+ * and what's on screen never disagree. The URL never changes; the entries
+ * only carry state. */
 
 /* Library health's lists each push as a page of their own. */
 export type PhonePage = 'settings' | 'health' | `worklist:${WorklistKind}`
+
+/** What the sheet shows over its tabs: search, or a node's detail. */
+export type SheetOverlay = { kind: 'search' } | { kind: 'node'; id: number }
 
 const WORKLISTS: readonly WorklistKind[] = ['duplicates', 'missing', 'enrichment', 'tag-writes', 'gaps']
 const PAGES: readonly PhonePage[] = ['settings', 'health', ...WORKLISTS.map((list) => `worklist:${list}` as const)]
@@ -23,12 +28,23 @@ export function worklistOf(page: PhonePage): WorklistKind | null {
   return WORKLISTS.find((list) => page === `worklist:${list}`) ?? null
 }
 
-/* Where the stack sits in history.state, beside anything else's state. */
-const STATE_KEY = 'legatoPhonePages'
+/* Where each sits in history.state, beside anything else's state. */
+const PAGES_KEY = 'legatoPhonePages'
+const OVERLAYS_KEY = 'legatoSheetOverlays'
 
-function pagesIn(state: unknown): readonly PhonePage[] {
-  const pages = state != null && typeof state === 'object' ? (state as Record<string, unknown>)[STATE_KEY] : null
-  return Array.isArray(pages) ? pages.filter((page): page is PhonePage => PAGES.includes(page)) : []
+type Place = { pages: readonly PhonePage[]; overlays: readonly SheetOverlay[] }
+
+const NOWHERE: Place = { pages: [], overlays: [] }
+
+function entry(state: unknown, key: string): unknown[] {
+  const value = state != null && typeof state === 'object' ? (state as Record<string, unknown>)[key] : null
+  return Array.isArray(value) ? value : []
+}
+
+function isOverlay(value: unknown): value is SheetOverlay {
+  if (value == null || typeof value !== 'object') return false
+  const overlay = value as Record<string, unknown>
+  return overlay.kind === 'search' || (overlay.kind === 'node' && typeof overlay.id === 'number')
 }
 
 /* A view opened inside the sheet, which back leaves the way it pops a page:
@@ -53,49 +69,92 @@ function viewIn(state: unknown): SheetView | null {
   return null
 }
 
-let pages: readonly PhonePage[] = typeof history === 'undefined' ? [] : pagesIn(history.state)
+function placeIn(state: unknown): Place {
+  return {
+    pages: entry(state, PAGES_KEY).filter((page): page is PhonePage => PAGES.includes(page as PhonePage)),
+    overlays: entry(state, OVERLAYS_KEY).filter(isOverlay),
+  }
+}
+
+let place: Place = typeof history === 'undefined' ? NOWHERE : placeIn(history.state)
 let view: SheetView | null = typeof history === 'undefined' ? null : viewIn(history.state)
 const listeners = new Set<() => void>()
 
-function setPages(next: readonly PhonePage[]) {
-  pages = next
+function setPlace(next: Place) {
+  place = next
   for (const listener of listeners) listener()
 }
 
 function onPopState(event: PopStateEvent) {
   view = viewIn(event.state)
-  setPages(pagesIn(event.state))
+  setPlace(placeIn(event.state))
+}
+
+/* Goes somewhere new: a new history entry, or this one rewritten. */
+function go(next: Place, replace = false) {
+  const state: unknown = history.state
+  const merged = { ...(state != null && typeof state === 'object' ? state : {}), [PAGES_KEY]: next.pages, [OVERLAYS_KEY]: next.overlays }
+  if (replace) history.replaceState(merged, '')
+  else history.pushState(merged, '')
+  setPlace(next)
 }
 
 /** Opens a page over whatever is showing. The page already on top isn't
  * pushed again, so a double tap doesn't need two backs. */
 export function pushPhonePage(page: PhonePage) {
-  if (pages[pages.length - 1] === page) return
-  const next = [...pages, page]
-  const state: unknown = history.state
-  history.pushState({ ...(state != null && typeof state === 'object' ? state : {}), [STATE_KEY]: next }, '')
-  setPages(next)
+  if (place.pages[place.pages.length - 1] === page) return
+  go({ ...place, pages: [...place.pages, page] })
 }
 
 /** Closes the top page, as the system's back would. Nothing to close does
  * nothing, rather than leaving the app. */
 export function popPhonePage() {
-  if (pages.length === 0) return
+  if (place.pages.length === 0) return
   history.back()
 }
 
 /** Closes every page, back to the map, as that many backs would: something
  * opened on the map from a page shows the map. */
 export function closePhonePages() {
-  if (pages.length === 0) return
-  history.go(-pages.length)
+  if (place.pages.length === 0) return
+  history.go(-place.pages.length)
+}
+
+function sameOverlay(a: SheetOverlay | undefined, b: SheetOverlay): boolean {
+  return a != null && a.kind === b.kind && (a.kind === 'search' || (b.kind === 'node' && a.id === b.id))
+}
+
+/** Shows an overlay in the sheet, over whatever it shows now; back returns
+ * there. The overlay already showing isn't pushed again. */
+export function pushSheetOverlay(overlay: SheetOverlay) {
+  if (sameOverlay(place.overlays[place.overlays.length - 1], overlay)) return
+  go({ ...place, overlays: [...place.overlays, overlay] })
+}
+
+/** Shows an overlay in place of the one showing, so back skips it. */
+export function replaceSheetOverlay(overlay: SheetOverlay) {
+  if (place.overlays.length === 0) return pushSheetOverlay(overlay)
+  if (sameOverlay(place.overlays[place.overlays.length - 1], overlay)) return
+  go({ ...place, overlays: [...place.overlays.slice(0, -1), overlay] }, true)
+}
+
+/** Goes back one overlay, as the system's back would. Nothing to close does
+ * nothing, rather than leaving the app. */
+export function popSheetOverlay() {
+  if (place.overlays.length === 0) return
+  history.back()
+}
+
+/** Where the phone is now, read outside React. */
+export function currentSheetOverlays(): readonly SheetOverlay[] {
+  return place.overlays
 }
 
 function subscribe(listener: () => void): () => void {
   if (listeners.size === 0) {
     window.addEventListener('popstate', onPopState)
     // Nothing listened while no phone shell was mounted.
-    pages = pagesIn(history.state)
+    place = placeIn(history.state)
     view = viewIn(history.state)
   }
   listeners.add(listener)
@@ -107,7 +166,12 @@ function subscribe(listener: () => void): () => void {
 
 /** The pushed pages, bottom first. Empty is the map. */
 export function usePhonePages(): readonly PhonePage[] {
-  return useSyncExternalStore(subscribe, () => pages)
+  return useSyncExternalStore(subscribe, () => place.pages)
+}
+
+/** The sheet's overlays, bottom first. Empty is the sheet's own tabs. */
+export function useSheetOverlays(): readonly SheetOverlay[] {
+  return useSyncExternalStore(subscribe, () => place.overlays)
 }
 
 /** Opens a view in the sheet, in place of any already open. */
@@ -124,6 +188,16 @@ export function openSheetView(next: SheetView) {
 export function closeSheetView() {
   if (view == null) return
   history.back()
+}
+
+/** Leaves the sheet's overlays for a view, in one step: the history entry
+ * showing them shows the view instead, so back from the view goes where
+ * back from the top overlay would have. A playlist opened from search. */
+export function replaceOverlaysWithView(next: SheetView) {
+  const state: unknown = history.state
+  history.replaceState({ ...(state != null && typeof state === 'object' ? state : {}), [OVERLAYS_KEY]: [], [VIEW_KEY]: next }, '')
+  view = next
+  setPlace({ ...place, overlays: [] })
 }
 
 /** The view open in the sheet, if any. */
