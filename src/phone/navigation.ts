@@ -31,7 +31,30 @@ function pagesIn(state: unknown): readonly PhonePage[] {
   return Array.isArray(pages) ? pages.filter((page): page is PhonePage => PAGES.includes(page)) : []
 }
 
+/* A view opened inside the sheet, which back leaves the way it pops a page:
+ * Favourites, a playlist or the import form, opened from the collections tab
+ * (#389, step 3). It rides in the same history entries as the pages, under
+ * its own key, so a page pushed over a view comes back to it. There's one
+ * at most: opening another replaces it, so back always lands on the tab
+ * itself. */
+
+export type SheetView = { kind: 'favourites' } | { kind: 'playlist'; playlistId: number } | { kind: 'import' }
+
+const VIEW_KEY = 'legatoSheetView'
+
+function viewIn(state: unknown): SheetView | null {
+  const value = state != null && typeof state === 'object' ? (state as Record<string, unknown>)[VIEW_KEY] : null
+  if (value == null || typeof value !== 'object') return null
+  const candidate = value as { kind?: unknown; playlistId?: unknown }
+  if (candidate.kind === 'favourites' || candidate.kind === 'import') return { kind: candidate.kind }
+  if (candidate.kind === 'playlist' && typeof candidate.playlistId === 'number') {
+    return { kind: 'playlist', playlistId: candidate.playlistId }
+  }
+  return null
+}
+
 let pages: readonly PhonePage[] = typeof history === 'undefined' ? [] : pagesIn(history.state)
+let view: SheetView | null = typeof history === 'undefined' ? null : viewIn(history.state)
 const listeners = new Set<() => void>()
 
 function setPages(next: readonly PhonePage[]) {
@@ -40,6 +63,7 @@ function setPages(next: readonly PhonePage[]) {
 }
 
 function onPopState(event: PopStateEvent) {
+  view = viewIn(event.state)
   setPages(pagesIn(event.state))
 }
 
@@ -72,6 +96,7 @@ function subscribe(listener: () => void): () => void {
     window.addEventListener('popstate', onPopState)
     // Nothing listened while no phone shell was mounted.
     pages = pagesIn(history.state)
+    view = viewIn(history.state)
   }
   listeners.add(listener)
   return () => {
@@ -83,4 +108,25 @@ function subscribe(listener: () => void): () => void {
 /** The pushed pages, bottom first. Empty is the map. */
 export function usePhonePages(): readonly PhonePage[] {
   return useSyncExternalStore(subscribe, () => pages)
+}
+
+/** Opens a view in the sheet, in place of any already open. */
+export function openSheetView(next: SheetView) {
+  const state: unknown = history.state
+  const entry = { ...(state != null && typeof state === 'object' ? state : {}), [VIEW_KEY]: next }
+  if (view == null) history.pushState(entry, '')
+  else history.replaceState(entry, '')
+  view = next
+  for (const listener of listeners) listener()
+}
+
+/** Leaves the open view, as the system's back would. */
+export function closeSheetView() {
+  if (view == null) return
+  history.back()
+}
+
+/** The view open in the sheet, if any. */
+export function useSheetView(): SheetView | null {
+  return useSyncExternalStore(subscribe, () => view)
 }

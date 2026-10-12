@@ -2,15 +2,27 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { closePhonePages, popPhonePage, pushPhonePage, usePhonePages, type PhonePage } from './navigation'
+import {
+  closePhonePages,
+  closeSheetView,
+  openSheetView,
+  popPhonePage,
+  pushPhonePage,
+  usePhonePages,
+  useSheetView,
+  type PhonePage,
+  type SheetView,
+} from './navigation'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const roots: Root[] = []
 let seen: (readonly PhonePage[])[] = []
+let views: (SheetView | null)[] = []
 
 function Probe() {
   seen.push(usePhonePages())
+  views.push(useSheetView())
   return null
 }
 
@@ -33,6 +45,7 @@ async function popped() {
 beforeEach(() => {
   history.replaceState(null, '')
   seen = []
+  views = []
 })
 
 afterEach(async () => {
@@ -128,5 +141,64 @@ describe('phone navigation', () => {
     const before = history.length
     closePhonePages()
     expect(history.length).toBe(before)
+  })
+})
+
+describe('a view in the sheet', () => {
+  // Each starts from a marked entry, the tab, so a back can be seen to land
+  // on it. (history.length would count entries earlier tests left ahead.)
+  it('opens as a history entry, which the system back leaves', async () => {
+    history.replaceState({ tab: true }, '')
+    mount()
+    act(() => openSheetView({ kind: 'favourites' }))
+    expect(views.at(-1)).toEqual({ kind: 'favourites' })
+    expect(history.state).toEqual({ tab: true, legatoSheetView: { kind: 'favourites' } })
+    const back = popped()
+    history.back()
+    await back
+    expect(history.state).toEqual({ tab: true })
+    expect(views.at(-1)).toBeNull()
+  })
+
+  it('replaces the open view rather than stacking, so one back lands on the tab', async () => {
+    history.replaceState({ tab: true }, '')
+    mount()
+    act(() => openSheetView({ kind: 'import' }))
+    act(() => openSheetView({ kind: 'playlist', playlistId: 7 }))
+    expect(views.at(-1)).toEqual({ kind: 'playlist', playlistId: 7 })
+    const back = popped()
+    closeSheetView()
+    await back
+    expect(history.state).toEqual({ tab: true })
+    expect(views.at(-1)).toBeNull()
+  })
+
+  it('comes back under a page pushed over it', async () => {
+    mount()
+    act(() => openSheetView({ kind: 'playlist', playlistId: 3 }))
+    act(() => pushPhonePage('settings'))
+    expect(history.state).toMatchObject({ legatoSheetView: { kind: 'playlist', playlistId: 3 }, legatoPhonePages: ['settings'] })
+    const back = popped()
+    popPhonePage()
+    await back
+    expect(seen.at(-1)).toEqual([])
+    expect(views.at(-1)).toEqual({ kind: 'playlist', playlistId: 3 })
+  })
+
+  it('does nothing with no view open', () => {
+    mount()
+    const before = history.length
+    closeSheetView()
+    expect(history.length).toBe(before)
+  })
+
+  it("reads a view already in the history, and ignores one it doesn't know", () => {
+    history.replaceState({ legatoSheetView: { kind: 'playlist', playlistId: 4 } }, '')
+    mount()
+    expect(views.at(-1)).toEqual({ kind: 'playlist', playlistId: 4 })
+    act(() => roots.splice(0).forEach((root) => root.unmount()))
+    history.replaceState({ legatoSheetView: { kind: 'playlist', playlistId: 'x' } }, '')
+    mount()
+    expect(views.at(-1)).toBeNull()
   })
 })
