@@ -9,36 +9,32 @@ import { formatDuration, plural } from '../ui/format'
 import { MOD_KEY_LABEL } from '../shell/keys'
 import { useShellLayout } from '../shell/layout'
 import { useGraph } from '../canvas/graphContext'
-import { computeClusters } from '../canvas/clusters'
-import { API_BASE as API } from '../config/serverHost'
-import { useReconnectEpoch } from '../connect/reconnect'
 import type { usePlayback } from '../playback/usePlayback'
+import {
+  enqueueItem,
+  filterOf,
+  groupResults,
+  playItem,
+  useReleaseYears,
+  useSearchRelations,
+  useSearchResults,
+  type Filter,
+  type Item,
+} from './searchData'
 
 /* The search palette: ⌘K from anywhere, or a click on the capsule. It opens
  * in the capsule's place, over a dimmed and lightly blurred app, on an
  * opaque surface — results are read, not glanced through, and the map
  * moving behind them would only compete.
  *
- * It's presentation over the existing search: /search's full-text index
- * finds the matches, and everything shown about them — covers, artists,
- * albums, durations, counts — comes from the graph the client already
- * holds. Only a record's year needs asking for, and only for the few rows
- * on screen.
+ * It's presentation over the existing search (searchData.ts): /search's
+ * full-text index finds the matches, and everything shown about them —
+ * covers, artists, albums, durations, counts — comes from the graph the
+ * client already holds. The phone's search shows the same results its own
+ * way.
  *
  * Keys: ↑↓ move through every row in display order, ↵ opens, ⇧↵ plays,
  * ⌘↵ adds to the queue, esc closes. */
-
-type Hit = { id: number; type: string; title: string }
-type Filter = 'all' | 'artist' | 'release' | 'recording' | 'playlist'
-type Playlist = { id: number; name: string; track_count: number }
-
-/* One row anything in the palette can be: a graph node, or a playlist. */
-type Item = { key: string; kind: 'artist' | 'release' | 'recording' | 'credit' | 'playlist'; id: number; title: string }
-
-const DEBOUNCE_MS = 120
-const SEARCH_LIMIT = 100
-const GROUP_LIMIT: Record<Exclude<Filter, 'all'>, number> = { artist: 3, release: 4, recording: 6, playlist: 3 }
-const FILTERED_LIMIT = 40
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'all' },
@@ -48,80 +44,7 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'playlist', label: 'playlists' },
 ]
 
-// Producers and engineers are people too: they search with the artists.
-const filterOf = (kind: Item['kind']): Exclude<Filter, 'all'> => (kind === 'credit' ? 'artist' : kind)
-
-/* The full-text search, debounced, with stale responses dropped. Asked
- * again after an outage (#119), when an answer that failed came back empty. */
-function useSearch(query: string): { hits: Hit[] | null; pending: boolean } {
-  const [state, setState] = useState<{ query: string; hits: Hit[] } | null>(null)
-  const reconnects = useReconnectEpoch()
-  useEffect(() => {
-    const q = query.trim()
-    if (!q) return
-    let cancelled = false
-    const timer = setTimeout(() => {
-      fetch(`${API}/search?${new URLSearchParams({ q, limit: String(SEARCH_LIMIT) })}`)
-        .then((r) => r.json())
-        .then((hits: Hit[]) => !cancelled && setState({ query, hits }))
-        .catch(() => !cancelled && setState({ query, hits: [] }))
-    }, DEBOUNCE_MS)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [query, reconnects])
-  if (!query.trim()) return { hits: null, pending: false }
-  return { hits: state?.hits ?? null, pending: state?.query !== query }
-}
-
-function usePlaylists(): Playlist[] {
-  const [playlists, setPlaylists] = useState<Playlist[]>([])
-  const reconnects = useReconnectEpoch()
-  useEffect(() => {
-    fetch(`${API}/playlists`)
-      .then((r) => r.json())
-      .then(setPlaylists)
-      .catch(() => undefined)
-  }, [reconnects])
-  return playlists
-}
-
-const NO_YEARS = new Map<number, string | null>()
-
-/* A record's year, from its summary — fetched once per record, cached for
- * the palette's life, or until an outage ends (#119): a summary that
- * failed while the server was gone is cached as no year. */
-function useReleaseYears(ids: number[]): Map<number, string | null> {
-  const reconnects = useReconnectEpoch()
-  const [cache, setCache] = useState({ epoch: reconnects, years: new Map<number, string | null>() })
-  const years = cache.epoch === reconnects ? cache.years : NO_YEARS
-  const wanted = ids.filter((id) => !years.has(id)).join(',')
-  useEffect(() => {
-    if (!wanted) return
-    let cancelled = false
-    const list = wanted.split(',').map(Number)
-    void Promise.all(
-      list.map((id) =>
-        fetch(`${API}/nodes/${id}/summary`)
-          .then((r) => (r.ok ? r.json() : null))
-          .then((s: { releaseDate?: string | null } | null) => [id, s?.releaseDate?.slice(0, 4) ?? null] as const)
-          .catch(() => [id, null] as const),
-      ),
-    ).then((entries) => {
-      if (cancelled) return
-      setCache((prev) => {
-        const next = new Map(prev.epoch === reconnects ? prev.years : NO_YEARS)
-        for (const [id, year] of entries) next.set(id, year)
-        return { epoch: reconnects, years: next }
-      })
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [wanted, reconnects])
-  return years
-}
+const GROUP_ORDER = ['artist', 'release', 'recording', 'playlist'] as const
 
 type SearchPaletteProps = {
   onClose: () => void
@@ -138,35 +61,8 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
   const [cursor, setCursor] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const { hits, pending } = useSearch(query)
-  const playlists = usePlaylists()
-
-  // What the graph knows that /search doesn't: each record's track count
-  // and each track's record, from the edges; each artist's records, from
-  // the same cluster logic the map uses.
-  const relations = useMemo(() => {
-    const releaseOf = new Map<number, number>()
-    const trackCount = new Map<number, number>()
-    for (const edge of graph.edges) {
-      if (edge.type !== 'appears_on') continue
-      if (!releaseOf.has(edge.from_node)) releaseOf.set(edge.from_node, edge.to_node)
-      trackCount.set(edge.to_node, (trackCount.get(edge.to_node) ?? 0) + 1)
-    }
-    const { releasesOf, clusterOf } = computeClusters(graph.nodes, graph.edges)
-    return { releaseOf, trackCount, releasesOf, clusterOf }
-  }, [graph.nodes, graph.edges])
-
-  const items = useMemo(() => {
-    if (!hits) return []
-    const q = query.trim().toLowerCase()
-    const nodeItems: Item[] = hits
-      .filter((h) => h.type === 'artist' || h.type === 'release' || h.type === 'recording' || h.type === 'credit')
-      .map((h) => ({ key: `n${h.id}`, kind: h.type as Item['kind'], id: h.id, title: h.title }))
-    const playlistItems: Item[] = playlists
-      .filter((p) => p.name.toLowerCase().includes(q))
-      .map((p) => ({ key: `p${p.id}`, kind: 'playlist', id: p.id, title: p.name }))
-    return [...nodeItems, ...playlistItems]
-  }, [hits, playlists, query])
+  const { hits, pending, items, playlists } = useSearchResults(query)
+  const relations = useSearchRelations()
 
   const counts = useMemo(() => {
     const c: Record<Exclude<Filter, 'all'>, number> = { artist: 0, release: 0, recording: 0, playlist: 0 }
@@ -174,15 +70,7 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
     return c
   }, [items])
 
-  // The top result is the best match in view; the groups list the rest.
-  const visible = filter === 'all' ? items : items.filter((item) => filterOf(item.kind) === filter)
-  const top = visible[0] ?? null
-  const groups = (filter === 'all' ? (['artist', 'release', 'recording', 'playlist'] as const) : [filter]).map((type) => ({
-    type,
-    rows: visible
-      .filter((item) => item !== top && filterOf(item.kind) === type)
-      .slice(0, filter === 'all' ? GROUP_LIMIT[type] : FILTERED_LIMIT),
-  }))
+  const { top, groups } = groupResults(items, filter, GROUP_ORDER)
   const order = [...(top ? [top] : []), ...groups.flatMap((g) => g.rows)]
   const selected = order[Math.min(cursor, order.length - 1)] ?? null
 
@@ -231,24 +119,8 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
   }
 
   const play = (item: Item) => {
-    if (item.kind === 'recording') void playback.playNode(item.id, item.title)
-    else if (item.kind === 'release') void playback.playAlbum(item.id)
-    else if (item.kind === 'playlist') void playback.playPlaylist(item.id)
-    else if (item.kind === 'artist') {
-      const tracks = graph.nodes.filter((n) => n.type === 'recording' && relations.clusterOf.get(n.id) === item.id).map((n) => n.id)
-      if (tracks.length) void playback.playTracks(tracks, 0, '')
-    }
+    playItem(item, playback, graph, relations)
     onClose()
-  }
-
-  // Adds the track, or each of a record's tracks in order, after whatever is
-  // already queued. Anything else has no single thing to queue.
-  const enqueue = async (item: Item) => {
-    if (item.kind === 'recording') await playback.addToQueue(item.id)
-    else if (item.kind === 'release') {
-      const tracks = (await fetch(`${API}/nodes/${item.id}/tracklist`).then((r) => r.json())) as { id: number }[]
-      for (const track of tracks) await playback.addToQueue(track.id)
-    }
   }
 
   const onKeyDown = (e: KeyboardEvent) => {
@@ -264,7 +136,7 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
       setCursor((c) => Math.max(0, c - 1))
     } else if (e.key === 'Enter' && selected) {
       e.preventDefault()
-      if (e.metaKey || e.ctrlKey) void enqueue(selected)
+      if (e.metaKey || e.ctrlKey) void enqueueItem(selected, playback)
       else if (e.shiftKey) play(selected)
       else open(selected)
     }
