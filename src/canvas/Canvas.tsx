@@ -21,6 +21,7 @@ import { FirstScanCard, MapNotice } from './MapStates'
 import { averageColors, hashCoverUrl, sampleCoverColor } from '../ui/coverColor'
 import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
+import { usePhoneWidth } from './usePhoneWidth'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
 
@@ -366,6 +367,12 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
 }
 
 
+type Area = { left: number; right: number; top: number; bottom: number }
+
+/** On a phone, how much of the top and bottom of the screen the shell's
+ * floating chrome and its sheet cover, in px. */
+export type MapInsets = { top: number; bottom: number }
+
 /* The rectangle of the window the shell leaves uncovered, in viewport px:
  * between the left and right occupancy, below the capsule, above the
  * player's row. The camera has to know it — sigma has no idea the glass is
@@ -373,7 +380,7 @@ function robustBBox(graph: Graph): { x: [number, number]; y: [number, number] } 
  *
  * Read from the live shell layout (through a ref), so opening a panel moves
  * where the next fit or fly lands without rebuilding the renderer. */
-function freeArea(renderer: Sigma, layout: ShellLayout): { left: number; right: number; top: number; bottom: number } {
+function freeArea(renderer: Sigma, layout: ShellLayout): Area {
   const dims = renderer.getDimensions()
   return {
     left: layout.leftOccupancy,
@@ -383,12 +390,24 @@ function freeArea(renderer: Sigma, layout: ShellLayout): { left: number; right: 
   }
 }
 
+/* A phone's map runs edge to edge, under the status bar, the floating
+ * search and the sheet (Legato Mobile v2). There's no rail or panel beside
+ * it: what's uncovered is the full width, between the insets the shell says
+ * its chrome covers. */
+function phoneArea(renderer: Sigma, insets: MapInsets): Area {
+  const dims = renderer.getDimensions()
+  return { left: 0, right: dims.width, top: insets.top, bottom: dims.height - insets.bottom }
+}
+
+function centreOf(area: Area): { x: number; y: number } {
+  return { x: (area.left + area.right) / 2, y: (area.top + area.bottom) / 2 }
+}
+
 /* Where a selected node should land: placed so the node and its card,
  * which opens NODE_CARD_OFFSET to the node's right and above it, sit
  * together in the middle of the free space. Clamped left when the free
  * strip is narrower than the pair. */
-function flyLandingPoint(renderer: Sigma, layout: ShellLayout): { x: number; y: number } {
-  const area = freeArea(renderer, layout)
+function flyLandingPoint(area: Area): { x: number; y: number } {
   const pairWidth = NODE_CARD_OFFSET.x + NODE_CARD_WIDTH_PX
   const freeWidth = area.right - area.left
   const x = freeWidth >= pairWidth + 80 ? area.left + (freeWidth - pairWidth) / 2 : area.left + 40
@@ -402,7 +421,7 @@ function flyLandingPoint(renderer: Sigma, layout: ShellLayout): { x: number; y: 
  * one framed unit spans k/r viewport pixels — k measured here by asking
  * sigma to convert two points at ratio 1, so it stays right through sigma's
  * own padding and aspect handling. */
-function ratioToFit(renderer: Sigma, graph: Graph, keys: Iterable<string>, layout: ShellLayout): number {
+function ratioToFit(renderer: Sigma, graph: Graph, keys: Iterable<string>, area: Area): number {
   const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
   const normalize = createNormalizationFunction(bbox)
   let minX = Infinity
@@ -423,7 +442,6 @@ function ratioToFit(renderer: Sigma, graph: Graph, keys: Iterable<string>, layou
   const b = renderer.viewportToFramedGraph({ x: 100, y: 100 }, unit)
   const pxPerUnitX = 100 / Math.max(1e-9, Math.abs(b.x - a.x))
   const pxPerUnitY = 100 / Math.max(1e-9, Math.abs(b.y - a.y))
-  const area = freeArea(renderer, layout)
   const needed = Math.max(
     ((maxX - minX) * pxPerUnitX) / (FOCUS_FILL * Math.max(1, area.right - area.left)),
     ((maxY - minY) * pxPerUnitY) / (FOCUS_FILL * Math.max(1, area.bottom - area.top)),
@@ -437,10 +455,9 @@ function ratioToFit(renderer: Sigma, graph: Graph, keys: Iterable<string>, layou
 function insetForShell(
   renderer: Sigma,
   bbox: { x: [number, number]; y: [number, number] },
-  layout: ShellLayout,
+  area: Area,
 ): { x: [number, number]; y: [number, number] } {
   const dims = renderer.getDimensions()
-  const area = freeArea(renderer, layout)
   const innerW = area.right - area.left
   const innerH = area.bottom - area.top
   if (innerW <= 0 || innerH <= 0) return bbox
@@ -651,6 +668,14 @@ type Props = {
   toolbar?: boolean
   /** #136: tells the renderer to re-resolve every colour it draws. */
   theme: ResolvedTheme
+  /** The phone layout (Legato Mobile v2): the map runs edge to edge under
+   * the shell's floating chrome and sheet, and draws no node card.
+   * Defaults to a (max-width: 600px) test. */
+  phone?: boolean
+  /** On a phone, what the shell's floating search and chips cover at the
+   * top and its sheet at the bottom. Fits and flies keep nodes clear of
+   * them. Defaults to the safe-area insets. */
+  mapInsets?: MapInsets
 }
 
 export type CanvasHandle = {
@@ -659,6 +684,13 @@ export type CanvasHandle = {
    * connection chips and worklist rows all come through here, so arriving
    * from anywhere leaves the map in the same place. */
   flyToNode: (nodeId: number) => void
+  /** Selects nothing itself either. Frames the node's cluster as
+   * flyToNode does, with the node centred in the map left showing above a
+   * sheet `bottomInset` px tall, and below `topInset` (by default, the top
+   * of the map the shell leaves showing). A phone's node detail calls it
+   * with the medium detent's height, and "show on map" with whatever the
+   * sheet is at. Snaps under reduced motion. */
+  centreNodeAbove: (nodeId: number, options: { bottomInset: number; topInset?: number }) => void
 }
 
 type LabelKind = 'artist' | 'release' | 'credit'
@@ -708,6 +740,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     mapOptions,
     toolbar = true,
     theme,
+    phone: phoneProp,
+    mapInsets,
   },
   ref,
 ) {
@@ -722,6 +756,25 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   const scanStatus = useScanStatus()
   const layout = useShellLayout()
   const layoutRef = useRef(layout)
+  const phoneWidth = usePhoneWidth()
+  const phone = phoneProp ?? phoneWidth
+  const phoneRef = useRef(phone)
+  const mapInsetsRef = useRef(mapInsets)
+  // A phone's map defaults to the safe-area insets, which only CSS knows:
+  // read off this probe's padding when a fit or a fly needs them.
+  const safeAreaProbeRef = useRef<HTMLDivElement>(null)
+
+  // The part of the map the shell leaves uncovered, by layout.
+  const visibleArea = useCallback((renderer: Sigma): Area => {
+    if (!phoneRef.current) return freeArea(renderer, layoutRef.current)
+    let insets = mapInsetsRef.current
+    if (!insets) {
+      const probe = safeAreaProbeRef.current
+      const style = probe ? getComputedStyle(probe) : null
+      insets = { top: Number.parseFloat(style?.paddingTop ?? '') || 0, bottom: Number.parseFloat(style?.paddingBottom ?? '') || 0 }
+    }
+    return phoneArea(renderer, insets)
+  }, [])
 
   // Cluster membership, recomputed only when the data changes, and the
   // reverse index (artist → member keys) the focus and the glows read.
@@ -744,21 +797,20 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // Artist id → its cluster's glow colour, filled in as covers are sampled.
   const glowColorsRef = useRef(new Map<number, string>())
 
-  // Shared by the imperative handle and a click on the map — both mean "go
-  // look at this", and must land in the same place at the same zoom.
-  const flyTo = useCallback((nodeId: number) => {
+  // Frames a node's cluster in `area`, the node landing at `landing`.
+  // False when the node isn't on the map.
+  const frameNode = useCallback((nodeId: number, area: Area, landing: { x: number; y: number }): boolean => {
     const graph = graphRef.current
     const renderer = rendererRef.current
     const key = nodeKey(nodeId)
-    if (!graph || !renderer || !graph.hasNode(key)) return
+    if (!graph || !renderer || !graph.hasNode(key)) return false
 
     const attrs = graph.getNodeAttributes(key)
     const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
     const { x, y } = createNormalizationFunction(bbox)({ x: attrs.x as number, y: attrs.y as number })
 
     const focus = focusFor(nodeId, graph, clustersRef.current.clusterOf, clusterMembersRef.current)
-    const ratio = ratioToFit(renderer, graph, focus.keys, layoutRef.current)
-    const landing = flyLandingPoint(renderer, layoutRef.current)
+    const ratio = ratioToFit(renderer, graph, focus.keys, area)
 
     // Distance in on-screen pixels, so a fly means the same at every zoom.
     const currentViewport = renderer.graphToViewport({ x: attrs.x as number, y: attrs.y as number })
@@ -772,9 +824,34 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     const camera = renderer.getCamera()
     const atLanding = renderer.viewportToFramedGraph(landing, { cameraState: { x, y, ratio, angle: camera.angle } })
     void camera.animate({ x: 2 * x - atLanding.x, y: 2 * y - atLanding.y, ratio }, { duration })
+    return true
   }, [])
 
-  useImperativeHandle(ref, () => ({ flyToNode: flyTo }), [flyTo])
+  // Shared by the imperative handle and a click on the map — both mean "go
+  // look at this", and must land in the same place at the same zoom. A
+  // phone draws no card beside the node, so the node takes the centre.
+  const flyTo = useCallback(
+    (nodeId: number) => {
+      const renderer = rendererRef.current
+      if (!renderer) return
+      const area = visibleArea(renderer)
+      frameNode(nodeId, area, phoneRef.current ? centreOf(area) : flyLandingPoint(area))
+    },
+    [frameNode, visibleArea],
+  )
+
+  const centreNodeAbove = useCallback(
+    (nodeId: number, { bottomInset, topInset }: { bottomInset: number; topInset?: number }) => {
+      const renderer = rendererRef.current
+      if (!renderer) return
+      const visible = visibleArea(renderer)
+      const area = { ...visible, top: topInset ?? visible.top, bottom: renderer.getDimensions().height - bottomInset }
+      frameNode(nodeId, area, centreOf(area))
+    },
+    [frameNode, visibleArea],
+  )
+
+  useImperativeHandle(ref, () => ({ flyToNode: flyTo, centreNodeAbove }), [flyTo, centreNodeAbove])
 
   // Held in refs so effects below don't list them as dependencies — a parent
   // re-render must never tear down the renderer or reset the camera.
@@ -832,6 +909,15 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     rendererRef.current?.refresh()
   }, [layout])
 
+  // The phone layout, and the shell's insets on it, move the same things.
+  useEffect(() => {
+    phoneRef.current = phone
+    mapInsetsRef.current = mapInsets
+    rendererRef.current?.refresh()
+    // The insets' numbers, not the object a parent may rebuild every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phone, mapInsets?.top, mapInsets?.bottom])
+
   const nodesLockedRef = useRef(nodesLocked)
   useEffect(() => {
     nodesLockedRef.current = nodesLocked
@@ -866,7 +952,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     if (!graph || !renderer) return
     const bbox = robustBBox(graph)
     if (!bbox) return
-    const target = insetForShell(renderer, bbox, layoutRef.current)
+    const target = insetForShell(renderer, bbox, visibleArea(renderer))
     const from = renderer.getCustomBBox() ?? renderer.getBBox()
     cancelSettleFitAnimRef.current?.()
     cancelSettleFitAnimRef.current = animateBBox(
@@ -877,7 +963,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       osPrefersReducedMotion() || reducedMotionForcedRef.current,
     )
     setMapOutOfView(false)
-  }, [])
+  }, [visibleArea])
 
   // #23: shift+drag rectangle multiselect. The ref is what the renderer
   // effect's gesture handlers below actually read/write (mount-once effect,
@@ -1035,7 +1121,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       const gap = size + 6
       let left = x + gap
       if (kind === 'artist') {
-        const limit = renderer.getDimensions().width - layoutRef.current.rightOccupancy - 16
+        const limit = renderer.getDimensions().width - (phoneRef.current ? 0 : layoutRef.current.rightOccupancy) - 16
         if (left + width > limit) left = x - gap - width
       }
       return { left, baseline: y + style.size * 0.36, top: y - style.size * 0.6, width, height: style.size * 1.2 }
@@ -1705,6 +1791,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     mouseCaptor.on('mouseup', handleMouseUp)
     mouseCaptor.on('mousedown', handleMouseDown)
 
+
     return () => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
       cancelFocusAnim?.()
@@ -1772,9 +1859,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // background refresh must never move the view out from under the user.
     if (hadNoNodes) {
       const bbox = robustBBox(graph)
-      if (bbox) renderer.setCustomBBox(insetForShell(renderer, bbox, layoutRef.current))
+      if (bbox) renderer.setCustomBBox(insetForShell(renderer, bbox, visibleArea(renderer)))
     }
-  }, [nodes, edges, loading, showCreditNodes, clusters])
+  }, [nodes, edges, loading, showCreditNodes, clusters, visibleArea])
 
   // Each artist's glow colour: the average of its records' cover colours
   // (eight at most — enough to find the mean), or its own photo's for an
@@ -1843,10 +1930,24 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
   // back empty is the fallback.
   const showEmptyState = !loading && nodes.length === 0
   const building = scanStatus.scanning && scanStatus.firstScan
+  // On a phone, the map's cards centre in the map the shell leaves showing.
+  const noticeTop = !phone
+    ? undefined
+    : mapInsets
+      ? `calc(50% + ${(mapInsets.top - mapInsets.bottom) / 2}px)`
+      : 'calc(50% + (env(safe-area-inset-top) - env(safe-area-inset-bottom)) / 2)'
+  const noticePlacement = noticeTop != null ? { top: noticeTop } : undefined
 
   return (
     <div className="absolute inset-0">
       <div ref={containerRef} className="absolute inset-0" />
+      {phone && (
+        <div
+          ref={safeAreaProbeRef}
+          aria-hidden="true"
+          className="pointer-events-none invisible absolute top-0 left-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
+        />
+      )}
 
       {/* Above the map's own notices and chrome (z-10): a selection's card
        * must never sit under the first-scan card. */}
@@ -1874,7 +1975,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
             subtitle={hoveredNode.subtitle}
           />
         )}
-        {selectedNode && (
+        {/* A phone has no room for the card beside its node; its sheet
+         * shows the node instead. */}
+        {selectedNode && !phone && (
           <div className="pointer-events-auto">
             {/* A card that fails to draw shows why in its own corner, below
              * the capsule, instead of taking the map down with it. */}
@@ -1905,15 +2008,21 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       {!showEmptyState && toolbar && <MapToolbar onZoomIn={() => zoomBy('in')} onZoomOut={() => zoomBy('out')} onFit={fitMap} options={mapOptions} />}
 
       {building ? (
-        <FirstScanCard progress={scanStatus.progress} />
+        <FirstScanCard progress={scanStatus.progress} phone={noticePlacement} />
       ) : scanStatus.error && showEmptyState ? (
-        <MapNotice title="The scan stopped" body={scanStatus.error} actions={[{ label: 'Try again', onClick: scanStatus.retry, primary: true }]} />
+        <MapNotice
+          title="The scan stopped"
+          body={scanStatus.error}
+          actions={[{ label: 'Try again', onClick: scanStatus.retry, primary: true }]}
+          phone={noticePlacement}
+        />
       ) : showEmptyState ? (
-        <MapNotice title={scanStatus.scanning ? 'Reading your library' : 'Nothing on the map yet'} body={
+        <MapNotice phone={noticePlacement} title={scanStatus.scanning ? 'Reading your library' : 'Nothing on the map yet'} body={
           scanStatus.scanning ? 'Nodes appear here as tracks are matched.' : 'Add a music folder in Settings and Legato draws the map from it.'
         } />
       ) : mapOutOfView ? (
         <MapNotice
+          phone={noticePlacement}
           title="The map spread out of view"
           body="The layout pushed everything past the edge of the window."
           actions={[

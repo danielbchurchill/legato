@@ -9,7 +9,13 @@ import { useShellLayout } from '../shell/layout'
 /* The map's states other than "here's your map": the first scan building
  * it, and the notices for a scan that failed, a map with nothing on it, and
  * a layout that pushed everything off screen. Each is one glass card in the
- * middle of the free space, saying what's true and what to do. */
+ * middle of the free space, saying what's true and what to do.
+ *
+ * On a phone the free space is the whole width, so a card centres on the
+ * screen, at `top` (the middle of the map the shell leaves showing), and
+ * keeps 16px clear of either edge. */
+export type PhonePlacement = { top: string }
+const PHONE_WIDTH = 'w-[min(380px,calc(100%-32px))]'
 
 /* The scanner's six stages, told as the three a person would recognise. */
 const STEPS: { label: string; stages: ScanStage[] }[] = [
@@ -22,7 +28,7 @@ const STEPS: { label: string; stages: ScanStage[] }[] = [
  * the card says how far along the rest is. The percentage is files read,
  * the one count that exists from the first second — later stages have no
  * total until they start. */
-export function FirstScanCard({ progress }: { progress: ScanProgress | null }) {
+export function FirstScanCard({ progress, phone }: { progress: ScanProgress | null; phone?: PhonePlacement }) {
   const layout = useShellLayout()
   const total = progress?.filesTotal ?? 0
   const done = progress?.filesScanned ?? 0
@@ -33,8 +39,8 @@ export function FirstScanCard({ progress }: { progress: ScanProgress | null }) {
     <div
       role="status"
       aria-live="polite"
-      className="glass absolute z-10 flex w-[380px] -translate-x-1/2 -translate-y-1/2 flex-col gap-[12px] rounded-[var(--radius-rail)] p-[20px]"
-      style={{ left: layout.cx, top: '46%' }}
+      className={`glass absolute z-10 flex ${phone ? PHONE_WIDTH : 'w-[380px]'} -translate-x-1/2 -translate-y-1/2 flex-col gap-[12px] rounded-[var(--radius-rail)] p-[20px]`}
+      style={phone ? { left: '50%', top: phone.top } : { left: layout.cx, top: '46%' }}
     >
       <div className="flex items-center gap-[10px] text-[var(--color-accent)]">
         <Spinner size={18} />
@@ -80,13 +86,23 @@ export function FirstScanCard({ progress }: { progress: ScanProgress | null }) {
 
 type NoticeAction = { label: string; onClick: () => void; primary?: boolean }
 
-export function MapNotice({ title, body, actions = [] }: { title: string; body: string; actions?: NoticeAction[] }) {
+export function MapNotice({
+  title,
+  body,
+  actions = [],
+  phone,
+}: {
+  title: string
+  body: string
+  actions?: NoticeAction[]
+  phone?: PhonePlacement
+}) {
   const layout = useShellLayout()
   return (
     <div
       role="status"
-      className="glass absolute z-10 flex w-[380px] -translate-x-1/2 -translate-y-1/2 flex-col gap-[8px] rounded-[var(--radius-rail)] p-[20px]"
-      style={{ left: layout.cx, top: '46%' }}
+      className={`glass absolute z-10 flex ${phone ? PHONE_WIDTH : 'w-[380px]'} -translate-x-1/2 -translate-y-1/2 flex-col gap-[8px] rounded-[var(--radius-rail)] p-[20px]`}
+      style={phone ? { left: '50%', top: phone.top } : { left: layout.cx, top: '46%' }}
     >
       <span className="text-heading text-[var(--color-ink)]">{title}</span>
       <p className="text-[length:var(--text-secondary)] leading-[18px] [overflow-wrap:anywhere] text-[var(--color-ink-2)]">{body}</p>
