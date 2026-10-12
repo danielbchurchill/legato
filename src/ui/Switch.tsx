@@ -29,15 +29,22 @@ import { Tooltip } from './Tooltip'
  *    outside the ring (data-focus-ring="part", see index.css).
  *  - An optional label, clickable as part of the control, to either side. */
 
-export type SwitchSize = 'sm' | 'md' | 'lg'
+export type SwitchSize = 'sm' | 'md' | 'lg' | 'xl'
 
 /* v2: md is 34×20 with a 16px knob travelling 14px. On is the accent
  * gradient with an on-accent knob; off is a --color-wash-2 track with an
- * ink-2 knob, so off reads as a recess rather than as a second colour. */
+ * ink-2 knob, so off reads as a recess rather than as a second colour.
+ *
+ * xl is the phone's switch (#389, Legato Mobile v2's settings page), the
+ * platforms' own 51×31 with a 27px knob. Its knob is white with a small
+ * shadow on either track, as both platforms draw it, and off is a
+ * --color-control track, which a white knob stands out on where it would
+ * vanish into a wash. Its target is 44px tall (index.css's touch-target). */
 const GEOMETRY: Record<SwitchSize, { track: string; thumb: string; travel: number }> = {
   sm: { track: 'h-[16px] w-[28px]', thumb: 'size-[12px]', travel: 28 - 12 - 4 },
   md: { track: 'h-[20px] w-[34px]', thumb: 'size-[16px]', travel: 34 - 16 - 4 },
   lg: { track: 'h-[24px] w-[44px]', thumb: 'size-[20px]', travel: 44 - 20 - 4 },
+  xl: { track: 'h-[31px] w-[51px]', thumb: 'size-[27px]', travel: 51 - 27 - 4 },
 }
 
 type SwitchProps = {
@@ -68,6 +75,14 @@ export function Switch({
   className = '',
 }: SwitchProps) {
   const geometry = GEOMETRY[size]
+  const phone = size === 'xl'
+  const track = checked ? 'bg-[image:var(--accent-fill)]' : phone ? 'bg-[var(--color-control)]' : 'bg-[var(--color-wash-2)]'
+  // The phone's knob is the platforms' white in either theme, not a token.
+  const thumb = phone
+    ? 'bg-[#fefefe] shadow-[0_2px_4px_rgb(0_0_0/0.2)]'
+    : checked
+      ? 'bg-[var(--color-on-accent)]'
+      : 'bg-[var(--color-ink-2)]'
 
   const control = (
     <button
@@ -80,17 +95,15 @@ export function Switch({
       onClick={() => onChange(!checked)}
       className={`inline-flex shrink-0 items-center gap-[8px] disabled:cursor-not-allowed ${
         labelSide === 'left' ? 'flex-row-reverse' : ''
-      } ${className}`}
+      } ${phone ? 'touch-target' : ''} ${className}`}
     >
       <span
-        className={`focus-ring-part flex shrink-0 items-center rounded-full border border-transparent p-[1px] transition-[background-color,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)] ${geometry.track} ${
-          checked ? 'bg-[image:var(--accent-fill)]' : 'bg-[var(--color-wash-2)]'
-        } ${disabled ? 'opacity-50' : ''}`}
+        className={`focus-ring-part flex shrink-0 items-center rounded-full border border-transparent p-[1px] transition-[background-color,opacity] duration-[var(--motion-fast)] ease-[var(--ease-out)] ${geometry.track} ${track} ${
+          disabled ? 'opacity-50' : ''
+        }`}
       >
         <span
-          className={`rounded-full transition-[transform,background-color] duration-[var(--motion-spring)] ease-[var(--ease-spring)] ${geometry.thumb} ${
-            checked ? 'bg-[var(--color-on-accent)]' : 'bg-[var(--color-ink-2)]'
-          }`}
+          className={`rounded-full transition-[transform,background-color] duration-[var(--motion-spring)] ease-[var(--ease-spring)] ${geometry.thumb} ${thumb}`}
           style={{ transform: `translateX(${checked ? geometry.travel : 0}px)` }}
         />
       </span>

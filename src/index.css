@@ -88,6 +88,24 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* A tap target at least 44px each way (#389), for a control drawn smaller:
+ * an invisible box centred on it takes its taps without changing how it's
+ * drawn or laid out. Neighbours closer than that share the overlap, and the
+ * later one in the page wins it. */
+@utility touch-target {
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+}
+
 /* Reduced motion means less movement, not less feedback (DESIGN.md, Motion).
  * Transforms and scale carry vestibular risk and drop to instant; opacity
  * and colour crossfades carry the same state information without it, so

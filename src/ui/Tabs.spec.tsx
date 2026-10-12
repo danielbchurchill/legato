@@ -124,4 +124,19 @@ describe('Tabs with iconOnly', () => {
     expect(visibleText(underline.list)).toEqual(['map', 'library'])
     expect(underline.list.querySelector('.sr-only')).toBeNull()
   })
+
+  it("at the phone's size, shares the width equally in 40px segments, each option's swatch before its label", () => {
+    const options: TabOption<'map' | 'library'>[] = [
+      { value: 'map', label: 'map', swatch: '#0f1214' },
+      { value: 'library', label: 'library' },
+    ]
+    const { list, tabs } = renderTabs({ size: 'xl', options })
+    expect(list.className).toContain('grid')
+    expect(list.className).toContain('auto-cols-fr')
+    expect(tabs().every((tab) => tab.className.includes('h-[40px]') && tab.className.includes('touch-target'))).toBe(true)
+    const [swatch] = tabs()[0].querySelectorAll<HTMLElement>('[aria-hidden="true"]')
+    expect(swatch.style.background).toBe('rgb(15, 18, 20)')
+    expect(tabs()[1].querySelector('[aria-hidden="true"]')).toBeNull()
+    expect(visibleText(list)).toEqual(['map', 'library'])
+  })
 })

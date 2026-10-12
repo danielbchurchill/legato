@@ -25,6 +25,18 @@ export type QualityPreference = 'auto' | Rung
 
 export const QUALITY_PREFERENCES: readonly QualityPreference[] = ['auto', ...LADDER]
 
+// #120's user override for the ladder, as Settings offers it, on the
+// desktop and the phone alike. Codec-neutral labels, since the same rung
+// means Opus in one browser and AAC in Safari. "auto" follows the
+// connection path.
+export const QUALITY_OPTIONS = [
+  { value: 'auto', label: 'auto' },
+  { value: 'original', label: 'original' },
+  { value: 'high', label: 'high · 256 kbps' },
+  { value: 'standard', label: 'standard · 160 kbps' },
+  { value: 'low', label: 'low · 96 kbps' },
+] as const satisfies readonly { value: QualityPreference; label: string }[]
+
 // Issue #120's default rung for each connection path. This computer plays
 // the original, as the home network does.
 const DEFAULT_RUNG: Record<ConnectionPath, Rung> = {

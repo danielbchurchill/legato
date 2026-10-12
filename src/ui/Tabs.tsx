@@ -31,9 +31,16 @@ import { usePrefersReducedMotion } from './usePrefersReducedMotion'
  * (wrapping), Home/End the ends. Every caller switches something cheap (a view, a sort, a setting),
  * so choosing on focus costs nothing and saves a keypress. */
 
-export type TabOption<T extends string> = { value: T; label: string; icon?: IconName }
+export type TabOption<T extends string> = {
+  value: T
+  label: string
+  icon?: IconName
+  /** A 12px dot of this colour before the label: the phone's theme control
+   * shows each theme's canvas (#389). */
+  swatch?: string
+}
 
-export type TabsSize = 'xs' | 'sm' | 'md' | 'lg'
+export type TabsSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl'
 
 const SEGMENT_HEIGHT: Record<TabsSize, string> = {
   xs: 'h-[20px] px-[8px]',
@@ -43,6 +50,7 @@ const SEGMENT_HEIGHT: Record<TabsSize, string> = {
   // the sort pill beside it.
   md: 'h-[30px] px-[12px]',
   lg: 'h-[32px] px-[14px]',
+  xl: 'h-[40px] justify-center px-[12px]',
 }
 
 /* An icon alone sits in a square segment, a circle once the thumb's under it. */
@@ -51,6 +59,7 @@ const SEGMENT_SQUARE: Record<TabsSize, string> = {
   sm: 'size-[24px] justify-center',
   md: 'size-[30px] justify-center',
   lg: 'size-[32px] justify-center',
+  xl: 'size-[40px] justify-center',
 }
 
 type TabsProps<T extends string> = {
@@ -63,7 +72,10 @@ type TabsProps<T extends string> = {
   /** `segmented` only: skip the inset well, for a caller drawing its own. */
   bare?: boolean
   /** Segmented heights, overall: 24 (xs), 28 (sm, default), 34 (md — the
-   * library header), 36 (lg — the capsule's map/library switch). Underline
+   * library header), 36 (lg — the capsule's map/library switch), 48 (xl —
+   * the phone's settings, #389: 40px segments in a 4px well, its corners
+   * 12px rather than round, the segments sharing its width equally and
+   * labelled 14/500, each taking taps across 44px). Underline
    * tabs only know lg: the phone sheet's 44px tabs, 15/500 and 24px apart
    * (#389). At any other size they're the panels' 13px labels. */
   size?: TabsSize
@@ -150,6 +162,7 @@ export function Tabs<T extends string>({
   }
 
   const segmented = variant === 'segmented'
+  const phone = segmented && size === 'xl'
   const iconSize = size === 'lg' ? 18 : 14
   const sheetTabs = !segmented && size === 'lg'
   const underlineGap = sheetTabs ? 'gap-[24px]' : 'gap-[20px]'
@@ -159,8 +172,12 @@ export function Tabs<T extends string>({
       ref={listRef}
       role="tablist"
       aria-label={label}
-      className={`relative inline-flex shrink-0 items-center ${
-        segmented ? (bare ? 'gap-[2px] p-[2px]' : 'gap-[2px] rounded-full bg-[var(--color-sunken)] p-[2px]') : underlineGap
+      className={`relative shrink-0 items-center ${
+        phone
+          ? 'grid auto-cols-fr grid-flow-col gap-[4px] rounded-[12px] bg-[var(--color-sunken)] p-[4px]'
+          : segmented
+            ? `inline-flex ${bare ? 'gap-[2px] p-[2px]' : 'gap-[2px] rounded-full bg-[var(--color-sunken)] p-[2px]'}`
+            : `inline-flex ${underlineGap}`
       } ${className}`}
     >
       {indicator && (
@@ -169,9 +186,11 @@ export function Tabs<T extends string>({
           className={`pointer-events-none absolute left-0 ${
             settled && !reduced ? 'transition-[transform,width] duration-[var(--motion-spring)] ease-[var(--ease-spring)]' : ''
           } ${
-            segmented
-              ? 'inset-y-[2px] rounded-full bg-[var(--color-raised)] shadow-[var(--shadow-sm)]'
-              : 'bottom-0 h-[2px] rounded-full bg-[var(--color-ink)]'
+            phone
+              ? 'inset-y-[4px] rounded-[9px] bg-[var(--color-raised)] shadow-[var(--shadow-sm)]'
+              : segmented
+                ? 'inset-y-[2px] rounded-full bg-[var(--color-raised)] shadow-[var(--shadow-sm)]'
+                : 'bottom-0 h-[2px] rounded-full bg-[var(--color-ink)]'
           }`}
           style={{ transform: `translateX(${indicator.left}px)`, width: `${indicator.width}px` }}
         />
@@ -192,9 +211,20 @@ export function Tabs<T extends string>({
             onClick={() => onChange(option.value)}
             onKeyDown={handleKeyDown}
             className={`relative z-[1] flex items-center gap-[6px] whitespace-nowrap transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
-              sheetTabs ? 'text-heading' : 'text-[length:var(--text-secondary)] leading-none font-medium'
-            } ${segmented ? `rounded-full ${iconAlone ? SEGMENT_SQUARE[size] : SEGMENT_HEIGHT[size]}` : sheetTabs ? 'py-[12px]' : 'pb-[9px]'} ${active ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-ink-2)] hover:text-[var(--color-ink)]'}`}
+              sheetTabs
+                ? 'text-heading'
+                : phone
+                  ? 'text-[14px] leading-none font-medium'
+                  : 'text-[length:var(--text-secondary)] leading-none font-medium'
+            } ${segmented ? `${phone ? 'touch-target rounded-[9px]' : 'rounded-full'} ${iconAlone ? SEGMENT_SQUARE[size] : SEGMENT_HEIGHT[size]}` : sheetTabs ? 'py-[12px]' : 'pb-[9px]'} ${active ? 'text-[var(--color-ink)]' : 'text-[color:var(--color-ink-2)] hover:text-[var(--color-ink)]'}`}
           >
+            {option.swatch && (
+              <span
+                aria-hidden="true"
+                className="size-[12px] shrink-0 rounded-full shadow-[0_0_0_1px_var(--color-line-strong)]"
+                style={{ background: option.swatch }}
+              />
+            )}
             {option.icon && <Icon name={option.icon} size={iconSize} />}
             {iconAlone ? <span className="sr-only">{option.label}</span> : option.label}
           </button>

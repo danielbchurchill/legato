@@ -2,7 +2,7 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { popPhonePage, pushPhonePage, usePhonePages, type PhonePage } from './navigation'
+import { closePhonePages, popPhonePage, pushPhonePage, usePhonePages, type PhonePage } from './navigation'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -104,5 +104,29 @@ describe('phone navigation', () => {
     history.replaceState({ legatoPhonePages: ['settings', 'nonsense', 'health'] }, '')
     mount()
     expect(seen.at(-1)).toEqual(['settings', 'health'])
+  })
+
+  it("keeps Library health's lists on the stack, and drops a list that doesn't exist", () => {
+    history.replaceState({ legatoPhonePages: ['settings', 'health', 'worklist:duplicates', 'worklist:nonsense'] }, '')
+    mount()
+    expect(seen.at(-1)).toEqual(['settings', 'health', 'worklist:duplicates'])
+  })
+
+  it('closes every page at once, back to the map', async () => {
+    mount()
+    act(() => pushPhonePage('settings'))
+    act(() => pushPhonePage('health'))
+    act(() => pushPhonePage('worklist:missing'))
+    const back = popped()
+    closePhonePages()
+    await back
+    expect(seen.at(-1)).toEqual([])
+  })
+
+  it('closes nothing on the map', () => {
+    mount()
+    const before = history.length
+    closePhonePages()
+    expect(history.length).toBe(before)
   })
 })

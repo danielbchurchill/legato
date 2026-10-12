@@ -4,15 +4,12 @@ import { ShellLayoutContext, useWindowSize } from '../shell/layout'
 import type { LeftView, NowPlayingTab } from '../shell/panels'
 import { Button } from '../ui/Button'
 import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
-import { Icon } from '../ui/Icon'
 import { Tabs } from '../ui/Tabs'
 import { plural } from '../ui/format'
 import { LibraryView } from '../library/LibraryView'
 import { useLibraryChanges, useLibraryStats } from '../library/useLibraryChanges'
 import { CollectionsPanel } from '../panels/CollectionsPanel'
-import { HealthPanel } from '../panels/HealthPanel'
 import { NowPlaying } from '../panels/NowPlaying'
-import { SettingsPanel } from '../panels/SettingsPanel'
 import { SearchPalette } from '../search/SearchPalette'
 import { ServerUnreachableOverShell, type UnreachableView } from '../connect/ServerUnreachable'
 import type { Settings } from '../hooks/useSettings'
@@ -35,8 +32,8 @@ import type { Detent, DetentHeights } from './sheetGeometry'
  *
  * The sheet's tabs show the desktop's own library view, collections panel
  * and now playing for now; later steps of #389 draw them as the handoff
- * does, and add node detail, search, now playing and the pushed pages'
- * own content. */
+ * does, and add node detail, search and now playing. Settings and Library
+ * health are pushed pages (PhonePages.tsx). */
 
 type Playback = ReturnType<typeof usePlayback>
 
@@ -97,7 +94,6 @@ export function PhoneShell({
   const [detent, setDetent] = useState<Detent>('peek')
   const [tab, setTab] = useState<SheetTab>('library')
   const [collectionsView, setCollectionsView] = useState<LeftView>({ kind: 'collections' })
-  const [healthView, setHealthView] = useState<LeftView>({ kind: 'health' })
   const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('next')
   const [peekHeight, setPeekHeight] = useState(0)
   const pages = usePhonePages()
@@ -170,33 +166,6 @@ export function PhoneShell({
     ),
   }
 
-  const pageContent = {
-    settings: (
-      <div className="flex flex-col gap-[16px]">
-        {/* Where the handoff's settings page puts it: Library health
-         * pushes from Settings. */}
-        <button
-          type="button"
-          onClick={() => pushPhonePage('health')}
-          className="flex min-h-[52px] items-center justify-between rounded-[16px] border border-[var(--color-line)] bg-[var(--color-solid)] px-[16px] text-[length:var(--text-heading)] text-[var(--color-ink)]"
-        >
-          Library health
-          <span className="inline-flex -rotate-90 text-[var(--color-ink-3)]">
-            <Icon name="chevron-down" size={18} />
-          </span>
-        </button>
-        <SettingsPanel
-          settings={settings}
-          updateSettings={updateSettings}
-          onSetAudioDevice={playback.setAudioDevice}
-          themePreference={themePreference}
-          onSetThemePreference={onSetThemePreference}
-        />
-      </div>
-    ),
-    health: <HealthPanel view={healthView} onNavigate={(view) => setHealthView(view ?? { kind: 'health' })} onFocusNode={showOnMap} />,
-  }
-
   return (
     <ShellLayoutContext.Provider value={layout}>
       <AppShell>
@@ -258,7 +227,14 @@ export function PhoneShell({
           </Sheet>
         </div>
 
-        <PhonePages platform={platform} content={pageContent} />
+        <PhonePages
+          platform={platform}
+          settings={settings}
+          updateSettings={updateSettings}
+          themePreference={themePreference}
+          onSetThemePreference={onSetThemePreference}
+          onShowOnMap={showOnMap}
+        />
 
         {searchOpen && (
           <SearchPalette
