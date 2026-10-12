@@ -185,6 +185,89 @@ function listArtists(
   return { items: all.slice(offset, offset + limit), total: all.length };
 }
 
+// The people the library credits (#389): every producer and engineer on a
+// track with a file, the credit nodes the map draws. The phone's library
+// lists them beside albums, artists and tracks. Someone who also performs
+// has the artist node instead (match/edges.ts, #273), and is listed under
+// artists, not here.
+//
+// Paged like the artists: the whole list read once, then sliced. A
+// recompute bumps the library's revision, but MusicBrainz credits arrive
+// one enrichment job at a time without one (enrich/credits.ts), so the list
+// is also read again once a newer edge exists. Edge ids only grow
+// (AUTOINCREMENT). A job that only takes a credit away shows at the next
+// revision.
+export type CreditRole = "producer" | "engineer";
+
+export type CreditRow = {
+  id: number;
+  name: string;
+  /** What they did on the library's tracks: producer, engineer, or both, in that order. */
+  roles: CreditRole[];
+  tracks: number;
+};
+
+const LIBRARY_CREDITS = `
+  SELECT c.id AS id, c.title AS name,
+         MAX(e.type = 'produced_by') AS produced,
+         MAX(e.type = 'engineered_by') AS engineered,
+         COUNT(DISTINCT e.from_node) AS tracks
+  FROM nodes c
+  JOIN edges e ON e.to_node = c.id
+  WHERE c.type = 'credit'
+    AND e.type IN ('produced_by', 'engineered_by')
+    AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = e.from_node)
+  GROUP BY c.id`;
+
+const CREDIT_SORTS = {
+  name: (a: CreditRow, b: CreditRow) => nameCollator.compare(a.name, b.name),
+} as const;
+export type CreditSort = keyof typeof CREDIT_SORTS;
+
+// The rows are read once per revision and newest edge, and sorted once per
+// order. The read is the slow part: at 30,000 albums, with 100,000 produced_by
+// edges over 500 people, it takes about 90 ms, all of it finding each edge's
+// row and its track's file.
+const creditCache = new WeakMap<
+  Database,
+  { revision: number; newestEdge: number; rows: CreditRow[]; lists: Map<string, CreditRow[]> }
+>();
+
+function libraryCredits(db: Database, sort: CreditSort, dir: "asc" | "desc"): CreditRow[] {
+  const revision = libraryRevision();
+  const newestEdge = (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM edges").get() as { id: number }).id;
+  let cache = creditCache.get(db);
+  if (cache?.revision !== revision || cache.newestEdge !== newestEdge) {
+    const rows = db.prepare(LIBRARY_CREDITS).all() as {
+      id: number;
+      name: string;
+      produced: number;
+      engineered: number;
+      tracks: number;
+    }[];
+    cache = {
+      revision,
+      newestEdge,
+      rows: rows.map(({ id, name, produced, engineered, tracks }) => ({
+        id,
+        name,
+        roles: [...(produced ? (["producer"] as const) : []), ...(engineered ? (["engineer"] as const) : [])],
+        tracks,
+      })),
+      lists: new Map(),
+    };
+    creditCache.set(db, cache);
+  }
+  const key = `${sort} ${dir}`;
+  let list = cache.lists.get(key);
+  if (!list) {
+    const compare = CREDIT_SORTS[sort];
+    list = [...cache.rows].sort((a, b) => (dir === "desc" ? compare(b, a) : compare(a, b)) || a.id - b.id);
+    cache.lists.set(key, list);
+  }
+  return list;
+}
+
 function listAlbums(
   db: Database,
   { q, sort, dir, limit, offset }: { q: string | null; sort: AlbumSort; dir: "asc" | "desc"; limit: number; offset: number },
@@ -356,6 +439,14 @@ export function libraryRoutes(db: Database) {
         limit: clampLimit(request.query.limit),
         offset: clampOffset(request.query.offset),
       });
+    });
+
+    // No search either, for the same reason.
+    app.get<{ Querystring: LibraryQuery }>("/library/credits", async (request) => {
+      const sort = pickSort(CREDIT_SORTS, request.query.sort, "name");
+      const all = libraryCredits(db, sort, request.query.dir === "desc" ? "desc" : "asc");
+      const offset = clampOffset(request.query.offset);
+      return { items: all.slice(offset, offset + clampLimit(request.query.limit)), total: all.length };
     });
 
     app.get<{ Querystring: LibraryQuery }>("/library/tracks", async (request) => {
