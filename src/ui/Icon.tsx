@@ -10,6 +10,7 @@ import computer from '../assets/icons/computer.svg?raw'
 import database from '../assets/icons/database.svg?raw'
 import eye from '../assets/icons/eye.svg?raw'
 import fastForward from '../assets/icons/fast-forward.svg?raw'
+import filter from '../assets/icons/filter.svg?raw'
 import globe from '../assets/icons/globe.svg?raw'
 import heart from '../assets/icons/heart.svg?raw'
 import home from '../assets/icons/home.svg?raw'
@@ -91,7 +92,10 @@ import volumeMute from '../assets/icons/volume-mute.svg?raw'
  * legato.fm, and a custom address.
  *
  * `arrow-left` is Android's back, in the top app bar of a pushed page on
- * the phone (#389). iOS's back is the chevron, as each platform draws it. */
+ * the phone (#389). iOS's back is the chevron, as each platform draws it.
+ *
+ * `filter` (proicons "Filter", three narrowing lines) is the phone
+ * library's sort line (#389), the glyph Legato Mobile v2 draws there. */
 const GLYPHS = {
   add,
   'arrow-left': arrowLeft,
@@ -105,6 +109,7 @@ const GLYPHS = {
   database,
   eye,
   'fast-forward': fastForward,
+  filter,
   globe,
   heart,
   home,

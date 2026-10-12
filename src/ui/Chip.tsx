@@ -6,7 +6,10 @@ import { useTouchLayout } from './touchLayout'
  * the strongest "this one" the palette has short of the accent. The optional
  * count rides at 70% in mono 11, so it reads as a property of the label
  * rather than a second label. A chip that's a button takes taps across 44px
- * in the phone's touch layout (touchLayout.ts). */
+ * in the phone's touch layout (touchLayout.ts).
+ *
+ * `lg` is the phone library's chip (#389, Legato Mobile v2): 32px with 14px
+ * sides, its target stretched to 44px over the gaps around it. */
 
 type ChipProps = {
   children: ReactNode
@@ -15,12 +18,18 @@ type ChipProps = {
   onClick?: () => void
   /** A chip with no onClick is a plain label (a connection), not a button. */
   className?: string
+  size?: 'md' | 'lg'
   title?: string
 }
 
-export function Chip({ children, active = false, count, onClick, className = '', title }: ChipProps) {
+const SIZE = {
+  md: 'h-[28px] px-[12px]',
+  lg: "relative h-[32px] px-[14px] before:absolute before:inset-x-0 before:-inset-y-[6px] before:content-['']",
+}
+
+export function Chip({ children, active = false, count, onClick, className = '', title, size = 'md' }: ChipProps) {
   const touch = useTouchLayout()
-  const classes = `inline-flex h-[28px] shrink-0 items-center gap-[6px] rounded-full border px-[12px] text-[length:var(--text-secondary)] leading-none font-medium whitespace-nowrap transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
+  const classes = `inline-flex ${SIZE[size]} shrink-0 items-center gap-[6px] rounded-full border text-[length:var(--text-secondary)] leading-none font-medium whitespace-nowrap transition-colors duration-[var(--motion-fast)] ease-[var(--ease-out)] ${
     active
       ? 'border-[var(--color-ink)] bg-[var(--color-ink)] text-[var(--color-canvas)]'
       : 'border-[var(--color-line-strong)] text-[var(--color-ink-2)]'

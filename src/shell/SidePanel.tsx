@@ -57,13 +57,16 @@ export function PanelHeader({ title, actions }: { title: ReactNode; actions?: Re
   )
 }
 
-/* A sub-page's way back: a chevron and the parent's name, secondary 500. */
-export function BackRow({ label, onBack }: { label: string; onBack: () => void }) {
+/* A sub-page's way back: a chevron and the parent's name, secondary 500.
+ * `large` stretches its target to 44px for a phone (#389). */
+export function BackRow({ label, onBack, large = false }: { label: string; onBack: () => void; large?: boolean }) {
   return (
     <button
       type="button"
       onClick={onBack}
-      className="-ml-[4px] flex h-[36px] items-center gap-[4px] text-[length:var(--text-secondary)] font-medium text-[var(--color-ink-2)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-ink)]"
+      className={`-ml-[4px] flex h-[36px] items-center gap-[4px] text-[length:var(--text-secondary)] font-medium text-[var(--color-ink-2)] transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-ink)] ${
+        large ? "relative before:absolute before:inset-x-0 before:-inset-y-[4px] before:content-['']" : ''
+      }`}
     >
       <span className="inline-flex rotate-90">
         <Icon name="chevron-down" size={16} />
