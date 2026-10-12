@@ -114,5 +114,9 @@ describe("the Artists tab and the map's clusters (#302)", () => {
       db.close();
     }
     expect(disagreements).toEqual([]);
-  });
+    // About 2 s on a laptop, but just over bun's default 5 s on GitHub's
+    // runners, where it failed CI for unrelated PRs (#363). The 150 libraries
+    // are what made the rule's disagreements show up (886 of 1,000 before
+    // #351), so the timeout grows rather than the coverage shrinking.
+  }, 20_000);
 });
