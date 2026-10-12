@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import type { WorklistKind } from '../shell/panels'
 
 /* Pushed pages on the phone (#389): full-screen pages over the map, such as
  * Settings and Library health, each with the platform's own back.
@@ -11,9 +12,16 @@ import { useSyncExternalStore } from 'react'
  * what's on screen never disagree. The URL never changes; the entries only
  * carry state. */
 
-export type PhonePage = 'settings' | 'health'
+/* Library health's lists each push as a page of their own. */
+export type PhonePage = 'settings' | 'health' | `worklist:${WorklistKind}`
 
-const PAGES: readonly PhonePage[] = ['settings', 'health']
+const WORKLISTS: readonly WorklistKind[] = ['duplicates', 'missing', 'enrichment', 'tag-writes', 'gaps']
+const PAGES: readonly PhonePage[] = ['settings', 'health', ...WORKLISTS.map((list) => `worklist:${list}` as const)]
+
+/** The list a worklist page shows; null for any other page. */
+export function worklistOf(page: PhonePage): WorklistKind | null {
+  return WORKLISTS.find((list) => page === `worklist:${list}`) ?? null
+}
 
 /* Where the stack sits in history.state, beside anything else's state. */
 const STATE_KEY = 'legatoPhonePages'
@@ -50,6 +58,13 @@ export function pushPhonePage(page: PhonePage) {
 export function popPhonePage() {
   if (pages.length === 0) return
   history.back()
+}
+
+/** Closes every page, back to the map, as that many backs would: something
+ * opened on the map from a page shows the map. */
+export function closePhonePages() {
+  if (pages.length === 0) return
+  history.go(-pages.length)
 }
 
 function subscribe(listener: () => void): () => void {
