@@ -82,3 +82,10 @@ export class TapGuard {
 export function isTouchEvent(original: Event): boolean {
   return 'touches' in original
 }
+
+/** Whether a touch event's touch came from a stylus: Safari reports an
+ * Apple Pencil as a touch whose touchType is 'stylus'. */
+export function isStylusTouch(original: Event): boolean {
+  const touch = (original as TouchEvent).changedTouches?.[0] as (Touch & { touchType?: string }) | undefined
+  return touch?.touchType === 'stylus'
+}

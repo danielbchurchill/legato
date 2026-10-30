@@ -22,7 +22,8 @@ import { averageColors, hashCoverUrl, sampleCoverColor } from '../ui/coverColor'
 import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
 import { choosePhoneLabels, phoneLabelSize, placeGreedily, type LabelBox } from './labelDensity'
-import { TapGuard, isTouchEvent, pinchCameraState, type CameraState, type Point as ScreenPoint } from './touchGestures'
+import { TapGuard, isStylusTouch, isTouchEvent, pinchCameraState, type CameraState, type Point as ScreenPoint } from './touchGestures'
+import { pickTapTarget, type TapCandidate } from './tapPick'
 import { usePhoneLayout } from '../phone/phoneLayout'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
@@ -1260,11 +1261,17 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     }
     renderer.getCamera().on('updated', settleLabelsAfterCameraMove)
 
+    // The labels the last frame drew. A finger's pick favours them in a
+    // near tie (tapPick.ts).
+    const labelsDrawn = new Set<string>()
+    renderer.on('beforeRender', () => labelsDrawn.clear())
+
     const drawLabel: NodeLabelDrawingFunction = (context, data) => {
       const kind = (data as unknown as { labelKind?: LabelKind }).labelKind
       if (!kind || !data.label) return
       const placed = phoneRef.current ? phoneLabels(context) : (placedLabels ??= placeLabels(context))
       if (!placed.has(data.key)) return
+      labelsDrawn.add(data.key)
       const colors = themeColorsRef.current
       const style = styleOf(kind)
       const box = labelBox(context, kind, data.label, data.x, data.y, data.size)
@@ -1655,17 +1662,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       }
     })
 
-    renderer.on('clickNode', (e) => {
-      if (didDrag) return
-      if (isTouchEvent(e.event.original) && !tapGuard.allowsTap()) return
-      // A real marquee drag that happened to release over a node — see
-      // marqueeActive below. Consumed here so the click that sigma still
-      // synthesizes for it (its own drag-distance tracking never saw the
-      // movement, since the marquee handler below claims every intervening
-      // mousemovebody with preventSigmaDefault) doesn't also select/fly.
-      if (marqueeActive) return
+    const clickNode = (node: string) => {
       if (multiSelectedRef.current.length > 0) setMultiSelected([])
-      const id = Number(e.node)
+      const id = Number(node)
       // Clicking the selected node again clears it — one of the three ways
       // out of a selection, alongside clicking empty canvas and Escape
       // (App.tsx). No fly on the way out: the camera has already arrived
@@ -1677,17 +1676,34 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       }
       onSelectNodeRef.current(id)
       flyToRef.current(id)
-    })
+    }
 
     // Clicking the canvas itself is the deselect gesture. Nothing outside a
     // node has any other meaning here — panning is a drag, and sigma reports
     // that separately (and a marquee drag is claimed before it ever reaches
     // sigma's own drag tracking — see marqueeActive below).
-    renderer.on('clickStage', (e) => {
-      if (marqueeActive) return
-      if (isTouchEvent(e.event.original) && !tapGuard.allowsTap()) return
+    const clickStage = () => {
       if (selectedNodeIdRef.current != null) onSelectNodeRef.current(null)
       if (multiSelectedRef.current.length > 0) setMultiSelected([])
+    }
+
+    // A tap reaches one of these two by sigma's own pick, and goes on to
+    // tapMap below, which picks again.
+    renderer.on('clickNode', (e) => {
+      if (isTouchEvent(e.event.original)) return tapMap(e.event, e.node)
+      if (didDrag) return
+      // A real marquee drag that happened to release over a node — see
+      // marqueeActive below. Consumed here so the click that sigma still
+      // synthesizes for it (its own drag-distance tracking never saw the
+      // movement, since the marquee handler below claims every intervening
+      // mousemovebody with preventSigmaDefault) doesn't also select/fly.
+      if (marqueeActive) return
+      clickNode(e.node)
+    })
+    renderer.on('clickStage', (e) => {
+      if (isTouchEvent(e.event.original)) return tapMap(e.event, null)
+      if (marqueeActive) return
+      clickStage()
     })
 
     // Sigma's captor answers a double-click by animating the camera to
@@ -1914,6 +1930,27 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
      * point between them, no rotation. */
     const touchCaptor = renderer.getTouchCaptor()
     const tapGuard = new TapGuard()
+
+    /* A dot is far smaller than a fingertip (#409), so a finger doesn't
+     * keep sigma's pick of the pixel under it: a tap takes the nearest drawn
+     * node in reach (tapPick.ts), and clears the selection only when there's
+     * none. A stylus is as precise as a mouse and keeps sigma's pick. */
+    const tapMap = (tap: ScreenPoint & { original: Event }, underTap: string | null) => {
+      if (!tapGuard.allowsTap()) return
+      const node = isStylusTouch(tap.original) ? underTap : pickTapTarget(tap, tapCandidates(), renderer.getDimensions())
+      if (node != null) clickNode(node)
+      else clickStage()
+    }
+    const tapCandidates = (): TapCandidate[] => {
+      const candidates: TapCandidate[] = []
+      graph.forEachNode((key) => {
+        const display = renderer.getNodeDisplayData(key)
+        if (!display) return
+        const { x, y } = renderer.framedGraphToViewport(display)
+        candidates.push({ key, x, y, radius: renderer.scaleSize(display.size), labelled: labelsDrawn.has(key), hidden: display.hidden })
+      })
+      return candidates
+    }
     let pinch: { camera: CameraState; from: [ScreenPoint, ScreenPoint] } | null = null
     touchCaptor.on('touchdown', (e) => {
       if (!renderer.getCustomBBox()) renderer.setCustomBBox(renderer.getBBox())
