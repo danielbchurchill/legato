@@ -92,12 +92,13 @@ describe("sweepStreamCache", () => {
 
   it("keeps every quality of a live hash and removes every quality of an orphan", async () => {
     insertLiveFileHash("live1111111111111111111111111111111111");
-    const live = (["opus96", "opus160", "opus256", "aac160", "aac256"] as const).map((q) =>
+    const live = (["original-fmp4", "opus96", "opus160", "opus256", "aac160", "aac256"] as const).map((q) =>
       writeStreamFile("live1111111111111111111111111111111111", q),
     );
     const orphans = [
       writeStreamFile("orphan22222222222222222222222222222222", "opus256"),
       writeStreamFile("orphan22222222222222222222222222222222", "aac160"),
+      writeStreamFile("orphan22222222222222222222222222222222", "original-fmp4"),
     ];
 
     const report = await sweepStreamCache(db, { cacheDir: dir, dryRun: false });
