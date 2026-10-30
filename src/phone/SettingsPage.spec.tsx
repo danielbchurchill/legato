@@ -7,7 +7,7 @@ import { OPEN_CONNECT_EVENT } from '../connect/openConnect'
 import { neverUseRelay } from '../connect/connectionPath'
 import type { ServerVersion } from '../hooks/useServerReady'
 import { readQualityPreference } from '../playback/quality'
-import { UpdateOfferProvider } from '../shell/serverUpdate'
+import { UpdateOfferProvider } from '../shell/ServerUpdateNotice'
 import { ToastProvider } from '../ui/Toast'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
