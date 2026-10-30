@@ -6,6 +6,7 @@ import path from "node:path";
 import { DATA_DIR } from "../config.js";
 import { FFMPEG_PATH } from "../mediaBinaries.js";
 import { onPlaybackWaiting, playbackWaiting, runMediaTask } from "../media/queue.js";
+import { scheduleTrim } from "./budget.js";
 import { VARIANTS, type TranscodedQuality } from "./quality.js";
 
 // Content-addressed by file_hash, same sharding as cover/store.ts and
@@ -407,6 +408,9 @@ export async function ensureVariant(
         await mkdir(path.dirname(target), { recursive: true });
         await runMediaTask("playback", () => transcodeToFile(sourcePath, quality, self), self.abandoned);
         await rename(temp, target);
+        // The remuxed original is the one rung with a size cap (#408). The
+        // file just made is the newest, so it's never what goes.
+        if (quality === "original-fmp4") void scheduleTrim(cacheDir).catch(() => {});
       } catch (err) {
         await unlink(temp).catch(() => {});
         throw err;

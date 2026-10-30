@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -457,6 +457,17 @@ describe("GET /api/v1/files/:id/stream", () => {
         ]);
         expect(streams.toString().trim()).toBe("audio");
       }
+    });
+
+    it("marks a cached remux as served, which the rung's size cap keeps longest", async () => {
+      await get("?quality=original-fmp4");
+      const cached = cachePath(HASH, "original-fmp4", path.join(dir, "streams"));
+      const hourAgo = new Date(Date.now() - 3_600_000);
+      utimesSync(cached, hourAgo, hourAgo);
+
+      expect((await get("?quality=original-fmp4", { range: "bytes=0-99" })).statusCode).toBe(206);
+      for (let i = 0; i < 50 && statSync(cached).mtimeMs <= hourAgo.getTime(); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(statSync(cached).mtimeMs).toBeGreaterThan(hourAgo.getTime());
     });
 
     it("only indexes the fragmented MP4 rungs", async () => {
