@@ -31,7 +31,7 @@ On a Synology, follow [synology.md](synology.md) instead: it does the same thing
 | Inside the container | What it is | Mounted from |
 |---|---|---|
 | `/music` | Your library, **read-only** | `LEGATO_MUSIC_DIR` on the host |
-| `/data` | Database, cover art, waveform cache | The `legato-data` named volume |
+| `/data` | Database, cover art, waveform and stream caches | The `legato-data` named volume |
 
 The server runs as `PUID:PGID`, never as root. On start, the container gives `/data` to that user if it isn't theirs yet (a first start, or after you change `PUID`). `PUID=0` is refused. That user needs read access to every folder in the library. On a Synology, check the shared folder's permissions for that user in Control Panel.
 
@@ -67,6 +67,19 @@ then `docker compose up -d` to recreate the container. Host networking changes t
 Host networking needs Docker Engine on Linux: a NAS, a Raspberry Pi, any Linux machine. Docker Desktop (on macOS, Windows or Linux) runs containers inside a virtual machine, so even with host networking the container isn't on your network and the connect screen can't find it. Connect by address there.
 
 Name the server with `LEGATO_SERVER_NAME`, whichever network it's on. The compose file has the line, commented out. Without it, the apps show the container's hostname: a random id like `15f18b3fbcac` on the bridge network, or the host's own name with host networking.
+
+## How much disk the stream cache takes
+
+When a browser or phone plays a track at a lower quality, or the web player asks for it as MP4, the server converts it once and keeps the result in `/data/streams`, so the next play starts straight away. The cache has a budget of 4 GB, every quality together. Past that, the tracks played longest ago go first. Nothing played in the last 10 minutes is removed, so the cache can be over its budget for a little while.
+
+To change the budget, set `LEGATO_STREAM_CACHE_MB` under `environment:`, in whole megabytes (1024 is 1 GB):
+
+```yaml
+    environment:
+      LEGATO_STREAM_CACHE_MB: "10240"
+```
+
+then `docker compose up -d`. A smaller budget takes effect on that start: the server trims the cache down to it and logs how much it removed. A value of 0, or one that isn't a whole number, is ignored with a warning in the log, and the cache keeps the 4 GB default. There's no unlimited setting.
 
 ## Tag write-back needs a read-write library
 
