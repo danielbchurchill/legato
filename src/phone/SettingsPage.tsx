@@ -11,6 +11,9 @@ import { useLibraryChanges, useLibraryStats } from '../library/useLibraryChanges
 import { LegatoAccountRow } from '../panels/LegatoAccountRow'
 import { useRebuildMap } from '../panels/useRebuildMap'
 import { QUALITY_OPTIONS, readQualityPreference, storeQualityPreference } from '../playback/quality'
+import { UpdateWording } from '../shell/ServerUpdateNotice'
+import { dismissUpdate, useUpdateOffer } from '../shell/serverUpdate'
+import { IconButton } from '../ui/IconButton'
 import { SectionLabel } from '../ui/SectionLabel'
 import { Shimmer } from '../ui/Skeleton'
 import { StatusDot } from '../ui/StatusDot'
@@ -68,6 +71,7 @@ export function SettingsPage({ settings, updateSettings, themePreference, onSetT
 
       <PageGroup label="library">
         <SourceRow />
+        <UpdateRow />
         <PageRow label="Change server" onClick={() => openConnectScreen()} chevron />
         <HealthRow />
       </PageGroup>
@@ -130,6 +134,32 @@ function SourceRow() {
           <span className="truncate">{name}</span>
           {stats && <span className="shrink-0">· {plural(stats.tracks, 'track')}</span>}
         </RowValue>
+      }
+    />
+  )
+}
+
+/* A newer legato-server release, under the server it's for (#405): the
+ * desktop's update pill, which the phone doesn't draw over the map. The
+ * same words and dismissal, without the install command, which the phone
+ * can't run; the app on the phone updates itself once the server has. */
+function UpdateRow() {
+  const offer = useUpdateOffer()
+  if (!offer) return null
+  return (
+    <PageRow
+      label={<UpdateWording offer={offer} />}
+      trailing={
+        <IconButton
+          icon="cancel"
+          label="Dismiss until a newer release"
+          size={44}
+          iconSize={20}
+          tone="ink-3"
+          tooltip={false}
+          className="-mr-[12px]"
+          onClick={() => dismissUpdate(offer.latestVersion)}
+        />
       }
     />
   )

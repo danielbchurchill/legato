@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AccountContext } from '../auth/accountContext'
 import { OPEN_CONNECT_EVENT } from '../connect/openConnect'
 import { neverUseRelay } from '../connect/connectionPath'
+import type { ServerVersion } from '../hooks/useServerReady'
 import { readQualityPreference } from '../playback/quality'
+import { UpdateOfferProvider } from '../shell/ServerUpdateNotice'
 import { ToastProvider } from '../ui/Toast'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -73,7 +75,7 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-async function render(settings: Record<string, string> = {}) {
+async function render(settings: Record<string, string> = {}, server: ServerVersion | null = null) {
   const updateSettings = vi.fn(async () => undefined)
   const onSetThemePreference = vi.fn()
   const container = document.createElement('div')
@@ -86,9 +88,13 @@ async function render(settings: Record<string, string> = {}) {
         ToastProvider,
         null,
         createElement(
-          AccountContext.Provider,
-          { value: { role: 'owner', provider: 'local', displayName: 'Sam Rivera', email: null } },
-          createElement(SettingsPage, { settings, updateSettings, themePreference: 'dark', onSetThemePreference }),
+          UpdateOfferProvider,
+          { server, name: 'raspberrypi' },
+          createElement(
+            AccountContext.Provider,
+            { value: { role: 'owner', provider: 'local', displayName: 'Sam Rivera', email: null } },
+            createElement(SettingsPage, { settings, updateSettings, themePreference: 'dark', onSetThemePreference }),
+          ),
         ),
       ),
     ),
@@ -180,6 +186,37 @@ describe('Settings on the phone', () => {
     expect(confirm).toBeDefined()
     await act(async () => confirm.click())
     expect(requests).toContainEqual({ method: 'POST', path: '/layout/rebuild' })
+  })
+
+  it("says the server has a newer release, without the command the phone can't run", async () => {
+    const offering = (latestVersion: string): ServerVersion => ({
+      version: '0.0.9',
+      gitSha: 'e7fb903',
+      schemaVersion: 44,
+      outOfDate: false,
+      update: { latestVersion, action: { kind: 'command', command: 'legato update' } },
+    })
+    const { container } = await render({}, offering('0.1.0'))
+    const library = [...container.querySelectorAll('section')].find((s) => s.querySelector('h3')?.textContent === 'library')!
+    expect(library.textContent).toContain('legato-server 0.1.0 is available for raspberrypi')
+    expect(container.textContent).not.toContain('legato update')
+
+    const dismiss = container.querySelector<HTMLButtonElement>('button[aria-label="Dismiss until a newer release"]')!
+    expect(dismiss.style.width).toBe('44px')
+    act(() => dismiss.click())
+    expect(container.textContent).not.toContain('is available')
+
+    // Dismissed on this device for 0.1.0 only.
+    const again = await render({}, offering('0.1.0'))
+    expect(again.container.textContent).not.toContain('is available')
+    const newer = await render({}, offering('0.2.0'))
+    expect(newer.container.textContent).toContain('legato-server 0.2.0 is available for raspberrypi')
+  })
+
+  it('has no update row when the server offers none', async () => {
+    const { container } = await render()
+    expect(container.textContent).not.toContain('is available')
+    expect(container.querySelector('button[aria-label="Dismiss until a newer release"]')).toBeNull()
   })
 
   it('names who is signed in, and signs out', async () => {
