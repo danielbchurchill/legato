@@ -1,13 +1,17 @@
 # Homebrew formula
 
-`legato.rb` is the formula for the `danielbchurchill/homebrew-legato` tap (issue #109). It stays in this repo until that tap repository exists. After that, the tap is where it lives (see [Moving it to the tap](#moving-it-to-the-tap)).
+`legato.rb` is the formula for the `danielbchurchill/homebrew-legato` tap (issue #109). The tap is live, and the release workflow bumps the copy there. This copy is what the workflow starts from (see [Moving it to the tap](#moving-it-to-the-tap)).
 
-Once the tap is live, a user runs:
+To install:
 
 ```sh
-brew install danielbchurchill/legato/legato
+brew tap danielbchurchill/legato
+brew trust danielbchurchill/legato
+brew install legato
 brew services start legato
 ```
+
+Current Homebrew won't load a formula from a tap you haven't trusted. `brew install danielbchurchill/legato/legato` on its own stops with "Refusing to load formula … from untrusted tap" (Homebrew 4.6.20, 2026-10-30). If your Homebrew says `trust` is an unknown command, it's older than that check: skip that line.
 
 ## What the formula does
 
