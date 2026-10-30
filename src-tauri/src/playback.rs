@@ -812,7 +812,7 @@ pub fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
 #[tauri::command]
 pub fn queue_set_device(state: State<PlaybackState>, name: Option<String>) -> Result<(), String> {
   *state.device_name.lock().unwrap() = name;
-  *state.session.lock().unwrap() = None;
+  state.stop();
   Ok(())
 }
 
@@ -936,18 +936,25 @@ impl PlaybackState {
     }
   }
 
+  // The session is dropped after the lock is released. Dropping its output
+  // waits for a callback in progress to return: cpal joins the output's
+  // thread on ALSA and WASAPI, and CoreAudio's stop waits for the render in
+  // flight.
   fn stop(&self) {
-    *self.session.lock().unwrap() = None;
+    let session = self.session.lock().unwrap().take();
+    drop(session);
   }
 
+  // Without the session lock (#387). rodio's try_seek waits for the output's
+  // callback to carry the seek out. On a streamed track that can mean
+  // waiting on the network, and if the output has stopped it waits for
+  // good. queue_seek used to hold the lock through that, so pause, next,
+  // stop and the monitor's position updates all waited behind it.
   fn seek(&self, position_ms: u64) -> Result<(), String> {
-    if let Some(session) = self.session.lock().unwrap().as_ref() {
-      session
-        .sink
-        .try_seek(Duration::from_millis(position_ms))
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    let Some(sink) = self.session.lock().unwrap().as_ref().map(|session| session.sink.clone()) else {
+      return Ok(());
+    };
+    sink.try_seek(Duration::from_millis(position_ms)).map_err(|e| e.to_string())
   }
 
   fn skip(&self) {
