@@ -224,9 +224,9 @@ function QualityRow() {
   )
 }
 
-/* #118's pin, for this device only. Shown on every phone, unlike the
- * desktop's row: since #365 a page a server served can take its route
- * through legato.fm, and the pin is what stops it (serverHost.ts). */
+/* #118's pin, for this device only. Shown on every phone, as the desktop's
+ * row is: since #365 a page a server served can take its route through
+ * legato.fm, and the pin is what stops it (serverHost.ts). */
 function NeverRelayRow() {
   const [on, setOn] = useState(neverUseRelay)
   return (

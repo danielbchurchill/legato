@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { neverUseRelay, setNeverUseRelay } from '../connect/connectionPath'
-import { SERVED_BY_SERVER } from '../config/serverHost'
 import { Switch } from '../ui/Switch'
 import { SettingsRow } from './SettingsPrimitives'
 
@@ -9,11 +8,11 @@ import { SettingsRow } from './SettingsPrimitives'
  * server base resolves (config/serverHost.ts), and the rail's connection
  * indicator says when it's on.
  *
- * Not on a page a Legato server served: that page only ever talks to the
- * server that served it, so there's no relay to rule out. */
+ * On a page a Legato server served too, as on the phone (#391): since #365
+ * that page can take its own server's route through legato.fm, and the pin
+ * is what keeps it at the server's own address. */
 export function NeverRelayRow() {
   const [on, setOn] = useState(neverUseRelay)
-  if (SERVED_BY_SERVER) return null
 
   return (
     <SettingsRow label="Never use the relay" align="start">

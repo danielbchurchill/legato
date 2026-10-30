@@ -48,11 +48,37 @@ describe('NeverRelayRow', () => {
     expect(toggle()!.getAttribute('aria-checked')).toBe('true')
   })
 
-  it("isn't offered on a page a Legato server served, which never uses the relay", async () => {
-    const meta = document.createElement('meta')
-    meta.name = 'legato-server'
-    document.head.appendChild(meta)
-    const { container } = await render()
-    expect(container.textContent).toBe('')
+  // Issue #391: since #365 a page a server served can take its own server's
+  // route through legato.fm, and the pin is what keeps it off that route.
+  it('is offered on a page a Legato server served, and keeps that page off its relay route', async () => {
+    const id = '0123456789abcdef0123456789abcdef'
+    for (const [name, content] of [
+      ['legato-server', 'same-origin'],
+      ['legato-server-id', id],
+    ]) {
+      const meta = document.createElement('meta')
+      meta.name = name
+      meta.content = content
+      document.head.appendChild(meta)
+    }
+    // This server, picked on the connect screen through legato.fm.
+    localStorage.setItem('legato:server-choice', `https://auth.legato.fm/relay/${id}`)
+
+    const { toggle } = await render()
+    const before = await import('../config/serverHost')
+    expect(before.SERVED_BY_SERVER).toBe(true)
+    expect(before.RELAY_SERVER_ID).toBe(id)
+    expect(toggle()).not.toBeNull()
+
+    // Turned on while on the relay route, the pin reloads the page
+    // (connectionPath.ts, whose spec checks that), and the reloaded page
+    // resolves its server again as it loads.
+    act(() => toggle()!.click())
+    expect(localStorage.getItem('legato:never-relay')).toBe('true')
+
+    vi.resetModules()
+    const after = await import('../config/serverHost')
+    expect(after.SERVER_ORIGIN).toBe(window.location.origin)
+    expect(after.RELAY_SERVER_ID).toBeNull()
   })
 })
