@@ -4,7 +4,7 @@ import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { noteServed, RECENTLY_SERVED_MS, trimStreamCache } from "./budget.js";
+import { noteServed, RECENTLY_SERVED_MS, trimStreamCache, trimStreamCacheOnStart } from "./budget.js";
 import { cachePath, ensureVariant } from "./cache.js";
 import { VARIANTS, type TranscodedQuality } from "./quality.js";
 
@@ -147,6 +147,30 @@ describe("trimStreamCache", () => {
 
   it("reports nothing for a cache that has never had a transcode", async () => {
     expect((await trimStreamCache({ cacheDir: path.join(dir, "nothing-here"), maxBytes: 0, now: NOW })).removed).toEqual([]);
+  });
+});
+
+describe("trimStreamCacheOnStart", () => {
+  it("brings a cache from before the budget down to it, and says so in one line", async () => {
+    // Served a day ago and more, so the ten-minute guard keeps none of it.
+    const files = [
+      cached("original-fmp4", "aa", 3 * 1024 ** 2, 3000),
+      cached("aac160", "bb", 3 * 1024 ** 2, 2000),
+      cached("opus160", "cc", 3 * 1024 ** 2, 1500),
+    ];
+    const lines: string[] = [];
+
+    await trimStreamCacheOnStart(dir, (line) => lines.push(line), 4 * 1024 ** 2);
+
+    expect(files.map((file) => existsSync(file))).toEqual([false, false, true]);
+    expect(lines).toEqual(["stream cache: removed 2 file(s), 6.0 MB, served longest ago, for its 4.0 MB budget; 3.0 MB left"]);
+  });
+
+  it("says nothing when the cache is already within budget", async () => {
+    cached("aac160", "aa", 1024 ** 2, 3000);
+    const lines: string[] = [];
+    await trimStreamCacheOnStart(dir, (line) => lines.push(line), 4 * 1024 ** 2);
+    expect(lines).toEqual([]);
   });
 });
 

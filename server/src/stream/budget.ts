@@ -128,3 +128,24 @@ export function scheduleTrim(cacheDir: string, maxBytes = STREAM_CACHE_BUDGET.by
   trimming = run.catch(() => undefined);
   return run;
 }
+
+function megabytes(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** The trim a server makes as it starts. A cache from before the budget,
+ * or from a bigger one, then comes down to it with nobody at a terminal:
+ * a packaged install or the Pi's compiled binary has no npm to clean up
+ * with. Logs one line, and only when it removed something. */
+export async function trimStreamCacheOnStart(
+  cacheDir: string,
+  log: (message: string) => void,
+  maxBytes = STREAM_CACHE_BUDGET.bytes,
+): Promise<void> {
+  const { removed, removedBytes, totalBytes } = await scheduleTrim(cacheDir, maxBytes);
+  if (removed.length === 0) return;
+  log(
+    `stream cache: removed ${removed.length} file(s), ${megabytes(removedBytes)}, served longest ago, ` +
+      `for its ${megabytes(maxBytes)} budget; ${megabytes(totalBytes)} left`,
+  );
+}

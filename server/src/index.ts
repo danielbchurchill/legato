@@ -24,6 +24,8 @@ import { pruneBeyondMemberBoundIfDue } from "./enrich/members.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 import { startUpdateChecks } from "./update/check.js";
+import { trimStreamCacheOnStart } from "./stream/budget.js";
+import { CACHE_DIR } from "./stream/cache.js";
 import { loadServerKey } from "./auth/serverKey.js";
 
 // Checked before anything else touches disk (openDb below creates the data
@@ -242,8 +244,14 @@ setInterval(() => {
 startUpdateChecks(db, (message) => app.log.info(message));
 
 // Issue #423: a LEGATO_STREAM_CACHE_MB the stream cache's budget can't use
-// is ignored, and said so here, once (config.ts).
+// is ignored, and said so here, once (config.ts). The cache is trimmed to
+// its budget after every new transcode (stream/cache.ts), but a server
+// upgraded from before the budget, or restarted with a smaller one, may
+// already hold more, so it's trimmed once here as well. Never awaited:
+// listing the cache is a stat per file, and nothing else needs to wait for
+// that.
 if (STREAM_CACHE_BUDGET.warning) app.log.warn(STREAM_CACHE_BUDGET.warning);
+void trimStreamCacheOnStart(CACHE_DIR, (message) => app.log.info(message)).catch((err) => app.log.warn(err));
 
 app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
   if (err) {
