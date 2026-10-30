@@ -231,6 +231,10 @@ then **Action → Build**. Host networking changes two things:
 
 `LEGATO_SERVER_NAME` is the name the apps show for this server, whichever network it's on. Without it, they show the container's hostname: a random id on the bridge network, or the NAS's own name with host networking.
 
+## How much disk the stream cache takes
+
+Legato keeps the tracks it converts for browsers and phones in `docker/legato/data/streams`, up to 4 GB, and removes the ones played longest ago once it's past that. To give it more room or less, **Project → legato → Action → Stop**, add `LEGATO_STREAM_CACHE_MB: "10240"` under `environment:` in the YAML (whole megabytes; 1024 is 1 GB), then **Action → Build**. [docker.md](docker.md#how-much-disk-the-stream-cache-takes) has the details.
+
 ## Updating
 
 Your library and settings carry over. The server updates its database by itself on the first start of a new version, and saves a copy of it beforehand.
@@ -250,6 +254,6 @@ Either way, the container log's first line shows the new version.
 
 ## Backups
 
-Only the database matters. Everything else in `docker/legato/data` is cover art and waveforms that Legato rebuilds by itself. Stop the project (**Project → legato → Action → Stop**), copy `docker/legato/data/legato.db` and any `legato.db-wal` / `legato.db-shm` next to it, then start it again. In Hyper Backup, select those files under `docker/legato/data`. Stopping first matters: a copy taken mid-write can be unusable.
+Only the database matters. Everything else in `docker/legato/data` is cover art, waveforms and converted tracks that Legato rebuilds by itself. Stop the project (**Project → legato → Action → Stop**), copy `docker/legato/data/legato.db` and any `legato.db-wal` / `legato.db-shm` next to it, then start it again. In Hyper Backup, select those files under `docker/legato/data`. Stopping first matters: a copy taken mid-write can be unusable.
 
 Legato also keeps its own copies in `docker/legato/data/backups/`, made automatically before each database upgrade. It keeps the three newest.

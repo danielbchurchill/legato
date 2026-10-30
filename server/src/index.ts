@@ -4,7 +4,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 import { openDb } from "./db.js";
-import { PORT, DATA_DIR, MDNS_ENABLED, SERVER_NAME } from "./config.js";
+import { PORT, DATA_DIR, MDNS_ENABLED, SERVER_NAME, STREAM_CACHE_BUDGET } from "./config.js";
 import { FFMPEG_PATH, FPCALC_PATH } from "./mediaBinaries.js";
 import { installAuthGate, redactCredentials } from "./auth/gate.js";
 import { clientAddress, installClientAddress } from "./auth/clientAddress.js";
@@ -24,6 +24,8 @@ import { pruneBeyondMemberBoundIfDue } from "./enrich/members.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 import { startUpdateChecks } from "./update/check.js";
+import { trimStreamCacheOnStart } from "./stream/budget.js";
+import { CACHE_DIR } from "./stream/cache.js";
 import { loadServerKey } from "./auth/serverKey.js";
 
 // Checked before anything else touches disk (openDb below creates the data
@@ -240,6 +242,16 @@ setInterval(() => {
 // Issue #110: the daily "is there a newer release" check. Never awaited, so
 // GitHub being slow or unreachable can't hold up startup.
 startUpdateChecks(db, (message) => app.log.info(message));
+
+// Issue #423: a LEGATO_STREAM_CACHE_MB the stream cache's budget can't use
+// is ignored, and said so here, once (config.ts). The cache is trimmed to
+// its budget after every new transcode (stream/cache.ts), but a server
+// upgraded from before the budget, or restarted with a smaller one, may
+// already hold more, so it's trimmed once here as well. Never awaited:
+// listing the cache is a stat per file, and nothing else needs to wait for
+// that.
+if (STREAM_CACHE_BUDGET.warning) app.log.warn(STREAM_CACHE_BUDGET.warning);
+void trimStreamCacheOnStart(CACHE_DIR, (message) => app.log.info(message)).catch((err) => app.log.warn(err));
 
 app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
   if (err) {

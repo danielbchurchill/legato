@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { openDb } from "../db.js";
 import { cachePath } from "./cache.js";
 import { streamCacheHash, sweepStreamCache } from "./evict.js";
-import type { TranscodedQuality } from "./quality.js";
+import { VARIANTS, type TranscodedQuality } from "./quality.js";
 
 let db: Database;
 let dir: string;
@@ -92,14 +92,9 @@ describe("sweepStreamCache", () => {
 
   it("keeps every quality of a live hash and removes every quality of an orphan", async () => {
     insertLiveFileHash("live1111111111111111111111111111111111");
-    const live = (["original-fmp4", "opus96", "opus160", "opus256", "aac160", "aac256"] as const).map((q) =>
-      writeStreamFile("live1111111111111111111111111111111111", q),
-    );
-    const orphans = [
-      writeStreamFile("orphan22222222222222222222222222222222", "opus256"),
-      writeStreamFile("orphan22222222222222222222222222222222", "aac160"),
-      writeStreamFile("orphan22222222222222222222222222222222", "original-fmp4"),
-    ];
+    const qualities = Object.keys(VARIANTS) as TranscodedQuality[];
+    const live = qualities.map((q) => writeStreamFile("live1111111111111111111111111111111111", q));
+    const orphans = qualities.map((q) => writeStreamFile("orphan22222222222222222222222222222222", q));
 
     const report = await sweepStreamCache(db, { cacheDir: dir, dryRun: false });
 

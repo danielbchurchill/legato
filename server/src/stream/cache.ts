@@ -408,9 +408,9 @@ export async function ensureVariant(
         await mkdir(path.dirname(target), { recursive: true });
         await runMediaTask("playback", () => transcodeToFile(sourcePath, quality, self), self.abandoned);
         await rename(temp, target);
-        // The remuxed original is the one rung with a size cap (#408). The
-        // file just made is the newest, so it's never what goes.
-        if (quality === "original-fmp4") void scheduleTrim(cacheDir).catch(() => {});
+        // The cache has a size budget, every rung together (#423). The file
+        // just made is the newest, so it's never what goes.
+        void scheduleTrim(cacheDir).catch(() => {});
       } catch (err) {
         await unlink(temp).catch(() => {});
         throw err;

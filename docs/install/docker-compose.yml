@@ -16,10 +16,13 @@ services:
       # The name Legato's apps show for this server. Without it, they show
       # the container's hostname: a random id on Docker's default network.
       # LEGATO_SERVER_NAME: "Living room"
+      # How much disk converted tracks may take, in megabytes. 4 GB without
+      # it. See "How much disk the stream cache takes" in docker.md.
+      # LEGATO_STREAM_CACHE_MB: "4096"
     ports:
       - "${LEGATO_HOST_PORT:-8899}:8899"
     volumes:
-      # Database, cover art and waveform cache. A named volume so it
+      # Database, cover art, waveform and stream caches. A named volume so it
       # survives `docker compose down` and image upgrades.
       - legato-data:/data
       # Your library, read-only. Legato only ever reads audio files unless
