@@ -2,6 +2,7 @@ import { API_BASE as API } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
 import { getConnectionPath, type ConnectionPath } from '../connect/connectionPath'
 import { checkServerNow, inOutage, SERVER_ANSWERED_EVENT, SERVER_BACK_EVENT, serverFailingSince, serverTroubleSince } from '../connect/reconnect'
+import type { TapeRung } from './trackFeed'
 
 /* Issue #120: which rung of the server's quality ladder a browser
  * client asks GET /files/:id/stream for. Only the web <audio> path uses
@@ -176,6 +177,21 @@ export function nextStreamQuality(path: ConnectionPath = connectionPath()): Stre
   })
 }
 
+/** The rung the tape (#408, tape.ts) asks for next. A MediaSource takes
+ * MP4, so every encoded rung is AAC, as Safari's are anyway, and the
+ * original comes as fragmented MP4: its own frames, moved into another
+ * container, not re-encoded (server/src/stream/quality.ts). */
+export function nextTapeRung(path: ConnectionPath = connectionPath()): TapeRung {
+  const quality = chooseQuality({ path, preference: readQualityPreference(), drops: qualityState.drops, aac: true })
+  return quality === 'original' ? 'original-fmp4' : (quality as Extract<StreamQuality, 'aac160' | 'aac256'>)
+}
+
+/** What the tape is playing, for the connection indicator: the rung its
+ * feed got, after any fallback, and the original whatever its container. */
+export function noteTapeQuality(fileId: number, rung: TapeRung): void {
+  changeQuality({ last: { fileId, quality: rung === 'original-fmp4' ? 'original' : rung } })
+}
+
 /** The URL the web player loads for a file. The single place #120's
  * quality choice reaches usePlayback. */
 export function streamUrl(fileId: number): string {
@@ -223,7 +239,7 @@ type MediaLike = Pick<HTMLMediaElement, 'addEventListener' | 'removeEventListene
  * answers it, so the player sees the same server the rest of the app does. */
 export type ServerTrouble = 'now' | 'since' | 'none'
 
-async function serverTroubleNow(at: number): Promise<ServerTrouble> {
+export async function serverTroubleNow(at: number): Promise<ServerTrouble> {
   await checkServerNow()
   if (serverFailingSince() !== null) return 'now'
   return serverTroubleSince(at) ? 'since' : 'none'
@@ -460,5 +476,52 @@ export function watchForDrops(
     online?.removeEventListener('online', onAnswered)
     online?.removeEventListener(SERVER_ANSWERED_EVENT, onAnswered)
     online?.removeEventListener(SERVER_BACK_EVENT, onServerBack)
+  }
+}
+
+/** The tape's (#408) half of watchForDrops. A stall longer than
+ * STALL_LIMIT_MS mid-track is a drop, as it is there: the track pauses, the
+ * ladder steps down for the next track the tape feeds, and `onDrop` lets
+ * the UI show paused. The rest of watchForDrops is for a source per track,
+ * and has nothing to do on the tape. The tape's fetches try again on their
+ * own and pick up where they stopped once the server answers
+ * (trackFeed.ts). The element's source never changes, so there's nothing
+ * to reload. And its `ended` comes only where the queue does, once the tape
+ * has ended its stream, so that goes straight to `onEnded`.
+ *
+ * Returns a cleanup function. */
+export function watchForStalls(
+  audio: Pick<MediaLike, 'addEventListener' | 'removeEventListener' | 'pause' | 'paused' | 'seeking' | 'currentTime'>,
+  onDrop: () => void,
+  { onEnded = () => {} }: { onEnded?: () => void } = {},
+): () => void {
+  let stallTimer: ReturnType<typeof setTimeout> | null = null
+
+  const clearStall = () => {
+    if (stallTimer !== null) clearTimeout(stallTimer)
+    stallTimer = null
+  }
+
+  const onWaiting = () => {
+    if (audio.paused || audio.seeking || audio.currentTime <= 0) return
+    clearStall()
+    stallTimer = setTimeout(() => {
+      stallTimer = null
+      noteDrop()
+      audio.pause()
+      onDrop()
+    }, STALL_LIMIT_MS)
+  }
+
+  const settled = ['playing', 'pause', 'seeking', 'emptied', 'ended'] as const
+  audio.addEventListener('waiting', onWaiting)
+  audio.addEventListener('ended', onEnded)
+  for (const event of settled) audio.addEventListener(event, clearStall)
+
+  return () => {
+    clearStall()
+    audio.removeEventListener('waiting', onWaiting)
+    audio.removeEventListener('ended', onEnded)
+    for (const event of settled) audio.removeEventListener(event, clearStall)
   }
 }
