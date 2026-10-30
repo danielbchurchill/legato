@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Centered } from './shell/Centered'
 import { useServerReady, type ServerStatus } from './hooks/useServerReady'
 import { ServerUpdateNotice } from './shell/ServerUpdateNotice'
+import { UpdateOfferProvider } from './shell/serverUpdate'
 import { ToastProvider } from './ui/Toast'
 import { useWsEvent } from './hooks/useWs'
 import Canvas, { type CanvasHandle } from './canvas/Canvas'
@@ -760,8 +761,10 @@ export default function App() {
          * with the notice saying to update it. The gate is there either
          * way, so updating the server (and the restart that takes) doesn't
          * remount the app and lose the queue. */}
-        <OwnerGated gated={!server?.outOfDate}>{app}</OwnerGated>
-        <ServerUpdateNotice server={server} />
+        <UpdateOfferProvider server={server} name={connection.name}>
+          <OwnerGated gated={!server?.outOfDate}>{app}</OwnerGated>
+          <ServerUpdateNotice server={server} />
+        </UpdateOfferProvider>
       </ToastProvider>
     )
   } else if (!unreachable || (path === 'embedded' && !embeddedHadTime)) {

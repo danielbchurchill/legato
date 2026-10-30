@@ -1,5 +1,8 @@
 import { SERVER_HOST } from '../config/serverHost'
 import type { ServerVersion } from '../hooks/useServerReady'
+import { usePhoneLayout } from '../phone/phoneLayout'
+import { IconButton } from '../ui/IconButton'
+import { dismissUpdate, UpdateWording, useUpdateOffer } from './serverUpdate'
 
 const PILL =
   'fixed top-[var(--spacing-panel)] left-1/2 z-20 -translate-x-1/2 rounded-full glass px-[16px] py-[6px] text-[length:var(--text-base)] whitespace-nowrap text-[var(--color-muted)]'
@@ -16,13 +19,21 @@ const PILL =
  * pill in the open strip of canvas between the two header regions, and
  * pointer-events off so it never sits on top of a click meant for the
  * graph. It stays up for as long as the heartbeat keeps reporting an old
- * server, and goes away by itself once the server is updated.
+ * server, and goes away by itself once the server is updated. It can't be
+ * dismissed, since the app misbehaves against a server that old.
  *
  * Out of date wins over update available: a server too old for this
  * client needs updating either way, and that sentence says why. The update
  * line takes pointer events, unlike the out-of-date one, because its
- * command is there to be selected and copied, and its link to be clicked. */
+ * command is there to be selected and copied, and its link to be clicked.
+ * It names the server it's for, and dismissing it hides that release on
+ * this device until the server offers a newer one (#405). The phone layout
+ * doesn't draw it over the map: it's a row in the phone's Settings
+ * (src/phone/SettingsPage.tsx). */
 export function ServerUpdateNotice({ server }: { server: ServerVersion | null }) {
+  const offer = useUpdateOffer()
+  const phone = usePhoneLayout()
+
   if (server?.outOfDate) {
     // A pre-#193 server reports no version at all; leaving the parenthetical
     // out is more honest than a placeholder, and still points at the same fix.
@@ -35,28 +46,38 @@ export function ServerUpdateNotice({ server }: { server: ServerVersion | null })
     )
   }
 
-  const update = server?.update
-  if (!update) return null
+  if (!offer || phone) return null
 
   return (
-    <div role="status" className={`select-text ${PILL}`}>
-      Legato {update.latestVersion} is available —{' '}
-      {update.action.kind === 'command' ? (
-        <>
-          {/* Rubik, not <code>'s default mono: DESIGN.md keeps Sometype Mono
-           * for data off a disk file, and this is the app talking. */}
-          run <code className="font-[family-name:var(--font-ui)] text-[var(--color-muted-hi)]">{update.action.command}</code>
-        </>
-      ) : (
-        <a
-          href={update.action.url}
-          target="_blank"
-          rel="noreferrer"
-          className="text-[var(--color-muted-hi)] underline underline-offset-2"
-        >
-          download the latest release
-        </a>
-      )}
+    <div role="status" className={`flex items-center gap-[8px] pr-[6px] ${PILL}`}>
+      <span className="select-text">
+        <UpdateWording offer={offer} /> —{' '}
+        {offer.action.kind === 'command' ? (
+          <>
+            {/* Rubik, not <code>'s default mono: DESIGN.md keeps Sometype Mono
+             * for data off a disk file, and this is the app talking. */}
+            run <code className="font-[family-name:var(--font-ui)] text-[var(--color-muted-hi)]">{offer.action.command}</code>
+          </>
+        ) : (
+          <a
+            href={offer.action.url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[var(--color-muted-hi)] underline underline-offset-2"
+          >
+            download the latest release
+          </a>
+        )}
+      </span>
+      <IconButton
+        icon="cancel"
+        label="Dismiss until a newer release"
+        size={24}
+        tone="ink-3"
+        round
+        className="-my-[2px]"
+        onClick={() => dismissUpdate(offer.latestVersion)}
+      />
     </div>
   )
 }
