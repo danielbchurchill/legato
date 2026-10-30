@@ -128,8 +128,8 @@ export function filesRoutes(
             reply.headers({ ...headers, "Accept-Ranges": "bytes" });
             return reply.send(activity.meter(Readable.from(readGrowing(variant.job))));
           }
-          // What stream/budget.ts keeps or gives up: the remux served longest ago.
-          if (quality === "original-fmp4") void noteServed(variant.path);
+          // What stream/budget.ts keeps or gives up: the file served longest ago.
+          void noteServed(variant.path);
           return await sendFile(variant.path, request.headers.range, reply, headers, activity);
         } catch (err) {
           request.log.error(err);
@@ -172,7 +172,7 @@ export function filesRoutes(
             await variant.job.finished;
           }
           const filePath = variant.kind === "complete" ? variant.path : variant.job.targetPath;
-          if (quality === "original-fmp4") void noteServed(filePath);
+          void noteServed(filePath);
           const index = await readFragmentIndex(filePath);
           reply.header("Cache-Control", "private, no-store");
           return index;

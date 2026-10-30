@@ -98,6 +98,32 @@ export const AUTH_CALLBACK_BASE_URL = process.env.AUTH_CALLBACK_BASE_URL;
 // Tauri shell only; undefined everywhere else, which writes nothing.
 export const STREAM_ACTIVITY_FILE = process.env.LEGATO_STREAM_ACTIVITY_FILE;
 
+// Issue #423: how much disk the stream cache (stream/cache.ts) may take,
+// every rung together, before the files served longest ago go
+// (stream/budget.ts). The default suits the reference server, a Raspberry
+// Pi whose data dir is on an SD card with a few GB free.
+// LEGATO_STREAM_CACHE_MB overrides it, in whole megabytes of 1024 × 1024
+// bytes. There's no "unlimited": 0, or anything that isn't a whole number,
+// is ignored with a warning (index.ts logs it once at startup), and the
+// default applies. Empty is the same as unset.
+export const DEFAULT_STREAM_CACHE_MB = 4096;
+
+const MEGABYTE = 1024 * 1024;
+
+export function resolveStreamCacheBudget(env: NodeJS.ProcessEnv = process.env): { bytes: number; warning: string | null } {
+  const fallback = DEFAULT_STREAM_CACHE_MB * MEGABYTE;
+  const raw = env.LEGATO_STREAM_CACHE_MB?.trim();
+  if (!raw) return { bytes: fallback, warning: null };
+  const megabytes = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  if (megabytes >= 1 && Number.isSafeInteger(megabytes * MEGABYTE)) return { bytes: megabytes * MEGABYTE, warning: null };
+  return {
+    bytes: fallback,
+    warning: `LEGATO_STREAM_CACHE_MB="${raw}" isn't a whole number of megabytes above 0, so the stream cache keeps its default budget of ${DEFAULT_STREAM_CACHE_MB} MB`,
+  };
+}
+
+export const STREAM_CACHE_BUDGET = resolveStreamCacheBudget();
+
 // Issue #114: the legato.fm service whose signed tokens this server
 // accepts. It's both the `iss` a token must carry and where the public
 // keys come from (<origin>/.well-known/jwks.json). Nothing contacts it

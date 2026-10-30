@@ -4,7 +4,7 @@ import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import Fastify from "fastify";
 import { openDb } from "./db.js";
-import { PORT, DATA_DIR, MDNS_ENABLED, SERVER_NAME } from "./config.js";
+import { PORT, DATA_DIR, MDNS_ENABLED, SERVER_NAME, STREAM_CACHE_BUDGET } from "./config.js";
 import { FFMPEG_PATH, FPCALC_PATH } from "./mediaBinaries.js";
 import { installAuthGate, redactCredentials } from "./auth/gate.js";
 import { clientAddress, installClientAddress } from "./auth/clientAddress.js";
@@ -240,6 +240,10 @@ setInterval(() => {
 // Issue #110: the daily "is there a newer release" check. Never awaited, so
 // GitHub being slow or unreachable can't hold up startup.
 startUpdateChecks(db, (message) => app.log.info(message));
+
+// Issue #423: a LEGATO_STREAM_CACHE_MB the stream cache's budget can't use
+// is ignored, and said so here, once (config.ts).
+if (STREAM_CACHE_BUDGET.warning) app.log.warn(STREAM_CACHE_BUDGET.warning);
 
 app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
   if (err) {

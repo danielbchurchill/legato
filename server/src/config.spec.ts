@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { resolveLegatoIdOrigin, resolveMediaConcurrencyLimit, resolveServerName } from "./config.js";
+import {
+  DEFAULT_STREAM_CACHE_MB,
+  resolveLegatoIdOrigin,
+  resolveMediaConcurrencyLimit,
+  resolveServerName,
+  resolveStreamCacheBudget,
+} from "./config.js";
 
 describe("resolveMediaConcurrencyLimit", () => {
   it("defaults to max(1, cores - 1) when LEGATO_MEDIA_CONCURRENCY is unset", () => {
@@ -70,5 +76,37 @@ describe("resolveServerName", () => {
   it("caps the name at one DNS label, and never leaves it empty", () => {
     expect(resolveServerName({ LEGATO_SERVER_NAME: "x".repeat(80) }, "h")).toHaveLength(63);
     expect(resolveServerName({ LEGATO_SERVER_NAME: "   " }, ".local")).toBe("Legato server");
+  });
+});
+
+describe("resolveStreamCacheBudget", () => {
+  const MB = 1024 * 1024;
+
+  // #423: sized for a Raspberry Pi's SD card.
+  it("defaults to 4 GB when LEGATO_STREAM_CACHE_MB is unset or empty", () => {
+    expect(DEFAULT_STREAM_CACHE_MB).toBe(4096);
+    expect(resolveStreamCacheBudget({})).toEqual({ bytes: 4 * 1024 ** 3, warning: null });
+    expect(resolveStreamCacheBudget({ LEGATO_STREAM_CACHE_MB: " " })).toEqual({ bytes: 4 * 1024 ** 3, warning: null });
+  });
+
+  it("takes LEGATO_STREAM_CACHE_MB in whole megabytes", () => {
+    expect(resolveStreamCacheBudget({ LEGATO_STREAM_CACHE_MB: "1024" })).toEqual({ bytes: 1024 * MB, warning: null });
+    expect(resolveStreamCacheBudget({ LEGATO_STREAM_CACHE_MB: " 20000 " })).toEqual({ bytes: 20000 * MB, warning: null });
+    expect(resolveStreamCacheBudget({ LEGATO_STREAM_CACHE_MB: "1" })).toEqual({ bytes: MB, warning: null });
+  });
+
+  // There's no "unlimited": a budget of nothing would empty the cache
+  // after every track, and a typo shouldn't mean that.
+  it("falls back to the default with a warning for 0 or anything that isn't a whole number", () => {
+    for (const value of ["0", "-1", "2.5", "4G", "4096MB", "lots", "1e3", "0x10", "unlimited"]) {
+      const { bytes, warning } = resolveStreamCacheBudget({ LEGATO_STREAM_CACHE_MB: value });
+      expect(bytes).toBe(4 * 1024 ** 3);
+      expect(warning).toContain(`LEGATO_STREAM_CACHE_MB="${value}"`);
+      expect(warning).toContain("4096 MB");
+    }
+  });
+
+  it("refuses a number too big to count bytes in exactly", () => {
+    expect(resolveStreamCacheBudget({ LEGATO_STREAM_CACHE_MB: "9".repeat(20) }).warning).not.toBeNull();
   });
 });

@@ -10,6 +10,7 @@ import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { fillMediaSlots, queuePlayback } from "../media/test-slots.js";
 import { cachePath, TranscodeJob } from "../stream/cache.js";
+import { FRAGMENTED_QUALITIES, VARIANTS, type TranscodedQuality } from "../stream/quality.js";
 import { filesRoutes, parseRange } from "./files.js";
 
 const SIZE = 1000;
@@ -319,6 +320,35 @@ describe("GET /api/v1/files/:id/stream", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  // #423: the stream cache's budget gives up the files served longest ago,
+  // whichever rung they're in (stream/budget.ts).
+  it("marks a cached file of any rung as served, from the stream and from its fragment index", async () => {
+    const cacheDir = path.join(dir, "streams");
+    const app = Fastify();
+    await app.register(filesRoutes(db, { cacheDir }), { prefix: "/api/v1" });
+    const hourAgo = new Date(Date.now() - 3_600_000);
+    async function servedSince(file: string): Promise<number> {
+      for (let i = 0; i < 50 && statSync(file).mtimeMs <= hourAgo.getTime(); i++) await new Promise((r) => setTimeout(r, 10));
+      return statSync(file).mtimeMs;
+    }
+
+    for (const quality of Object.keys(VARIANTS) as TranscodedQuality[]) {
+      await app.inject({ url: `/api/v1/files/${fileId}/stream?quality=${quality}` });
+      const cached = cachePath(HASH, quality, cacheDir);
+      utimesSync(cached, hourAgo, hourAgo);
+      const res = await app.inject({ url: `/api/v1/files/${fileId}/stream?quality=${quality}`, headers: { range: "bytes=0-99" } });
+      expect(res.statusCode).toBe(206);
+      expect(await servedSince(cached)).toBeGreaterThan(hourAgo.getTime());
+    }
+
+    for (const quality of FRAGMENTED_QUALITIES) {
+      const cached = cachePath(HASH, quality, cacheDir);
+      utimesSync(cached, hourAgo, hourAgo);
+      expect((await app.inject({ url: `/api/v1/files/${fileId}/stream/index?quality=${quality}` })).statusCode).toBe(200);
+      expect(await servedSince(cached)).toBeGreaterThan(hourAgo.getTime());
+    }
+  });
+
   // #408: the original's audio as fragmented MP4, for the web player that
   // feeds a ManagedMediaSource on an iPhone.
   describe("original-fmp4", () => {
@@ -457,17 +487,6 @@ describe("GET /api/v1/files/:id/stream", () => {
         ]);
         expect(streams.toString().trim()).toBe("audio");
       }
-    });
-
-    it("marks a cached remux as served, which the rung's size cap keeps longest", async () => {
-      await get("?quality=original-fmp4");
-      const cached = cachePath(HASH, "original-fmp4", path.join(dir, "streams"));
-      const hourAgo = new Date(Date.now() - 3_600_000);
-      utimesSync(cached, hourAgo, hourAgo);
-
-      expect((await get("?quality=original-fmp4", { range: "bytes=0-99" })).statusCode).toBe(206);
-      for (let i = 0; i < 50 && statSync(cached).mtimeMs <= hourAgo.getTime(); i++) await new Promise((r) => setTimeout(r, 10));
-      expect(statSync(cached).mtimeMs).toBeGreaterThan(hourAgo.getTime());
     });
 
     it("only indexes the fragmented MP4 rungs", async () => {
