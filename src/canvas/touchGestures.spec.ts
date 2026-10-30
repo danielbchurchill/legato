@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { TAP_TOLERANCE_PX, TapGuard, isTouchEvent, midpoint, pinchCameraState, type CameraState, type Point } from './touchGestures'
+import { TAP_TOLERANCE_PX, TapGuard, isStylusTouch, isTouchEvent, midpoint, pinchCameraState, type CameraState, type Point } from './touchGestures'
 
 /* A stand-in for sigma's viewport → framed-graph conversion on a 400×800
  * viewport: the camera's x/y sits at the centre, y grows upwards, and one
@@ -104,5 +104,17 @@ describe('isTouchEvent', () => {
   it('tells a touch from a mouse event', () => {
     expect(isTouchEvent(new Event('mousedown'))).toBe(false)
     expect(isTouchEvent(Object.assign(new Event('touchstart'), { touches: [] }))).toBe(true)
+  })
+})
+
+describe('isStylusTouch', () => {
+  const touchEnd = (touchType?: string) => Object.assign(new Event('touchend'), { touches: [], changedTouches: [{ touchType }] })
+
+  it('tells an Apple Pencil from a finger', () => {
+    expect(isStylusTouch(touchEnd('stylus'))).toBe(true)
+    expect(isStylusTouch(touchEnd('direct'))).toBe(false)
+    // Browsers other than Safari don't report a touchType at all.
+    expect(isStylusTouch(touchEnd())).toBe(false)
+    expect(isStylusTouch(new Event('mouseup'))).toBe(false)
   })
 })
