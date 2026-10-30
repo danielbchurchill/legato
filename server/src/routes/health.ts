@@ -16,7 +16,7 @@ import { readUpdateStatus, type UpdateCheckOptions, type UpdateStatus } from "..
 //                  or LEGATO_SERVER_NAME (config.ts). The same name it
 //                  advertises over mDNS
 //   version        release version, the same string `legato-server
-//                  --version` prints ("0.0.0-dev" outside a compiled binary)
+//                  --version` prints ("0.0.0-dev" outside a release build)
 //   gitSha         commit the binary was built from ("unknown" outside one)
 //   bootId         a random id this process picked when it started (#119).
 //                  A client that sees it change knows the server restarted,

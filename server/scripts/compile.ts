@@ -14,7 +14,7 @@
 // LEGATO_RELEASE_VERSION / LEGATO_RELEASE_GIT_SHA let the release workflow
 // pin exact values (the git tag, the tagged commit's SHA) instead of this
 // script re-deriving them — see .github/workflows/release.yml. Local runs
-// fall back to package.json's version and `git rev-parse --short HEAD`.
+// stamp the source run's 0.0.0-dev and `git rev-parse --short HEAD`.
 //
 // Every binary also embeds the web client (issue #116), served at / by
 // src/routes/web-client.ts. By default this script runs the repo root's
@@ -24,8 +24,9 @@
 // already-built client instead: server/Dockerfile builds it in its own
 // stage, where the server stage has no root node_modules to build with.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { DEV_VERSION } from "../src/version.js";
 import { generateMigrationsManifest } from "./generate-migrations-manifest.mjs";
 
 const SERVER_DIR = path.join(import.meta.dirname, "..");
@@ -45,10 +46,13 @@ const TARGETS: Record<string, { bunTarget: Bun.Build.CompileTarget; windows: boo
   "windows-x64-baseline": { bunTarget: "bun-windows-x64-baseline", windows: true },
 };
 
-function resolveVersion(): string {
-  if (process.env.LEGATO_RELEASE_VERSION) return process.env.LEGATO_RELEASE_VERSION;
-  const pkg = JSON.parse(readFileSync(path.join(SERVER_DIR, "package.json"), "utf8")) as { version: string };
-  return pkg.version;
+// A binary compiled from a checkout (scripts/deploy-server.sh, a local
+// Docker build, the desktop sidecar) isn't any release, so it gets the same
+// version as a source run. The update check stands down for that one
+// (src/update/check.ts); package.json's 0.0.0 made every release look newer
+// (#404). Only the release workflow and its Docker image name a version.
+export function resolveVersion(env: NodeJS.ProcessEnv = process.env): string {
+  return env.LEGATO_RELEASE_VERSION || DEV_VERSION;
 }
 
 function resolveGitSha(): string {
@@ -233,7 +237,10 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(`\ncompile failed: ${err instanceof Error ? err.message : err}`);
-  process.exit(1);
-});
+// Only when run as the script, so compile.spec.ts can import resolveVersion.
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error(`\ncompile failed: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  });
+}

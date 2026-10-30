@@ -16,8 +16,9 @@ import { resolveInstallChannel } from "./installChannel.js";
 //     config files, where nobody opens a settings screen)
 //   - the `updateCheckEnabled` setting is "false" (PUT /api/v1/settings)
 //   - the install channel is desktop: the Tauri updater (#129) owns that
-//   - the server is a source run (version 0.0.0-dev), which updates with
-//     git pull and has no release to compare against
+//   - the server is a source run or a binary compiled from a checkout
+//     (version 0.0.0-dev, scripts/compile.ts), which updates from git and
+//     has no release to compare against
 
 export const RELEASES_URL = "https://api.github.com/repos/danielbchurchill/legato/releases";
 
