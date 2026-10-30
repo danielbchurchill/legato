@@ -3,8 +3,9 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { API_BASE as API } from '../config/serverHost'
 import { IS_TAURI } from '../config/runtime'
-import { nativeStreamUrl, streamUrl, watchForDrops } from './quality'
+import { nativeStreamUrl, noteTapeQuality, streamUrl, watchForDrops, watchForStalls } from './quality'
 import { useMediaSession } from './mediaSession'
+import { canUseTape, TapePlayer, type TapePlayerHost } from './tapePlayer'
 import { notePlaybackStarted } from '../pwa/installOffer'
 import {
   describePlaybackError,
@@ -207,6 +208,14 @@ function reportPlay(entry: PlayInProgress): void {
 // was. The web path never has this problem — the <audio> element only ever
 // holds the one currently-playing source, so queue edits are a plain array
 // splice.
+// #408: where ManagedMediaSource exists (iOS 17.1 and later, Safari 17 and
+// later), the web player plays the queue from one MediaSource, the next
+// track's audio going in while the current one plays (tape.ts). Locked, an
+// installed iPhone app is suspended once its audio stops, so a player that
+// starts each track from JavaScript at the boundary stops after one.
+// Everywhere else the <audio> element still gets a source per track.
+const USE_TAPE = !IS_TAURI && canUseTape()
+
 export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode: RepeatMode = 'off') {
   const [status, setStatus] = useState<PlaybackStatus>({
     playing: false,
@@ -317,6 +326,20 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   const audioRef = useRef<HTMLAudioElement | null>(null)
   if (!IS_TAURI && audioRef.current === null) audioRef.current = new Audio()
 
+  // The tape (#408), made on the first play. It reads the queue through
+  // tapeHost, which is replaced on every render, so it always sees the
+  // latest callbacks without being made again.
+  const tapeRef = useRef<TapePlayer<QueueEntry> | null>(null)
+  const tapeHost = useRef<TapePlayerHost<QueueEntry> | null>(null)
+  const tapePlayer = useCallback(() => {
+    tapeRef.current ??= new TapePlayer<QueueEntry>(audioRef.current!, {
+      after: (entry) => tapeHost.current!.after(entry),
+      onTrackPlaying: (entry, landed, rung) => tapeHost.current!.onTrackPlaying(entry, landed, rung),
+      onTrackFailed: (entry, error, starting) => tapeHost.current!.onTrackFailed(entry, error, starting),
+    })
+    return tapeRef.current
+  }, [])
+
   // #119: one player owns the sound. The shell stays mounted through an
   // outage, but whatever does unmount it (signing out, say) takes its audio
   // with it, rather than leaving an element still playing that nothing on
@@ -325,6 +348,8 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     const audio = audioRef.current
     if (!audio) return
     return () => {
+      tapeRef.current?.stop()
+      tapeRef.current = null
       audio.pause()
       audio.removeAttribute('src')
       audio.load()
@@ -392,7 +417,8 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         startedAt: new Date().toISOString(),
         lastPositionMs: 0,
       }
-      audio.src = streamUrl(info.fileId)
+      if (USE_TAPE) tapePlayer().play({ key: entry, fileId: info.fileId })
+      else audio.src = streamUrl(info.fileId)
       // A missing/unreadable source file or a format ffmpeg can't
       // transcode surfaces here as a rejected play() (confirmed live:
       // NotSupportedError against a file the server's own ffmpeg spawn
@@ -404,12 +430,15 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       setStatus((s) => ({
         ...s,
         playing: true,
+        // From the top: the lock screen's scrubber is placed from this as
+        // the track changes (#407), not from where the last one got to.
+        positionMs: 0,
         currentRecordingNodeId: entry.recordingNodeId,
         currentFileId: info.fileId,
         currentDurationMs: info.durationMs,
       }))
     },
-    [finalizeCurrentPlay],
+    [finalizeCurrentPlay, tapePlayer],
   )
 
   // #125's off/all/one for the web-fallback path — Rust's reconcile_repeat
@@ -433,6 +462,72 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     [startWebTrack],
   )
 
+  // What the tape (#408) asks of the queue, and what it says back.
+  useEffect(() => {
+    tapeHost.current = {
+      // What plays after `entry`, as advanceWebTrack would have it: the
+      // same again with repeat one, the first again at the end with repeat
+      // all.
+      after: (entry) => {
+        const sequence = playSequence.current
+        let next: QueueEntry | undefined = entry
+        if (repeatModeRef.current !== 'one') {
+          const index = sequence.indexOf(entry)
+          next = index === -1 ? undefined : (sequence[index + 1] ?? (repeatModeRef.current === 'all' ? sequence[0] : undefined))
+        }
+        const info = next && trackInfo.current.get(next.recordingNodeId)
+        return next && info ? { key: next, fileId: info.fileId } : null
+      },
+      onTrackPlaying: (entry, landed, rung) => {
+        const info = trackInfo.current.get(entry.recordingNodeId)
+        if (info && rung) noteTapeQuality(info.fileId, rung)
+        // A play, skip or scrub that landed: startWebTrack has shown it.
+        if (landed) return
+        const index = playSequence.current.indexOf(entry)
+        if (index === -1 || !info) return
+        // The tape played on into the next track, or the same one again
+        // with repeat one: what a source per track does at its `ended`.
+        finalizeCurrentPlay()
+        currentIndex.current = index
+        currentPlay.current = {
+          recordingNodeId: entry.recordingNodeId,
+          fileId: info.fileId,
+          startedAt: new Date().toISOString(),
+          lastPositionMs: 0,
+        }
+        setCurrentTitle(entry.title)
+        setUpNext(playSequence.current.slice(index + 1))
+        setStatus((s) => ({
+          ...s,
+          positionMs: 0,
+          currentRecordingNodeId: entry.recordingNodeId,
+          currentFileId: info.fileId,
+          currentDurationMs: info.durationMs,
+        }))
+      },
+      onTrackFailed: (entry, _error, starting) => {
+        if (starting) {
+          // As a rejected play() shows a source per track that won't load.
+          audioRef.current?.pause()
+          setStatus((s) => ({ ...s, playing: false }))
+          return
+        }
+        // A later track the server can't play leaves the queue, as one
+        // that won't open does on native playback (enqueueTauri).
+        const index = playSequence.current.indexOf(entry)
+        if (index <= currentIndex.current) return
+        playSequence.current = playSequence.current.filter((_, i) => i !== index)
+        setUpNext(playSequence.current.slice(currentIndex.current + 1))
+        tapeRef.current?.queueChanged()
+      },
+    }
+  })
+
+  // A new repeat mode can change what follows the playing track.
+  useEffect(() => {
+    tapeRef.current?.queueChanged()
+  }, [repeatMode])
+
   // Web-fallback event wiring — <audio>'s own timeupdate/ended replace the
   // playback://position and playback://track-changed events Rust emits.
   useEffect(() => {
@@ -441,9 +536,15 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     if (!audio) return
 
     const onTimeUpdate = () => {
-      const positionMs = audio.currentTime * 1000
+      // On the tape the element's clock runs across the whole queue; the
+      // position in the track is the tape's to say. At a boundary that's
+      // already the next track's, a moment before the tape says it's
+      // playing: it isn't the position the last track's play got to.
+      const onTape = USE_TAPE ? tapeRef.current?.current() : null
+      const positionMs = onTape ? onTape.positionS * 1000 : USE_TAPE ? 0 : audio.currentTime * 1000
       setStatus((s) => ({ ...s, positionMs }))
-      if (currentPlay.current) currentPlay.current.lastPositionMs = positionMs
+      const playingEntry = playSequence.current[currentIndex.current]
+      if (currentPlay.current && (!USE_TAPE || onTape?.key === playingEntry)) currentPlay.current.lastPositionMs = positionMs
     }
     const currentDurationMs = () => {
       const entry = playSequence.current[currentIndex.current]
@@ -457,11 +558,13 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     // #120: a mid-track drop pauses this track and moves the next one down
     // the quality ladder (playback/quality.ts). #119: the end of a track
     // comes through there too, since a stream the server cut can end early,
-    // and that's a drop, not the next track.
-    const stopWatchingDrops = watchForDrops(audio, () => setStatus((s) => ({ ...s, playing: false })), {
-      onEnded: () => advanceWebTrack(currentIndex.current),
-      durationMs: currentDurationMs,
-    })
+    // and that's a drop, not the next track. On the tape, only a stall is
+    // left to watch for, and `ended` is the end of the queue.
+    const onDrop = () => setStatus((s) => ({ ...s, playing: false }))
+    const onEnded = () => advanceWebTrack(currentIndex.current)
+    const stopWatchingDrops = USE_TAPE
+      ? watchForStalls(audio, onDrop, { onEnded })
+      : watchForDrops(audio, onDrop, { onEnded, durationMs: currentDurationMs })
     return () => {
       audio.removeEventListener('timeupdate', onTimeUpdate)
       audio.removeEventListener('playing', notePlaybackStarted)
@@ -887,6 +990,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
         if (!IS_TAURI) {
           setUpNext(newTail)
+          tapeRef.current?.queueChanged()
           return
         }
         await rebuildTauriQueueInPlace()
@@ -938,6 +1042,8 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     if (IS_TAURI) {
       await invoke('queue_stop')
     } else if (audioRef.current) {
+      tapeRef.current?.stop()
+      tapeRef.current = null
       audioRef.current.pause()
       audioRef.current.removeAttribute('src')
       audioRef.current.load()
@@ -1086,6 +1192,12 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
           setStatus((s) => ({ ...s, playing: true }))
           return
         }
+        // A track the tape couldn't start has nothing at the playhead:
+        // play tries it again.
+        if (USE_TAPE && tapeRef.current && !tapeRef.current.current() && currentIndex.current >= 0) {
+          startWebTrack(currentIndex.current)
+          return
+        }
         try {
           await audioRef.current?.play()
           setStatus((s) => ({ ...s, playing: true }))
@@ -1093,7 +1205,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
           setStatus((s) => ({ ...s, playing: false }))
         }
       }),
-    [jumpToIndexTauri, serialized],
+    [jumpToIndexTauri, serialized, startWebTrack],
   )
 
   // The transport's one action for a failed start (PlaybackProblem.action):
@@ -1124,6 +1236,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
       if (!IS_TAURI) {
         setUpNext(playSequence.current.slice(currentIndex.current + 1))
+        tapeRef.current?.queueChanged()
         return
       }
       await rebuildTauriQueueInPlace()
@@ -1140,6 +1253,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
       if (!IS_TAURI) {
         setUpNext(playSequence.current.slice(currentIndex.current + 1))
+        tapeRef.current?.queueChanged()
         return
       }
       await rebuildTauriQueueInPlace()
@@ -1174,6 +1288,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         playSequence.current = playSequence.current.slice(0, currentIndex.current + 1)
         if (!IS_TAURI) {
           setUpNext([])
+          tapeRef.current?.queueChanged()
           return
         }
         await rebuildTauriQueueInPlace()
@@ -1203,6 +1318,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
         if (!IS_TAURI) {
           setUpNext(playSequence.current.slice(currentIndex.current + 1))
+          tapeRef.current?.queueChanged()
           return
         }
         await rebuildTauriQueueInPlace()
@@ -1234,6 +1350,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
         if (!IS_TAURI) {
           setUpNext(playSequence.current.slice(currentIndex.current + 1))
+          tapeRef.current?.queueChanged()
           return
         }
         await rebuildTauriQueueInPlace()
@@ -1244,6 +1361,10 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   const seek = useCallback(async (positionMs: number) => {
     if (IS_TAURI) {
       await invoke('queue_seek', { positionMs })
+    } else if (USE_TAPE) {
+      // Straight there inside what's buffered, through the fragment index
+      // past it (tape.ts).
+      tapeRef.current?.seek(positionMs / 1000)
     } else if (audioRef.current) {
       // The transcode stream has no Range support (server/src/routes/files.ts
       // spawns ffmpeg fresh per request, no seek param) — this only actually
@@ -1277,6 +1398,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     status,
     title: currentTitle,
     controls: { play: resume, pause, next, previous, seek },
+    element: audioRef.current,
   })
 
   return {

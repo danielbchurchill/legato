@@ -3,7 +3,9 @@ import {
   chooseQuality,
   connectionPath,
   EARLY_END_MS,
+  nextTapeRung,
   noteDrop,
+  noteTapeQuality,
   prefersAac,
   readQualityPreference,
   STALL_LIMIT_MS,
@@ -12,6 +14,7 @@ import {
   streamUrl,
   subscribeStreamQuality,
   watchForDrops,
+  watchForStalls,
   type ServerTrouble,
 } from './quality'
 import { setConnectionPath } from '../connect/connectionPath'
@@ -841,5 +844,89 @@ describe('watchForDrops', () => {
     expect(nextQuality()).toBe('opus160')
     storeQualityPreference('auto', storage)
     expect(nextQuality()).toBe('original')
+  })
+})
+
+// #408: the tape's own rungs, and what's left of watchForDrops on it.
+describe('the tape', () => {
+  let storage: Storage
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    storage = memoryStorage()
+    vi.stubGlobal('localStorage', storage)
+    storeQualityPreference('auto', storage)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('asks for the original as fragmented MP4, and AAC for every encoded rung, whatever the browser', () => {
+    setConnectionPath('home')
+    expect(nextTapeRung('home')).toBe('original-fmp4')
+    expect(nextTapeRung('custom')).toBe('aac256')
+    expect(nextTapeRung('relay')).toBe('aac160')
+    storeQualityPreference('low', storage)
+    expect(nextTapeRung('home')).toBe('aac160')
+    storeQualityPreference('auto', storage)
+    noteDrop()
+    expect(nextTapeRung('home')).toBe('aac256')
+  })
+
+  it("names the original as original for the connection indicator, whatever container it came in", () => {
+    noteTapeQuality(4, 'original-fmp4')
+    expect(streamQualitySnapshot().last).toEqual({ fileId: 4, quality: 'original' })
+    noteTapeQuality(5, 'aac256')
+    expect(streamQualitySnapshot().last).toEqual({ fileId: 5, quality: 'aac256' })
+  })
+
+  it('takes a stall longer than the limit mid-track as a drop: pauses, reports it, steps the next track down', () => {
+    const audio = new FakeAudio()
+    const onDrop = vi.fn()
+    watchForStalls(audio, onDrop)
+    expect(nextTapeRung('home')).toBe('original-fmp4')
+
+    audio.currentTime = 30
+    audio.fire('waiting')
+    vi.advanceTimersByTime(STALL_LIMIT_MS - 1)
+    expect(onDrop).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+
+    expect(audio.pause).toHaveBeenCalled()
+    expect(onDrop).toHaveBeenCalledTimes(1)
+    expect(nextTapeRung('home')).toBe('aac256')
+  })
+
+  it('forgets a stall once playback carries on, and ignores one at the very start or while seeking', () => {
+    const audio = new FakeAudio()
+    const onDrop = vi.fn()
+    watchForStalls(audio, onDrop)
+
+    audio.currentTime = 30
+    audio.fire('waiting')
+    vi.advanceTimersByTime(STALL_LIMIT_MS / 2)
+    audio.fire('playing')
+    vi.advanceTimersByTime(STALL_LIMIT_MS)
+
+    audio.currentTime = 0
+    audio.fire('waiting')
+    audio.currentTime = 40
+    audio.seeking = true
+    audio.fire('waiting')
+    vi.advanceTimersByTime(STALL_LIMIT_MS * 2)
+    expect(onDrop).not.toHaveBeenCalled()
+  })
+
+  it("hands the element's ended, the end of the queue, straight on", () => {
+    const audio = new FakeAudio()
+    const onEnded = vi.fn()
+    const stop = watchForStalls(audio, vi.fn(), { onEnded })
+    audio.fire('ended')
+    expect(onEnded).toHaveBeenCalledTimes(1)
+    stop()
+    audio.fire('ended')
+    expect(onEnded).toHaveBeenCalledTimes(1)
   })
 })
