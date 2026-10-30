@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -172,7 +172,7 @@ describe("GET /api/v1/files/:id/stream", () => {
     const res = await get("?quality=aac160", { range: "bytes=100-199" });
     const cached = readFileSync(cachePath(HASH, "aac160", path.join(dir, "streams")));
     expect(res.statusCode).toBe(206);
-    expect(res.headers["content-type"]).toBe("audio/mp4");
+    expect(res.headers["content-type"]).toBe('audio/mp4; codecs="mp4a.40.2"');
     expect(res.headers["content-range"]).toBe(`bytes 100-199/${cached.length}`);
     expect(res.rawPayload.equals(cached.subarray(100, 200))).toBe(true);
   });
@@ -317,5 +317,172 @@ describe("GET /api/v1/files/:id/stream", () => {
     db.prepare("UPDATE files SET file_path = ? WHERE id = ?").run(path.join(dir, "missing.flac"), fileId);
     const res = await get();
     expect(res.statusCode).toBe(404);
+  });
+
+  // #408: the original's audio as fragmented MP4, for the web player that
+  // feeds a ManagedMediaSource on an iPhone.
+  describe("original-fmp4", () => {
+    async function index(query: string) {
+      const app = Fastify();
+      await app.register(filesRoutes(db, { cacheDir: path.join(dir, "streams") }), { prefix: "/api/v1" });
+      return app.inject({ method: "GET", url: `/api/v1/files/${fileId}/stream/index${query}` });
+    }
+
+    // Every packet's own bytes, by hash: a stream copy carries the source's
+    // FLAC frames unchanged, where a re-encode would make new ones.
+    function packetHashes(file: string): string[] {
+      const csv = execFileSync("ffprobe", [
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_data_hash",
+        "MD5",
+        "-show_entries",
+        "packet=data_hash",
+        "-of",
+        "csv=p=0",
+        file,
+      ]);
+      return csv.toString().trim().split("\n");
+    }
+
+    it("is the source's own FLAC frames in fragmented MP4, not a re-encode", async () => {
+      const res = await get("?quality=original-fmp4");
+      expect(res.statusCode).toBe(200);
+      // Named while the remux is still being written, for addSourceBuffer.
+      expect(res.headers["content-type"]).toBe('audio/mp4; codecs="fLaC"');
+      expect(res.headers["content-length"]).toBeUndefined();
+      expect(res.rawPayload.toString("latin1", 4, 8)).toBe("ftyp");
+
+      const cached = cachePath(HASH, "original-fmp4", path.join(dir, "streams"));
+      expect(res.rawPayload.equals(readFileSync(cached))).toBe(true);
+      expect(packetHashes(cached)).toEqual(packetHashes(sourcePath));
+    });
+
+    it("leaves original the untouched source file, byte for byte, for desktop playback", async () => {
+      await get("?quality=original-fmp4");
+      const res = await get("?quality=original");
+      expect(res.headers["content-type"]).toBe("audio/flac");
+      expect(res.rawPayload.equals(readFileSync(sourcePath))).toBe(true);
+    });
+
+    it("indexes it: fLaC, the init segment, and fragments a Range request can fetch one at a time", async () => {
+      const res = await index("?quality=original-fmp4");
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["cache-control"]).toBe("private, no-store");
+      const body = res.json() as { codecs: string; initEnd: number; fragments: { offset: number; time: number }[]; end: number };
+      expect(body.codecs).toBe("fLaC");
+      expect(body.fragments[0]).toEqual({ offset: body.initEnd, time: 0 });
+
+      const init = await get("?quality=original-fmp4", { range: `bytes=0-${body.initEnd - 1}` });
+      expect(init.statusCode).toBe(206);
+      expect(init.rawPayload.toString("latin1", 4, 8)).toBe("ftyp");
+      const last = body.fragments.at(-1)!;
+      const fragment = await get("?quality=original-fmp4", { range: `bytes=${last.offset}-${body.end - 1}` });
+      expect(fragment.statusCode).toBe(206);
+      expect(fragment.rawPayload.toString("latin1", 4, 8)).toBe("moof");
+    });
+
+    it("names a cached remux's codec on every Range request", async () => {
+      await get("?quality=original-fmp4");
+      const res = await get("?quality=original-fmp4", { range: "bytes=0-99" });
+      expect(res.statusCode).toBe(206);
+      expect(res.headers["content-type"]).toBe('audio/mp4; codecs="fLaC"');
+    });
+
+    it("indexes an ALAC .m4a as alac", async () => {
+      const alac = path.join(dir, "track.m4a");
+      execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "alac", alac], { stdio: "ignore" });
+      db.prepare("UPDATE files SET file_path = ? WHERE id = ?").run(alac, fileId);
+      const res = await index("?quality=original-fmp4");
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { codecs: string }).codecs).toBe("alac");
+      expect((await get("?quality=original-fmp4")).headers["content-type"]).toBe('audio/mp4; codecs="alac"');
+    });
+
+    it("waits for a fresh AAC encode to finish before indexing it", async () => {
+      const res = await index("?quality=aac160");
+      expect(res.statusCode).toBe(200);
+      expect((res.json() as { codecs: string }).codecs).toBe("mp4a.40.2");
+      expect(existsSync(cachePath(HASH, "aac160", path.join(dir, "streams")))).toBe(true);
+    });
+
+    it("refuses an MP3 with 415, before ffmpeg opens it, so the player asks for AAC", async () => {
+      const mp3 = path.join(dir, "track.mp3");
+      writeFileSync(mp3, "not read");
+      db.prepare("UPDATE files SET file_path = ? WHERE id = ?").run(mp3, fileId);
+      expect((await get("?quality=original-fmp4")).statusCode).toBe(415);
+      expect((await index("?quality=original-fmp4")).statusCode).toBe(415);
+      expect(existsSync(path.join(dir, "streams"))).toBe(false);
+    });
+
+    it("leaves chapters out, which would be a second track a MediaSource refuses", async () => {
+      const chapters = path.join(dir, "chapters.txt");
+      writeFileSync(
+        chapters,
+        ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=500\ntitle=one\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=500\nEND=1000\ntitle=two\n",
+      );
+      const withChapters = path.join(dir, "chapters.m4a");
+      execFileSync(
+        "ffmpeg",
+        [
+          "-f",
+          "lavfi",
+          "-i",
+          "sine=frequency=440:duration=1",
+          "-i",
+          chapters,
+          "-map",
+          "0",
+          "-map_chapters",
+          "1",
+          "-c:a",
+          "aac",
+          withChapters,
+        ],
+        { stdio: "ignore" },
+      );
+      db.prepare("UPDATE files SET file_path = ? WHERE id = ?").run(withChapters, fileId);
+      for (const quality of ["original-fmp4", "aac160"] as const) {
+        expect((await get(`?quality=${quality}`)).statusCode).toBe(200);
+        const streams = execFileSync("ffprobe", [
+          "-v",
+          "error",
+          "-show_entries",
+          "stream=codec_type",
+          "-of",
+          "csv=p=0",
+          cachePath(HASH, quality, path.join(dir, "streams")),
+        ]);
+        expect(streams.toString().trim()).toBe("audio");
+      }
+    });
+
+    it("marks a cached remux as served, which the rung's size cap keeps longest", async () => {
+      await get("?quality=original-fmp4");
+      const cached = cachePath(HASH, "original-fmp4", path.join(dir, "streams"));
+      const hourAgo = new Date(Date.now() - 3_600_000);
+      utimesSync(cached, hourAgo, hourAgo);
+
+      expect((await get("?quality=original-fmp4", { range: "bytes=0-99" })).statusCode).toBe(206);
+      for (let i = 0; i < 50 && statSync(cached).mtimeMs <= hourAgo.getTime(); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(statSync(cached).mtimeMs).toBeGreaterThan(hourAgo.getTime());
+    });
+
+    it("only indexes the fragmented MP4 rungs", async () => {
+      for (const quality of ["original", "opus160", "nonsense"]) expect((await index(`?quality=${quality}`)).statusCode).toBe(400);
+      expect((await index("")).statusCode).toBe(400);
+    });
+
+    it("returns 404 for a file the scan has marked missing", async () => {
+      db.prepare("UPDATE files SET missing_since = '2026-01-01T00:00:00.000Z' WHERE id = ?").run(fileId);
+      expect((await index("?quality=original-fmp4")).statusCode).toBe(404);
+    });
+
+    it("returns 502 when the source can't be read", async () => {
+      db.prepare("UPDATE files SET file_path = ? WHERE id = ?").run(path.join(dir, "missing.flac"), fileId);
+      expect((await index("?quality=original-fmp4")).statusCode).toBe(502);
+    });
   });
 });

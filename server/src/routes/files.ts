@@ -3,15 +3,47 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import type { Database } from "../sqlite.js";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyBaseLogger, FastifyInstance, FastifyReply } from "fastify";
 import { streamActivity, type StreamActivity } from "../stream/activity.js";
-import { CACHE_DIR, ensureVariant, readGrowing } from "../stream/cache.js";
+import { noteServed } from "../stream/budget.js";
+import { CACHE_DIR, ensureVariant, readGrowing, type CachedVariant, type TranscodeJob } from "../stream/cache.js";
+import { readCodecs, readFragmentIndex } from "../stream/fragments.js";
 import {
+  canRemux,
+  FRAGMENTED_QUALITIES,
+  isFragmentedQuality,
   isStreamQuality,
   passthroughContentType,
   STREAM_QUALITIES,
   VARIANTS,
+  type StreamQuality,
+  type TranscodedQuality,
 } from "../stream/quality.js";
+
+type FileRow = { file_path: string; file_hash: string | null; missing_since: string | null };
+
+// The file behind an id, or why there's nothing to stream: a missing row or
+// file is 404, and a source original-fmp4 can't carry as it is (#408) is
+// 415, which tells the player to ask for an AAC rung instead.
+function findStreamable(db: Database, id: string, quality: StreamQuality): { file: FileRow } | { code: number; error: string } {
+  const file = db.prepare("SELECT file_path, file_hash, missing_since FROM files WHERE id = ?").get(id) as FileRow | undefined;
+  if (!file || file.missing_since) return { code: 404, error: "file not found" };
+  if (quality === "original-fmp4" && !canRemux(path.extname(file.file_path))) {
+    return { code: 415, error: "this file's audio can't be carried in MP4 as it is; ask for an AAC quality" };
+  }
+  return { file };
+}
+
+// This request listens to an encode until its response is over or its
+// client hangs up, waiting for a seek included. An encode nobody listens to
+// gives its slot up to a track someone is waiting for (stream/cache.ts). A
+// client that hung up while the encode was being set up has already closed,
+// and would never leave.
+function listen(job: TranscodeJob, reply: FastifyReply): void {
+  const leave = job.join();
+  reply.raw.once("close", leave);
+  if (reply.raw.destroyed) leave();
+}
 
 // Resolves an opaque numeric file id to a path server-side — the client
 // never sees or supplies a raw filesystem path. This is the concrete fix
@@ -43,16 +75,12 @@ export function filesRoutes(
           return { error: `unknown quality, expected one of: ${STREAM_QUALITIES.join(", ")}` };
         }
 
-        const file = db
-          .prepare("SELECT file_path, file_hash, missing_since FROM files WHERE id = ?")
-          .get(request.params.id) as
-          | { file_path: string; file_hash: string | null; missing_since: string | null }
-          | undefined;
-
-        if (!file || file.missing_since) {
-          reply.code(404);
-          return { error: "file not found" };
+        const found = findStreamable(db, request.params.id, quality);
+        if ("error" in found) {
+          reply.code(found.code);
+          return { error: found.error };
         }
+        const { file } = found;
 
         if (quality === "original") return sendOriginal(file.file_path, file.file_hash, request.headers.range, reply, activity);
 
@@ -68,15 +96,7 @@ export function filesRoutes(
         try {
           let variant = await ensureVariant(file.file_hash, file.file_path, quality, cacheDir);
           if (variant.kind === "growing") {
-            // This request listens to the encode until its response is
-            // over or its client hangs up, waiting for a seek included.
-            // An encode nobody listens to gives its slot up to a track
-            // someone is waiting for (stream/cache.ts). A client
-            // that hung up while the encode was being set up has already
-            // closed, and would never leave.
-            const leave = variant.job.join();
-            reply.raw.once("close", leave);
-            if (reply.raw.destroyed) leave();
+            listen(variant.job, reply);
             // A first byte (or an early failure) before any header goes
             // out, so a source ffmpeg can't read is still a clean 502.
             await variant.job.started;
@@ -95,7 +115,7 @@ export function filesRoutes(
           // change, so the browser can hold onto them instead of
           // re-fetching on every seek.
           const headers = {
-            "Content-Type": VARIANTS[quality].contentType,
+            "Content-Type": await contentType(quality, variant, request.log),
             "Cache-Control": "private, max-age=31536000, immutable",
           };
 
@@ -108,6 +128,8 @@ export function filesRoutes(
             reply.headers({ ...headers, "Accept-Ranges": "bytes" });
             return reply.send(activity.meter(Readable.from(readGrowing(variant.job))));
           }
+          // What stream/budget.ts keeps or gives up: the remux served longest ago.
+          if (quality === "original-fmp4") void noteServed(variant.path);
           return await sendFile(variant.path, request.headers.range, reply, headers, activity);
         } catch (err) {
           request.log.error(err);
@@ -116,7 +138,71 @@ export function filesRoutes(
         }
       },
     );
+
+    // #408: a fragmented MP4 rung's codec string and fragment index
+    // (stream/fragments.ts), for the web player that feeds a MediaSource
+    // from the stream above with Range requests. Only a finished file has
+    // an index, so this waits for an encode under way, listening to it as a
+    // seek does. Not cached by the browser: a tag write changes the file's
+    // hash under the same id, and an index has to describe the bytes the
+    // next Range request gets.
+    app.get<{ Params: { id: string }; Querystring: { quality?: string } }>(
+      "/files/:id/stream/index",
+      async (request, reply) => {
+        const quality = request.query.quality;
+        if (!isFragmentedQuality(quality)) {
+          reply.code(400);
+          return { error: `unknown quality, expected one of: ${FRAGMENTED_QUALITIES.join(", ")}` };
+        }
+        const found = findStreamable(db, request.params.id, quality);
+        if ("error" in found) {
+          reply.code(found.code);
+          return { error: found.error };
+        }
+        const { file } = found;
+        if (!file.file_hash) {
+          reply.code(500);
+          return { error: "file has no content hash, cannot cache a transcode" };
+        }
+
+        try {
+          const variant = await ensureVariant(file.file_hash, file.file_path, quality, cacheDir);
+          if (variant.kind === "growing") {
+            listen(variant.job, reply);
+            await variant.job.finished;
+          }
+          const filePath = variant.kind === "complete" ? variant.path : variant.job.targetPath;
+          if (quality === "original-fmp4") void noteServed(filePath);
+          const index = await readFragmentIndex(filePath);
+          reply.header("Cache-Control", "private, no-store");
+          return index;
+        } catch (err) {
+          request.log.error(err);
+          reply.code(502);
+          return { error: `no fragment index for ${quality}` };
+        }
+      },
+    );
   };
+}
+
+// A fragmented MP4 rung names its codec (#408): the web player that feeds
+// a MediaSource hands this straight to addSourceBuffer, before the encode
+// has finished and there's an index to ask. It's read from the moov, which
+// is written first. A file whose moov can't be read still plays in an
+// <audio> element, so it goes out as plain audio/mp4.
+async function contentType(quality: TranscodedQuality, variant: CachedVariant, log: FastifyBaseLogger): Promise<string> {
+  const { contentType } = VARIANTS[quality];
+  if (!isFragmentedQuality(quality)) return contentType;
+  try {
+    const bytes =
+      variant.kind === "complete" ? createReadStream(variant.path, { highWaterMark: 64 * 1024 }) : readGrowing(variant.job);
+    const codecs = await readCodecs(bytes);
+    return `${contentType}; codecs="${codecs}"`;
+  } catch (err) {
+    log.warn({ err }, `no codec string for ${quality}`);
+    return contentType;
+  }
 }
 
 // #120's "Original": the source file as it sits on disk, never transcoded —

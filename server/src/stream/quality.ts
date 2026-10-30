@@ -1,8 +1,21 @@
 // Issue #120: the quality ladder. `original` is the source file
-// itself, never transcoded; every other rung is one ffmpeg encode, cached
+// itself, never transcoded; every other rung is one ffmpeg run, cached
 // on disk under its own directory so a track heard at two qualities is two
 // independent cache entries rather than one overwriting the other.
-export const STREAM_QUALITIES = ["original", "opus96", "opus160", "opus256", "aac160", "aac256"] as const;
+//
+// `original-fmp4` (#408) is the original's own audio, not re-encoded, moved
+// into fragmented MP4: what the web player on an iPhone feeds a
+// ManagedMediaSource, which takes MP4 and not a FLAC file. `original` stays
+// the source file byte for byte, which desktop playback reads (#185).
+export const STREAM_QUALITIES = [
+  "original",
+  "original-fmp4",
+  "opus96",
+  "opus160",
+  "opus256",
+  "aac160",
+  "aac256",
+] as const;
 export type StreamQuality = (typeof STREAM_QUALITIES)[number];
 export type TranscodedQuality = Exclude<StreamQuality, "original">;
 
@@ -31,26 +44,40 @@ function opus(kbps: number): Variant {
   };
 }
 
+// A source's chapters would go in as a second, text track, and a
+// MediaSource's audio SourceBuffer takes one audio track (#408).
+const FRAGMENTED_MP4 = [
+  "-map_chapters",
+  "-1",
+  "-movflags",
+  "+empty_moov+default_base_moof",
+  "-frag_duration",
+  "1000000",
+  "-f",
+  "mp4",
+];
+
 function aac(kbps: number): Variant {
   return {
     extension: "m4a",
     contentType: "audio/mp4",
-    encoderArgs: [
-      "-c:a",
-      "aac",
-      "-b:a",
-      `${kbps}k`,
-      "-movflags",
-      "+empty_moov+default_base_moof",
-      "-frag_duration",
-      "1000000",
-      "-f",
-      "mp4",
-    ],
+    encoderArgs: ["-c:a", "aac", "-b:a", `${kbps}k`, ...FRAGMENTED_MP4],
   };
 }
 
+// A stream copy: the original's frames as they are, in one-second
+// fragments. FFmpeg 5.1 (Debian bookworm's, which a Raspberry Pi runs)
+// still calls FLAC in MP4 experimental and refuses it without -strict;
+// 6.0 dropped that. The tags stay in the source, as the phone-tested
+// prototype had it: the player only wants the audio.
+const ORIGINAL_FMP4: Variant = {
+  extension: "m4a",
+  contentType: "audio/mp4",
+  encoderArgs: ["-c:a", "copy", "-map_metadata", "-1", "-strict", "experimental", ...FRAGMENTED_MP4],
+};
+
 export const VARIANTS: Record<TranscodedQuality, Variant> = {
+  "original-fmp4": ORIGINAL_FMP4,
   opus96: opus(96),
   opus160: opus(160),
   opus256: opus(256),
@@ -64,6 +91,24 @@ export function isStreamQuality(value: unknown): value is StreamQuality {
 
 export function isTranscodedQuality(value: string): value is TranscodedQuality {
   return Object.hasOwn(VARIANTS, value);
+}
+
+// The rungs that are fragmented MP4, which GET /files/:id/stream/index can
+// map for a MediaSource (stream/fragments.ts).
+export const FRAGMENTED_QUALITIES: readonly TranscodedQuality[] = ["original-fmp4", "aac160", "aac256"];
+
+export function isFragmentedQuality(value: unknown): value is TranscodedQuality {
+  return typeof value === "string" && (FRAGMENTED_QUALITIES as readonly string[]).includes(value);
+}
+
+// The sources whose audio original-fmp4 can carry as it is, by extension as
+// PASSTHROUGH_TYPES below reads them: FLAC, and the ALAC or AAC an .m4a
+// holds. An MP3 or an Ogg file can't go through a MediaSource on iOS this
+// way, so its player asks for an AAC rung instead.
+const REMUXABLE = new Set([".flac", ".m4a", ".mp4"]);
+
+export function canRemux(extension: string): boolean {
+  return REMUXABLE.has(extension.toLowerCase());
 }
 
 // Content-Type for `original` passthrough, keyed on the source's own
