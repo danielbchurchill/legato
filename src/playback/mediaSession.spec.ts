@@ -111,28 +111,75 @@ describe('bindMediaSessionActions', () => {
     unbind()
     expect(session.handlers.size).toBe(0)
   })
+
+  it("clears seeking forward and back, so the browser's own skip buttons don't take next and previous's place", () => {
+    const session = new FakeSession()
+    const set = vi.spyOn(session, 'setActionHandler')
+    bindMediaSessionActions(session, () => fakeControls())
+    expect(set).toHaveBeenCalledWith('seekbackward', null)
+    expect(set).toHaveBeenCalledWith('seekforward', null)
+  })
+
+  it('logs an action the browser refuses, rather than hiding it (#407)', () => {
+    const session = new FakeSession()
+    session.unsupported.add('previoustrack')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    bindMediaSessionActions(session, () => fakeControls())
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('previoustrack')
+    expect(warn.mock.calls[0][1]).toBeInstanceOf(TypeError)
+    warn.mockRestore()
+  })
 })
 
 describe('syncPositionState', () => {
   it('hands the session seconds, clamped inside the track', () => {
     const session = new FakeSession()
-    syncPositionState(session, { positionMs: 61_000, durationMs: 180_000 })
+    syncPositionState(session, { positionMs: 61_000, durationMs: 180_000, playing: true })
     expect(session.setPositionState).toHaveBeenLastCalledWith({ duration: 180, position: 61, playbackRate: 1 })
 
-    syncPositionState(session, { positionMs: 200_000, durationMs: 180_000 })
+    syncPositionState(session, { positionMs: 200_000, durationMs: 180_000, playing: true })
     expect(session.setPositionState).toHaveBeenLastCalledWith({ duration: 180, position: 180, playbackRate: 1 })
   })
 
   it('clears the scrubber when the length is unknown, rather than guessing one', () => {
     const session = new FakeSession()
-    syncPositionState(session, { positionMs: 5_000, durationMs: null })
+    syncPositionState(session, { positionMs: 5_000, durationMs: null, playing: true })
     expect(session.setPositionState).toHaveBeenLastCalledWith()
+  })
+
+  it('sets the playback state again after every position, which keeps the scrubber from moving over silence (#408)', () => {
+    const session = new FakeSession()
+    const order: string[] = []
+    session.setPositionState = vi.fn(() => void order.push(`position while ${session.playbackState}`))
+    let state = session.playbackState
+    Object.defineProperty(session, 'playbackState', {
+      get: () => state,
+      set: (value: MediaSessionPlaybackState) => {
+        state = value
+        order.push(`state ${value}`)
+      },
+    })
+
+    syncPositionState(session, { positionMs: 1_000, durationMs: 180_000, playing: true })
+    syncPositionState(session, { positionMs: 2_000, durationMs: 180_000, playing: false })
+    syncPositionState(session, { positionMs: 2_000, durationMs: null, playing: false })
+
+    expect(order).toEqual([
+      'position while none',
+      'state playing',
+      'position while playing',
+      'state paused',
+      'position while paused',
+      'state paused',
+    ])
   })
 
   it('is a no-op on a browser without setPositionState', () => {
     const session = new FakeSession() as MediaSessionLike
     delete session.setPositionState
-    expect(() => syncPositionState(session, { positionMs: 0, durationMs: 1000 })).not.toThrow()
+    expect(() => syncPositionState(session, { positionMs: 0, durationMs: 1000, playing: false })).not.toThrow()
+    expect(session.playbackState).toBe('paused')
   })
 })
 

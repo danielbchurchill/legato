@@ -404,6 +404,9 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       setStatus((s) => ({
         ...s,
         playing: true,
+        // From the top: the lock screen's scrubber is placed from this as
+        // the track changes (#407), not from where the last one got to.
+        positionMs: 0,
         currentRecordingNodeId: entry.recordingNodeId,
         currentFileId: info.fileId,
         currentDurationMs: info.durationMs,
@@ -1277,6 +1280,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     status,
     title: currentTitle,
     controls: { play: resume, pause, next, previous, seek },
+    element: audioRef.current,
   })
 
   return {

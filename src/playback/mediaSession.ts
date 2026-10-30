@@ -53,16 +53,29 @@ export function readArtistAndAlbum(node: NodeEdges): { artist: string; album: st
   return { artist: out('performed_by'), album: out('appears_on') }
 }
 
+/** An action the browser refused, said out loud (#407: an empty catch here
+ * hid why the iPhone's lock screen had no next, previous or scrubber). */
+function reportRefusal(action: MediaSessionAction, error: unknown): void {
+  console.warn(`[legato] the media session refused "${action}"`, error)
+}
+
 /** Points the session's buttons at the player. Returns a cleanup that
  * unhooks them. An action this browser doesn't know (older ones lack
  * seekto) throws from setActionHandler, which costs that one button and
- * nothing else. */
+ * nothing else, and is logged.
+ *
+ * Seeking forward and back are cleared, not left unset: a page with
+ * neither gets the browser's own ±10 or ±15 s skip buttons, which can take
+ * the place of next and previous on the lock screen.
+ *
+ * Calling this again re-registers every handler without unhooking any in
+ * between, which useMediaSession does each time playback starts (#407). */
 export function bindMediaSessionActions(
   session: MediaSessionLike,
   controls: () => MediaSessionControls,
   onSeek: (positionMs: number) => void = () => undefined,
 ): () => void {
-  const handlers: [MediaSessionAction, MediaSessionActionHandler][] = [
+  const handlers: [MediaSessionAction, MediaSessionActionHandler | null][] = [
     ['play', () => void controls().play()],
     ['pause', () => void controls().pause()],
     ['nexttrack', () => void controls().next()],
@@ -76,14 +89,16 @@ export function bindMediaSessionActions(
         onSeek(positionMs)
       },
     ],
+    ['seekbackward', null],
+    ['seekforward', null],
   ]
   const bound: MediaSessionAction[] = []
   for (const [action, handler] of handlers) {
     try {
       session.setActionHandler(action, handler)
-      bound.push(action)
-    } catch {
-      // Unsupported action; see above.
+      if (handler) bound.push(action)
+    } catch (error) {
+      reportRefusal(action, error)
     }
   }
   return () => {
@@ -97,25 +112,33 @@ export function bindMediaSessionActions(
   }
 }
 
-/** Where the lock screen's scrubber sits. The browser extrapolates from
- * here while playing, so this only needs calling when that extrapolation
- * would go wrong: a new track, play/pause, a seek. Cleared when the length
- * isn't known, since a guessed duration is a scrubber that lies. */
+/** Where the lock screen's scrubber sits, and whether it moves. The browser
+ * extrapolates from here while playing, so this only needs calling when
+ * that extrapolation would go wrong: a new track, play/pause, a seek.
+ * Cleared when the length isn't known, since a guessed duration is a
+ * scrubber that lies.
+ *
+ * The playback state is set again after the position, every time: #408's
+ * prototype found that without it, the iPhone's lock screen kept its
+ * scrubber moving over silence after the audio had stopped. */
 export function syncPositionState(
   session: MediaSessionLike,
-  { positionMs, durationMs }: { positionMs: number; durationMs: number | null },
+  { positionMs, durationMs, playing }: { positionMs: number; durationMs: number | null; playing: boolean },
 ): void {
-  if (!session.setPositionState) return
-  try {
-    if (durationMs == null || durationMs <= 0) {
-      session.setPositionState()
-      return
+  if (session.setPositionState) {
+    try {
+      if (durationMs == null || durationMs <= 0) {
+        session.setPositionState()
+      } else {
+        const duration = durationMs / 1000
+        session.setPositionState({ duration, position: Math.min(Math.max(positionMs / 1000, 0), duration), playbackRate: 1 })
+      }
+    } catch (error) {
+      // An out-of-range state throws; the scrubber just keeps its last value.
+      console.warn('[legato] the media session refused a position', error)
     }
-    const duration = durationMs / 1000
-    session.setPositionState({ duration, position: Math.min(Math.max(positionMs / 1000, 0), duration), playbackRate: 1 })
-  } catch {
-    // An out-of-range state throws; the scrubber just keeps its last value.
   }
+  session.playbackState = playing ? 'playing' : 'paused'
 }
 
 type MetadataFactory = (init: MediaMetadataInit) => MediaMetadata
@@ -135,17 +158,19 @@ function currentSession(): MediaSessionLike | null {
 }
 
 /** Keeps the session in step with the web player. Called from usePlayback
- * with its own status and controls. */
+ * with its own status and controls, and the <audio> element they drive. */
 export function useMediaSession({
   enabled,
   status,
   title,
   controls,
+  element = null,
 }: {
   enabled: boolean
   status: PlaybackStatus
   title: string | null
   controls: MediaSessionControls
+  element?: EventTarget | null
 }): void {
   // The controls are new functions whenever usePlayback's callbacks change;
   // the handlers read them through this ref so they're bound once, not
@@ -159,14 +184,40 @@ export function useMediaSession({
 
   const session = enabled ? currentSession() : null
 
+  // #407: the lock screen showed play and pause, but no next, previous or
+  // scrubber. WebKit hands the page's actions to the lock screen through
+  // an object that exists only while one of the page's media elements has
+  // an active media session, and is made empty each time one becomes
+  // active (NowPlayingManager in WebKit's source): an action set before
+  // then is dropped without an error. These were set once, when the app
+  // loaded, before anything had played. #408's prototype set them after
+  // play() and its lock screen had all three. So they're set again every
+  // time the element starts playing.
   useEffect(() => {
     if (!session) return
-    return bindMediaSessionActions(
-      session,
-      () => controlsRef.current,
-      (positionMs) => syncPositionState(session, { positionMs, durationMs: statusRef.current.currentDurationMs }),
-    )
-  }, [session])
+    const bind = () =>
+      bindMediaSessionActions(
+        session,
+        () => controlsRef.current,
+        (positionMs) =>
+          syncPositionState(session, {
+            positionMs,
+            durationMs: statusRef.current.currentDurationMs,
+            playing: statusRef.current.playing,
+          }),
+      )
+    const unbind = bind()
+    const onPlaying = () => {
+      bind()
+      const { positionMs, currentDurationMs } = statusRef.current
+      syncPositionState(session, { positionMs, durationMs: currentDurationMs, playing: true })
+    }
+    element?.addEventListener('playing', onPlaying)
+    return () => {
+      element?.removeEventListener('playing', onPlaying)
+      unbind()
+    }
+  }, [session, element])
 
   const nodeId = status.currentRecordingNodeId
   useEffect(() => {
@@ -198,10 +249,6 @@ export function useMediaSession({
   const durationMs = status.currentDurationMs
   useEffect(() => {
     if (!session || nodeId == null) return
-    // session is navigator.mediaSession (or a stand-in in tests): setting this
-    // property is how the browser API is driven, not a React value mutated.
-    // oxlint-disable-next-line react/immutability
-    session.playbackState = playing ? 'playing' : 'paused'
-    syncPositionState(session, { positionMs: statusRef.current.positionMs, durationMs })
+    syncPositionState(session, { positionMs: statusRef.current.positionMs, durationMs, playing })
   }, [session, nodeId, playing, durationMs])
 }
