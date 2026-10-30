@@ -34,7 +34,7 @@ const FOCUSABLE =
 type DialogProps = {
   open: boolean
   onClose: () => void
-  title: string
+  title: ReactNode
   description?: ReactNode
   children?: ReactNode
   /** Buttons, right-aligned under the content. */
@@ -173,7 +173,7 @@ type AlertDialogProps = {
   open: boolean
   onCancel: () => void
   onConfirm: () => void
-  title: string
+  title: ReactNode
   description: ReactNode
   confirmLabel: string
   cancelLabel?: string

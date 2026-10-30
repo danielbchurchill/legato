@@ -160,16 +160,34 @@ describe('the account in Settings', () => {
     expect(container.textContent).not.toContain('A device you sign out')
   })
 
-  it('asks before removing a server, and says what that does', async () => {
+  it('asks before removing a server, naming it, and says what that does', async () => {
     const calls = relaySays({ ...LISTS, [`DELETE /linked-servers/${SERVER_A}`]: () => Response.json({ unlinked: true }) })
     await render()
     await act(async () => button('remove', row('musicbox')).click())
     expect(calls.some((call) => call.method === 'DELETE')).toBe(false)
-    expect(document.body.textContent).toContain(
+    const dialog = document.querySelector<HTMLElement>('[role="alertdialog"]')!
+    expect(dialog.querySelector('h2')?.textContent).toBe('remove musicbox')
+    expect(dialog.textContent).toContain(
       "musicbox won't open from this legato.fm account any more, and its connection to legato.fm closes. Its owner can link it again from its Settings.",
     )
-    await act(async () => button('remove', document.querySelector('[role="alertdialog"]') ?? document).click())
+    await act(async () => button('remove', dialog).click())
     expect(calls.map((call) => `${call.method} ${call.url}`)).toContain(`DELETE https://auth.legato.fm/linked-servers/${SERVER_A}`)
+  })
+
+  // Issue #388: with two rows, the dialog has to say which one it removes.
+  it('names a server this device never reached by the start of its id', async () => {
+    const calls = relaySays({ ...LISTS, [`DELETE /linked-servers/${SERVER_B}`]: () => Response.json({ unlinked: true }) })
+    await render()
+    await act(async () => button('remove', row('fedcba98…')).click())
+    const dialog = document.querySelector<HTMLElement>('[role="alertdialog"]')!
+    const title = dialog.querySelector('h2')!
+    expect(title.textContent).toBe('remove fedcba98…')
+    expect(title.querySelector('.mono')?.textContent).toBe('fedcba98…')
+    expect(dialog.textContent).toContain("fedcba98… won't open from this legato.fm account any more")
+    expect(dialog.textContent).not.toContain('musicbox')
+    expect(dialog.textContent).not.toContain('This server')
+    await act(async () => button('remove', dialog).click())
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toContain(`DELETE https://auth.legato.fm/linked-servers/${SERVER_B}`)
   })
 
   it('lists again when a link finishes, so a server linked again is back', async () => {

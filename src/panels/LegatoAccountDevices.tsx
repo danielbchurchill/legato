@@ -36,7 +36,7 @@ export function LegatoAccountDevices({ token, onSignedOut }: { token: string; on
   const [lists, setLists] = useState<Lists | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [removing, setRemoving] = useState<{ serverId: string; name: string } | null>(null)
+  const [removing, setRemoving] = useState<{ serverId: string; name: string | null } | null>(null)
 
   const failed = useCallback(
     (err: unknown) => {
@@ -135,13 +135,10 @@ export function LegatoAccountDevices({ token, onSignedOut }: { token: string; on
               return (
                 <Item
                   key={server.serverId}
-                  title={name ?? <span className="mono">{server.serverId.slice(0, 8)}…</span>}
+                  title={<ServerName serverId={server.serverId} name={name} />}
                   detail={serverDetail(server)}
                   action={
-                    <Button
-                      disabled={busy !== null}
-                      onClick={() => setRemoving({ serverId: server.serverId, name: name ?? 'This server' })}
-                    >
+                    <Button disabled={busy !== null} onClick={() => setRemoving({ serverId: server.serverId, name })}>
                       {busy === `server:${server.serverId}` ? <Shimmer>removing…</Shimmer> : 'remove'}
                     </Button>
                   }
@@ -162,11 +159,18 @@ export function LegatoAccountDevices({ token, onSignedOut }: { token: string; on
           setRemoving(null)
           void act(`server:${target.serverId}`, () => removeServer(token, target.serverId))
         }}
-        title="remove this server"
+        // Which one, since a mis-click on the wrong row would unlink it (#388).
+        title={
+          removing && (
+            <>
+              remove <ServerName {...removing} />
+            </>
+          )
+        }
         description={
           <p>
-            {removing?.name} won't open from this legato.fm account any more, and its connection to legato.fm closes. Its owner can link it
-            again from its Settings.
+            {removing && <ServerName {...removing} />} won't open from this legato.fm account any more, and its connection to legato.fm
+            closes. Its owner can link it again from its Settings.
           </p>
         }
         confirmLabel="remove"
@@ -174,6 +178,11 @@ export function LegatoAccountDevices({ token, onSignedOut }: { token: string; on
       />
     </>
   )
+}
+
+// What the list calls a server: its name, or the start of its id in mono.
+function ServerName({ serverId, name }: { serverId: string; name: string | null }) {
+  return name ?? <span className="mono">{serverId.slice(0, 8)}…</span>
 }
 
 // Two lines, so neither is cut short in Settings' width: how legato.fm
