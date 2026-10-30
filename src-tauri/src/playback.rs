@@ -397,9 +397,10 @@ pub struct QueueStatus {
 const OPEN_AHEAD: usize = 2;
 
 struct Session {
-  // Held for the lifetime of playback — dropping it stops output.
-  _stream: MixerDeviceSink,
-  sink: Player,
+  // Held for the lifetime of playback — dropping it stops output. None only
+  // in tests, where a thread stands in for the output device.
+  _stream: Option<MixerDeviceSink>,
+  sink: Arc<Player>,
   // Which session this is. queue_stop followed straight away by a new
   // enqueue (every play and every queue edit does that) replaces the
   // session before the old monitor thread's next tick, so "is there still
@@ -521,14 +522,14 @@ fn open_source(track: &QueueTrack) -> Result<Opened, PlaybackError> {
   // buffer, because decode's reads are still synchronous with the
   // network. This background-prefetches instead.
   match File::open(path).and_then(NetworkAheadReader::new) {
-    Ok(reader) => decode(reader, path).map(|source| Opened { source, streaming: false }),
+    Ok(reader) => decode(reader, path, false),
     Err(err) => {
       let unreachable = classify_open_error(path, &err);
       let Some(url) = stream_instead(err.kind(), track.stream_url.as_deref()) else {
         return Err(unreachable);
       };
       let reader = open_server_stream(url).map_err(|failure| with_stream_failure(unreachable, &failure))?;
-      decode(reader, path).map(|source| Opened { source, streaming: true })
+      decode(reader, path, true)
     }
   }
 }
@@ -587,12 +588,13 @@ fn describe_stream_error(e: &ureq::Error) -> String {
 // With the length, symphonia seeks by byte offset in either direction.
 // Without it, it treats the source as forward-only: a seek back failed with
 // RandomAccessNotSupported, and the scrubber only ever moved forward.
-fn decode(reader: NetworkAheadReader, path: &str) -> Result<Decoder<NetworkAheadReader>, PlaybackError> {
+fn decode(reader: NetworkAheadReader, path: &str, streaming: bool) -> Result<Opened, PlaybackError> {
   let len = reader.shared.len;
   Decoder::builder()
     .with_data(reader)
     .with_byte_len(len)
     .build()
+    .map(|source| Opened { source, streaming })
     .map_err(|e| PlaybackError::Undecodable { path: path.to_string(), detail: e.to_string() })
 }
 
@@ -770,8 +772,8 @@ fn ensure_session<'a>(
     sink.set_volume(*state.volume.lock().unwrap());
     let generation = state.next_generation.fetch_add(1, Ordering::Relaxed);
     *guard = Some(Session {
-      _stream: stream,
-      sink,
+      _stream: Some(stream),
+      sink: Arc::new(sink),
       generation,
       queue: VecDeque::new(),
       pending: VecDeque::new(),
@@ -886,9 +888,7 @@ pub fn queue_play(state: State<PlaybackState>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn queue_pause(state: State<PlaybackState>) -> Result<(), String> {
-  if let Some(session) = state.session.lock().unwrap().as_ref() {
-    session.sink.pause();
-  }
+  state.pause();
   Ok(())
 }
 
@@ -897,7 +897,7 @@ pub fn queue_pause(state: State<PlaybackState>) -> Result<(), String> {
 /// untouched — it lives outside the session precisely so it survives this.
 #[tauri::command]
 pub fn queue_stop(state: State<PlaybackState>) -> Result<(), String> {
-  *state.session.lock().unwrap() = None;
+  state.stop();
   Ok(())
 }
 
@@ -906,13 +906,7 @@ pub fn queue_stop(state: State<PlaybackState>) -> Result<(), String> {
 /// network, which on the main thread would freeze the window.
 #[tauri::command(async)]
 pub fn queue_seek(state: State<PlaybackState>, position_ms: u64) -> Result<(), String> {
-  if let Some(session) = state.session.lock().unwrap().as_ref() {
-    session
-      .sink
-      .try_seek(Duration::from_millis(position_ms))
-      .map_err(|e| e.to_string())?;
-  }
-  Ok(())
+  state.seek(position_ms)
 }
 
 /// Skips the currently playing track. Gapless scheduling only guarantees
@@ -930,16 +924,43 @@ pub fn queue_seek(state: State<PlaybackState>, position_ms: u64) -> Result<(), S
 /// command has nothing real behind it to skip to in that case.
 #[tauri::command]
 pub fn queue_skip(state: State<PlaybackState>) -> Result<(), String> {
-  if let Some(session) = state.session.lock().unwrap().as_mut() {
-    session.sink.skip_one();
-    session.queue.pop_front();
-    session.announce_owed = true;
-    let nothing_left = session.queue.is_empty() && session.pending.is_empty() && !session.opening;
-    if nothing_left && *state.repeat_mode.lock().unwrap() == RepeatMode::All {
-      session.pending.extend(session.full_order.iter().cloned());
+  state.skip();
+  Ok(())
+}
+
+// The transport commands' bodies, apart from Tauri so tests can drive them.
+impl PlaybackState {
+  fn pause(&self) {
+    if let Some(session) = self.session.lock().unwrap().as_ref() {
+      session.sink.pause();
     }
   }
-  Ok(())
+
+  fn stop(&self) {
+    *self.session.lock().unwrap() = None;
+  }
+
+  fn seek(&self, position_ms: u64) -> Result<(), String> {
+    if let Some(session) = self.session.lock().unwrap().as_ref() {
+      session
+        .sink
+        .try_seek(Duration::from_millis(position_ms))
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+  }
+
+  fn skip(&self) {
+    if let Some(session) = self.session.lock().unwrap().as_mut() {
+      session.sink.skip_one();
+      session.queue.pop_front();
+      session.announce_owed = true;
+      let nothing_left = session.queue.is_empty() && session.pending.is_empty() && !session.opening;
+      if nothing_left && *self.repeat_mode.lock().unwrap() == RepeatMode::All {
+        session.pending.extend(session.full_order.iter().cloned());
+      }
+    }
+  }
 }
 
 #[tauri::command]
@@ -1514,6 +1535,183 @@ mod tests {
 
     assert_eq!(rest, data[1000..]);
     assert!(server.requests.lock().unwrap()[0].ends_with(" from 1000"));
+  }
+
+  // Stands in for the output device: pulls the player's mix at the pace
+  // cpal's callback would (44.1 kHz stereo) until dropped. `pulled` counts
+  // the samples it got, so a test can tell a callback that's running from
+  // one stuck inside a track.
+  struct FakeOutput {
+    pulled: Arc<AtomicU64>,
+    done: Arc<AtomicBool>,
+  }
+
+  impl Drop for FakeOutput {
+    fn drop(&mut self) {
+      self.done.store(true, Ordering::Relaxed);
+    }
+  }
+
+  fn fake_output(mut mix: rodio::queue::SourcesQueueOutput) -> FakeOutput {
+    let (pulled, done) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)));
+    let output = FakeOutput { pulled: pulled.clone(), done: done.clone() };
+    std::thread::spawn(move || {
+      while !done.load(Ordering::Relaxed) {
+        // 10 ms of it.
+        for _ in 0..882 {
+          mix.next();
+        }
+        pulled.fetch_add(882, Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(10));
+      }
+    });
+    output
+  }
+
+  impl FakeOutput {
+    fn stuck(&self) -> bool {
+      let before = self.pulled.load(Ordering::Relaxed);
+      std::thread::sleep(Duration::from_millis(100));
+      self.pulled.load(Ordering::Relaxed) == before
+    }
+  }
+
+  // A session playing one track through a FakeOutput, as queue_enqueue
+  // leaves it, and the track's player.
+  struct Playing {
+    state: Arc<PlaybackState>,
+    sink: Arc<Player>,
+    output: FakeOutput,
+  }
+
+  fn playing(reader: NetworkAheadReader) -> Playing {
+    let (sink, mix) = Player::new();
+    let output = fake_output(mix);
+    let sink = Arc::new(sink);
+    let mut session = Session {
+      _stream: None,
+      sink: sink.clone(),
+      generation: 0,
+      queue: VecDeque::new(),
+      pending: VecDeque::new(),
+      opening: false,
+      announce_owed: false,
+      full_order: Vec::new(),
+    };
+    append_opened(&mut session, track(1), decode(reader, "01.wav", true).unwrap());
+    let state = Arc::new(PlaybackState::new());
+    *state.session.lock().unwrap() = Some(session);
+    Playing { state, sink, output }
+  }
+
+  // `seconds` of WAV as a stream whose first `head` bytes arrive and then
+  // nothing more, its connection held open until the returned sender is
+  // dropped. `asked` records each offset it's asked for again from.
+  fn stalled_wav(seconds: u32, head: usize, stall_limit: Duration) -> (NetworkAheadReader, Arc<Mutex<Vec<u64>>>, std::sync::mpsc::Sender<()>) {
+    let wav = wav_bytes(seconds);
+    let (release, hold) = std::sync::mpsc::channel();
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let reopen: Reopen = {
+      let asked = asked.clone();
+      Box::new(move |at| {
+        asked.lock().unwrap().push(at);
+        Err(io::Error::other("the server is stalled"))
+      })
+    };
+    let body = Box::new(Trickle { data: wav[..head].to_vec(), head, hold });
+    (NetworkAheadReader::start(body, wav.len() as u64, Some(reopen), Some(stall_limit)), asked, release)
+  }
+
+  // Runs `f` on a thread of its own and gives it `limit` to finish. None if
+  // it hasn't, in which case it's left running.
+  fn within<T: Send + 'static>(limit: Duration, f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+      let _ = done.send(f());
+    });
+    result.recv_timeout(limit).ok()
+  }
+
+  // The controls a waiting seek mustn't hold up, by name.
+  type Control = (&'static str, fn(&PlaybackState));
+  const PAUSE_SKIP_STOP: [Control; 3] = [("pause", PlaybackState::pause), ("skip", PlaybackState::skip), ("stop", PlaybackState::stop)];
+
+  fn wait_until(limit: Duration, mut ready: impl FnMut() -> bool) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < limit {
+      if ready() {
+        return true;
+      }
+      std::thread::sleep(Duration::from_millis(10));
+    }
+    ready()
+  }
+
+  // Issue #387. A seek lands past the edge of a stream that stopped
+  // arriving, close enough to wait for it rather than ask the server again.
+  // 6.5 s isn't on one of the decoder's packet boundaries, so rodio decodes
+  // its way there from the boundary before it, one sample at a time, and the
+  // read for every one of those samples waited out the stall limit afresh.
+  // At 20 s a sample, that's hours inside the output's callback: no sound,
+  // a frozen position, and no new request to the server.
+  #[test]
+  fn a_seek_past_where_a_stalled_stream_got_to_ends_the_track_within_the_stall_limit() {
+    // 1 MiB of a 30 s WAV is 5.9 s of it, and 6.5 s is 1.15 MB in.
+    let (reader, asked, _connection) = stalled_wav(30, 1 << 20, Duration::from_millis(200));
+    let playing = playing(reader);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let state = playing.state.clone();
+    let seeked = within(Duration::from_secs(3), move || state.seek(6_500));
+
+    assert!(seeked.is_some(), "the seek was still waiting on the stalled stream after 3 s");
+    assert!(wait_until(Duration::from_secs(2), || playing.sink.empty()), "the track never ended");
+    assert!(asked.lock().unwrap().is_empty(), "asked the server again from {:?}", asked.lock().unwrap());
+  }
+
+  // The rest of #387: while that seek waited, so did every other control,
+  // because queue_seek held the session lock they all take.
+  #[test]
+  fn pause_skip_and_stop_answer_while_a_seek_waits_on_a_stalled_stream() {
+    let (reader, _asked, _connection) = stalled_wav(30, 1 << 20, Duration::from_secs(30));
+    let playing = playing(reader);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let state = playing.state.clone();
+    let seeking = std::thread::spawn(move || state.seek(6_500));
+    assert!(wait_until(Duration::from_secs(2), || playing.output.stuck()), "the seek never reached the stalled edge");
+    assert!(!seeking.is_finished());
+
+    for (control, run) in PAUSE_SKIP_STOP {
+      let state = playing.state.clone();
+      assert!(within(Duration::from_millis(500), move || run(&state)).is_some(), "{control} waited for the seek");
+    }
+  }
+
+  // The likelier way into #387's own freeze. Its output had stopped:
+  // coreaudiod held no audio-out assertion, and it keeps one for a callback
+  // that's only stuck. Nothing ran the seek, try_seek waits for that with no
+  // limit, and queue_seek held the session lock meanwhile. No network is
+  // needed: this track is a local file.
+  #[test]
+  fn pause_skip_and_stop_answer_while_a_seek_waits_on_an_output_that_stopped() {
+    let dir = scratch_dir("stopped-output");
+    let path = dir.join("01.wav");
+    std::fs::write(&path, wav_bytes(10)).unwrap();
+    let playing = playing(NetworkAheadReader::new(File::open(&path).unwrap()).unwrap());
+    std::thread::sleep(Duration::from_millis(100));
+    drop(playing.output);
+
+    let state = playing.state.clone();
+    let seeking = std::thread::spawn(move || state.seek(5_000));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!seeking.is_finished());
+
+    for (control, run) in PAUSE_SKIP_STOP {
+      let state = playing.state.clone();
+      assert!(within(Duration::from_millis(500), move || run(&state)).is_some(), "{control} waited for the seek");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
   }
 
   // usePlayback.ts switches on `kind` and reads these field names; this
