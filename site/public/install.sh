@@ -46,7 +46,7 @@ main() {
     *) die "--library needs an absolute path, got $mount_dir" ;;
   esac
 
-  [ "$(uname -s)" = Linux ] || die "this script is for Linux. On macOS: brew install danielbchurchill/legato/legato"
+  [ "$(uname -s)" = Linux ] || die "this script is for Linux. On macOS: brew tap danielbchurchill/legato && brew trust danielbchurchill/legato && brew install legato"
   [ "$(id -u)" != 0 ] || die "run this as the user who should own Legato, not root (it installs a per-user service)"
   for tool in curl tar awk sha256sum systemctl loginctl; do command -v "$tool" >/dev/null 2>&1 || die "needs $tool, which isn't installed"; done
   case "$(uname -m)" in
