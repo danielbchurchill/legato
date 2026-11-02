@@ -1,15 +1,21 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import Fastify, { type FastifyInstance } from "fastify";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
+import { subscribe } from "../ws.js";
 import {
   addTrackToPlaylist,
+  addTracksToPlaylist,
   createPlaylist,
   deletePlaylist,
   listPlaylists,
   listPlaylistTracks,
   removeTrackFromPlaylist,
+  MAX_TRACKS_PER_ADD,
+  playlistsRoutes,
   renamePlaylist,
   reorderPlaylistTrack,
+  tracksToAdd,
 } from "./playlists.js";
 
 let db: Database;
@@ -126,5 +132,123 @@ describe("playlists", () => {
     addTrackToPlaylist(db, playlist.id, b);
 
     expect(listPlaylists(db).find((p) => p.id === playlist.id)?.track_count).toBe(2);
+  });
+});
+
+// #448: a whole album goes into a playlist in one request, in its order.
+describe("adding several tracks at once", () => {
+  it("appends them after what's there, in the order given, positions dense", () => {
+    const playlist = createPlaylist(db, "Road trip");
+    const [a, b, c, d] = ["A", "B", "C", "D"].map((t) => makeNode("recording", t));
+    addTrackToPlaylist(db, playlist.id, a);
+
+    const rows = addTracksToPlaylist(db, playlist.id, [d, b, c]);
+
+    expect(rows.map((r) => r.node_id)).toEqual([d, b, c]);
+    const tracks = listPlaylistTracks(db, playlist.id);
+    expect(tracks.map((t) => t.id)).toEqual([a, d, b, c]);
+    expect(tracks.map((t) => t.position)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("adds a track that's already there again, as a single add does", () => {
+    const playlist = createPlaylist(db, "Road trip");
+    const [a, b] = ["A", "B"].map((t) => makeNode("recording", t));
+    addTrackToPlaylist(db, playlist.id, a);
+
+    addTracksToPlaylist(db, playlist.id, [a, b]);
+
+    expect(listPlaylistTracks(db, playlist.id).map((t) => t.id)).toEqual([a, a, b]);
+  });
+
+  it("adds none of them when one of them isn't a node", () => {
+    const playlist = createPlaylist(db, "Road trip");
+    const a = makeNode("recording", "A");
+
+    expect(() => addTracksToPlaylist(db, playlist.id, [a, 999_999])).toThrow();
+
+    expect(listPlaylistTracks(db, playlist.id)).toEqual([]);
+  });
+
+  it("reads one id or a list of ids from a request body, and nothing else", () => {
+    expect(tracksToAdd({ nodeId: 7 })).toEqual([7]);
+    expect(tracksToAdd({ nodeIds: [3, 1, 2] })).toEqual([3, 1, 2]);
+    expect(tracksToAdd({ nodeIds: [3, 1, 2], nodeId: 7 })).toEqual([3, 1, 2]);
+    expect(tracksToAdd({})).toBeNull();
+    expect(tracksToAdd(null)).toBeNull();
+    expect(tracksToAdd({ nodeId: "7" })).toBeNull();
+    expect(tracksToAdd({ nodeId: 0 })).toBeNull();
+    expect(tracksToAdd({ nodeIds: [] })).toBeNull();
+    expect(tracksToAdd({ nodeIds: [1, 2.5] })).toBeNull();
+    expect(tracksToAdd({ nodeIds: "1,2" })).toBeNull();
+    expect(tracksToAdd({ nodeIds: Array.from({ length: MAX_TRACKS_PER_ADD + 1 }, (_, i) => i + 1) })).toBeNull();
+  });
+});
+
+describe("POST /playlists/:id/tracks", () => {
+  let app: FastifyInstance;
+  let events: { event: string; payload: unknown }[];
+  let unsubscribe: () => void;
+
+  beforeEach(async () => {
+    app = Fastify();
+    await app.register(playlistsRoutes(db));
+    events = [];
+    unsubscribe = subscribe((message) => events.push(JSON.parse(message)));
+  });
+
+  afterEach(async () => {
+    unsubscribe();
+    await app.close();
+  });
+
+  const post = (playlistId: number, payload: unknown) =>
+    app.inject({ method: "POST", url: `/playlists/${playlistId}/tracks`, payload: payload as object });
+
+  it("still adds one track from { nodeId }, answering with its row", async () => {
+    const playlist = createPlaylist(db, "Road trip");
+    const a = makeNode("recording", "A");
+
+    const res = await post(playlist.id, { nodeId: a });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ playlist_id: playlist.id, node_id: a, position: 1 });
+    expect(listPlaylistTracks(db, playlist.id).map((t) => t.id)).toEqual([a]);
+    expect(events).toEqual([{ event: "playlist:tracks-changed", payload: { playlistId: playlist.id } }]);
+  });
+
+  it("adds every track from { nodeIds } in order, with one broadcast", async () => {
+    const playlist = createPlaylist(db, "Road trip");
+    const ids = ["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"].map((t) => makeNode("recording", t));
+
+    const res = await post(playlist.id, { nodeIds: ids });
+
+    expect(res.statusCode).toBe(200);
+    const rows = res.json() as { node_id: number; position: number }[];
+    expect(rows.map((r) => r.node_id)).toEqual(ids);
+    expect(rows.map((r) => r.position)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(listPlaylistTracks(db, playlist.id).map((t) => t.id)).toEqual(ids);
+    expect(events).toEqual([{ event: "playlist:tracks-changed", payload: { playlistId: playlist.id } }]);
+  });
+
+  it("turns away a body with neither, and adds nothing", async () => {
+    const playlist = createPlaylist(db, "Road trip");
+
+    for (const payload of [{}, { nodeIds: [] }, { nodeIds: ["1"] }, { nodeId: null }]) {
+      const res = await post(playlist.id, payload);
+      expect(res.statusCode).toBe(400);
+    }
+    expect(listPlaylistTracks(db, playlist.id)).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  it("adds none of a list with a node that doesn't exist, and says nothing changed", async () => {
+    const playlist = createPlaylist(db, "Road trip");
+    const a = makeNode("recording", "A");
+
+    const res = await post(playlist.id, { nodeIds: [a, 999_999] });
+
+    expect(res.statusCode).not.toBe(200);
+    expect(listPlaylistTracks(db, playlist.id)).toEqual([]);
+    expect(events).toEqual([]);
   });
 });
