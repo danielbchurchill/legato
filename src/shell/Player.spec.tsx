@@ -37,7 +37,15 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-function renderPlayer(problem: PlaybackProblem | null, onResolveProblem = () => undefined, layout?: ShellLayout, streaming = false) {
+type PlayerProps = Parameters<typeof Player>[0]
+
+function renderPlayer(
+  problem: PlaybackProblem | null,
+  onResolveProblem = () => undefined,
+  layout?: ShellLayout,
+  streaming = false,
+  overrides: Partial<PlayerProps> = {},
+) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const noop = () => undefined
@@ -51,8 +59,11 @@ function renderPlayer(problem: PlaybackProblem | null, onResolveProblem = () => 
         createElement(Player, {
           title: 'Song',
           artist: 'Someone',
+          artistId: null,
           queueOpen: false,
           onToggleQueue: noop,
+          onFocusNode: noop,
+          onOpenDetails: noop,
           status: {
             playing: false,
             positionMs: 0,
@@ -75,6 +86,7 @@ function renderPlayer(problem: PlaybackProblem | null, onResolveProblem = () => 
           onPrevious: noop,
           onToggleShuffle: noop,
           onCycleRepeat: noop,
+          ...overrides,
         }),
       ),
     )
@@ -152,6 +164,46 @@ describe('Player in a narrow bar', () => {
 
     const container = renderPlayer({ headline: "Can't open “Song”", detail: 'missing', action: 'skip' }, undefined, layout)
     expect(container.querySelector('[role="alert"] button')?.textContent).toBe('Skip track')
+  })
+})
+
+// #451: from the player bar to the track and its artist.
+describe('Player title and artist', () => {
+  const playing = {
+    playing: true,
+    positionMs: 0,
+    currentRecordingNodeId: 42,
+    currentFileId: 9,
+    currentDurationMs: 1000,
+    streaming: false,
+    volume: 1,
+  }
+  const link = (container: HTMLElement, name: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === name)
+
+  it("opens the playing track's article from the title, and the artist from the artist line", () => {
+    const onOpenDetails = vi.fn()
+    const onFocusNode = vi.fn()
+    const container = renderPlayer(null, undefined, undefined, false, { status: playing, artistId: 7, onOpenDetails, onFocusNode })
+    act(() => link(container, 'Song')!.click())
+    expect(onOpenDetails).toHaveBeenCalledWith(42)
+    act(() => link(container, 'Someone')!.click())
+    expect(onFocusNode).toHaveBeenCalledWith(7)
+  })
+
+  it('leaves the artist as text when its node is unknown', () => {
+    const container = renderPlayer(null, undefined, undefined, false, { status: playing, artistId: null })
+    expect(link(container, 'Song')).toBeDefined()
+    expect(link(container, 'Someone')).toBeUndefined()
+    expect(container.textContent).toContain('Someone')
+  })
+
+  it("doesn't put links nobody can see in the tab order once the title column has gone", () => {
+    const layout = computeShellLayout(1100, 700, { leftOpen: true, rightOpen: true })
+    const container = renderPlayer(null, undefined, layout, false, { status: playing, artistId: 7 })
+    expect(link(container, 'Song')).toBeUndefined()
+    expect(link(container, 'Someone')).toBeUndefined()
+    expect(container.querySelector('.sr-only')?.textContent).toBe('SongSomeone')
   })
 })
 

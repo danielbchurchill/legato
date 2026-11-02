@@ -24,6 +24,7 @@ import { HealthPanel } from './panels/HealthPanel'
 import { SettingsPanel } from './panels/SettingsPanel'
 import { NowPlaying } from './panels/NowPlaying'
 import { NodeDetails } from './panels/NodeDetails'
+import { performer, useNodeDetail } from './panels/useNodeDetail'
 import { SearchPalette } from './search/SearchPalette'
 import { API_BASE, DEFAULT_SERVER_ORIGIN, SERVER_ORIGIN } from './config/serverHost'
 import { useSettings } from './hooks/useSettings'
@@ -253,6 +254,12 @@ function Workspace({
 
   const playingNodeId = playback.status.currentRecordingNodeId
   const playingArtist = playingNodeId != null ? (graph.byId.get(playingNodeId)?.subtitle ?? null) : null
+  // #451: the player bar's artist line opens the artist. The graph's
+  // subtitle names them, but only the track's own edges say which node they
+  // are, so the bar reads the track once per track. The phone's shell reads
+  // its own (usePlayingTrack).
+  const { node: playingDetail } = useNodeDetail(!phone && playerVisible ? playingNodeId : null)
+  const playingArtistId = playingDetail != null && playingDetail.id === playingNodeId ? (performer(playingDetail)?.other_id ?? null) : null
 
   const shuffleLibrary = useCallback(() => {
     const tracks = graph.nodes.filter((n) => n.type === 'recording')
@@ -584,6 +591,7 @@ function Workspace({
           <Player
             title={playback.currentTitle ?? ''}
             artist={playingArtist}
+            artistId={playingArtistId}
             status={playback.status}
             shuffled={playback.shuffled}
             queueBusy={playback.queueBusy}
@@ -591,6 +599,8 @@ function Workspace({
             problem={playback.problem}
             queueOpen={rightView === 'queue'}
             onToggleQueue={toggleQueue}
+            onFocusNode={focusNode}
+            onOpenDetails={openDetails}
             onResolveProblem={() => void playback.resolveProblem()}
             onPause={playback.pause}
             onResume={playback.resume}
