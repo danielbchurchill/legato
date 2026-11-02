@@ -20,8 +20,9 @@ import type { SortDir, TrackRow, TrackSort } from './types'
  *
  * The # column is the row's play control: the mono number at rest, a play
  * glyph on hover or focus, and for the playing track the accent equaliser
- * (with the row washed and its title in the accent). Clicking anywhere else
- * on a row opens its details. */
+ * (with the row washed and its title in the accent). The artist's and the
+ * album's names are links that open that artist or album (#451). Clicking
+ * anywhere else on a row opens the track's details. */
 
 type Header = { label: string; sort?: TrackSort; align?: 'right' }
 
@@ -116,14 +117,30 @@ const TrackRowView = memo(function TrackRowView({
       case 'artist':
       case 'album': {
         const value = id === 'artist' ? track.artistName : track.albumTitle
+        const nodeId = id === 'artist' ? track.artistId : track.albumId
+        const text = 'text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]'
+        if (value == null || nodeId == null) {
+          return (
+            <span key={id} role="cell" title={value ?? undefined} className={`truncate ${text}`}>
+              {value ?? NO_VALUE}
+            </span>
+          )
+        }
+        // #451: the name opens that artist or album. The link is only as
+        // wide as the name, so the rest of the cell still opens the track.
         return (
-          <span
-            key={id}
-            role="cell"
-            title={value ?? undefined}
-            className="truncate text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]"
-          >
-            {value ?? NO_VALUE}
+          <span key={id} role="cell" className="flex min-w-0">
+            <button
+              type="button"
+              title={value}
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpen(nodeId)
+              }}
+              className={`min-w-0 truncate text-left transition-colors duration-[var(--motion-fast)] hover:text-[var(--color-ink)] hover:underline ${text}`}
+            >
+              {value}
+            </button>
           </span>
         )
       }
