@@ -30,7 +30,7 @@ the server answers on the NAS's port 8899, and the desktop app lists it under
 
 # Installing Legato on a Synology NAS
 
-This guide runs the Legato server on a Synology through **Container Manager**, DSM's Docker app, using a compose project. It takes about fifteen minutes, plus the first scan, which runs on its own once you've added your library. Every step happens in DSM's web interface. SSH is optional: one step offers it as the quick way to look up two numbers, and the update section has a command-line shortcut.
+This guide runs the Legato server on a Synology through **Container Manager**, DSM's Docker app, using a compose project. It takes about 20 minutes, plus the first scan, which runs on its own once you've added your library. Every step happens in DSM's web interface. SSH is optional: one step offers it as the quick way to look up two numbers, and the update section has a command-line shortcut.
 
 What you end up with: Legato's server running as a normal (non-root) DSM user, reading your music share **read-only**, reachable at `http://<your NAS>:8899` from any browser or Legato app on your network.
 
@@ -174,7 +174,7 @@ If port 8899 is already taken on your NAS, change only the **left** number (`"89
 **Container Manager → Container → legato → Details → Log.** The server logs one JSON object per line. The ones that matter on a first start have these `msg` values (trimmed here):
 
 ```
-{"level":30,…,"msg":"legato-server 0.4.0 (3d06f23)"}
+{"level":30,…,"msg":"legato-server 0.2.0 (5f5330d)"}
 {"level":30,…,"msg":"database: /data/legato.db (0 files)"}
 {"level":40,…,"msg":"No owner account yet — setup code K7QM-4XRD, valid for 10 minutes. Open http://<this server>:8899/setup …"}
 {"level":30,…,"msg":"legato-server listening at http://127.0.0.1:8899"}
@@ -196,13 +196,13 @@ A few things about the code:
 
 - **It replaces itself every ten minutes.** When the countdown runs out a new one appears in its place, and the log shows each new one too. You never need to restart anything to get a fresh code.
 - **It's only shown on your own network.** You'll see it when you open the page by IP address, by a bare name (`http://diskstation:8899`), or by a `.local` name. If you reach the NAS through QuickConnect, DSM's reverse proxy, or a public domain name, the page asks you to type the code instead. Read it from the container log (step 7).
-- **The QR code** under the form is for claiming the server to a legato.fm account, which isn't live yet. Creating the owner is all a server needs.
+- **The QR code** under the form is for linking the server to a legato.fm account. You don't need it for the home server beta: creating the owner is all a server needs.
 
 Until an owner exists, the server answers nothing but this page, so nobody else on your network can browse your library in the meantime.
 
 ## 9. Add your library
 
-Signed in, open Legato's library settings and add a folder. The picker shows the folders **inside the container**, so choose **`/music`**, whatever your share is called on the NAS. The first scan starts on its own.
+Once you're signed in, Legato opens on **Add your music**. Choose **Choose a folder**, then **`/music`**. The picker shows the folders **inside the container**, so your music is always at `/music`, whatever your share is called on the NAS. The first scan starts on its own, and you can browse and play while it runs: albums appear as it reaches them, and **Settings → Library health** shows how far it's got.
 
 > **[Screenshot 11: `11-add-music.png`]** The add-folder picker with `/music` listed.
 
@@ -210,7 +210,7 @@ To add a second share later, add another line under `volumes:` (`- /volume2/more
 
 ## Appearing on the connect screen
 
-Legato's desktop app lists the servers it finds under **on this network** on its connect screen, so nobody has to type the NAS's address. The server announces itself over mDNS, but on Container Manager's default bridge network that announcement stays on Docker's internal network, where other devices can't hear it. With the project as written in step 6, you connect by address.
+Legato's desktop app, which has no signed builds yet, lists the servers it finds under **on this network** on its connect screen, so nobody has to type the NAS's address. The server announces itself over mDNS, but on Container Manager's default bridge network that announcement stays on Docker's internal network, where other devices can't hear it. With the project as written in step 6, you connect by address.
 
 Container Manager accepts host networking in a project's compose file, which puts the container on the NAS's own network. **Project → legato → Action → Stop**, then in the YAML replace the `ports:` block with `network_mode: host`, and give the server a name:
 

@@ -54,7 +54,7 @@ The one paid product, once it launches, is **Legato Relay**: an always-on bridge
 | Docker / Docker Compose | [docs/install/docker.md](docs/install/docker.md) |
 | Synology (Container Manager) | [docs/install/synology.md](docs/install/synology.md) |
 | Unraid | [packaging/unraid](packaging/unraid) |
-| Linux, with a one-line install script and a systemd user service | `curl -fsSL https://legato.fm/install.sh \| sh` |
+| Linux, with a one-line install script and a systemd user service | `curl -fsSL https://legato.fm/install.sh \| sh -s -- --library=/path/to/music` |
 | macOS, with Homebrew | [packaging/homebrew](packaging/homebrew) |
 | Desktop app (macOS, Windows, Linux) | Signed builds are on the way. Until then, [build from source](#building-from-source) |
 

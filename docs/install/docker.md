@@ -22,7 +22,13 @@ On a Synology, follow [synology.md](synology.md) instead: it does the same thing
 
    Or put those three lines in a `.env` file next to the compose file (`LEGATO_MUSIC_DIR=/volume1/music`, and so on) and run plain `docker compose up -d`. If your tool doesn't read `.env` files, edit the values straight into the compose file.
 
-4. Open `http://<host>:8899` and add **`/music`** as a library folder. That's the path *inside* the container, whatever the folder is called on the host. The first scan starts on its own.
+4. A new server has no owner account yet, so it logs a short setup code, valid for ten minutes and replaced by a new one after that:
+
+   ```sh
+   docker compose logs | grep "setup code"
+   ```
+
+5. Open `http://<host>:8899/setup` on a computer on your network. The page shows the setup code itself; through a reverse proxy, it asks you to type the one from the log. Create the owner account, a name and a password, then add **`/music`** as a library folder. That's the path *inside* the container, whatever the folder is called on the host. The first scan starts on its own.
 
 `LEGATO_HOST_PORT` changes the host port if 8899 is taken. The container always listens on 8899 inside.
 
@@ -47,7 +53,7 @@ then `docker compose up -d` to recreate the container. The new folder shows up i
 
 ## Appearing on the connect screen
 
-Legato's desktop app lists the servers it finds under **on this network** on its connect screen, so nobody has to type an address. The server announces itself over mDNS, but on Docker's default bridge network that announcement stays on Docker's internal network, where other devices can't hear it. With the compose file as it comes, the server works, but you connect to it by address.
+Legato's desktop app, which has no signed builds yet, lists the servers it finds under **on this network** on its connect screen, so nobody has to type an address. The server announces itself over mDNS, but on Docker's default bridge network that announcement stays on Docker's internal network, where other devices can't hear it. With the compose file as it comes, the server works, but you connect to it by address.
 
 To be listed, the container needs the host's network. In `docker-compose.yml`, replace the `ports:` block with `network_mode: host`:
 

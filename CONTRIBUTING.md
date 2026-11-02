@@ -1,6 +1,6 @@
 # Contributing to Legato
 
-Thanks for wanting to help. Legato is pre-release and built mostly by one person, so the easiest way to get a change in is to talk first.
+Thanks for wanting to help. Legato is in early beta and built mostly by one person, so the easiest way to get a change in is to talk first.
 
 ## Before you start
 
