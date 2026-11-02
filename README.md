@@ -7,7 +7,7 @@
   <img src="site/public/images/hero-light-1440.webp" alt="Legato's map with Highway 61 Revisited selected: its connections lit on the graph, a preview card beside it, and its article open on the right." />
 </picture>
 
-> **Status: pre-release.** Legato runs today against real libraries, but there are no public builds yet. The install options below are ready in the repo and will be published with the first release. [legato.fm](https://legato.fm) has the waitlist.
+> **Status: early beta.** The home server has [releases](https://github.com/danielbchurchill/legato/releases), and the install options below use them. The desktop app has no signed builds yet. [legato.fm](https://legato.fm) has the waitlist.
 
 ## What it does
 
