@@ -1,7 +1,7 @@
 import { SERVER_ANSWERED_EVENT, SERVER_BACK_EVENT } from '../connect/reconnect'
 import { nextTapeRung, serverTroubleNow } from './quality'
 import { Tape, type MediaSourceLike, type TapeTrack } from './tape'
-import { openTrackFeed, type FeedDeps, type TapeRung } from './trackFeed'
+import { openTrackFeed, TrackLayouts, type FeedDeps, type TapeRung } from './trackFeed'
 
 /* #408: the tape (tape.ts) on the web player's one <audio> element. Where
  * ManagedMediaSource exists (iOS 17.1 and later, Safari 17 and later on a
@@ -71,6 +71,10 @@ export class TapePlayer<K> {
   private objectUrl: string | null = null
   // What each track was fed at, for the connection indicator.
   private readonly rungs = new Map<K, TapeRung>()
+  // Each track's index and init segment, once for as long as this player
+  // plays (#439). Kept across MediaSources: a file's layout isn't the
+  // stream's.
+  private readonly layouts = new TrackLayouts()
   private readonly audio: HTMLAudioElement
   private readonly host: TapePlayerHost<K>
 
@@ -149,6 +153,7 @@ export class TapePlayer<K> {
       isTypeSupported: (type) => Source.isTypeSupported(type),
       retryAfter,
       serverTrouble: serverTroubleNow,
+      layouts: this.layouts,
     }
     const tape = new Tape<K>(this.audio, mediaSource as unknown as MediaSourceLike, {
       after: (key) => this.host.after(key),

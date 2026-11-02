@@ -17,9 +17,16 @@ import type { ServerTrouble } from './quality'
  *   finish, which on a Raspberry Pi can take a while, and an AAC track is
  *   small enough to hold.
  * - The original (a remux, quick to finish), or any rung from part way
- *   through (a scrub), goes by the index: the init segment and then about a
- *   megabyte of whole fragments at a time, by Range. Nothing before a
- *   scrub's target is fetched, and a 100 MB FLAC never sits in memory whole.
+ *   through (a scrub), goes by the index: the init segment and then whole
+ *   fragments by Range. Nothing before a scrub's target is fetched, and a
+ *   100 MB FLAC never sits in memory whole.
+ *
+ * #439: the tape lands the playhead only once a play, skip or scrub's first
+ * fragment is in, so the first request is the fragment holding the target,
+ * about a second of audio. The next is one fragment too, and each after it
+ * twice the one before, up to WINDOW_BYTES. A track's index and init
+ * segment are kept on the tape (TrackLayouts), so a scrub, or the same
+ * track again, asks only for audio.
  *
  * A network failure is tried again, from the first byte not yet handed on,
  * for as long as the tape wants the track: an outage pauses the player
@@ -72,13 +79,57 @@ export type FeedDeps = {
   /** How the server has fared since `at` (quality.ts), to tell a broken
    * file's 502 from a server that's away. */
   serverTrouble: (since: number) => Promise<ServerTrouble>
+  /** The layouts the tape has already fetched. Without it, every open asks. */
+  layouts?: TrackLayouts
 }
 
 export type FeedRequest = { fileId: number; rung: TapeRung; fromS: number; signal: AbortSignal }
 
-// About this much of a track per Range request: nine seconds of 16-bit
-// FLAC, three of a 96 kHz one.
+// At most this much of a track per Range request, once the windows have
+// widened: nine seconds of 16-bit FLAC, three of a 96 kHz one.
 export const WINDOW_BYTES = 1024 * 1024
+
+// How many tracks' layouts the tape keeps: the one playing, the one after
+// it, and the few before it that previous goes back to.
+export const LAYOUTS_KEPT = 8
+
+/** What every open of one track at one rung starts with: its fragment index
+ * and its init segment. */
+export type TrackLayout = { index: FragmentIndex; init: Uint8Array }
+
+/** The tape's layouts (#439), the most recently used kept. */
+export class TrackLayouts {
+  private readonly kept = new Map<string, TrackLayout>()
+  private readonly limit: number
+
+  constructor(limit = LAYOUTS_KEPT) {
+    this.limit = limit
+  }
+
+  get(fileId: number, rung: TapeRung): TrackLayout | undefined {
+    const key = `${fileId}:${rung}`
+    const layout = this.kept.get(key)
+    if (layout) {
+      this.kept.delete(key)
+      this.kept.set(key, layout)
+    }
+    return layout
+  }
+
+  set(fileId: number, rung: TapeRung, layout: TrackLayout): void {
+    const key = `${fileId}:${rung}`
+    this.kept.delete(key)
+    this.kept.set(key, layout)
+    for (const oldest of this.kept.keys()) {
+      if (this.kept.size <= this.limit) break
+      this.kept.delete(oldest)
+    }
+  }
+
+  forget(fileId: number, rung: TapeRung): void {
+    this.kept.delete(`${fileId}:${rung}`)
+  }
+}
 
 // A response that keeps ending in the same place, this many times over
 // with backoff between (a couple of minutes), is the file's fault, not the
@@ -160,39 +211,120 @@ async function fetchRange(url: string, start: number, end: number, signal: Abort
   }
 }
 
-async function openIndexed({ fileId, rung, fromS, signal }: FeedRequest, deps: FeedDeps): Promise<TrackFeed> {
-  const index = (await (await request(indexPath(fileId, rung), {}, signal, deps)).json()) as FragmentIndex
-  const type = `audio/mp4; codecs="${index.codecs}"`
-  checkType(type, rung, deps)
+// Whole fragments `from` to `last`, by one Range request.
+type Window = { pieces: Uint8Array[]; last: number; bytes: number }
+
+async function fetchWindow(
+  url: string,
+  index: FragmentIndex,
+  from: number,
+  last: number,
+  signal: AbortSignal,
+  deps: FeedDeps,
+): Promise<Window> {
   const { fragments } = index
+  const start = fragments[from].offset
+  const to = last + 1 < fragments.length ? fragments[last + 1].offset : index.end
+  const bytes = await fetchRange(url, start, to - 1, signal, deps)
+  const pieces: Uint8Array[] = []
+  for (let i = from; i <= last; i++) {
+    const end = i < last ? fragments[i + 1].offset : to
+    pieces.push(bytes.subarray(fragments[i].offset - start, end - start))
+  }
+  return { pieces, last, bytes: bytes.length }
+}
+
+// A moof and the mdat after it, filling the piece exactly: what an index
+// that still describes the file says is there.
+function isWholeFragment(piece: Uint8Array): boolean {
+  const view = new DataView(piece.buffer, piece.byteOffset, piece.byteLength)
+  const box = (at: number) => {
+    if (at + 8 > piece.length) return null
+    let size = view.getUint32(at)
+    if (size === 1 && at + 16 <= piece.length) size = Number(view.getBigUint64(at + 8))
+    return { type: String.fromCharCode(...piece.subarray(at + 4, at + 8)), size }
+  }
+  const moof = box(0)
+  if (moof?.type !== 'moof' || moof.size < 8) return false
+  const mdat = box(moof.size)
+  return mdat?.type === 'mdat' && moof.size + mdat.size === piece.length
+}
+
+// The fragment holding the target.
+function fragmentAt({ fragments }: FragmentIndex, fromS: number): number {
   let first = 0
   for (let i = 0; i < fragments.length; i++) if (fragments[i].time <= fromS) first = i
+  return first
+}
+
+async function openIndexed({ fileId, rung, fromS, signal }: FeedRequest, deps: FeedDeps): Promise<TrackFeed> {
   const url = streamPath(fileId, rung)
-  const ready: Uint8Array[] = []
-  let nextFragment = first
+
+  const kept = deps.layouts?.get(fileId, rung)
+  if (kept) {
+    const first = fragmentAt(kept.index, fromS)
+    const window = kept.index.fragments.length ? await fetchWindow(url, kept.index, first, first, signal, deps) : null
+    if (!window || isWholeFragment(window.pieces[0])) return indexedFeed(kept, rung, first, window, url, signal, deps)
+    // The bytes have moved under the index: a tag write changed the file
+    // under the same id since. Ask for it all again.
+    deps.layouts!.forget(fileId, rung)
+  }
+
+  const index = (await (await request(indexPath(fileId, rung), {}, signal, deps)).json()) as FragmentIndex
+  checkType(`audio/mp4; codecs="${index.codecs}"`, rung, deps)
+  const first = fragmentAt(index, fromS)
+  // Side by side: both ranges are known once the index is in.
+  const [init, window] = await Promise.all([
+    fetchRange(url, 0, index.initEnd - 1, signal, deps),
+    index.fragments.length ? fetchWindow(url, index, first, first, signal, deps) : null,
+  ])
+  // A copy: a server that ignored the Range sent the whole file, and the
+  // init would hold all of it.
+  const layout = { index, init: init.slice() }
+  deps.layouts?.set(fileId, rung, layout)
+  return indexedFeed(layout, rung, first, window, url, signal, deps)
+}
+
+// The init segment, the fragment holding the target, then the next one
+// alone too, then windows twice as wide each time, up to WINDOW_BYTES: each
+// takes the fragments that start within its budget of bytes, and always at
+// least one. The second is one fragment so that it lands soon: in Chrome
+// (#439), a target a quarter of a second from the end of its fragment
+// started playing and ran out before a second request two fragments wide
+// came in.
+function indexedFeed(
+  { index, init }: TrackLayout,
+  rung: TapeRung,
+  first: number,
+  window: Window | null,
+  url: string,
+  signal: AbortSignal,
+  deps: FeedDeps,
+): TrackFeed {
+  const { fragments } = index
+  const ready = window ? [...window.pieces] : []
+  let nextFragment = window ? window.last + 1 : fragments.length
+  let budget = 0
   let initSent = false
 
   return {
-    type,
+    type: `audio/mp4; codecs="${index.codecs}"`,
     rung,
     fromTime: fragments[first]?.time ?? 0,
     async next() {
       if (!initSent) {
         initSent = true
-        return fetchRange(url, 0, index.initEnd - 1, signal, deps)
+        return init
       }
       if (ready.length === 0) {
         if (nextFragment >= fragments.length) return null
-        const from = fragments[nextFragment].offset
+        const start = fragments[nextFragment].offset
         let last = nextFragment
-        while (last + 1 < fragments.length && fragments[last + 1].offset - from < WINDOW_BYTES) last++
-        const to = last + 1 < fragments.length ? fragments[last + 1].offset : index.end
-        const bytes = await fetchRange(url, from, to - 1, signal, deps)
-        for (let i = nextFragment; i <= last; i++) {
-          const end = i < last ? fragments[i + 1].offset : to
-          ready.push(bytes.subarray(fragments[i].offset - from, end - from))
-        }
-        nextFragment = last + 1
+        while (last + 1 < fragments.length && fragments[last + 1].offset - start < budget) last++
+        const more = await fetchWindow(url, index, nextFragment, last, signal, deps)
+        ready.push(...more.pieces)
+        nextFragment = more.last + 1
+        budget = Math.min(WINDOW_BYTES, 2 * more.bytes)
       }
       return ready.shift() ?? null
     },

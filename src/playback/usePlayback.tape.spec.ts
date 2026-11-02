@@ -385,6 +385,34 @@ describe('usePlayback on the tape (#408)', () => {
     expect(playback.current.status.currentRecordingNodeId).toBeNull()
   })
 
+  it("fetches each track's index and init segment once on the tape, however often it's played again (#439)", async () => {
+    const playback = await renderPlayback()
+    await act(async () => {
+      await playback.current.playTracks([1, 2, 3], 0, 'One')
+    })
+    await settle()
+    for (const step of [() => playback.current.next(), () => playback.current.next(), () => playback.current.previous()]) {
+      await act(async () => {
+        await step()
+      })
+      await settle()
+    }
+    expect(playback.current.status.currentRecordingNodeId).toBe(2)
+
+    const asked = vi.mocked(fetch).mock.calls.map(([input, init]) => ({
+      url: String(input),
+      range: new Headers(init?.headers).get('Range'),
+    }))
+    for (const fileId of [10, 20, 30]) {
+      const ofFile = asked.filter((a) => a.url.includes(`/files/${fileId}/stream`))
+      expect(ofFile.filter((a) => a.url.includes('/stream/index'))).toHaveLength(1)
+      expect(ofFile.filter((a) => a.range?.startsWith('bytes=0-'))).toHaveLength(1)
+    }
+    // The whole queue was in, so the skip took a MediaSource of its own:
+    // the layouts outlast it.
+    expect(FakeMediaSource.made.length).toBeGreaterThan(1)
+  })
+
   it('previous restarts the track more than 3 s in, from what the tape still holds (#438)', async () => {
     const playback = await renderPlayback()
     await act(async () => {
