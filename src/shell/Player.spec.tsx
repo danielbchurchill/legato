@@ -151,7 +151,7 @@ describe('Player in a narrow bar', () => {
 
   it('keeps the cover, the whole transport and the scrubber at the narrowest desktop window', () => {
     const container = renderPlayer(null, undefined, computeShellLayout(1100, 700, { leftOpen: true, rightOpen: true }))
-    expect(buttons(container)).toEqual(['Shuffle off', 'Previous track', 'Play', 'Next track', 'Repeat off'])
+    expect(buttons(container)).toEqual(['Show now playing', 'Shuffle off', 'Previous track', 'Play', 'Next track', 'Repeat off'])
     expect(container.querySelector('[aria-label="Seek"]')?.children).toHaveLength(24)
     // The title column has given way on screen, but still names the track.
     expect(container.querySelector('.sr-only')?.textContent).toBe('SongSomeone')
@@ -164,6 +164,72 @@ describe('Player in a narrow bar', () => {
 
     const container = renderPlayer({ headline: "Can't open “Song”", detail: 'missing', action: 'skip' }, undefined, layout)
     expect(container.querySelector('[role="alert"] button')?.textContent).toBe('Skip track')
+  })
+})
+
+// #449: the cover opens and closes now playing, as the queue button does.
+describe('Player cover', () => {
+  const cover = (container: HTMLElement) => container.querySelector<HTMLButtonElement>('button[aria-label$=" now playing"]')
+
+  // A window for each set of parts that still has the cover (DESIGN.md
+  // "The player as it narrows"): the whole bar, compact, without the title,
+  // without queue and volume, and the desktop app's narrowest window.
+  const widths: [string, ShellLayout][] = [
+    ['the whole bar', computeShellLayout(1440, 1024, { leftOpen: false, rightOpen: false })],
+    ['a compact bar', computeShellLayout(1400, 1024, { leftOpen: true, rightOpen: true })],
+    ['a bar without the title', computeShellLayout(1250, 1024, { leftOpen: true, rightOpen: true })],
+    ['a bar without queue and volume', computeShellLayout(1120, 1024, { leftOpen: true, rightOpen: true })],
+    ['the narrowest desktop window', computeShellLayout(1100, 700, { leftOpen: true, rightOpen: true })],
+  ]
+
+  it.each(widths)('toggles now playing in %s', (_, layout) => {
+    expect(layout.playerParts.cover).toBe(true)
+    const onToggleQueue = vi.fn()
+    const container = renderPlayer(null, undefined, layout, false, { onToggleQueue })
+    const button = cover(container)!
+    expect(button.getAttribute('aria-label')).toBe('Show now playing')
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    act(() => button.click())
+    expect(onToggleQueue).toHaveBeenCalledOnce()
+  })
+
+  it('is pressed while now playing is open, with the queue button', () => {
+    const container = renderPlayer(null, undefined, undefined, false, { queueOpen: true })
+    const button = cover(container)!
+    expect(button.getAttribute('aria-label')).toBe('Hide now playing')
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+    expect(container.querySelector('[aria-label="Hide queue"]')?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('calls the same toggle as the queue button', () => {
+    const onToggleQueue = vi.fn()
+    const container = renderPlayer(null, undefined, undefined, false, { onToggleQueue })
+    act(() => cover(container)!.click())
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="Show queue"]')!.click())
+    expect(onToggleQueue).toHaveBeenCalledTimes(2)
+  })
+
+  it('works from the keyboard: a real button in the tab order', () => {
+    const button = cover(renderPlayer(null))!
+    expect(button.tagName).toBe('BUTTON')
+    expect(button.type).toBe('button')
+    expect(button.tabIndex).toBe(0)
+    act(() => button.focus())
+    expect(document.activeElement).toBe(button)
+  })
+
+  it("keeps its look at rest, and takes the wash the bar's controls hover with", () => {
+    const container = renderPlayer(null)
+    const button = cover(container)!
+    expect(button.className).not.toMatch(/\b(border|outline|ring|bg-)/)
+    expect(button.className).toContain('hover:shadow-[0_0_0_4px_var(--color-wash)]')
+    expect(container.querySelector('[aria-label="Show queue"]')!.className).toContain('hover:bg-[var(--color-wash)]')
+  })
+
+  it('goes with the cover where the bar is too narrow for it', () => {
+    const layout = computeShellLayout(1050, 700, { leftOpen: true, rightOpen: true })
+    expect(layout.playerParts.cover).toBe(false)
+    expect(cover(renderPlayer(null, undefined, layout))).toBeNull()
   })
 })
 
@@ -223,6 +289,11 @@ describe('Player geometry', () => {
     expect(width('Repeat off')).toBe(px(geometry.PLAYER_REPEAT_SIZE))
     expect(width('Show queue')).toBe(px(geometry.PLAYER_QUEUE_SIZE))
     expect(width('Volume, 100%')).toBe(px(geometry.PLAYER_VOLUME_SIZE))
+    // #449: the cover's button is the cover, not a box around it.
+    const cover = container.querySelector<HTMLElement>('[aria-label="Show now playing"]')!
+    expect(cover.style.width).toBe(px(geometry.PLAYER_COVER_SIZE))
+    expect(cover.style.height).toBe(px(geometry.PLAYER_COVER_SIZE))
+    expect((cover.firstElementChild as HTMLElement).style.width).toBe(px(geometry.PLAYER_COVER_SIZE))
   })
 
   it('spaces and pads the parts by the same sizes', () => {
@@ -231,7 +302,10 @@ describe('Player geometry', () => {
     expect(bar.style.paddingLeft).toBe(px(geometry.PLAYER_PADDING_LEFT))
     expect(bar.style.paddingRight).toBe(px(geometry.PLAYER_PADDING_RIGHT))
     expect(bar.style.gap).toBe(px(geometry.PLAYER_COLUMN_GAP))
-    expect((bar.firstElementChild as HTMLElement).style.width).toBe(px(geometry.PLAYER_COVER_SIZE))
+    // The cover, in its tooltip's wrapper, which adds nothing to its size.
+    const cover = bar.firstElementChild as HTMLElement
+    expect(cover.className).not.toMatch(/\b(p|px|m|mx)-/)
+    expect((cover.firstElementChild as HTMLElement).style.width).toBe(px(geometry.PLAYER_COVER_SIZE))
 
     const transport = container.querySelector('[aria-label="Previous track"]')!.closest('div')!
     expect(transport.style.gap).toBe(px(geometry.PLAYER_TRANSPORT_GAP))

@@ -43,7 +43,8 @@ import {
  * the free space. It replaces the 514×121 transport dock.
  *
  * Left to right: the cover, title over artist, the transport over its
- * scrubber, then the queue and volume buttons. The title opens the track's
+ * scrubber, then the queue and volume buttons. The cover opens and closes
+ * now playing as the queue button does (#449); the title opens the track's
  * article and the artist goes to the artist (#451). The bar picks up the
  * cover's colour as a wash from its left edge, so what's playing tints the
  * chrome that controls it. As the bar narrows, the parts give way in the
@@ -208,6 +209,7 @@ type PlayerProps = {
   repeatMode: RepeatMode
   problem: PlaybackProblem | null
   queueOpen: boolean
+  /** Opens and closes now playing: the queue button, and the cover (#449). */
   onToggleQueue: () => void
   /** Goes to a node, as now playing's artist link does: the artist line. */
   onFocusNode: (id: number) => void
@@ -254,6 +256,7 @@ export function Player({
   const background = color
     ? `linear-gradient(90deg, ${withAlpha(color, 0.38)}, ${withAlpha(color, 0)} 42%), var(--color-surface)`
     : undefined
+  const nowPlayingLabel = queueOpen ? 'Hide now playing' : 'Show now playing'
   // The title and artist are links only while they're on screen: once the
   // title column gives way they stay for screen readers, and a link no one
   // can see shouldn't take the focus.
@@ -276,13 +279,29 @@ export function Player({
         background,
       }}
     >
+      {/* #449: the cover opens and closes now playing, as the queue button
+       * does, since it's what people reach for first. It keeps its look at
+       * rest. On hover the wash the bar's other controls take shows around
+       * it, 4px out, so its corners come to their 10px, and the art itself
+       * is never tinted. */}
       {parts.cover && (
-        <CoverArt
-          nodeId={status.currentRecordingNodeId}
-          size="thumb"
-          style={{ width: PLAYER_COVER_SIZE, height: PLAYER_COVER_SIZE }}
-          alt=""
-        />
+        <Tooltip label={nowPlayingLabel} placement="top">
+          <button
+            type="button"
+            aria-label={nowPlayingLabel}
+            aria-pressed={queueOpen}
+            onClick={onToggleQueue}
+            className="shrink-0 rounded-[var(--radius-art)] hover:shadow-[0_0_0_4px_var(--color-wash)]"
+            style={{ width: PLAYER_COVER_SIZE, height: PLAYER_COVER_SIZE }}
+          >
+            <CoverArt
+              nodeId={status.currentRecordingNodeId}
+              size="thumb"
+              style={{ width: PLAYER_COVER_SIZE, height: PLAYER_COVER_SIZE }}
+              alt=""
+            />
+          </button>
+        </Tooltip>
       )}
 
       <div
