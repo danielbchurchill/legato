@@ -1,4 +1,4 @@
-import { useState, type Ref } from 'react'
+import { useState, type ReactNode, type Ref } from 'react'
 import { Button } from '../ui/Button'
 import { CoverArt } from '../ui/CoverArt'
 import { Icon } from '../ui/Icon'
@@ -15,6 +15,7 @@ import { enqueueItem } from '../search/searchData'
 import type { usePlayback } from '../playback/usePlayback'
 import type { PhoneNodeState } from './nodeDetail'
 import { MenuItem } from './MenuItem'
+import { useTrackHoldMenu } from './useTrackHoldMenu'
 
 /* A node's detail on the phone (#389, Legato Mobile v2 screen 5): the
  * desktop's details panel, drawn in the sheet at the medium detent with the
@@ -273,22 +274,54 @@ export function NodeBody({ node, playback, onOpenNode }: NodeSheetProps) {
   return (
     <TouchLayoutContext.Provider value={true}>
       <div className="px-[20px] pb-[20px]">
-        {node.tab === 'overview' && (
-          <Overview
-            sheet
+        <TrackHold detail={detail} playback={playback} onOpenNode={onOpenNode}>
+          {(holdRef) => (
+            <>
+              {node.tab === 'overview' && (
+                <Overview
+                  sheet
+                  holdRef={holdRef}
             node={detail}
-            summary={summary}
-            tracklist={tracklist}
-            people={credits.people}
-            onShowTracks={() => node.setTab('tracks')}
-            playback={playback}
-            onFocusNode={onOpenNode}
-          />
-        )}
-        {node.tab === 'tracks' && <TracksTab sheet node={detail} tracklist={tracklist} playback={playback} onFocusNode={onOpenNode} />}
+                  summary={summary}
+                  tracklist={tracklist}
+                  people={credits.people}
+                  onShowTracks={() => node.setTab('tracks')}
+                  playback={playback}
+                  onFocusNode={onOpenNode}
+                />
+              )}
+              {node.tab === 'tracks' && (
+                <TracksTab sheet holdRef={holdRef} node={detail} tracklist={tracklist} playback={playback} onFocusNode={onOpenNode} />
+              )}
+            </>
+          )}
+        </TrackHold>
         {node.tab === 'credits' && <CreditsTab sheet node={detail} people={credits.people} reload={reload} onFocusNode={onOpenNode} />}
         {node.tab === 'metadata' && <MetadataTab sheet key={detail.id} node={detail} summary={summary} reload={reload} />}
       </div>
     </TouchLayoutContext.Provider>
+  )
+}
+
+/* An album's or a person's tracks take a hold, which opens the track's
+ * menu (TrackHoldMenu.tsx). On an album's own tracks there's no other album
+ * for go to album to open. */
+function TrackHold({
+  detail,
+  playback,
+  onOpenNode,
+  children,
+}: {
+  detail: NodeDetailsData['node']
+  playback: Playback
+  onOpenNode: (id: number) => void
+  children: (holdRef: (list: HTMLElement | null) => (() => void) | undefined) => ReactNode
+}) {
+  const { holdRef, menu } = useTrackHoldMenu({ playback, onOpenNode, ownAlbumId: detail.type === 'release' ? detail.id : null })
+  return (
+    <>
+      {children(holdRef)}
+      {menu}
+    </>
   )
 }

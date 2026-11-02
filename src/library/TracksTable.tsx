@@ -4,6 +4,7 @@ import { CoverArt } from '../ui/CoverArt'
 import { Equaliser } from '../ui/Equaliser'
 import { Icon } from '../ui/Icon'
 import { formatDuration, NO_VALUE } from '../ui/format'
+import { RowAddToPlaylist } from '../panels/AddToPlaylistButton'
 import { useLibraryPage } from './useLibraryPage'
 import { RowSkeleton, RowsSkeleton } from './LibrarySkeleton'
 import { LibraryEmpty } from './LibraryEmpty'
@@ -21,8 +22,9 @@ import type { SortDir, TrackRow, TrackSort } from './types'
  * The # column is the row's play control: the mono number at rest, a play
  * glyph on hover or focus, and for the playing track the accent equaliser
  * (with the row washed and its title in the accent). The artist's and the
- * album's names are links that open that artist or album (#451). Clicking
- * anywhere else on a row opens the track's details. */
+ * album's names are links that open that artist or album (#451). The time
+ * column's duration swaps for add to playlist on hover or focus (#447).
+ * Clicking anywhere else on a row opens the track's details. */
 
 type Header = { label: string; sort?: TrackSort; align?: 'right' }
 
@@ -145,9 +147,12 @@ const TrackRowView = memo(function TrackRowView({
         )
       }
       case 'time':
+        // Hover or focus swaps the duration for add to playlist (#447).
         return (
-          <span key={id} role="cell" className="mono text-right text-mono text-[var(--color-ink-2)]">
-            {formatDuration(track.durationMs)}
+          <span key={id} role="cell" className="flex justify-end">
+            <RowAddToPlaylist nodeId={track.id} size={28}>
+              <span className="mono text-mono text-[var(--color-ink-2)]">{formatDuration(track.durationMs)}</span>
+            </RowAddToPlaylist>
           </span>
         )
       case 'format':

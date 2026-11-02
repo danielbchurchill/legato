@@ -11,12 +11,13 @@ import { useGraph } from '../canvas/graphContext'
 import { API_BASE as API } from '../config/serverHost'
 import { useReconnectEpoch } from '../connect/reconnect'
 import type { usePlayback } from '../playback/usePlayback'
+import { AddToPlaylistButton } from './AddToPlaylistButton'
 import { totalDuration, usePlaylists, usePlaylistTracks, type PlaylistTrack } from './collectionsData'
 
 /* One playlist: a hero with its mosaic, name and length; play and shuffle;
  * rename and delete; then its tracks. Clicking a track plays the playlist
- * from there. Hovering one swaps its duration for the controls that
- * reorder it, or take it out. */
+ * from there. Hovering one swaps its duration for the controls that add it
+ * to a playlist (this one or another, #447), reorder it, or take it out. */
 
 type ImportReport = { sourceFilename: string; entries: { matchType: 'path' | 'metadata' | 'missing' }[] }
 
@@ -53,6 +54,9 @@ export function PlaylistPage({ playlistId, onBack, onFocusNode, playback }: Play
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  // The row whose playlist picker is open keeps its controls showing, since
+  // the picker, not the row, has the focus then.
+  const [pickingFor, setPickingFor] = useState<number | null>(null)
 
   const rename = async () => {
     const next = name.trim()
@@ -192,10 +196,22 @@ export function PlaylistPage({ playlistId, onBack, onFocusNode, playback }: Play
               </span>
               <span className="truncate text-small text-[var(--color-ink-2)]">{graph.byId.get(track.id)?.subtitle ?? NO_VALUE}</span>
             </button>
-            <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-2)] group-focus-within:hidden group-hover:hidden">
+            <span
+              className={`mono text-[length:var(--text-mono)] text-[var(--color-ink-2)] ${
+                pickingFor === track.playlist_track_id ? 'hidden' : 'group-focus-within:hidden group-hover:hidden'
+              }`}
+            >
               {formatDuration(track.canonical_duration_ms)}
             </span>
-            <span className="hidden items-center group-focus-within:flex group-hover:flex">
+            <span
+              className={`items-center ${pickingFor === track.playlist_track_id ? 'flex' : 'hidden group-focus-within:flex group-hover:flex'}`}
+            >
+              <AddToPlaylistButton
+                nodeId={track.id}
+                size={26}
+                open={pickingFor === track.playlist_track_id}
+                onOpenChange={(open) => setPickingFor(open ? track.playlist_track_id : null)}
+              />
               <IconButton icon="chevron-up" label="Move up" size={26} disabled={i === 0} onClick={() => void move(i, -1)} />
               <IconButton
                 icon="chevron-down"
