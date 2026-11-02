@@ -106,11 +106,14 @@ describe('a track row on the desktop', () => {
     expect(slot.className).toContain('[grid-area:1/1]')
     // At rest the button is hidden and the duration shows; the row's hover
     // or focus turns them around.
-    expect(slot.className.split(' ')).toContain('invisible')
-    expect(slot.className).toContain('group-hover:visible')
-    expect(slot.className).toContain('group-focus-within:visible')
-    expect(duration.className).toContain('group-hover:invisible')
-    expect(duration.className).toContain('group-focus-within:invisible')
+    expect(slot.className.split(' ')).toContain('opacity-0')
+    expect(slot.className).toContain('group-hover:opacity-100')
+    expect(slot.className).toContain('group-focus-within:opacity-100')
+    expect(duration.className).toContain('group-hover:opacity-0')
+    expect(duration.className).toContain('group-focus-within:opacity-0')
+    // Never hidden by visibility, which the app's button transitions would
+    // carry over 120ms (index.css): a Tab in that time would pass it.
+    expect(slot.className).not.toMatch(/\binvisible\b|\bvisible\b/)
   })
 
   it('opens the picker without the click reaching the row, and stays shown while it is open', async () => {
@@ -126,7 +129,7 @@ describe('a track row on the desktop', () => {
     expect(onRowClick).not.toHaveBeenCalled()
     expect(popup()).not.toBeNull()
     const slot = container.querySelectorAll('[class*="grid-area"]')[1]
-    expect(slot.className.split(' ')).not.toContain('invisible')
+    expect(slot.className.split(' ')).not.toContain('opacity-0')
 
     // A click inside the picker, portaled out of the row, doesn't reach it either.
     await pick('Road trip')

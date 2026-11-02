@@ -76,13 +76,19 @@ export function AddToPlaylistButton({ size = 32, label, open, onOpenChange, ...w
  * next's rows swap theirs for their controls (#447). Both sit in one grid
  * cell, so the column is as wide as the wider of the two and nothing in
  * the row moves when they swap. While the picker is open the button stays,
- * since the picker is what has the focus then. */
+ * since the picker is what has the focus then.
+ *
+ * The button is hidden by opacity, as the credits tab's remove is, not by
+ * visibility: every button transitions `all` (index.css, MO-2), which
+ * would carry a visibility it inherits over 120ms, and a Tab pressed in
+ * that time would pass a button that was still hidden. Focusing the row's
+ * play control shows it, so Tab goes play, +, next row, as it would. */
 export function RowAddToPlaylist({ nodeId, children, size = 26 }: { nodeId: number; children: ReactNode; size?: number }) {
   const [open, setOpen] = useState(false)
   return (
     <span className="grid items-center justify-items-end">
-      <span className={`[grid-area:1/1] ${open ? 'invisible' : 'group-focus-within:invisible group-hover:invisible'}`}>{children}</span>
-      <span className={`[grid-area:1/1] inline-flex ${open ? '' : 'invisible group-focus-within:visible group-hover:visible'}`}>
+      <span className={`[grid-area:1/1] ${open ? 'opacity-0' : 'group-focus-within:opacity-0 group-hover:opacity-0'}`}>{children}</span>
+      <span className={`[grid-area:1/1] inline-flex ${open ? '' : 'opacity-0 group-focus-within:opacity-100 group-hover:opacity-100'}`}>
         <AddToPlaylistButton nodeId={nodeId} size={size} open={open} onOpenChange={setOpen} />
       </span>
     </span>
