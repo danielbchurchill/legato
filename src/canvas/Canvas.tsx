@@ -23,7 +23,7 @@ import { ErrorBoundary, RenderError } from '../ui/ErrorBoundary'
 import { useShellLayout, type ShellLayout, INSET, CAPSULE_HEIGHT } from '../shell/layout'
 import { choosePhoneLabels, phoneLabelSize, placeGreedily, type LabelBox } from './labelDensity'
 import { TapGuard, isStylusTouch, isTouchEvent, pinchCameraState, type CameraState, type Point as ScreenPoint } from './touchGestures'
-import { pickTapTarget, type TapCandidate } from './tapPick'
+import { pickMouseTarget, pickTapTarget, type TapCandidate } from './tapPick'
 import { usePhoneLayout } from '../phone/phoneLayout'
 import type { usePlayback } from '../playback/usePlayback'
 import type { ResolvedTheme } from '../hooks/useTheme'
@@ -192,6 +192,11 @@ const SETTLE_REFIT_DURATION_MS = 320
 const DRAG_THRESHOLD_PX = 4
 
 const HOVER_DWELL_MS = 90 // was --motion-instant's value before the gpui-kit port zeroed that token; a debounce threshold, not a transition, so it keeps its own number
+/* How long the map has to be still under a resting pointer before hover is
+ * picked again (#450). Long enough that a fly or a zoom doesn't hover every
+ * node it passes under the pointer, short enough to land before a hand
+ * that's waiting for the map to stop clicks. */
+const HOVER_REPICK_MS = 100
 const DIM_CROSSFADE_MS = 120 // --motion-exit
 
 function osPrefersReducedMotion(): boolean {
@@ -1568,10 +1573,41 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     }
     renderer.on('afterRender', drawGlows)
 
-    // Hover is a mouse's: a finger resting on a node is the start of a tap
-    // or a pan, and nothing would ever end the "hover" it reports.
-    renderer.on('enterNode', ({ node, event }) => {
-      if (isTouchEvent(event.original)) return
+    /* Every node as the last frame drew it, in viewport px: what the mouse's
+     * and a finger's picks measure against (tapPick.ts). Built on the first
+     * pick after a frame and kept until the next, so a pointer moving over a
+     * still map scans an array rather than asking sigma for every node. */
+    let drawn: TapCandidate[] | null = null
+    const drawnNodes = (): TapCandidate[] => {
+      if (drawn) return drawn
+      const nodes: TapCandidate[] = []
+      graph.forEachNode((key) => {
+        const display = renderer.getNodeDisplayData(key)
+        if (!display) return
+        const { x, y } = renderer.framedGraphToViewport(display)
+        nodes.push({ key, x, y, radius: renderer.scaleSize(display.size), labelled: labelsDrawn.has(key), hidden: display.hidden })
+      })
+      drawn = nodes
+      return nodes
+    }
+    // The node the mouse at `point` means, if it's still on the map.
+    const mousePick = (point: ScreenPoint): string | null => {
+      const key = pickMouseTarget(point, drawnNodes(), renderer.getDimensions())
+      return key != null && graph.hasNode(key) ? key : null
+    }
+
+    /* Hover is the mouse's, and follows its pick (#450): the cursor, the
+     * plate and the hover focus all show the node a click there would
+     * select. Sigma's own enterNode and leaveNode follow the pixel under the
+     * pointer, so they go unused. A finger never hovers: resting on a node is
+     * the start of a tap or a pan, and nothing would ever end it. */
+    const mouseCaptor = renderer.getMouseCaptor()
+    let hovered: string | null = null
+    // Where the mouse is over the map, or null once it leaves.
+    let pointer: ScreenPoint | null = null
+    let repickTimeout: ReturnType<typeof setTimeout> | null = null
+
+    const enterHover = (node: string) => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
       const keys = new Set(graph.neighbors(node))
       keys.add(node)
@@ -1587,8 +1623,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         }
         setHoveredNodeId(Number(node))
       }, HOVER_DWELL_MS)
-    })
-    renderer.on('leaveNode', () => {
+    }
+    const leaveHover = () => {
       setHoveredNodeId(null)
       if (dwellTimeout != null) {
         // The dwell never engaged, so nothing was focused: nothing to undo.
@@ -1601,6 +1637,36 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
         hoverActive = false
         applyFocus()
       }
+    }
+    const setHover = (node: string | null) => {
+      if (node === hovered) return
+      if (hovered != null) leaveHover()
+      hovered = node
+      renderer.getContainer().style.cursor = node != null ? 'pointer' : ''
+      if (node != null) enterHover(node)
+    }
+
+    mouseCaptor.on('mousemove', (e) => {
+      pointer = { x: e.x, y: e.y }
+      // While the button is down this is a drag or a pan, and what's hovered
+      // stays put until it ends.
+      if (!mouseCaptor.isMouseDown) setHover(mousePick(pointer))
+    })
+    mouseCaptor.on('mouseleave', () => {
+      pointer = null
+      setHover(null)
+    })
+    // The map can move under a still pointer: a wheel zoom, a fly, the layout
+    // settling. The hover is picked again once it stops, so it never goes on
+    // showing a node a click there wouldn't select.
+    renderer.on('afterRender', () => {
+      drawn = null
+      if (pointer == null) return
+      if (repickTimeout != null) clearTimeout(repickTimeout)
+      repickTimeout = setTimeout(() => {
+        repickTimeout = null
+        if (pointer != null && !mouseCaptor.isMouseDown) setHover(mousePick(pointer))
+      }, HOVER_REPICK_MS)
     })
 
     // Standard sigma.js drag-node recipe: track the dragged node across
@@ -1612,6 +1678,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // out of the way), matching Obsidian's live-physics drag feel.
     let draggedNode: string | null = null
     let downAt: { x: number; y: number } | null = null
+    // Where the last mouse press landed, on a node or not, and the node it
+    // picked. Kept past mouseup, which comes before the click they decide.
+    let pressAt: { x: number; y: number } | null = null
+    let pressPick: string | null = null
     // Whether the pointer has moved far enough since mousedown for this to be
     // a drag rather than a click.
     //
@@ -1637,16 +1707,20 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       setMultiSelectedKeys(keys)
     }
 
+    // A drag starts only from a press on a drawn dot, so the gaps in a dense
+    // map still pan it. It moves the node hover shows, which a press inside
+    // a near tie (tapPick.ts) can make a neighbour of the dot under it.
     renderer.on('downNode', (e) => {
       // A finger on a node pans the map, as anywhere else; only a mouse
       // drags a node.
       if (isTouchEvent(e.event.original)) return
-      draggedNode = e.node
+      const node = mousePick(e.event) ?? e.node
+      draggedNode = node
       didDrag = false
       downAt = { x: e.event.x, y: e.event.y }
 
       const current = multiSelectedRef.current
-      if (current.length >= 2 && current.includes(e.node)) {
+      if (current.length >= 2 && current.includes(node)) {
         groupDragOrigins = new Map(
           current.map((key) => [
             key,
@@ -1687,24 +1761,29 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       if (multiSelectedRef.current.length > 0) setMultiSelected([])
     }
 
-    // A tap reaches one of these two by sigma's own pick, and goes on to
-    // tapMap below, which picks again.
-    renderer.on('clickNode', (e) => {
-      if (isTouchEvent(e.event.original)) return tapMap(e.event, e.node)
-      if (didDrag) return
-      // A real marquee drag that happened to release over a node — see
-      // marqueeActive below. Consumed here so the click that sigma still
-      // synthesizes for it (its own drag-distance tracking never saw the
-      // movement, since the marquee handler below claims every intervening
+    // Sigma's clickNode and clickStage only say whether the pixel under the
+    // pointer was a dot; both pick again. A click takes the mouse's pick, the
+    // node hover shows, and a tap goes on to tapMap below.
+    const clickMap = (event: ScreenPoint & { original: MouseEvent | TouchEvent }, underPointer: string | null) => {
+      if (isTouchEvent(event.original)) return tapMap(event, underPointer)
+      // A node drag, or a real marquee drag that happened to release over a
+      // node — see marqueeActive below. Consumed here so the click that sigma
+      // still synthesizes for it (its own drag-distance tracking never saw
+      // the movement, since the handlers below claim every intervening
       // mousemovebody with preventSigmaDefault) doesn't also select/fly.
-      if (marqueeActive) return
-      clickNode(e.node)
-    })
-    renderer.on('clickStage', (e) => {
-      if (isTouchEvent(e.event.original)) return tapMap(e.event, null)
-      if (marqueeActive) return
-      clickStage()
-    })
+      if (didDrag || marqueeActive) return
+      // A pan that ended over a node. Sigma drops the click after three
+      // moves, but a quick flick can arrive in fewer.
+      if (pressAt != null && Math.hypot(event.x - pressAt.x, event.y - pressAt.y) >= DRAG_THRESHOLD_PX) return
+      // The node its press picked, which hover has shown since. Picking again
+      // here could disagree: a layout still settling moves the map between
+      // press and release.
+      const node = pressAt == null ? mousePick(event) : pressPick != null && graph.hasNode(pressPick) ? pressPick : null
+      if (node != null) clickNode(node)
+      else clickStage()
+    }
+    renderer.on('clickNode', (e) => clickMap(e.event, e.node))
+    renderer.on('clickStage', (e) => clickMap(e.event, null))
 
     // Sigma's captor answers a double-click by animating the camera to
     // ratio/2.2 over 200ms. DESIGN.md is explicit that the graph's own
@@ -1713,8 +1792,6 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // against each other. Suppressed on both the node and the stage.
     renderer.on('doubleClickNode', (e) => e.preventSigmaDefault())
     renderer.on('doubleClickStage', (e) => e.preventSigmaDefault())
-
-    const mouseCaptor = renderer.getMouseCaptor()
 
     // Moves one node to a graph-space position, live — the shared tail end
     // of both the single-node and group-drag branches below. Mirrors the
@@ -1916,6 +1993,14 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // that triggers this handler, and is registered first.
     const handleMouseDown = (e: { x: number; y: number; original: MouseEvent | TouchEvent }) => {
       if (!renderer.getCustomBBox()) renderer.setCustomBBox(renderer.getBBox())
+      pressAt = { x: e.x, y: e.y }
+      pressPick = mousePick(e)
+      // A press that missed every dot isn't a node drag, whatever the last
+      // press was; one on a dot went through downNode above, which reset it.
+      if (draggedNode == null) didDrag = false
+      // The map may have moved under a still pointer since it last hovered:
+      // the press shows the node its click will select.
+      setHover(pressPick)
       marqueeActive = false
       marqueeDownAt = draggedNode == null && e.original.shiftKey ? { x: e.x, y: e.y } : null
       marqueeCurrentAt = marqueeDownAt
@@ -1937,19 +2022,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
      * none. A stylus is as precise as a mouse and keeps sigma's pick. */
     const tapMap = (tap: ScreenPoint & { original: Event }, underTap: string | null) => {
       if (!tapGuard.allowsTap()) return
-      const node = isStylusTouch(tap.original) ? underTap : pickTapTarget(tap, tapCandidates(), renderer.getDimensions())
+      const node = isStylusTouch(tap.original) ? underTap : pickTapTarget(tap, drawnNodes(), renderer.getDimensions())
       if (node != null) clickNode(node)
       else clickStage()
-    }
-    const tapCandidates = (): TapCandidate[] => {
-      const candidates: TapCandidate[] = []
-      graph.forEachNode((key) => {
-        const display = renderer.getNodeDisplayData(key)
-        if (!display) return
-        const { x, y } = renderer.framedGraphToViewport(display)
-        candidates.push({ key, x, y, radius: renderer.scaleSize(display.size), labelled: labelsDrawn.has(key), hidden: display.hidden })
-      })
-      return candidates
     }
     let pinch: { camera: CameraState; from: [ScreenPoint, ScreenPoint] } | null = null
     touchCaptor.on('touchdown', (e) => {
@@ -1977,7 +2052,9 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
     return () => {
       if (dwellTimeout != null) clearTimeout(dwellTimeout)
+      if (repickTimeout != null) clearTimeout(repickTimeout)
       if (cameraSettleTimer != null) clearTimeout(cameraSettleTimer)
+      renderer.getContainer().style.cursor = ''
       cancelFocusAnim?.()
       cancelSettleFitAnimRef.current?.()
       applyFocusRef.current = () => {}
