@@ -9,6 +9,7 @@ import { TouchLayoutContext } from '../ui/touchLayout'
 import { useCoverColor, withAlpha } from '../ui/coverColor'
 import { PlaylistPicker } from '../panels/AddToPlaylistButton'
 import { CreditsTab, FavouriteButton, MetadataTab, Overview, TracksTab } from '../panels/NodeDetails'
+import { NodeByline } from '../panels/NodeByline'
 import { shuffle, type NodeDetailsData } from '../panels/nodeDetailsData'
 import { enqueueItem } from '../search/searchData'
 import type { usePlayback } from '../playback/usePlayback'
@@ -21,7 +22,8 @@ import type { PhoneNodeState } from './nodeDetail'
  * Over the map, a back button and "centre on map" take the search capsule's
  * place. In the sheet, the header (it stays put while the tab scrolls, and
  * drags the sheet) is the cover beside the kind and year, the title and the
- * artist, then play, shuffle, the heart and "more", then the tabs. A wash
+ * artist (a track's reads "Artist · Album", #451), then play, shuffle, the
+ * heart and "more", then the tabs. A wash
  * of the cover's colour fades down the top 260px, the colour the desktop's
  * panel takes its own wash from (ui/coverColor.ts). The tabs are the
  * desktop's own (panels/NodeDetails.tsx), from the same endpoints, in the
@@ -133,20 +135,14 @@ function Header({ details, node, playback, onOpenNode }: NodeSheetProps & { deta
           <h2 className="line-clamp-2 text-[21px] leading-[26px] font-medium [overflow-wrap:anywhere] text-[var(--color-ink)]">
             {detail.title}
           </h2>
-          {artistName &&
-            (artistId != null ? (
-              <button
-                type="button"
-                onClick={() => onOpenNode(artistId)}
-                className="touch-target self-start truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]"
-              >
-                {artistName}
-              </button>
-            ) : (
-              <span className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
-                {artistName}
-              </span>
-            ))}
+          <NodeByline
+            artistName={artistName}
+            artistId={artistId}
+            albumName={details.albumName}
+            albumId={details.albumId}
+            onOpenNode={onOpenNode}
+            sheet
+          />
         </div>
       </div>
 

@@ -16,6 +16,7 @@ import type { usePlayback } from '../playback/usePlayback'
 import { AddToPlaylistButton } from './AddToPlaylistButton'
 import { DetailRows } from './DetailRows'
 import { formatBitrate, formatFormat } from './format'
+import { NodeByline } from './NodeByline'
 import { useFavourite } from './useFavourite'
 import { API, type NodeDetail } from './useNodeDetail'
 import { TYPE_WORD, useJson, useNodeDetails, type CreditedPerson, type Summary, type TracklistEntry } from './nodeDetailsData'
@@ -59,7 +60,7 @@ type NodeDetailsProps = {
 export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }: NodeDetailsProps) {
   const details = useNodeDetails(nodeId, playback)
   if (!details) return <DetailsSkeleton />
-  const { node, reload, summary, tracklist, credits, kindLine, artistName, artistId, tabs } = details
+  const { node, reload, summary, tracklist, credits, kindLine, artistName, artistId, albumName, albumId, tabs } = details
 
   return (
     <div className="flex flex-col">
@@ -75,7 +76,7 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
           <div className="mt-[16px] flex flex-col gap-[2px]">
             <span className="text-small text-[var(--color-ink-2)]">{kindLine}</span>
             <h2 className="text-[22px] leading-[28px] font-medium [overflow-wrap:anywhere] text-[var(--color-ink)]">{node.title}</h2>
-            {artistName && <ArtistLink name={artistName} id={artistId} onFocusNode={onFocusNode} />}
+            <NodeByline artistName={artistName} artistId={artistId} albumName={albumName} albumId={albumId} onOpenNode={onFocusNode} />
           </div>
         </>
       ) : (
@@ -90,7 +91,7 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
           <div className="flex min-w-0 flex-col gap-[2px]">
             <span className="text-small text-[var(--color-ink-2)]">{kindLine}</span>
             <h2 className="line-clamp-2 text-[19px] leading-[24px] font-medium text-[var(--color-ink)]">{node.title}</h2>
-            {artistName && <ArtistLink name={artistName} id={artistId} onFocusNode={onFocusNode} />}
+            <NodeByline artistName={artistName} artistId={artistId} albumName={albumName} albumId={albumId} onOpenNode={onFocusNode} />
           </div>
         </div>
       )}
@@ -139,20 +140,6 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
       {tab === 'credits' && <CreditsTab node={node} people={credits.people} reload={reload} onFocusNode={onFocusNode} />}
       {tab === 'metadata' && <MetadataTab key={node.id} node={node} summary={summary} reload={reload} />}
     </div>
-  )
-}
-
-function ArtistLink({ name, id, onFocusNode }: { name: string; id: number | null; onFocusNode: (id: number) => void }) {
-  return id != null ? (
-    <button
-      type="button"
-      onClick={() => onFocusNode(id)}
-      className="self-start truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)] hover:underline"
-    >
-      {name}
-    </button>
-  ) : (
-    <span className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">{name}</span>
   )
 }
 
