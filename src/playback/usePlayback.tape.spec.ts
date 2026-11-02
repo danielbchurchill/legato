@@ -384,4 +384,48 @@ describe('usePlayback on the tape (#408)', () => {
     expect(element.srcObject).toBeNull()
     expect(playback.current.status.currentRecordingNodeId).toBeNull()
   })
+
+  it('previous restarts the track more than 3 s in, from what the tape still holds (#438)', async () => {
+    const playback = await renderPlayback()
+    await act(async () => {
+      await playback.current.playTracks([1, 2, 3], 0, 'One')
+    })
+    await settle()
+    await playFor(3.5)
+    const appended = buffer().appended.length
+    await act(async () => {
+      await playback.current.previous()
+    })
+    await settle()
+
+    expect(audio().currentTime).toBe(0)
+    expect(buffer().appended).toHaveLength(appended)
+    expect(playback.current.status).toMatchObject({ currentRecordingNodeId: 1, positionMs: 0 })
+    expect(plays).toEqual([expect.objectContaining({ fileId: 10, msPlayed: 3500 })])
+  })
+
+  it('previous goes back a track within the first 3 s, and restarts the first track (#438)', async () => {
+    const playback = await renderPlayback()
+    await act(async () => {
+      await playback.current.playTracks([1, 2, 3], 0, 'One')
+    })
+    await settle()
+    await playFor(5)
+    expect(playback.current.status).toMatchObject({ currentRecordingNodeId: 2, positionMs: 1000 })
+
+    await act(async () => {
+      await playback.current.previous()
+    })
+    await settle()
+    expect(playback.current.status.currentRecordingNodeId).toBe(1)
+
+    await playFor(1)
+    const at = audio().currentTime
+    await act(async () => {
+      await playback.current.previous()
+    })
+    await settle()
+    expect(playback.current.status).toMatchObject({ currentRecordingNodeId: 1, positionMs: 0 })
+    expect(audio().currentTime).toBe(at - 1)
+  })
 })
