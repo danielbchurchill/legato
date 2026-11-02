@@ -14,6 +14,7 @@ import { shuffle, type NodeDetailsData } from '../panels/nodeDetailsData'
 import { enqueueItem } from '../search/searchData'
 import type { usePlayback } from '../playback/usePlayback'
 import type { PhoneNodeState } from './nodeDetail'
+import { MenuItem } from './MenuItem'
 
 /* A node's detail on the phone (#389, Legato Mobile v2 screen 5): the
  * desktop's details panel, drawn in the sheet at the medium detent with the
@@ -261,21 +262,8 @@ function MoreMenu({ details, playback, onEditTags }: { details: NodeDetailsData;
   )
 }
 
-/** A row of a phone "more" menu, 44px: node detail's and Now playing's. */
-export function MenuItem({ onClick, disabled, children }: { onClick: () => void; disabled?: boolean; children: string }) {
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={disabled}
-        className="flex h-[44px] w-full items-center rounded-[10px] px-[12px] text-left text-[length:var(--text-body)] text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] disabled:text-[var(--color-ink-3)]"
-      >
-        {children}
-      </button>
-    </li>
-  )
-}
+// Now playing's menu takes its rows from here.
+export { MenuItem }
 
 /** The tab under the header, in the sheet's place for content. */
 export function NodeBody({ node, playback, onOpenNode }: NodeSheetProps) {
