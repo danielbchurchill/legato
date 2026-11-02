@@ -91,6 +91,10 @@ export function useNodeDetails(nodeId: number | null, playback: Playback): NodeD
 
   if (!node || node.id !== nodeId) return null
 
+  // /credits names a node's tracks by id alone; their titles come from the
+  // map's graph, and playTracks looks up any it doesn't have (#444).
+  const creditTracks = credits.tracks.map((id) => ({ id, title: graph.byId.get(id)?.title ?? '' }))
+
   // A producer's or engineer's tracks are the ones credited to them, in the
   // node's own edges; /credits only says who made a node. Only the phone's
   // sheet lists them so far.
@@ -136,11 +140,11 @@ export function useNodeDetails(nodeId: number | null, playback: Playback): NodeD
     play: () => {
       if (node.type === 'release') void playback.playAlbum(node.id)
       else if (node.type === 'recording') void playback.playNode(node.id, node.title)
-      else if (credits.tracks.length) void playback.playTracks(credits.tracks, 0, '')
+      else if (creditTracks.length) void playback.playTracks(creditTracks, 0)
     },
     shuffle: () => {
-      const ids = node.type === 'release' && tracklist ? tracklist.map((t) => t.id) : credits.tracks
-      if (ids.length) void playback.playTracks(shuffle(ids), 0, '', node.type === 'release' ? { kind: 'release', nodeId: node.id } : null)
+      const tracks = node.type === 'release' && tracklist ? tracklist : creditTracks
+      if (tracks.length) void playback.playTracks(shuffle(tracks), 0, node.type === 'release' ? { kind: 'release', nodeId: node.id } : null)
     },
     tabs: [
       { value: 'overview', label: 'overview' },

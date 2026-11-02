@@ -190,8 +190,8 @@ export function playItem(item: Item, playback: Playback, graph: GraphData, relat
   else if (item.kind === 'release') void playback.playAlbum(item.id)
   else if (item.kind === 'playlist') void playback.playPlaylist(item.id)
   else if (item.kind === 'artist') {
-    const tracks = graph.nodes.filter((n) => n.type === 'recording' && relations.clusterOf.get(n.id) === item.id).map((n) => n.id)
-    if (tracks.length) void playback.playTracks(tracks, 0, '')
+    const tracks = graph.nodes.filter((n) => n.type === 'recording' && relations.clusterOf.get(n.id) === item.id)
+    if (tracks.length) void playback.playTracks(tracks, 0)
   }
 }
 

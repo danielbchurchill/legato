@@ -543,7 +543,7 @@ function Workspace({
         />
 
         {rightView === 'queue' && (
-          <RightPanel label="Now playing" wash={rightWash}>
+          <RightPanel label="Now playing" wash={rightWash} fill={nowPlayingTab === 'lyrics'}>
             <ErrorBoundary key={playingNodeId} fallback={panelError}>
               <NowPlaying
                 nodeId={playingNodeId}

@@ -9,6 +9,9 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+// What playTracks is handed: each track with its title (#444).
+const titled = (...ids: number[]) => ids.map((id) => ({ id, title: `Track ${id}` }))
+
 type Handler = (event: { payload: unknown }) => void
 
 const { invokeMock, handlers } = vi.hoisted(() => ({ invokeMock: vi.fn(), handlers: new Map<string, Handler>() }))
@@ -94,7 +97,7 @@ describe('native playback of a file that may not be here (#185)', () => {
     const { result, unmount } = await renderPlaybackHook()
 
     await act(async () => {
-      await result.current!.playTracks([1, 2], 0, 'One')
+      await result.current!.playTracks(titled(1, 2), 0)
     })
 
     const enqueued = invokeMock.mock.calls.filter(([cmd]) => cmd === 'queue_enqueue').map(([, args]) => args.track)
@@ -111,7 +114,7 @@ describe('native playback of a file that may not be here (#185)', () => {
   it("follows Rust's word on whether the current track is streaming", async () => {
     const { result, unmount } = await renderPlaybackHook()
     await act(async () => {
-      await result.current!.playTracks([1, 2], 0, 'One')
+      await result.current!.playTracks(titled(1, 2), 0)
     })
     expect(result.current!.status.streaming).toBe(false)
 

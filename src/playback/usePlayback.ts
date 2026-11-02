@@ -28,6 +28,13 @@ type ResolvedTrack = {
 
 export type QueueEntry = { recordingNodeId: number; title: string; durationMs: number | null }
 
+/* A track to play and its title, as the list it was picked from shows it.
+ * #444: playTracks takes the titles with the ids, because POST
+ * /queue/resolve has none, and a queue built from ids alone showed up next,
+ * the transport and the lock screen without track names. A title left
+ * empty is looked up before anything is queued. */
+export type TrackToPlay = { id: number; title: string }
+
 /* Where the current queue came from, for the now-playing panel's "Playing
  * from …" line. Set by the entry points that know (an album, a playlist,
  * the shuffled library); a bare playTracks with no source says nothing
@@ -264,8 +271,8 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   // meets a node it hasn't seen) — the cache that lets previous()/shuffle/
   // reorder/remove/insert re-enqueue without re-resolving. titleCache is
   // separate because POST /queue/resolve (which fills trackInfo) doesn't
-  // return titles — only the tracklist/playlist-tracks endpoints do, so
-  // whichever call resolved a track's context populates it there.
+  // return titles: playTracks fills it from the titles its caller passes,
+  // and looks up any that are missing (titleTracks below).
   //
   // playSequence is the single ordered queue model shared by both playback
   // paths — the full list (already-played prefix included), with
@@ -737,6 +744,22 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     setProblem(null)
   }, [])
 
+  // #444: the title every queue entry is built with. The caller's titles
+  // come first, being what its list shows; one it left empty comes from
+  // the cache, or failing that from GET /nodes/:id. They're looked up now,
+  // before anything is queued, because the web player shows an entry's
+  // title as it plays (the transport and the lock screen) and up next
+  // shows the rest. Every caller passes its titles, so the lookup is only
+  // for a list that doesn't have one.
+  const titleTracks = useCallback(async (tracks: TrackToPlay[]) => {
+    for (const t of tracks) if (t.title) titleCache.current.set(t.id, t.title)
+    const untitled = [...new Set(tracks.filter((t) => !titleCache.current.get(t.id)).map((t) => t.id))]
+    const found = await Promise.all(untitled.map(fetchNodeTitle))
+    untitled.forEach((id, i) => {
+      if (found[i]) titleCache.current.set(id, found[i])
+    })
+  }, [])
+
   // The generalized entry point everything else funnels through: given an
   // explicit ordered list of recording node ids and where to start in it,
   // resolve, populate playSequence/currentIndex, and start playback. Only
@@ -762,7 +785,8 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   // running inside it would wait on a promise chain that can't resolve
   // until the very call doing the waiting returns).
   const playTracksCore = useCallback(
-    async (recordingNodeIds: number[], startIndex: number, title: string) => {
+    async (list: TrackToPlay[], startIndex: number) => {
+      const recordingNodeIds = list.map((t) => t.id)
       const tracks = await resolveTracks(recordingNodeIds)
       if (tracks.length === 0) return
       cacheTracks(tracks)
@@ -772,14 +796,14 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       // Ids that failed to resolve (file missing since last scan) are
       // dropped entirely — up-next should only ever show what will really
       // play, same policy resolveQueueContext's caller relied on before.
-      const sequence: QueueEntry[] = recordingNodeIds
-        .filter((id) => resolvedIds.has(id))
-        .map((id) => ({
-          recordingNodeId: id,
-          title: titleCache.current.get(id) ?? (id === anchorId ? title : ''),
-          durationMs: trackInfo.current.get(id)?.durationMs ?? null,
-        }))
-      if (sequence.length === 0) return
+      const playable = list.filter((t) => resolvedIds.has(t.id))
+      if (playable.length === 0) return
+      await titleTracks(playable)
+      const sequence: QueueEntry[] = playable.map((t) => ({
+        recordingNodeId: t.id,
+        title: titleCache.current.get(t.id) ?? '',
+        durationMs: trackInfo.current.get(t.id)?.durationMs ?? null,
+      }))
 
       const resolvedStartIndex = Math.max(0, sequence.findIndex((e) => e.recordingNodeId === anchorId))
 
@@ -812,7 +836,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       clearStartFailure()
       const startEntry = toPlay[0]
       const startInfo = trackInfo.current.get(startEntry.recordingNodeId)!
-      setCurrentTitle(startEntry.title || title)
+      setCurrentTitle(startEntry.title)
       setUpNext(playSequence.current.slice(resolvedStartIndex + 1))
       setStatus((s) => ({
         ...s,
@@ -822,13 +846,13 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         currentDurationMs: startInfo.durationMs,
       }))
     },
-    [cacheTracks, clearStartFailure, enqueueTauri, finalizeCurrentPlay, showStartFailure, startWebTrack],
+    [cacheTracks, clearStartFailure, enqueueTauri, finalizeCurrentPlay, showStartFailure, startWebTrack, titleTracks],
   )
 
   const playTracks = useCallback(
-    (recordingNodeIds: number[], startIndex: number, title: string, source: QueueSource | null = null) => {
+    (tracks: TrackToPlay[], startIndex: number, source: QueueSource | null = null) => {
       setQueueSource(source)
-      return serialized(() => playTracksCore(recordingNodeIds, startIndex, title))
+      return serialized(() => playTracksCore(tracks, startIndex))
     },
     [playTracksCore, serialized],
   )
@@ -836,12 +860,10 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   const playNode = useCallback(
     async (recordingNodeId: number, title: string) => {
       const { entries, releaseId } = await resolveQueueContext(recordingNodeId, title)
-      for (const entry of entries) titleCache.current.set(entry.recordingNodeId, entry.title)
       const startIndex = entries.findIndex((c) => c.recordingNodeId === recordingNodeId)
       await playTracks(
-        entries.map((c) => c.recordingNodeId),
+        entries.map((c) => ({ id: c.recordingNodeId, title: c.title })),
         startIndex === -1 ? 0 : startIndex,
-        title,
         releaseId != null ? { kind: 'release', nodeId: releaseId } : null,
       )
     },
@@ -872,13 +894,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       try {
         const tracklist = (await fetch(`${API}/nodes/${releaseId}/tracklist`).then((r) => r.json())) as TracklistEntry[]
         if (tracklist.length === 0) return
-        for (const t of tracklist) titleCache.current.set(t.id, t.title)
-        await playTracks(
-          tracklist.map((t) => t.id),
-          0,
-          '',
-          { kind: 'release', nodeId: releaseId },
-        )
+        await playTracks(tracklist, 0, { kind: 'release', nodeId: releaseId })
       } catch {
         // A resolution hiccup here just means playback doesn't start —
         // same policy as resolveQueueContext's own catch.
@@ -1008,13 +1024,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       try {
         const tracks = (await fetch(`${API}/playlists/${playlistId}/tracks`).then((r) => r.json())) as PlaylistTrackEntry[]
         if (tracks.length === 0) return
-        for (const t of tracks) titleCache.current.set(t.id, t.title)
-        await playTracks(
-          tracks.map((t) => t.id),
-          0,
-          '',
-          { kind: 'playlist', playlistId },
-        )
+        await playTracks(tracks, 0, { kind: 'playlist', playlistId })
         if (shuffled) await toggleShuffle()
       } catch {
         // Same policy as playAlbum.
@@ -1024,20 +1034,12 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   )
 
   // Shuffle library (#307). The tracks come from the map's graph, already
-  // shuffled, and nothing on the way to POST /queue/resolve carries their
-  // titles, so they're cached here as playAlbum caches its tracklist's.
-  // Without them the player's title line was blank and up next showed
-  // artists only.
+  // shuffled, with their titles: without them the player's title line was
+  // blank and up next showed artists only.
   const playLibrary = useCallback(
-    async (tracks: { id: number; title: string }[]) => {
+    async (tracks: TrackToPlay[]) => {
       if (tracks.length === 0) return
-      for (const t of tracks) titleCache.current.set(t.id, t.title)
-      await playTracks(
-        tracks.map((t) => t.id),
-        0,
-        tracks[0].title,
-        { kind: 'library' },
-      )
+      await playTracks(tracks, 0, { kind: 'library' })
     },
     [playTracks],
   )
@@ -1293,7 +1295,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
           // inside `serialized`, and playTracks re-entering that same lock
           // would wait on a promise chain that can't resolve until this
           // very call returns.
-          await playTracksCore([recordingNodeId], 0, await fetchNodeTitle(recordingNodeId))
+          await playTracksCore([{ id: recordingNodeId, title: '' }], 0)
           return
         }
 
@@ -1320,7 +1322,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       serialized(async () => {
         if (currentIndex.current === -1) {
           // See addToQueue's comment above — playTracksCore, not playTracks.
-          await playTracksCore([recordingNodeId], 0, await fetchNodeTitle(recordingNodeId))
+          await playTracksCore([{ id: recordingNodeId, title: '' }], 0)
           return
         }
 

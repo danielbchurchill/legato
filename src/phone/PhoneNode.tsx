@@ -105,11 +105,11 @@ function Header({ details, node, playback, onOpenNode }: NodeSheetProps & { deta
   const credit = detail.type === 'credit'
   // A producer or engineer plays the tracks they're credited on, which the
   // sheet lists for them (nodeDetailsData.ts).
-  const creditIds = credit ? (details.tracklist ?? []).map((t) => t.id) : null
-  const canPlay = creditIds ? creditIds.length > 0 : details.canPlay
-  const canShuffle = creditIds ? creditIds.length > 1 : details.canShuffle
-  const play = creditIds ? () => void playback.playTracks(creditIds, 0, '') : details.play
-  const shuffleAll = creditIds ? () => void playback.playTracks(shuffle(creditIds), 0, '') : details.shuffle
+  const creditTracks = credit ? (details.tracklist ?? []) : null
+  const canPlay = creditTracks ? creditTracks.length > 0 : details.canPlay
+  const canShuffle = creditTracks ? creditTracks.length > 1 : details.canShuffle
+  const play = creditTracks ? () => void playback.playTracks(creditTracks, 0) : details.play
+  const shuffleAll = creditTracks ? () => void playback.playTracks(shuffle(creditTracks), 0) : details.shuffle
   return (
     <div className="relative flex flex-col px-[20px] pt-[2px]">
       <div className="flex items-end gap-[14px]">

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type DragEvent, type ReactNode, type RefObject } from 'react'
 import { Button } from '../ui/Button'
 import { CoverArt } from '../ui/CoverArt'
 import { Icon } from '../ui/Icon'
 import { IconButton } from '../ui/IconButton'
 import { Kbd } from '../ui/Kbd'
+import { ScrollArea } from '../ui/ScrollArea'
 import { Skeleton } from '../ui/Skeleton'
 import { Tabs } from '../ui/Tabs'
 import { MOD_KEY_LABEL } from '../shell/keys'
@@ -17,6 +18,7 @@ import { formatBitrate, formatFormat } from './format'
 import { currentLyricIndex, parseSyncedLyrics } from './lyrics'
 import { useFavourite } from './useFavourite'
 import { useLyrics } from './useLyrics'
+import { useLyricsFollow } from './useLyricsFollow'
 import { sourceLabel, usePlaylistName } from './queueSource'
 import { performer, release, useNodeDetail, type NodeDetail } from './useNodeDetail'
 
@@ -26,7 +28,9 @@ import { performer, release, useNodeDetail, type NodeDetail } from './useNodeDet
  * it, one right panel at a time.
  *
  * The full cover only heads the up-next tab. Lyrics and details are reading
- * views, so they take a compact header and give the space to the text. */
+ * views, so they take a compact header and give the space to the text. The
+ * lyrics scroll on their own under it (#445): the panel holds still (App
+ * passes RightPanel `fill`) and the header, actions and tabs stay put. */
 
 type Playback = ReturnType<typeof usePlayback>
 
@@ -58,6 +62,7 @@ export function NowPlaying({
   onShowOnMap,
 }: NowPlayingProps) {
   const { node } = useNodeDetail(nodeId)
+  const lyricsScroller = useRef<HTMLDivElement>(null)
 
   if (nodeId == null) {
     return (
@@ -76,7 +81,7 @@ export function NowPlaying({
   const album = release(node)
 
   return (
-    <div className="flex flex-col">
+    <div className={tab === 'lyrics' ? 'flex min-h-0 flex-1 flex-col' : 'flex flex-col'}>
       {tab === 'next' ? (
         <>
           <CoverArt
@@ -132,7 +137,13 @@ export function NowPlaying({
       />
 
       {tab === 'next' && <UpNext playback={playback} albumTitle={album?.other_title ?? null} onShuffleLibrary={onShuffleLibrary} />}
-      {tab === 'lyrics' && <Lyrics nodeId={node.id} positionMs={playback.status.positionMs} />}
+      {tab === 'lyrics' && (
+        // Out to the panel's edges, so its scrollbar sits where the panel's
+        // own would and the lyrics run under the panel's bottom edge.
+        <ScrollArea viewportRef={lyricsScroller} className="-mx-[12px] -mb-[12px] min-h-0 flex-1" contentClassName="px-[12px] pb-[12px]">
+          <Lyrics nodeId={node.id} positionMs={playback.status.positionMs} scroller={lyricsScroller} />
+        </ScrollArea>
+      )}
       {tab === 'details' && <TrackDetails node={node} artist={artist?.other_title ?? null} album={album?.other_title ?? null} />}
     </div>
   )
@@ -356,9 +367,11 @@ function UpNextRow({
 
 /* ---- Lyrics -------------------------------------------------------------- */
 
-/** The track's lyrics, the sung line kept in view. The phone's Now playing
- * shows them in place of the cover. */
-export function Lyrics({ nodeId, positionMs }: { nodeId: number; positionMs: number }) {
+/** The track's lyrics. Synced ones follow the song in `scroller`, the
+ * element they scroll in, the sung line held a third of the way down it
+ * (useLyricsFollow.ts). The phone's Now playing shows them in place of the
+ * cover. */
+export function Lyrics({ nodeId, positionMs, scroller }: { nodeId: number; positionMs: number; scroller: RefObject<HTMLElement | null> }) {
   const { lyrics, lyricsWaitVisible } = useLyrics(nodeId, true)
   const synced = useMemo(
     () => (lyrics && lyrics !== 'loading' && lyrics.syncedLyrics ? parseSyncedLyrics(lyrics.syncedLyrics) : null),
@@ -366,13 +379,7 @@ export function Lyrics({ nodeId, positionMs }: { nodeId: number; positionMs: num
   )
   const current = synced ? currentLyricIndex(synced, positionMs) : -1
   const currentRef = useRef<HTMLSpanElement>(null)
-
-  // Keep the sung line in view as the song moves, without yanking the
-  // panel if the reader has scrolled away to read ahead — "nearest" only
-  // moves it when it has left the visible area.
-  useEffect(() => {
-    currentRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [current])
+  const { tail } = useLyricsFollow({ scroller, line: currentRef, current, lines: synced && synced.length > 0 ? synced : null })
 
   if (lyrics === 'loading') {
     return lyricsWaitVisible ? (
@@ -396,7 +403,9 @@ export function Lyrics({ nodeId, positionMs }: { nodeId: number; positionMs: num
       <div className="mt-[16px] flex flex-col gap-[6px]">
         {synced.map((line, i) =>
           line.text === '' ? (
-            <span key={i} aria-hidden="true" className="h-[10px]" />
+            // A pause is followed like a line, so the lyrics hold still
+            // through it rather than jumping back to the top.
+            <span key={i} ref={i === current ? currentRef : undefined} aria-hidden="true" className="h-[10px]" />
           ) : (
             <span
               key={i}
@@ -414,6 +423,8 @@ export function Lyrics({ nodeId, positionMs }: { nodeId: number; positionMs: num
             </span>
           ),
         )}
+        {/* Room for the last lines to reach the reading position. */}
+        <span aria-hidden="true" className="shrink-0" style={{ height: tail }} />
       </div>
     )
   }

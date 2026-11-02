@@ -22,6 +22,10 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 import { usePlayback } from './usePlayback'
 
+// What playTracks is handed: each track with its title (#444). Every test
+// starts on 10, “Song”.
+const titled = (...ids: number[]) => ids.map((id) => ({ id, title: id === 10 ? 'Song' : `Track ${id}` }))
+
 function makeTrack(id: number) {
   return {
     recordingNodeId: id,
@@ -108,7 +112,7 @@ describe('usePlayback when native playback cannot open a file', () => {
     for (const id of [10, 20]) unreachablePaths.add(makeTrack(id).filePath)
 
     await act(async () => {
-      await result.current!.playTracks([10, 20], 0, 'Song')
+      await result.current!.playTracks(titled(10, 20), 0)
     })
 
     const playback = result.current!
@@ -136,7 +140,7 @@ describe('usePlayback when native playback cannot open a file', () => {
     healthRoots = [{ libraryRootId: 1, path: '/mnt/music', reachable: false }]
 
     await act(async () => {
-      await result.current!.playTracks([10], 0, 'Song')
+      await result.current!.playTracks(titled(10), 0)
     })
 
     expect(result.current!.problem?.headline).toBe('The library drive is disconnected')
@@ -148,7 +152,7 @@ describe('usePlayback when native playback cannot open a file', () => {
     unreachablePaths.add(makeTrack(10).filePath)
 
     await act(async () => {
-      await result.current!.playTracks([10, 20], 0, 'Song')
+      await result.current!.playTracks(titled(10, 20), 0)
     })
     expect(result.current!.problem).not.toBeNull()
 
@@ -170,7 +174,7 @@ describe('usePlayback when native playback cannot open a file', () => {
     unreachablePaths.add(makeTrack(20).filePath)
 
     await act(async () => {
-      await result.current!.playTracks([10, 20, 30], 0, 'Song')
+      await result.current!.playTracks(titled(10, 20, 30), 0)
     })
 
     expect(result.current!.problem).toBeNull()

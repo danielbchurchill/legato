@@ -66,6 +66,9 @@ function makeTrack(id: number): Track {
 
 const TRACKS: Record<number, Track> = { 10: makeTrack(10), 20: makeTrack(20), 30: makeTrack(30), 40: makeTrack(40) }
 
+// What playTracks is handed: each track with its title (#444).
+const titled = (...ids: number[]) => ids.map((id) => ({ id, title: `Track ${id}` }))
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -143,7 +146,7 @@ describe('usePlayback Tauri queue-operation serialization', () => {
     // Seed a 4-track queue starting on the last track (index 3) so
     // previous() has two full steps to walk back through.
     await act(async () => {
-      await result.current!.playTracks([10, 20, 30, 40], 3, 'Track 40')
+      await result.current!.playTracks(titled(10, 20, 30, 40), 3)
     })
     expect(result.current!.status.currentRecordingNodeId).toBe(40)
 
@@ -198,7 +201,7 @@ describe('usePlayback Tauri queue-operation serialization', () => {
     // Read against the pre-previous() value (1), it silently no-ops
     // (1 <= 1), which is exactly the "second click does nothing" symptom.
     await act(async () => {
-      await result.current!.playTracks([10, 20, 30, 40], 1, 'Track 20')
+      await result.current!.playTracks(titled(10, 20, 30, 40), 1)
     })
     expect(result.current!.status.currentRecordingNodeId).toBe(20)
 
@@ -250,7 +253,7 @@ describe('usePlayback Tauri queue-operation serialization', () => {
     })
 
     await act(async () => {
-      await result.current!.playTracks([10, 20, 30, 40], 3, 'Track 40')
+      await result.current!.playTracks(titled(10, 20, 30, 40), 3)
     })
     expect(result.current!.status.currentRecordingNodeId).toBe(40)
     expect(result.current!.status.playing).toBe(true)
@@ -305,8 +308,8 @@ describe('usePlayback Tauri queue-operation serialization', () => {
     let p1: Promise<void> = Promise.resolve()
     let p2: Promise<void> = Promise.resolve()
     act(() => {
-      p1 = result.current!.playTracks([10, 20], 0, 'Track 10')
-      p2 = result.current!.playTracks([30, 40], 0, 'Track 30')
+      p1 = result.current!.playTracks(titled(10, 20), 0)
+      p2 = result.current!.playTracks(titled(30, 40), 0)
     })
     await act(async () => {
       await Promise.all([p1, p2])
@@ -335,7 +338,7 @@ describe('usePlayback Tauri queue-operation serialization', () => {
     })
 
     await act(async () => {
-      await result.current!.playTracks([10, 20, 30, 40], 3, 'Track 40')
+      await result.current!.playTracks(titled(10, 20, 30, 40), 3)
     })
     expect(result.current!.status.currentRecordingNodeId).toBe(40)
 
@@ -348,7 +351,7 @@ describe('usePlayback Tauri queue-operation serialization', () => {
     let p2: Promise<void> = Promise.resolve()
     act(() => {
       p1 = result.current!.previous()
-      p2 = result.current!.playTracks([20], 0, 'Track 20')
+      p2 = result.current!.playTracks(titled(20), 0)
     })
     await act(async () => {
       await Promise.all([p1, p2])
@@ -382,7 +385,7 @@ describe('usePlayback Tauri queue-operation serialization', () => {
     })
 
     await act(async () => {
-      await result.current!.playTracks([10, 20, 30, 40], 3, 'Track 40')
+      await result.current!.playTracks(titled(10, 20, 30, 40), 3)
     })
     invokeMock.mockClear()
 

@@ -295,12 +295,7 @@ export function Overview({
                 <button
                   type="button"
                   onClick={() =>
-                    void playback.playTracks(
-                      tracklist.map((t) => t.id),
-                      i,
-                      '',
-                      node.type === 'release' ? { kind: 'release', nodeId: node.id } : null,
-                    )
+                    void playback.playTracks(tracklist, i, node.type === 'release' ? { kind: 'release', nodeId: node.id } : null)
                   }
                   className={`grid w-full items-center rounded-[8px] text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] ${
                     sheet ? SHEET_TRACK_ROW : 'h-[34px] grid-cols-[18px_minmax(0,1fr)_auto] gap-[10px] px-[6px]'
@@ -454,14 +449,7 @@ export function TracksTab({
           <li key={track.id}>
             <button
               type="button"
-              onClick={() =>
-                void playback.playTracks(
-                  tracks.map((t) => t.id),
-                  i,
-                  '',
-                  node.type === 'release' ? { kind: 'release', nodeId: node.id } : null,
-                )
-              }
+              onClick={() => void playback.playTracks(tracks, i, node.type === 'release' ? { kind: 'release', nodeId: node.id } : null)}
               className={`group grid w-full items-center rounded-[var(--radius-control)] text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] ${
                 sheet ? SHEET_TRACK_ROW : 'h-[42px] grid-cols-[20px_minmax(0,1fr)_auto] gap-[10px] px-[6px]'
               }`}

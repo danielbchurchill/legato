@@ -27,8 +27,9 @@ import type { PlayingTrack } from './usePlayingTrack'
  * connection indicator names it; the transport at 48 / 56 / 76 / 56 / 48;
  * and three chips: lyrics, show on map, up next.
  *
- * Lyrics swap in for the cover, in the same square, the sung line kept in
- * view, and come back out on a second tap. Show on map closes it and shows
+ * Lyrics swap in for the cover, in the same square, the sung line held a
+ * third of the way down it, clear of the fades (#445), and come back out on
+ * a second tap. Show on map closes it and shows
  * the track on the map; the more menu's go to album and go to artist close
  * it and open that node. Up next closes it onto the sheet's up next.
  *
@@ -100,6 +101,7 @@ export function NowPlayingScreen({
   const onClosedRef = useRef(onClosed)
   onClosedRef.current = onClosed
   const [lyrics, setLyrics] = useState(false)
+  const lyricsScroller = useRef<HTMLDivElement>(null)
 
   const { status, currentTitle, problem } = playback
   const color = useCoverColor(track.nodeId)
@@ -253,10 +255,11 @@ export function NowPlayingScreen({
         >
           {lyrics && track.nodeId != null ? (
             <div
+              ref={lyricsScroller}
               data-selectable
               className="size-full touch-pan-y overflow-y-auto overscroll-contain pb-[24px] [mask-image:linear-gradient(transparent,black_20px,black_calc(100%-32px),transparent)]"
             >
-              <Lyrics nodeId={track.nodeId} positionMs={status.positionMs} />
+              <Lyrics nodeId={track.nodeId} positionMs={status.positionMs} scroller={lyricsScroller} />
             </div>
           ) : (
             <div className="size-full rounded-[12px] shadow-[var(--shadow-panel)]">

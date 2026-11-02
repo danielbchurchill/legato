@@ -287,7 +287,7 @@ describe('usePlayback on the tape (#408)', () => {
   it('plays the queue from one MediaSource, with remote playback off, the next track going in behind the first', async () => {
     const playback = await renderPlayback()
     await act(async () => {
-      await playback.current.playTracks([1, 2, 3], 0, 'One')
+      await playback.current.playTracks(TRACKLIST, 0)
     })
     await settle()
 
@@ -315,7 +315,7 @@ describe('usePlayback on the tape (#408)', () => {
   it("moves the player on at a track boundary by itself, and reports the play that's over", async () => {
     const playback = await renderPlayback()
     await act(async () => {
-      await playback.current.playTracks([1, 2, 3], 0, 'One')
+      await playback.current.playTracks(TRACKLIST, 0)
     })
     await settle()
     await playFor(5)
@@ -330,7 +330,7 @@ describe('usePlayback on the tape (#408)', () => {
   it('shows a skip at once, and plays on from where it landed', async () => {
     const playback = await renderPlayback()
     await act(async () => {
-      await playback.current.playTracks([1, 2, 3], 0, 'One')
+      await playback.current.playTracks(TRACKLIST, 0)
     })
     await settle()
     await act(async () => {
@@ -348,7 +348,7 @@ describe('usePlayback on the tape (#408)', () => {
     missing.add(20)
     const playback = await renderPlayback()
     await act(async () => {
-      await playback.current.playTracks([1, 2, 3], 0, 'One')
+      await playback.current.playTracks(TRACKLIST, 0)
     })
     await settle()
 
@@ -365,14 +365,14 @@ describe('usePlayback on the tape (#408)', () => {
   it('clears the player at the end of the queue, and stop takes the MediaSource down', async () => {
     const playback = await renderPlayback()
     await act(async () => {
-      await playback.current.playTracks([1, 2], 0, 'One')
+      await playback.current.playTracks(TRACKLIST.slice(0, 2), 0)
     })
     await settle()
     await playFor(9)
     expect(playback.current.status).toMatchObject({ playing: false, currentRecordingNodeId: null })
 
     await act(async () => {
-      await playback.current.playTracks([3], 0, 'Three')
+      await playback.current.playTracks(TRACKLIST.slice(2), 0)
     })
     await settle()
     // A queue after one that ended gets a MediaSource of its own.
@@ -388,7 +388,7 @@ describe('usePlayback on the tape (#408)', () => {
   it("fetches each track's index and init segment once on the tape, however often it's played again (#439)", async () => {
     const playback = await renderPlayback()
     await act(async () => {
-      await playback.current.playTracks([1, 2, 3], 0, 'One')
+      await playback.current.playTracks(TRACKLIST, 0)
     })
     await settle()
     for (const step of [() => playback.current.next(), () => playback.current.next(), () => playback.current.previous()]) {
@@ -416,7 +416,7 @@ describe('usePlayback on the tape (#408)', () => {
   it('previous restarts the track more than 3 s in, from what the tape still holds (#438)', async () => {
     const playback = await renderPlayback()
     await act(async () => {
-      await playback.current.playTracks([1, 2, 3], 0, 'One')
+      await playback.current.playTracks(TRACKLIST, 0)
     })
     await settle()
     await playFor(3.5)
@@ -435,7 +435,7 @@ describe('usePlayback on the tape (#408)', () => {
   it('previous goes back a track within the first 3 s, and restarts the first track (#438)', async () => {
     const playback = await renderPlayback()
     await act(async () => {
-      await playback.current.playTracks([1, 2, 3], 0, 'One')
+      await playback.current.playTracks(TRACKLIST, 0)
     })
     await settle()
     await playFor(5)
