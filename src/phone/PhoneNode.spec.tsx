@@ -212,7 +212,10 @@ describe("a node's detail on the phone", () => {
     act(() => button(container, 'More')!.click())
     const menu = () => document.querySelector('[role="dialog"]')!
     expect([...menu().querySelectorAll('button')].map((b) => b.textContent)).toEqual(['add to queue', 'add to playlist', 'edit tags'])
-    act(() => button(menu(), 'add to playlist')!.click())
+    await act(async () => {
+      button(menu(), 'add to playlist')!.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     expect(menu().querySelector('input[aria-label="New playlist name"]')).not.toBeNull()
   })
 
@@ -345,7 +348,10 @@ describe('holding a track row on the phone', () => {
     expect(opened).toEqual([2])
 
     hold(button(container, '2Highway Blues')!)
-    act(() => button(document.querySelector('[role="dialog"]')!, 'add to playlist')!.click())
+    await act(async () => {
+      button(document.querySelector('[role="dialog"]')!, 'add to playlist')!.click()
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+    })
     expect(document.querySelector('[role="dialog"] input[aria-label="New playlist name"]')).not.toBeNull()
   })
 })

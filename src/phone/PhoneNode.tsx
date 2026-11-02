@@ -282,7 +282,7 @@ export function NodeBody({ node, playback, onOpenNode }: NodeSheetProps) {
                 <Overview
                   sheet
                   holdRef={holdRef}
-            node={detail}
+                  node={detail}
                   summary={summary}
                   tracklist={tracklist}
                   people={credits.people}

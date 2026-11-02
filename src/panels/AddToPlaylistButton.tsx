@@ -202,29 +202,34 @@ export function PlaylistPicker({ onDone, sheet = false, ...what }: PlaylistAddit
       <p role="status" className="sr-only">
         {words?.status ?? ''}
       </p>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          void createAndAdd()
-        }}
-        className="mt-[8px] flex items-center gap-[6px] border-t border-[var(--color-line)] pt-[8px]"
-      >
-        <TextField
-          prose
-          size={sheet ? 'lg' : 'md'}
-          value={newName}
-          onChange={setNewName}
-          placeholder="New playlist…"
-          label="New playlist name"
-          className="flex-1"
-        />
-        <IconButton
-          icon="add"
-          label="Create playlist and add"
-          onClick={() => void createAndAdd()}
-          {...(sheet ? { size: 44, iconSize: 20, tooltip: false } : {})}
-        />
-      </form>
+      {/* Not until the list is here: the popover gives the focus to the
+       * first thing in it that takes one, and that should be a playlist,
+       * or the popup itself, never a field nobody asked to type in. */}
+      {playlists !== null && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            void createAndAdd()
+          }}
+          className="mt-[8px] flex items-center gap-[6px] border-t border-[var(--color-line)] pt-[8px]"
+        >
+          <TextField
+            prose
+            size={sheet ? 'lg' : 'md'}
+            value={newName}
+            onChange={setNewName}
+            placeholder="New playlist…"
+            label="New playlist name"
+            className="flex-1"
+          />
+          <IconButton
+            icon="add"
+            label="Create playlist and add"
+            onClick={() => void createAndAdd()}
+            {...(sheet ? { size: 44, iconSize: 20, tooltip: false } : {})}
+          />
+        </form>
+      )}
     </>
   )
 }

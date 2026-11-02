@@ -2,7 +2,7 @@
 //
 // #447 and #448: add to playlist from any desktop track row, and a whole
 // album at once.
-import { act, createElement, type ReactElement } from 'react'
+import { act, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AddToPlaylistButton, RowAddToPlaylist } from './AddToPlaylistButton'
@@ -34,7 +34,8 @@ beforeEach(() => {
       const path = new URL(url).pathname.replace('/api/v1', '')
       if (path === '/playlists' && init?.method === 'POST')
         return { ok: true, status: 200, json: async () => ({ id: 9, name: 'Night bus', track_count: 0 }) } as Response
-      if (path === '/playlists') return { ok: true, status: 200, json: async () => [{ id: 7, name: 'Road trip', track_count: 3 }] } as Response
+      if (path === '/playlists')
+        return { ok: true, status: 200, json: async () => [{ id: 7, name: 'Road trip', track_count: 3 }] } as Response
       if (path === '/nodes/20/tracklist')
         return {
           ok: true,
@@ -151,7 +152,7 @@ describe('a track row on the desktop', () => {
 
   it('says so when the add fails, and stays open', async () => {
     addAnswers = 'fail'
-    await render(createElement(AddToPlaylistButton, { nodeId: 5 }))
+    await render(<AddToPlaylistButton nodeId={5} />)
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Add to playlist"]')!.click())
     await settle()
     await pick('Road trip')
@@ -160,9 +161,18 @@ describe('a track row on the desktop', () => {
   })
 })
 
+it('gives the focus to the popup, not the new playlist field, as it opens', async () => {
+  await render(<AddToPlaylistButton nodeId={5} />)
+  await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Add to playlist"]')!.click())
+  expect(document.activeElement).toBe(popup())
+  await settle()
+  expect(document.activeElement).toBe(popup())
+  expect(popup()!.querySelector('input')).not.toBeNull()
+})
+
 describe('an album', () => {
   it("adds every track in the album's order in one request, and says how many went in", async () => {
-    await render(createElement(AddToPlaylistButton, { albumId: 20 }))
+    await render(<AddToPlaylistButton albumId={20} />)
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Add album to playlist"]')!.click())
     await settle()
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -178,7 +188,7 @@ describe('an album', () => {
   })
 
   it('makes a new playlist and adds the album to it', async () => {
-    await render(createElement(AddToPlaylistButton, { albumId: 20 }))
+    await render(<AddToPlaylistButton albumId={20} />)
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Add album to playlist"]')!.click())
     await settle()
     const field = popup()!.querySelector('input')!
