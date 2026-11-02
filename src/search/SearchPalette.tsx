@@ -122,6 +122,13 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
     else onOpen(item.id)
   }
 
+  const pickingChange = (item: Item, next: boolean) => {
+    setPickingFor(next ? item.key : null)
+    // Back to the field once it closes, after the picker hands the focus to
+    // its button.
+    if (!next) requestAnimationFrame(() => inputRef.current?.focus())
+  }
+
   const play = (item: Item) => {
     playItem(item, playback, graph, relations)
     onClose()
@@ -208,6 +215,8 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
                   onPlay={() => play(top)}
                   onOpen={() => open(top)}
                   onHover={() => setCursor(0)}
+                  picking={pickingFor === top.key}
+                  onPickingChange={(next) => pickingChange(top, next)}
                 />
               ) : (
                 <div />
@@ -228,12 +237,7 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
                           onOpen={() => open(item)}
                           onHover={() => setCursor(order.indexOf(item))}
                           picking={pickingFor === item.key}
-                          onPickingChange={(next) => {
-                            setPickingFor(next ? item.key : null)
-                            // Back to the field once it closes, after the
-                            // picker hands the focus to its button.
-                            if (!next) requestAnimationFrame(() => inputRef.current?.focus())
-                          }}
+                          onPickingChange={(next) => pickingChange(item, next)}
                         />
                       ))}
                     </div>
@@ -307,6 +311,8 @@ function TopResult({
   onPlay,
   onOpen,
   onHover,
+  picking,
+  onPickingChange,
 }: {
   item: Item
   subtitle: string
@@ -314,6 +320,9 @@ function TopResult({
   onPlay: () => void
   onOpen: () => void
   onHover: () => void
+  /** A track's playlist picker is open (#447). */
+  picking: boolean
+  onPickingChange: (open: boolean) => void
 }) {
   return (
     <div
@@ -342,6 +351,7 @@ function TopResult({
         <Button variant="secondary" onClick={onOpen}>
           open
         </Button>
+        {item.kind === 'recording' && <AddToPlaylistButton nodeId={item.id} open={picking} onOpenChange={onPickingChange} />}
       </div>
     </div>
   )
