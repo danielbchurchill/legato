@@ -29,7 +29,11 @@ export function LeftPanel({ children, label }: { children: ReactNode; label: str
   )
 }
 
-export function RightPanel({ children, label, wash }: { children: ReactNode; label: string; wash?: string }) {
+/** `fill` holds the panel still and gives the content its full height, for
+ * content that scrolls a part of itself: the now playing panel's lyrics
+ * (#445), under a header that stays put. It's the same scroller either way,
+ * so switching it doesn't remount the content. */
+export function RightPanel({ children, label, wash, fill }: { children: ReactNode; label: string; wash?: string; fill?: boolean }) {
   return (
     <Surface
       role="complementary"
@@ -39,7 +43,7 @@ export function RightPanel({ children, label, wash }: { children: ReactNode; lab
       // its material and the cover colour reads as light falling through it.
       style={wash ? { background: `${wash}, var(--color-surface)` } : undefined}
     >
-      <ScrollArea className="flex-1" contentClassName="p-[12px]">
+      <ScrollArea className="flex-1" contentClassName={fill ? 'flex h-full flex-col p-[12px]' : 'p-[12px]'}>
         {children}
       </ScrollArea>
     </Surface>
