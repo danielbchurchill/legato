@@ -138,12 +138,13 @@ describe('panels after the server comes back', () => {
     await render(createElement(AddToPlaylistButton, { nodeId: 1 }))
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Add to playlist"]')?.click())
     await settle()
-    expect(container.textContent).not.toContain('Road trip')
+    // The picker is a popover, portaled to the body.
+    expect(document.body.textContent).not.toContain('Road trip')
 
     server = 'up'
     await act(async () => announceServerBack({ restarted: true }))
     await settle()
 
-    expect(container.textContent).toContain('Road trip')
+    expect(document.body.textContent).toContain('Road trip')
   })
 })

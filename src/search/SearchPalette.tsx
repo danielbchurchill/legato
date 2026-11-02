@@ -6,10 +6,11 @@ import { Icon } from '../ui/Icon'
 import { Kbd } from '../ui/Kbd'
 import { SectionLabel } from '../ui/SectionLabel'
 import { formatDuration, plural } from '../ui/format'
-import { MOD_KEY_LABEL } from '../shell/keys'
+import { ALT_KEY_LABEL, MOD_KEY_LABEL } from '../shell/keys'
 import { useShellLayout } from '../shell/layout'
 import { useGraph } from '../canvas/graphContext'
 import type { usePlayback } from '../playback/usePlayback'
+import { AddToPlaylistButton } from '../panels/AddToPlaylistButton'
 import {
   enqueueItem,
   filterOf,
@@ -34,7 +35,7 @@ import {
  * way.
  *
  * Keys: ↑↓ move through every row in display order, ↵ opens, ⇧↵ plays,
- * ⌘↵ adds to the queue, esc closes. */
+ * ⌘↵ adds to the queue, ⌥↵ opens a track's playlist picker, esc closes. */
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: 'all', label: 'all' },
@@ -59,6 +60,8 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [cursor, setCursor] = useState(0)
+  // The track whose playlist picker is open (#447).
+  const [pickingFor, setPickingFor] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const { hits, pending, items, playlists } = useSearchResults(query)
@@ -81,6 +84,7 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
   if (cursorFor.query !== query || cursorFor.filter !== filter) {
     setCursorFor({ query, filter })
     setCursor(0)
+    setPickingFor(null)
   }
 
   useEffect(() => {
@@ -118,6 +122,13 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
     else onOpen(item.id)
   }
 
+  const pickingChange = (item: Item, next: boolean) => {
+    setPickingFor(next ? item.key : null)
+    // Back to the field once it closes, after the picker hands the focus to
+    // its button.
+    if (!next) requestAnimationFrame(() => inputRef.current?.focus())
+  }
+
   const play = (item: Item) => {
     playItem(item, playback, graph, relations)
     onClose()
@@ -137,7 +148,9 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
     } else if (e.key === 'Enter' && selected) {
       e.preventDefault()
       if (e.metaKey || e.ctrlKey) void enqueueItem(selected, playback)
-      else if (e.shiftKey) play(selected)
+      else if (e.altKey) {
+        if (selected.kind === 'recording') setPickingFor(selected.key)
+      } else if (e.shiftKey) play(selected)
       else open(selected)
     }
   }
@@ -202,6 +215,8 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
                   onPlay={() => play(top)}
                   onOpen={() => open(top)}
                   onHover={() => setCursor(0)}
+                  picking={pickingFor === top.key}
+                  onPickingChange={(next) => pickingChange(top, next)}
                 />
               ) : (
                 <div />
@@ -221,6 +236,8 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
                           selected={selected === item}
                           onOpen={() => open(item)}
                           onHover={() => setCursor(order.indexOf(item))}
+                          picking={pickingFor === item.key}
+                          onPickingChange={(next) => pickingChange(item, next)}
                         />
                       ))}
                     </div>
@@ -245,6 +262,7 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
           <Hint keys={['↵']}>open</Hint>
           <Hint keys={['⇧↵']}>play</Hint>
           <Hint keys={[`${MOD_KEY_LABEL}↵`]}>add to queue</Hint>
+          <Hint keys={[`${ALT_KEY_LABEL}↵`]}>add to playlist</Hint>
           <span className="mono ml-auto text-[var(--color-ink-3)]">{plural(trackTotal, 'track')}</span>
         </div>
       </div>
@@ -293,6 +311,8 @@ function TopResult({
   onPlay,
   onOpen,
   onHover,
+  picking,
+  onPickingChange,
 }: {
   item: Item
   subtitle: string
@@ -300,6 +320,9 @@ function TopResult({
   onPlay: () => void
   onOpen: () => void
   onHover: () => void
+  /** A track's playlist picker is open (#447). */
+  picking: boolean
+  onPickingChange: (open: boolean) => void
 }) {
   return (
     <div
@@ -328,11 +351,15 @@ function TopResult({
         <Button variant="secondary" onClick={onOpen}>
           open
         </Button>
+        {item.kind === 'recording' && <AddToPlaylistButton nodeId={item.id} open={picking} onOpenChange={onPickingChange} />}
       </div>
     </div>
   )
 }
 
+/* A result. A track's row, while it's under the cursor (the pointer or
+ * the arrow keys) or its picker is open, has add to playlist at its end
+ * (#447), beside the option rather than inside it. */
 function ResultRow({
   item,
   subtitle,
@@ -340,6 +367,8 @@ function ResultRow({
   selected,
   onOpen,
   onHover,
+  picking,
+  onPickingChange,
 }: {
   item: Item
   subtitle: string
@@ -347,35 +376,48 @@ function ResultRow({
   selected: boolean
   onOpen: () => void
   onHover: () => void
+  picking: boolean
+  onPickingChange: (open: boolean) => void
 }) {
   const track = item.kind === 'recording'
   return (
-    <button
-      type="button"
-      id={`search-${item.key}`}
-      role="option"
-      aria-selected={selected}
-      tabIndex={-1}
-      onClick={onOpen}
+    <div
       onPointerMove={onHover}
-      className={`-mx-[8px] grid items-center gap-[10px] rounded-[var(--radius-control)] px-[8px] text-left transition-colors duration-[var(--motion-fast)] ${
-        track ? 'h-[44px] grid-cols-[32px_minmax(0,1fr)_auto]' : 'h-[48px] grid-cols-[40px_minmax(0,1fr)_auto]'
-      } ${selected ? 'bg-[var(--color-wash-2)]' : ''}`}
+      className={`-mx-[8px] flex items-center rounded-[var(--radius-control)] transition-colors duration-[var(--motion-fast)] ${
+        selected ? 'bg-[var(--color-wash-2)]' : ''
+      }`}
     >
-      <Artwork item={item} size={track ? 32 : 40} />
-      <span className="flex min-w-0 flex-col">
-        <span title={item.title} className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
-          {item.title}
+      <button
+        type="button"
+        id={`search-${item.key}`}
+        role="option"
+        aria-selected={selected}
+        tabIndex={-1}
+        onClick={onOpen}
+        className={`grid min-w-0 flex-1 items-center gap-[10px] px-[8px] text-left ${
+          track ? 'h-[44px] grid-cols-[32px_minmax(0,1fr)_auto]' : 'h-[48px] grid-cols-[40px_minmax(0,1fr)_auto]'
+        }`}
+      >
+        <Artwork item={item} size={track ? 32 : 40} />
+        <span className="flex min-w-0 flex-col">
+          <span title={item.title} className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
+            {item.title}
+          </span>
+          <span className="truncate text-small text-[var(--color-ink-2)]">{subtitle}</span>
         </span>
-        <span className="truncate text-small text-[var(--color-ink-2)]">{subtitle}</span>
-      </span>
-      {selected ? (
-        <Kbd>↵</Kbd>
-      ) : duration ? (
-        <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-2)]">{duration}</span>
-      ) : (
-        <span />
+        {selected ? (
+          <Kbd>↵</Kbd>
+        ) : duration ? (
+          <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-2)]">{duration}</span>
+        ) : (
+          <span />
+        )}
+      </button>
+      {track && (selected || picking) && (
+        <span className="-ml-[2px] pr-[8px]">
+          <AddToPlaylistButton nodeId={item.id} size={26} open={picking} onOpenChange={onPickingChange} />
+        </span>
       )}
-    </button>
+    </div>
   )
 }

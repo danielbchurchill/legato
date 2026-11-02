@@ -1,4 +1,4 @@
-import { useState, type Ref } from 'react'
+import { useState, type ReactNode, type Ref } from 'react'
 import { Button } from '../ui/Button'
 import { CoverArt } from '../ui/CoverArt'
 import { Icon } from '../ui/Icon'
@@ -14,6 +14,8 @@ import { shuffle, type NodeDetailsData } from '../panels/nodeDetailsData'
 import { enqueueItem } from '../search/searchData'
 import type { usePlayback } from '../playback/usePlayback'
 import type { PhoneNodeState } from './nodeDetail'
+import { MenuItem } from './MenuItem'
+import { useTrackHoldMenu } from './useTrackHoldMenu'
 
 /* A node's detail on the phone (#389, Legato Mobile v2 screen 5): the
  * desktop's details panel, drawn in the sheet at the medium detent with the
@@ -200,9 +202,10 @@ function HeaderSkeleton() {
 }
 
 /* "more": what the desktop's panel has beside the heart, for a record or a
- * track. Add to queue, add to playlist (a track; the menu turns into the
- * playlist picker), and edit tags, which opens the metadata tab where Edit
- * is, as the desktop's pencil does. */
+ * track. Add to queue, add to playlist (the menu turns into the playlist
+ * picker; a record's goes in whole, in its order, #448), and edit tags,
+ * which opens the metadata tab where Edit is, as the desktop's pencil
+ * does. */
 function MoreMenu({ details, playback, onEditTags }: { details: NodeDetailsData; playback: Playback; onEditTags: () => void }) {
   const [open, setOpen] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -234,7 +237,7 @@ function MoreMenu({ details, playback, onEditTags }: { details: NodeDetailsData;
     >
       {(close) =>
         picking ? (
-          <PlaylistPicker nodeId={node.id} onDone={close} sheet />
+          <PlaylistPicker {...(node.type === 'release' ? { albumId: node.id } : { nodeId: node.id })} onDone={close} sheet />
         ) : (
           <ul className="flex flex-col">
             <MenuItem
@@ -245,7 +248,7 @@ function MoreMenu({ details, playback, onEditTags }: { details: NodeDetailsData;
             >
               add to queue
             </MenuItem>
-            {node.type === 'recording' && <MenuItem onClick={() => setPicking(true)}>add to playlist</MenuItem>}
+            <MenuItem onClick={() => setPicking(true)}>add to playlist</MenuItem>
             <MenuItem
               onClick={() => {
                 onEditTags()
@@ -261,21 +264,8 @@ function MoreMenu({ details, playback, onEditTags }: { details: NodeDetailsData;
   )
 }
 
-/** A row of a phone "more" menu, 44px: node detail's and Now playing's. */
-export function MenuItem({ onClick, disabled, children }: { onClick: () => void; disabled?: boolean; children: string }) {
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={disabled}
-        className="flex h-[44px] w-full items-center rounded-[10px] px-[12px] text-left text-[length:var(--text-body)] text-[var(--color-ink)] transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] disabled:text-[var(--color-ink-3)]"
-      >
-        {children}
-      </button>
-    </li>
-  )
-}
+// Now playing's menu takes its rows from here.
+export { MenuItem }
 
 /** The tab under the header, in the sheet's place for content. */
 export function NodeBody({ node, playback, onOpenNode }: NodeSheetProps) {
@@ -285,22 +275,54 @@ export function NodeBody({ node, playback, onOpenNode }: NodeSheetProps) {
   return (
     <TouchLayoutContext.Provider value={true}>
       <div className="px-[20px] pb-[20px]">
-        {node.tab === 'overview' && (
-          <Overview
-            sheet
-            node={detail}
-            summary={summary}
-            tracklist={tracklist}
-            people={credits.people}
-            onShowTracks={() => node.setTab('tracks')}
-            playback={playback}
-            onFocusNode={onOpenNode}
-          />
-        )}
-        {node.tab === 'tracks' && <TracksTab sheet node={detail} tracklist={tracklist} playback={playback} onFocusNode={onOpenNode} />}
+        <TrackHold detail={detail} playback={playback} onOpenNode={onOpenNode}>
+          {(holdRef) => (
+            <>
+              {node.tab === 'overview' && (
+                <Overview
+                  sheet
+                  holdRef={holdRef}
+                  node={detail}
+                  summary={summary}
+                  tracklist={tracklist}
+                  people={credits.people}
+                  onShowTracks={() => node.setTab('tracks')}
+                  playback={playback}
+                  onFocusNode={onOpenNode}
+                />
+              )}
+              {node.tab === 'tracks' && (
+                <TracksTab sheet holdRef={holdRef} node={detail} tracklist={tracklist} playback={playback} onFocusNode={onOpenNode} />
+              )}
+            </>
+          )}
+        </TrackHold>
         {node.tab === 'credits' && <CreditsTab sheet node={detail} people={credits.people} reload={reload} onFocusNode={onOpenNode} />}
         {node.tab === 'metadata' && <MetadataTab sheet key={detail.id} node={detail} summary={summary} reload={reload} />}
       </div>
     </TouchLayoutContext.Provider>
+  )
+}
+
+/* An album's or a person's tracks take a hold, which opens the track's
+ * menu (TrackHoldMenu.tsx). On an album's own tracks there's no other album
+ * for go to album to open. */
+function TrackHold({
+  detail,
+  playback,
+  onOpenNode,
+  children,
+}: {
+  detail: NodeDetailsData['node']
+  playback: Playback
+  onOpenNode: (id: number) => void
+  children: (holdRef: (list: HTMLElement | null) => (() => void) | undefined) => ReactNode
+}) {
+  const { holdRef, menu } = useTrackHoldMenu({ playback, onOpenNode, ownAlbumId: detail.type === 'release' ? detail.id : null })
+  return (
+    <>
+      {children(holdRef)}
+      {menu}
+    </>
   )
 }

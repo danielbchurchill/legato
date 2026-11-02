@@ -172,6 +172,7 @@ export function NodeCard({ renderer, node, nodeKey, layout, onOpenDetails, playb
             </Button>
           )}
           {node.type === 'recording' && <AddToPlaylistButton nodeId={node.id} />}
+          {node.type === 'release' && <AddToPlaylistButton albumId={node.id} />}
           <IconButton
             icon="heart"
             label={isFavourite ? 'Remove from favourites' : 'Add to favourites'}

@@ -80,22 +80,49 @@ export function listPlaylistTracks(db: Database, playlistId: number): PlaylistTr
 }
 
 export function addTrackToPlaylist(db: Database, playlistId: number, nodeId: number): PlaylistTrackRow {
+  return addTracksToPlaylist(db, playlistId, [nodeId])[0];
+}
+
+// Appends every node in `nodeIds`, in that order, in one transaction: a
+// whole album goes in at once (#448), or, if any id is bad, none of it
+// does. A node already in the playlist is added again, as a single add
+// always has (DESIGN.md, "Adding to a playlist").
+export function addTracksToPlaylist(db: Database, playlistId: number, nodeIds: readonly number[]): PlaylistTrackRow[] {
   return db.transaction(() => {
     const { maxPosition } = db
       .prepare("SELECT MAX(position) AS maxPosition FROM playlist_tracks WHERE playlist_id = ?")
       .get(playlistId) as { maxPosition: number | null };
 
-    const row = db
-      .prepare(
-        `INSERT INTO playlist_tracks (playlist_id, node_id, position) VALUES (?, ?, ?)
-         RETURNING id, playlist_id, node_id, position, added_at`,
-      )
-      .get(playlistId, nodeId, (maxPosition ?? 0) + 1) as PlaylistTrackRow;
+    const insert = db.prepare(
+      `INSERT INTO playlist_tracks (playlist_id, node_id, position) VALUES (?, ?, ?)
+       RETURNING id, playlist_id, node_id, position, added_at`,
+    );
+    const start = (maxPosition ?? 0) + 1;
+    const rows = nodeIds.map((nodeId, i) => insert.get(playlistId, nodeId, start + i) as PlaylistTrackRow);
 
     db.prepare("UPDATE playlists SET updated_at = datetime('now') WHERE id = ?").run(playlistId);
 
-    return row;
+    return rows;
   })();
+}
+
+/** The most tracks one request adds. An album is far under it; the cap
+ * bounds how long one request holds the database's write lock. */
+export const MAX_TRACKS_PER_ADD = 1000;
+
+const isNodeId = (value: unknown): value is number => Number.isInteger(value) && (value as number) > 0;
+
+/** The node ids a POST /playlists/:id/tracks body asks to add, in order:
+ * `{ nodeId }` for one track, `{ nodeIds }` for several. Null when the
+ * body is neither. */
+export function tracksToAdd(body: unknown): number[] | null {
+  if (body == null || typeof body !== "object") return null;
+  const { nodeId, nodeIds } = body as { nodeId?: unknown; nodeIds?: unknown };
+  if (nodeIds !== undefined) {
+    if (!Array.isArray(nodeIds) || nodeIds.length === 0 || nodeIds.length > MAX_TRACKS_PER_ADD) return null;
+    return nodeIds.every(isNodeId) ? nodeIds : null;
+  }
+  return isNodeId(nodeId) ? [nodeId] : null;
 }
 
 // Renumbers the whole playlist rather than just shifting the range between
@@ -180,13 +207,21 @@ export function playlistsRoutes(db: Database) {
       return listPlaylistTracks(db, Number(request.params.id));
     });
 
-    app.post<{ Params: { id: string }; Body: { nodeId: number } }>(
+    // `{ nodeId }` adds one track and answers with its row; `{ nodeIds }`
+    // adds them all in order and answers with their rows. Either way the
+    // clients hear one playlist:tracks-changed.
+    app.post<{ Params: { id: string }; Body: { nodeId?: number; nodeIds?: number[] } }>(
       "/playlists/:id/tracks",
-      async (request) => {
+      async (request, reply) => {
         const playlistId = Number(request.params.id);
-        const track = addTrackToPlaylist(db, playlistId, request.body.nodeId);
+        const nodeIds = tracksToAdd(request.body);
+        if (nodeIds == null) {
+          reply.code(400);
+          return { error: `send a nodeId, or nodeIds: 1 to ${MAX_TRACKS_PER_ADD} node ids` };
+        }
+        const rows = addTracksToPlaylist(db, playlistId, nodeIds);
         broadcast("playlist:tracks-changed", { playlistId });
-        return track;
+        return Array.isArray(request.body.nodeIds) ? rows : rows[0];
       },
     );
 

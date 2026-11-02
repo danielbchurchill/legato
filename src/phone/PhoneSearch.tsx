@@ -7,6 +7,7 @@ import { formatDuration, plural } from '../ui/format'
 import { useGraph, type GraphData } from '../canvas/graphContext'
 import { playItem, useReleaseYears, useSearchRelations, type Group, type Item, type SearchRelations } from '../search/searchData'
 import type { usePlayback } from '../playback/usePlayback'
+import { holdRowProps, useTrackHoldMenu } from './useTrackHoldMenu'
 import type { PhoneSearchState } from './searchState'
 
 /* Search on the phone (#389, Legato Mobile v2 screen 4). A tap on the
@@ -108,6 +109,9 @@ export function SearchResultsList({ search, playback, onOpenNode, onOpenPlaylist
   const people = usePeopleFacts(graph, relations)
   const shown = [...(top ? [top] : []), ...groups.flatMap((g) => g.rows)]
   const years = useReleaseYears(shown.filter((item) => item.kind === 'release').map((item) => item.id))
+  // A held track opens its menu (TrackHoldMenu.tsx); a tap still opens it.
+  const { holdRef, menu } = useTrackHoldMenu({ playback, onOpenNode })
+  const holdProps = (item: Item) => (item.kind === 'recording' ? holdRowProps(item.id, relations.releaseOf.get(item.id)) : {})
 
   const open = (item: Item) => (item.kind === 'playlist' ? onOpenPlaylist(item.id) : onOpenNode(item.id))
 
@@ -148,11 +152,14 @@ export function SearchResultsList({ search, playback, onOpenNode, onOpenPlaylist
   }
 
   return (
-    <div className="flex flex-col px-[16px] pb-[20px]">
+    <div ref={holdRef} className="flex flex-col px-[16px] pb-[20px] [-webkit-touch-callout:none]">
       {top && (
         <>
           <GroupLabel first>top result</GroupLabel>
-          <div className="flex items-center rounded-[16px] bg-[var(--color-wash)] pr-[12px]">
+          <div
+            {...holdProps(top)}
+            className="flex items-center rounded-[16px] bg-[var(--color-wash)] pr-[12px] transition-colors duration-[var(--motion-fast)] data-[held]:bg-[var(--color-wash-2)]"
+          >
             <button type="button" onClick={() => open(top)} className="flex min-w-0 flex-1 items-center gap-[14px] p-[12px] text-left">
               <Artwork item={top} size={56} />
               <span className="flex min-w-0 flex-col">
@@ -192,11 +199,13 @@ export function SearchResultsList({ search, playback, onOpenNode, onOpenPlaylist
                       ? plural(people.credit(item.id).tracks, 'track')
                       : null
                 }
+                holdProps={holdProps(item)}
                 onOpen={() => open(item)}
               />
             ))}
           </section>
         ))}
+      {menu}
     </div>
   )
 }
@@ -210,13 +219,27 @@ function GroupLabel({ children, first = false }: { children: ReactNode; first?: 
 /* A row: an album or a person at 60px with a 48px cover or avatar, a track
  * at 52px with a 40px cover and its duration. A track's title is regular
  * weight; everything else's is 500. */
-function ResultRow({ item, subtitle, trailing, onOpen }: { item: Item; subtitle: string; trailing: string | null; onOpen: () => void }) {
+function ResultRow({
+  item,
+  subtitle,
+  trailing,
+  holdProps,
+  onOpen,
+}: {
+  item: Item
+  subtitle: string
+  trailing: string | null
+  /** A track's data-hold-* attributes, which let a hold open its menu. */
+  holdProps: Record<string, string>
+  onOpen: () => void
+}) {
   const track = item.kind === 'recording'
   return (
     <button
       type="button"
       onClick={onOpen}
-      className={`flex w-full items-center gap-[12px] rounded-[var(--radius-control)] px-[4px] text-left ${track ? 'h-[52px]' : 'h-[60px]'}`}
+      {...holdProps}
+      className={`flex w-full items-center gap-[12px] rounded-[var(--radius-control)] px-[4px] text-left transition-colors duration-[var(--motion-fast)] data-[held]:bg-[var(--color-wash-2)] ${track ? 'h-[52px]' : 'h-[60px]'}`}
     >
       <Artwork item={item} size={track ? 40 : 48} />
       <span className="flex min-w-0 flex-1 flex-col">

@@ -91,6 +91,9 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (url: string) => {
       const path = new URL(url, 'http://test').pathname
+      if (path.endsWith('/playlists')) return { ok: true, json: async () => [{ id: 7, name: 'Road trip', track_count: 0 }] }
+      if (path.endsWith('/playlists/7/tracks')) return { ok: true, json: async () => [] }
+      if (path.endsWith('/nodes/3')) return { ok: true, json: async () => TRACK }
       const body = path.endsWith('/2/summary')
         ? { kind: 'release', tracks: 2, totalDurationMs: 75_000, releaseDate: '1966-05-16' }
         : path.endsWith('/2/tracklist')
@@ -169,8 +172,9 @@ describe("a node's detail on the phone", () => {
   it('lists the tracks in 44px rows and plays the album', async () => {
     const playback = fakePlayback()
     const container = await render(2, playback)
-    const row = button(container, "1Dylan's Dream0:27")!
+    const row = button(container, "1Dylan's Dream")!.closest('li')!
     expect(row.className).toContain('h-[44px]')
+    expect(row.textContent).toBe("1Dylan's Dream0:27")
     act(() => button(container, 'play')!.click())
     expect(playback.playAlbum).toHaveBeenCalledWith(2)
   })
@@ -193,12 +197,12 @@ describe("a node's detail on the phone", () => {
     expect(button(byline, 'Dylan Moss Live')!.className).toContain('touch-target')
   })
 
-  it('offers add to queue and edit tags for a record, and edit tags opens the metadata tab', async () => {
+  it('offers add to queue, add to playlist and edit tags for a record, and edit tags opens the metadata tab', async () => {
     const playback = fakePlayback()
     const container = await render(2, playback)
     act(() => button(container, 'More')!.click())
     const menu = document.querySelector('[role="dialog"]')!
-    expect([...menu.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['add to queue', 'edit tags'])
+    expect([...menu.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['add to queue', 'add to playlist', 'edit tags'])
     act(() => button(menu, 'edit tags')!.click())
     expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('metadata')
   })
@@ -208,8 +212,28 @@ describe("a node's detail on the phone", () => {
     act(() => button(container, 'More')!.click())
     const menu = () => document.querySelector('[role="dialog"]')!
     expect([...menu().querySelectorAll('button')].map((b) => b.textContent)).toEqual(['add to queue', 'add to playlist', 'edit tags'])
-    act(() => button(menu(), 'add to playlist')!.click())
+    await act(async () => {
+      button(menu(), 'add to playlist')!.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     expect(menu().querySelector('input[aria-label="New playlist name"]')).not.toBeNull()
+  })
+
+  it("adds a record's tracks to a playlist in its order, and says how many went in (#448)", async () => {
+    const container = await render(2)
+    act(() => button(container, 'More')!.click())
+    act(() => button(document.querySelector('[role="dialog"]')!, 'add to playlist')!.click())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    await act(async () => {
+      button(document.querySelector('[role="dialog"]')!, 'Road trip')!.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const post = vi.mocked(fetch).mock.calls.find(([url, init]) => String(url).endsWith('/playlists/7/tracks') && init?.method === 'POST')
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ nodeIds: [3, 4] })
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('added 2 tracks')
+    expect(document.querySelector('[role="status"]')?.textContent).toBe('Added 2 tracks to Road trip')
   })
 
   it('gives an artist a round photo and the heart alone', async () => {
@@ -250,5 +274,84 @@ describe('the controls over the map in node detail', () => {
     expect(onBack).toHaveBeenCalled()
     expect(onCentre).toHaveBeenCalled()
     expect(button(container, 'centre on map')!.parentElement!.hasAttribute('inert')).toBe(true)
+  })
+})
+
+// #447: a held track row opens a menu; a quick tap still plays.
+describe('holding a track row on the phone', () => {
+  type Point = { x: number; y: number }
+  const touch = (target: Element, type: string, at: Point) => {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    const touches = type === 'touchend' ? [] : [{ identifier: 0, clientX: at.x, clientY: at.y, target }]
+    Object.defineProperty(event, 'touches', { value: touches })
+    target.dispatchEvent(event)
+    return event
+  }
+  const hold = (target: Element, ms = 400) => {
+    touch(target, 'touchstart', { x: 10, y: 10 })
+    act(() => vi.advanceTimersByTime(ms))
+  }
+  const menuItems = () => [...(document.querySelector('[role="dialog"]')?.querySelectorAll('button') ?? [])].map((b) => b.textContent)
+
+  afterEach(() => vi.useRealTimers())
+
+  it("opens the track's menu on a hold, without playing it, and washes the row", async () => {
+    const playback = fakePlayback()
+    const container = await render(2, playback)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const title = button(container, "1Dylan's Dream")!
+    hold(title)
+    // On the album's own list, there's no other album to go to.
+    expect(menuItems()).toEqual(['add to queue', 'add to playlist'])
+    expect(title.closest('li')!.hasAttribute('data-held')).toBe(true)
+    // The touch ends; the click it makes doesn't play the track.
+    const end = touch(title, 'touchend', { x: 10, y: 10 })
+    expect(end.defaultPrevented).toBe(true)
+    act(() => title.click())
+    expect(playback.playTracks).not.toHaveBeenCalled()
+
+    act(() => button(document.querySelector('[role="dialog"]')!, 'add to queue')!.click())
+    expect(playback.addToQueue).toHaveBeenCalledWith(3)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(title.closest('li')!.hasAttribute('data-held')).toBe(false)
+  })
+
+  it('plays on a quick tap, and leaves a touch that moves to the scroll', async () => {
+    const playback = fakePlayback()
+    const container = await render(2, playback)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const title = button(container, "1Dylan's Dream")!
+
+    hold(title, 200)
+    touch(title, 'touchend', { x: 10, y: 10 })
+    act(() => title.click())
+    expect(menuItems()).toEqual([])
+    expect(playback.playTracks).toHaveBeenCalledTimes(1)
+
+    touch(title, 'touchstart', { x: 10, y: 10 })
+    touch(title, 'touchmove', { x: 10, y: 40 })
+    act(() => vi.advanceTimersByTime(600))
+    expect(menuItems()).toEqual([])
+  })
+
+  it('turns into the playlist picker, and goes to the album a held track is on', async () => {
+    const opened: number[] = []
+    const container = await render(5, fakePlayback(), (id) => opened.push(id))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    hold(button(container, "1Dylan's Dream")!)
+    // A producer's list doesn't know the album: the track is asked.
+    await act(async () => {
+      await vi.dynamicImportSettled()
+    })
+    expect(menuItems()).toEqual(['add to queue', 'add to playlist', 'go to album'])
+    act(() => button(document.querySelector('[role="dialog"]')!, 'go to album')!.click())
+    expect(opened).toEqual([2])
+
+    hold(button(container, '2Highway Blues')!)
+    await act(async () => {
+      button(document.querySelector('[role="dialog"]')!, 'add to playlist')!.click()
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+    })
+    expect(document.querySelector('[role="dialog"] input[aria-label="New playlist name"]')).not.toBeNull()
   })
 })

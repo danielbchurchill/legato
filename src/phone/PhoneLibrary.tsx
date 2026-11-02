@@ -31,6 +31,7 @@ import {
   type TrackSort,
 } from '../library/types'
 import type { usePlayback } from '../playback/usePlayback'
+import { holdRowProps, useTrackHoldMenu } from './useTrackHoldMenu'
 
 /* The phone's library tab (#389, Legato Mobile v2 screen 2), in the sheet
  * at its large detent: chips for albums, artists, tracks and credits, a
@@ -140,7 +141,7 @@ export function PhoneLibrary({ onOpenNode, playback, noLibrary, onShowMap }: Pho
       </div>
       {entity === 'albums' && <Albums onOpen={onOpenNode} />}
       {entity === 'artists' && <Artists onOpen={onOpenNode} />}
-      {entity === 'tracks' && <Tracks playback={playback} />}
+      {entity === 'tracks' && <Tracks playback={playback} onOpenNode={onOpenNode} />}
       {entity === 'credits' && <Credits onOpen={onOpenNode} />}
     </div>
   )
@@ -446,7 +447,8 @@ function RowsLoading({ height, size, round, label }: { height: number; size: num
 /* A track as the handoff's search results draw one: a 40px cover, the
  * title over the artist, the duration in mono. The row plays it, and says
  * so to a screen reader. The playing track's title is in the accent, as
- * the desktop's table marks it. */
+ * the desktop's table marks it. Held, it opens the track's menu
+ * (TrackHoldMenu.tsx), and is washed while that's open. */
 const TrackRowView = memo(function TrackRowView({
   track,
   isPlaying,
@@ -462,7 +464,8 @@ const TrackRowView = memo(function TrackRowView({
       onClick={() => onPlay(track)}
       aria-label={`Play ${track.title}${track.artistName ? `, ${track.artistName}` : ''}`}
       aria-current={isPlaying ? 'true' : undefined}
-      className="flex h-full w-full items-center gap-[12px] px-[4px] text-left"
+      {...holdRowProps(track.id, track.albumId)}
+      className="flex h-full w-full items-center gap-[12px] rounded-[var(--radius-control)] px-[4px] text-left transition-colors duration-[var(--motion-fast)] data-[held]:bg-[var(--color-wash-2)]"
     >
       <CoverArt nodeId={track.albumId ?? track.id} size="thumb" radius="none" className="size-[40px] rounded-[5px]" />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -478,8 +481,9 @@ const TrackRowView = memo(function TrackRowView({
   )
 })
 
-function Tracks({ playback }: { playback: Playback }) {
+function Tracks({ playback, onOpenNode }: { playback: Playback; onOpenNode: (id: number) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null)
+  const { holdRef, menu } = useTrackHoldMenu({ playback, onOpenNode })
   const [sort, setSort] = useState<{ sort: TrackSort; dir: SortDir }>({ sort: 'title', dir: 'asc' })
   const { rows, total, loading, waitVisible, ensureRange } = useLibraryPage<TrackRow>('library/tracks', '', sort.sort, sort.dir)
   // Stable, so the memoised rows don't re-render as playback ticks.
@@ -506,18 +510,21 @@ function Tracks({ playback }: { playback: Playback }) {
         ) : total === 0 ? (
           <LibraryEmpty title="No tracks yet" body="Tracks appear here as your folders are read." />
         ) : (
-          <PagedRows
-            scrollRef={scrollRef}
-            label="Tracks"
-            rows={rows}
-            total={total}
-            ensureRange={ensureRange}
-            rowHeight={TRACK_ROW}
-            pending={<RowLoading size={40} />}
-            renderRow={(track) => <TrackRowView track={track} isPlaying={track.id === playingId} onPlay={onPlay} />}
-          />
+          <div ref={holdRef} className="[-webkit-touch-callout:none]">
+            <PagedRows
+              scrollRef={scrollRef}
+              label="Tracks"
+              rows={rows}
+              total={total}
+              ensureRange={ensureRange}
+              rowHeight={TRACK_ROW}
+              pending={<RowLoading size={40} />}
+              renderRow={(track) => <TrackRowView track={track} isPlaying={track.id === playingId} onPlay={onPlay} />}
+            />
+          </div>
         )}
       </Scroller>
+      {menu}
     </>
   )
 }

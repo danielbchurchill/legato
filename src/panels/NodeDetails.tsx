@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode, type Ref } from 'react'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { CoverArt } from '../ui/CoverArt'
@@ -13,7 +13,7 @@ import { formatClock, formatCount, formatDuration, NO_VALUE, plural } from '../u
 import { useGraph } from '../canvas/graphContext'
 import type { DetailsTab } from '../shell/panels'
 import type { usePlayback } from '../playback/usePlayback'
-import { AddToPlaylistButton } from './AddToPlaylistButton'
+import { AddToPlaylistButton, RowAddToPlaylist } from './AddToPlaylistButton'
 import { DetailRows } from './DetailRows'
 import { formatBitrate, formatFormat } from './format'
 import { NodeByline } from './NodeByline'
@@ -110,6 +110,7 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
         <span className="ml-auto flex">
           <FavouriteButton node={node} />
           {node.type === 'recording' && <AddToPlaylistButton nodeId={node.id} />}
+          {node.type === 'release' && <AddToPlaylistButton albumId={node.id} />}
           {(node.type === 'recording' || node.type === 'release') && (
             <IconButton icon="pencil" label="Edit tags" active={tab === 'metadata'} onClick={() => onTabChange('metadata')} />
           )}
@@ -162,8 +163,46 @@ export function FavouriteButton({ node, sheet = false }: { node: NodeDetail; she
 
 /* In the phone's sheet, a track is the handoff's 44px row: the number in a
  * 20px column, the title at 15px, 12px apart. */
-const SHEET_TRACK_ROW = 'h-[44px] grid-cols-[20px_minmax(0,1fr)_auto] gap-[12px] px-[4px]'
+const SHEET_TRACK_ROW = 'h-[44px] grid-cols-[20px_minmax(0,1fr)] gap-[12px] pl-[4px]'
 const SHEET_TRACK_TITLE = 'text-[15px] leading-[20px]'
+
+/* A track in an album's (or a person's) list: its play button (the
+ * number and the title), then its end, the duration. On the desktop, hover
+ * or focus swaps the duration for add to playlist (#447), so the end sits
+ * beside the button rather than inside it. In the phone's sheet the
+ * duration stays, and a hold on the row opens its menu instead
+ * (phone/TrackHoldMenu.tsx), which reads the row's data-hold-* attributes. */
+function TrackListRow({
+  track,
+  sheet,
+  height,
+  albumId,
+  children,
+}: {
+  track: Pick<TracklistEntry, 'id' | 'canonical_duration_ms'>
+  sheet: boolean
+  /** The desktop row's height: the overview's 34px, the tracks tab's 42. */
+  height: string
+  /** The album a phone row's go to album opens, where the list knows it. */
+  albumId: number | null
+  /** The row's play button. */
+  children: ReactNode
+}) {
+  const duration = (
+    <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-2)]">{formatDuration(track.canonical_duration_ms)}</span>
+  )
+  return (
+    <li
+      {...(sheet ? { 'data-hold-track': track.id, 'data-hold-album': albumId ?? undefined } : {})}
+      className={`group grid grid-cols-[minmax(0,1fr)_auto] items-center rounded-[var(--radius-control)] transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] data-[held]:bg-[var(--color-wash-2)] ${
+        sheet ? 'h-[44px] gap-[12px] pr-[4px]' : `${height} gap-[10px] pr-[6px]`
+      }`}
+    >
+      {children}
+      {sheet ? duration : <RowAddToPlaylist nodeId={track.id}>{duration}</RowAddToPlaylist>}
+    </li>
+  )
+}
 
 function Section({
   label,
@@ -206,6 +245,7 @@ export function Overview({
   playback,
   onFocusNode,
   sheet = false,
+  holdRef,
 }: {
   node: NodeDetail
   summary: Summary | null
@@ -215,6 +255,8 @@ export function Overview({
   playback: Playback
   onFocusNode: (id: number) => void
   sheet?: boolean
+  /** The phone's: a hold on a track opens its menu (phone/TrackHoldMenu.tsx). */
+  holdRef?: Ref<HTMLOListElement>
 }) {
   // The phone's sheet lists a producer's or engineer's tracks, as it does a
   // record's (nodeDetailsData.ts).
@@ -276,16 +318,16 @@ export function Overview({
           label="tracks"
           action={tracklist.length > OVERVIEW_TRACKS ? <Button onClick={onShowTracks}>all {tracklist.length}</Button> : undefined}
         >
-          <ol className={`mt-[4px] flex flex-col ${sheet ? '-mx-[4px]' : '-mx-[6px]'}`}>
+          <ol ref={holdRef} className={`mt-[4px] flex flex-col ${sheet ? '-mx-[4px] [-webkit-touch-callout:none]' : '-mx-[6px]'}`}>
             {tracklist.slice(0, OVERVIEW_TRACKS).map((track, i) => (
-              <li key={track.id}>
+              <TrackListRow key={track.id} track={track} sheet={sheet} height="h-[34px]" albumId={node.type === 'release' ? node.id : null}>
                 <button
                   type="button"
                   onClick={() =>
                     void playback.playTracks(tracklist, i, node.type === 'release' ? { kind: 'release', nodeId: node.id } : null)
                   }
-                  className={`grid w-full items-center rounded-[8px] text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] ${
-                    sheet ? SHEET_TRACK_ROW : 'h-[34px] grid-cols-[18px_minmax(0,1fr)_auto] gap-[10px] px-[6px]'
+                  className={`grid h-full items-center text-left ${
+                    sheet ? SHEET_TRACK_ROW : 'grid-cols-[18px_minmax(0,1fr)] gap-[10px] pl-[6px]'
                   }`}
                 >
                   <span className="mono text-right text-[length:var(--text-mono)] text-[var(--color-ink-3)]">
@@ -296,11 +338,8 @@ export function Overview({
                   >
                     {track.title}
                   </span>
-                  <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-2)]">
-                    {formatDuration(track.canonical_duration_ms)}
-                  </span>
                 </button>
-              </li>
+              </TrackListRow>
             ))}
           </ol>
         </Section>
@@ -404,12 +443,15 @@ export function TracksTab({
   playback,
   onFocusNode,
   sheet = false,
+  holdRef,
 }: {
   node: NodeDetail
   tracklist: TracklistEntry[] | null
   playback: Playback
   onFocusNode: (id: number) => void
   sheet?: boolean
+  /** The phone's: a hold on a track opens its menu (phone/TrackHoldMenu.tsx). */
+  holdRef?: Ref<HTMLOListElement>
 }) {
   if (node.type === 'artist')
     return (
@@ -431,14 +473,14 @@ export function TracksTab({
   const total = tracks.reduce((n, t) => n + (t.canonical_duration_ms ?? 0), 0)
   return (
     <>
-      <ol className={`mt-[8px] flex flex-col ${sheet ? '-mx-[4px]' : '-mx-[6px]'}`}>
+      <ol ref={holdRef} className={`mt-[8px] flex flex-col ${sheet ? '-mx-[4px] [-webkit-touch-callout:none]' : '-mx-[6px]'}`}>
         {tracks.map((track, i) => (
-          <li key={track.id}>
+          <TrackListRow key={track.id} track={track} sheet={sheet} height="h-[42px]" albumId={node.type === 'release' ? node.id : null}>
             <button
               type="button"
               onClick={() => void playback.playTracks(tracks, i, node.type === 'release' ? { kind: 'release', nodeId: node.id } : null)}
-              className={`group grid w-full items-center rounded-[var(--radius-control)] text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)] ${
-                sheet ? SHEET_TRACK_ROW : 'h-[42px] grid-cols-[20px_minmax(0,1fr)_auto] gap-[10px] px-[6px]'
+              className={`grid h-full items-center text-left ${
+                sheet ? SHEET_TRACK_ROW : 'grid-cols-[20px_minmax(0,1fr)] gap-[10px] pl-[6px]'
               }`}
             >
               <span className="flex justify-end">
@@ -454,11 +496,8 @@ export function TracksTab({
               >
                 {track.title}
               </span>
-              <span className="mono text-[length:var(--text-mono)] text-[var(--color-ink-2)]">
-                {formatDuration(track.canonical_duration_ms)}
-              </span>
             </button>
-          </li>
+          </TrackListRow>
         ))}
       </ol>
       <div className="mt-[8px] flex justify-between border-t border-[var(--color-line)] pt-[10px] text-small text-[var(--color-ink-2)]">

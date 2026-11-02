@@ -35,7 +35,11 @@ type PopoverProps = {
   /** Accessible name for the popup. */
   label: string
   /** Render the trigger, spreading the props onto a real <button>. */
-  trigger: (props: TriggerProps & { open: boolean }) => ReactNode
+  trigger?: (props: TriggerProps & { open: boolean }) => ReactNode
+  /** Without a trigger, what the popup anchors to and gives the focus back
+   * to: the phone's track row a hold opened a menu on. Controlled through
+   * `open` and `onOpenChange`. */
+  anchorRef?: RefObject<HTMLElement | null>
   children: ReactNode | ((close: () => void) => ReactNode)
   placement?: Placement
   align?: Align
@@ -54,6 +58,7 @@ export function Popover({
   className = 'w-[280px] p-[16px]',
   open: openProp,
   onOpenChange,
+  anchorRef,
 }: PopoverProps) {
   const [openState, setOpenState] = useState(false)
   const open = openProp ?? openState
@@ -62,7 +67,8 @@ export function Popover({
     onOpenChange?.(next)
   }
 
-  const triggerRef = useRef<HTMLButtonElement>(null)
+  const ownTriggerRef = useRef<HTMLButtonElement>(null)
+  const triggerRef: RefObject<HTMLElement | null> = trigger ? ownTriggerRef : (anchorRef ?? ownTriggerRef)
   const popupRef = useRef<HTMLDivElement>(null)
   const id = useId()
   const shown = useMountFade(open)
@@ -86,7 +92,9 @@ export function Popover({
 
     const handlePointerDown = (e: PointerEvent) => {
       const target = e.target as Node
-      if (popupRef.current?.contains(target) || triggerRef.current?.contains(target)) return
+      // A press on the trigger is its own toggle; one on an anchor that
+      // isn't a trigger closes the popup like any press outside it.
+      if (popupRef.current?.contains(target) || ownTriggerRef.current?.contains(target)) return
       setOpen(false)
     }
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -105,8 +113,8 @@ export function Popover({
 
   return (
     <>
-      {trigger({
-        ref: triggerRef,
+      {trigger?.({
+        ref: ownTriggerRef,
         open,
         onClick: () => setOpen(!open),
         'aria-expanded': open,
