@@ -3,8 +3,12 @@
  * Tokens are the app's v2 design system (../DESIGN.md), dark ("ink") by default with
  * paper overrides under [data-theme='light']. Values are copied rather than imported
  * since this is a separate Vite project with no dependency on the app build. Every rule
- * below reads a token; the one exception is the ink/paper comparison slider, whose
- * chrome is meant to look the same in both themes.
+ * below reads a token; the one exception is the tester guide's cover frame, which
+ * matches the printed cover and so looks the same in both themes.
+ *
+ * index.html is the home page; privacy.html and terms.html share the header, footer
+ * and legal rules. Rules that only the home page needs hang off .home-header and
+ * .home-footer, so the legal pages look the same as before.
  */
 
 @import '@fontsource-variable/rubik/index.css';
@@ -20,12 +24,14 @@
   --v-line: rgb(255 255 255 / 0.09);
   --v-line-strong: rgb(255 255 255 / 0.16);
   --v-wash: rgb(255 255 255 / 0.05);
+  --v-wash-2: rgb(255 255 255 / 0.09);
   --v-ink: #f2efe9;
   --v-ink-2: #a9adaf;
   --v-ink-3: #74797c;
   --v-accent: #bf68eb;
   --v-accent-fill: linear-gradient(135deg, #bf68eb, #68b6eb);
   --v-on-accent: #15111c;
+  --v-ok: oklch(0.78 0.12 150);
   --v-warn: oklch(0.8 0.14 72);
   --v-bad: oklch(0.7 0.16 28);
   --v-shadow: 0 24px 60px rgb(0 0 0 / 0.45), 0 2px 6px rgb(0 0 0 / 0.3);
@@ -42,12 +48,14 @@
   --v-line: rgb(60 44 28 / 0.12);
   --v-line-strong: rgb(60 44 28 / 0.22);
   --v-wash: rgb(60 44 28 / 0.045);
+  --v-wash-2: rgb(60 44 28 / 0.085);
   --v-ink: #1c1915;
   --v-ink-2: #57514a;
   --v-ink-3: #7d766d;
   --v-accent: #7d38b0;
   --v-accent-fill: linear-gradient(135deg, #bf68eb, #68b6eb);
   --v-on-accent: #15111c;
+  --v-ok: oklch(0.55 0.12 150);
   --v-warn: oklch(0.6 0.15 60);
   --v-bad: oklch(0.55 0.17 28);
   --v-shadow: 0 22px 50px rgb(80 56 30 / 0.16), 0 2px 6px rgb(80 56 30 / 0.08);
@@ -70,6 +78,12 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* Several blocks below set their own display, which would otherwise beat the
+ * browser's [hidden] rule and show every tab panel at once. */
+[hidden] {
+  display: none !important;
 }
 
 /* The sticky header is about 64px tall; without the padding, every anchor
@@ -130,6 +144,32 @@ a {
   border: 0;
 }
 
+/* Grows a small control's hit area to at least 44×44 without moving it, for
+ * fingers. Nothing it overlaps is itself a target. */
+.hit {
+  position: relative;
+}
+
+.hit::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}
+
+/* Sideways scrollers hide their scrollbar; the next item peeking in shows
+ * there's more. */
+.scroll-x {
+  scrollbar-width: none;
+}
+
+.scroll-x::-webkit-scrollbar {
+  display: none;
+}
+
 /* ---- Type ------------------------------------------------------------ */
 
 .eyebrow {
@@ -140,6 +180,10 @@ a {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--v-ink-3);
+}
+
+.eyebrow-accent {
+  color: var(--v-accent);
 }
 
 h1,
@@ -186,6 +230,10 @@ p {
   margin: 0;
 }
 
+.balance {
+  text-wrap: balance;
+}
+
 /* ---- Theme-paired images ----------------------------------------------- */
 
 /* Every screenshot ships once per theme. The other theme's copy is
@@ -202,8 +250,10 @@ main {
   overflow-x: hidden;
 }
 
+/* 1248px is a 1200px column plus the 24px gutters, the same column as the
+ * hero's screenshot and the status track. */
 .section {
-  max-width: 1200px;
+  max-width: 1248px;
   margin: 0 auto;
   padding: 96px 24px;
   display: flex;
@@ -211,8 +261,8 @@ main {
   gap: 40px;
 }
 
-.section-tight {
-  gap: 36px;
+.section-loose {
+  gap: 48px;
 }
 
 /* Eyebrow and heading on the left, body copy on the right. auto-fit drops it
@@ -249,6 +299,19 @@ main {
 .section-head h2 {
   max-width: 24ch;
   text-wrap: balance;
+}
+
+.section-note {
+  max-width: 640px;
+  margin: 0 auto;
+  text-align: center;
+  font-size: 15px;
+  color: var(--v-ink-2);
+  text-wrap: pretty;
+}
+
+.section-note a {
+  color: var(--v-ink);
 }
 
 /* ---- Header ------------------------------------------------------------ */
@@ -317,6 +380,88 @@ main {
   }
 }
 
+/* The home page's header keeps the toggle and the button on the right when
+ * the nav wraps, and swaps both for a menu on a phone (see the 720px block).
+ * Its row is the page's 1200px column; the legal pages keep theirs. */
+.home-header .row {
+  max-width: 1248px;
+}
+
+.home-header .theme-toggle {
+  margin-left: auto;
+}
+
+.menu-button,
+.menu {
+  display: none;
+}
+
+.menu-button {
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-right: -6px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--v-ink);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.menu-button[aria-expanded='true'] {
+  background: var(--v-wash-2);
+}
+
+/* Two lines that cross into an × as the menu opens. */
+.menu-icon {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 18px;
+  transition: gap 160ms var(--ease-out);
+}
+
+.menu-icon span {
+  display: block;
+  height: 1.5px;
+  border-radius: 2px;
+  background: currentColor;
+  transition: transform 160ms var(--ease-out);
+}
+
+.menu-button[aria-expanded='true'] .menu-icon {
+  gap: 0;
+}
+
+.menu-button[aria-expanded='true'] .menu-icon span:first-child {
+  transform: translateY(0.75px) rotate(45deg);
+}
+
+.menu-button[aria-expanded='true'] .menu-icon span:last-child {
+  transform: translateY(-0.75px) rotate(-45deg);
+}
+
+.menu a {
+  display: flex;
+  align-items: center;
+  height: 52px;
+  border-bottom: 1px solid var(--v-line);
+  color: var(--v-ink);
+  font-size: 17px;
+  text-decoration: none;
+}
+
+.menu-theme {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 16px;
+}
+
 /* ---- Buttons ----------------------------------------------------------- */
 
 .btn {
@@ -367,6 +512,27 @@ main {
 .btn-ghost:hover {
   color: var(--v-ink);
   background: var(--v-wash);
+}
+
+.btn-outline {
+  padding: 0 20px;
+  box-shadow: inset 0 0 0 1px var(--v-line-strong);
+  color: var(--v-ink);
+}
+
+.btn-outline:hover {
+  background: var(--v-wash);
+}
+
+.btn-mono {
+  font-family: var(--v-mono);
+  font-size: 14px;
+}
+
+.btn-meta {
+  font-family: var(--v-mono);
+  font-size: 12px;
+  color: var(--v-ink-3);
 }
 
 /* ---- Segmented control (theme toggle, tabs) ---------------------------- */
@@ -420,6 +586,17 @@ main {
   font-size: 13px;
 }
 
+/* The theme row in the phone menu. */
+.segmented-large {
+  border-radius: 999px;
+}
+
+.segmented-large button {
+  height: 40px;
+  padding: 0 18px;
+  font-size: 15px;
+}
+
 /* Keyed off <html data-theme>, not aria-pressed, so the right half is lit
  * from first paint: the head script sets the attribute long before main.ts
  * runs and syncs aria-pressed. */
@@ -428,16 +605,6 @@ html[data-theme='light'] [data-set-theme='light'] {
   background: var(--v-raised);
   color: var(--v-ink);
   box-shadow: var(--v-shadow-sm);
-}
-
-.tabs {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.tabs .segmented {
-  align-self: flex-start;
 }
 
 /* ---- Screenshots ------------------------------------------------------- */
@@ -465,56 +632,54 @@ html[data-theme='light'] [data-set-theme='light'] {
     var(--v-shadow);
 }
 
-.shot-tile {
-  border-radius: 12px;
-}
-
-.figure {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
 .caption {
   font-family: var(--v-mono);
   font-size: 12px;
   color: var(--v-ink-3);
 }
 
-.caption-pair {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+/* A phone screenshot. The captures have no status bar or notch, and none is
+ * drawn: just the screen, in a thin bezel. */
+.phone {
+  aspect-ratio: 786 / 1704;
+  padding: 5px;
+  border-radius: 30px;
+  background: var(--v-solid);
+  box-shadow:
+    0 0 0 1px var(--v-line-strong),
+    var(--v-shadow);
 }
 
-.caption-title {
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--v-ink);
+.phone img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 25px;
 }
 
-.caption-line {
-  font-size: 14px;
-  color: var(--v-ink-2);
+/* The two phones behind the front one in the phone hero. */
+.phone-back {
+  padding: 4px;
+  border-radius: 24px;
+  box-shadow:
+    0 0 0 1px var(--v-line-strong),
+    var(--v-shadow-sm);
 }
 
-.shot-grid-2 {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
-  gap: 32px;
+.phone-back img {
+  border-radius: 20px;
 }
 
-.shot-grid-3 {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
-  gap: 32px 24px;
+.phone-film {
+  box-shadow:
+    0 0 0 1px var(--v-line-strong),
+    var(--v-shadow-sm);
 }
 
 /* ---- Hero -------------------------------------------------------------- */
 
 .hero {
-  padding: 96px 24px 72px;
+  padding: 88px 24px 32px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -530,8 +695,67 @@ html[data-theme='light'] [data-set-theme='light'] {
   text-align: center;
 }
 
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 14px 0 12px;
+  border-radius: 999px;
+  background: var(--v-wash);
+  box-shadow: inset 0 0 0 1px var(--v-line-strong);
+  color: var(--v-ink);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color var(--motion-fast) var(--ease-out);
+}
+
+.status-pill:hover {
+  background: var(--v-wash-2);
+}
+
+.status-pill-version {
+  font-family: var(--v-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--v-ink-3);
+}
+
+.dot-ok {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--v-ok);
+  color: var(--v-ok);
+}
+
+/* The page's only looping motion: the beta dot and the "now" node. Each sets
+ * color to its own fill, which the ring takes. */
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 50%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 8px color-mix(in srgb, currentColor 0%, transparent);
+  }
+}
+
+.pulse {
+  animation: pulse 2.4s var(--ease-out) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}
+
 .lede {
-  max-width: 64ch;
+  max-width: 62ch;
   font-size: 18px;
   color: var(--v-ink-2);
   text-wrap: pretty;
@@ -545,10 +769,22 @@ html[data-theme='light'] [data-set-theme='light'] {
   gap: 10px;
 }
 
+.hero-meta {
+  font-family: var(--v-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  color: var(--v-ink-3);
+}
+
+/* Desktop and tablet: the app window, with a phone over its corner. The
+ * phone hangs 9% below the window; the margin keeps it clear of the status
+ * track, and main's overflow-x clips its overhang at the side. */
 .hero-media {
   position: relative;
   width: 100%;
   max-width: 1200px;
+  margin-bottom: 56px;
 }
 
 .hero-glow {
@@ -560,130 +796,156 @@ html[data-theme='light'] [data-set-theme='light'] {
   opacity: 0.22;
 }
 
-/* ---- Library search row ----------------------------------------------- */
-
-.search-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 32px 56px;
-  padding-top: 32px;
+.hero-phone-over {
+  position: absolute;
+  right: -2.5%;
+  bottom: -9%;
+  width: 20%;
 }
 
-.search-text {
-  flex: 1 1 260px;
+/* Phones: three phones in place of the window, the album page in front. No
+ * rotation or dimming; the depth comes from size and shadow. */
+.hero-phones {
+  display: none;
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  aspect-ratio: 1 / 1.14;
+}
+
+.hero-phones-glow {
+  inset: 10% 6% 6%;
+  filter: blur(60px);
+  opacity: 0.26;
+}
+
+.hero-phone-left,
+.hero-phone-right {
+  position: absolute;
+  top: 15%;
+  width: 40%;
+}
+
+.hero-phone-left {
+  left: 0;
+}
+
+.hero-phone-right {
+  right: 0;
+}
+
+.hero-phone-front {
+  position: absolute;
+  left: 24%;
+  top: 0;
+  width: 52%;
+}
+
+/* The status track: now, next, later. */
+.waves-wrap {
+  width: 100%;
+  max-width: 1200px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.waves {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 32px 0;
+}
+
+.wave {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 32px;
+}
+
+.rail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 16px;
+}
+
+.rail-node {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  margin: 1px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px var(--v-ink-3);
+}
+
+.rail-node-now {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  background: var(--v-accent-fill);
+  box-shadow: none;
+  color: var(--v-accent);
+}
+
+.rail-line {
+  flex: 1;
+  height: 2px;
+  border-radius: 2px;
+}
+
+.rail-line-now {
+  background: linear-gradient(90deg, var(--v-accent), var(--v-line-strong));
+}
+
+.rail-line-dash {
+  background: repeating-linear-gradient(90deg, var(--v-line-strong) 0 6px, transparent 6px 12px);
+}
+
+.rail-line-fade {
+  -webkit-mask-image: linear-gradient(90deg, #000 30%, transparent);
+  mask-image: linear-gradient(90deg, #000 30%, transparent);
+}
+
+.wave-text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wave-text h3 {
+  font-size: 19px;
+}
+
+.wave-text p:not(.eyebrow) {
+  font-size: 15px;
+  color: var(--v-ink-2);
+  text-wrap: pretty;
+}
+
+/* ---- Phone ------------------------------------------------------------- */
+
+.film {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.film-item {
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.search-text h3 {
-  font-size: 24px;
-  line-height: 1.2;
-  letter-spacing: -0.015em;
+.film-item .caption {
+  text-align: center;
 }
 
-.search-text p {
-  color: var(--v-ink-2);
-  text-wrap: pretty;
-}
-
-.search-shot {
-  flex: 2 1 520px;
-  min-width: 0;
-}
-
-.keycap {
-  padding: 2px 6px;
-  border-radius: 6px;
-  box-shadow: inset 0 0 0 1px var(--v-line-strong);
-  color: var(--v-ink);
-  font-family: var(--v-mono);
-  font-size: 13px;
-}
-
-/* ---- Ink/paper comparison ------------------------------------------------ */
-
-/* Paper sits on top of ink, clipped from the left edge to --compare-x;
- * main.ts moves that one property. The colours here are literal on purpose:
- * the frame always shows both themes, so its chrome can't follow either. */
-.compare {
-  --compare-x: 50%;
-  cursor: ew-resize;
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.compare img {
-  pointer-events: none;
-}
-
-.compare-paper {
-  position: absolute;
-  inset: 0;
-  clip-path: inset(0 0 0 var(--compare-x));
-}
-
-.compare-divider {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: var(--compare-x);
-  width: 2px;
-  margin-left: -1px;
-  background: #f2efe9;
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.25);
-}
-
-.compare-handle {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 40px;
-  height: 40px;
-  margin: -20px 0 0 -20px;
-  border-radius: 50%;
-  background: #f2efe9;
-  box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  color: #1c1915;
-  font-family: var(--v-mono);
-  font-size: 13px;
-}
-
-.compare-handle:focus-visible {
-  outline: 2px solid #bf68eb;
-  outline-offset: 3px;
-}
-
-.compare-label {
-  position: absolute;
-  bottom: 14px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-family: var(--v-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  pointer-events: none;
-}
-
-.compare-label-ink {
-  left: 16px;
-  background: rgb(15 18 20 / 0.7);
-  color: #f2efe9;
-}
-
-.compare-label-paper {
-  right: 16px;
-  background: rgb(251 249 245 / 0.85);
-  color: #1c1915;
-}
-
-/* ---- Cards (ways in, pricing) ------------------------------------------ */
+/* ---- Cards ------------------------------------------------------------- */
 
 .card-grid {
   display: grid;
@@ -705,35 +967,508 @@ html[data-theme='light'] [data-set-theme='light'] {
   font-size: 19px;
 }
 
-.card p:not(.eyebrow, .price) {
+.card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---- What's new -------------------------------------------------------- */
+
+.news-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 20px;
+}
+
+.news-card {
+  gap: 20px;
+}
+
+/* The release card leads, so it gets the stronger outline. */
+.news-card-lead {
+  box-shadow: 0 0 0 1px var(--v-line-strong);
+}
+
+.marks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--v-ink-2);
+}
+
+.marks li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.mark-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 50%;
+  background: var(--v-accent);
+}
+
+.marks-warn .mark-dot {
+  background: var(--v-warn);
+}
+
+/* An empty box: these are what testers check, not results. */
+.mark-box {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  margin-top: 4px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1.5px var(--v-ink-3);
+}
+
+.news-foot {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--v-line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--v-ink-2);
+}
+
+.news-foot-version {
+  font-family: var(--v-mono);
+  font-size: 12px;
+  color: var(--v-ink-3);
+}
+
+.news-foot a {
+  align-self: flex-start;
+  color: var(--v-ink);
+  text-decoration: none;
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+.news-foot a:hover {
+  color: var(--v-ink-2);
+}
+
+.feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px 40px;
+  padding: 28px 32px;
+  border-radius: var(--v-r-panel);
+  background: var(--v-surface);
+  backdrop-filter: blur(var(--v-blur));
+  -webkit-backdrop-filter: blur(var(--v-blur));
+  box-shadow: 0 0 0 1px var(--v-line-strong);
+}
+
+.feedback-text {
+  flex: 1 1 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.feedback-text h3 {
+  font-size: 20px;
+}
+
+.feedback-text p {
   font-size: 15px;
   color: var(--v-ink-2);
   text-wrap: pretty;
 }
 
-/* The icons draw in currentColor, which an SVG loaded as an image never
- * inherits. Used as a mask instead, the accent gradient fills the strokes. */
-.card-icon {
-  display: block;
-  width: 24px;
-  height: 24px;
-  margin-bottom: 8px;
-  background: var(--v-accent-fill);
-  -webkit-mask: var(--icon) center / contain no-repeat;
-  mask: var(--icon) center / contain no-repeat;
+/* ---- Tour -------------------------------------------------------------- */
+
+.tour {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 24px 32px;
 }
 
-.card-icon[data-icon='database'] { --icon: url('/icons/database.svg'); }
-.card-icon[data-icon='laptop'] { --icon: url('/icons/laptop.svg'); }
-.card-icon[data-icon='globe'] { --icon: url('/icons/globe.svg'); }
+.tour-tabs {
+  flex: 1 1 240px;
+  min-width: 0;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 
-.ways-in-note {
-  max-width: 640px;
-  margin: 0 auto;
-  text-align: center;
+.tour-tabs [role='tab'] {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: var(--v-r-ctl);
+  background: transparent;
+  color: var(--v-ink-2);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-out);
+}
+
+.tour-tabs [role='tab']:hover {
+  color: var(--v-ink);
+}
+
+.tour-tabs [role='tab'][aria-selected='true'] {
+  background: var(--v-raised);
+  color: var(--v-ink);
+  box-shadow: var(--v-shadow-sm);
+}
+
+.tour-num {
+  font-family: var(--v-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--v-ink-3);
+}
+
+.tour-panels {
+  flex: 4 1 600px;
+  min-width: 0;
+}
+
+.tour-panel figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* A sideways swipe on the image steps through the tabs (main.ts); the
+ * browser keeps vertical scrolling and pinch-zoom. */
+.tour-frame {
+  touch-action: pan-y pinch-zoom;
+}
+
+/* Above 720px the frame has the image's own shape, so --focus does nothing.
+ * On a phone the frame turns 4:5 and --focus picks the part that matters. */
+.tour-frame img {
+  height: 100%;
+  object-fit: cover;
+  object-position: var(--focus, 50% 50%);
+}
+
+.tour-pager {
+  display: none;
+}
+
+.tour-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 68ch;
+}
+
+.tour-caption-title {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.tour-caption-text {
   font-size: 15px;
   color: var(--v-ink-2);
+  text-wrap: pretty;
 }
+
+/* ---- Install ----------------------------------------------------------- */
+
+.install-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 20px;
+}
+
+.platform {
+  flex: 3 1 560px;
+  min-width: 0;
+  gap: 22px;
+}
+
+.platform-tabs {
+  align-self: flex-start;
+}
+
+.platform-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.platform-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.platform-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+}
+
+.platform-title h3 {
+  font-size: 22px;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.platform-meta {
+  font-family: var(--v-mono);
+  font-size: 12px;
+  color: var(--v-ink-3);
+}
+
+.platform-head p {
+  max-width: 64ch;
+  font-size: 15px;
+  color: var(--v-ink-2);
+  text-wrap: pretty;
+}
+
+.platform-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.platform-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.platform-steps li > span:last-child {
+  padding-top: 2px;
+}
+
+.step-num {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--v-sunken);
+  box-shadow: inset 0 0 0 1px var(--v-line-strong);
+  font-family: var(--v-mono);
+  font-size: 12px;
+  color: var(--v-ink-2);
+}
+
+/* A terminal: the copy button lives in the toolbar, not over the code, so a
+ * long line never runs under it. */
+.code {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--v-sunken);
+  box-shadow: inset 0 0 0 1px var(--v-line);
+}
+
+.code-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 44px;
+  padding: 0 7px 0 16px;
+  border-bottom: 1px solid var(--v-line);
+}
+
+.code-label {
+  font-family: var(--v-mono);
+  font-size: 12px;
+  color: var(--v-ink-3);
+}
+
+/* Wide enough for "copied", so the label swap never moves the button. */
+.copy-button {
+  min-width: calc(6ch + 28px);
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--v-raised);
+  box-shadow: 0 0 0 1px var(--v-line-strong);
+  color: var(--v-ink-2);
+  font-family: var(--v-mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+.copy-button:hover {
+  color: var(--v-ink);
+}
+
+.code pre {
+  margin: 0;
+  padding: 14px 18px 16px;
+  overflow-x: auto;
+  font-family: var(--v-mono);
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--v-ink);
+}
+
+.code code {
+  font: inherit;
+}
+
+.prompt {
+  color: var(--v-ink-3);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.platform-note {
+  font-size: 14px;
+  color: var(--v-ink-3);
+  text-wrap: pretty;
+}
+
+.platform-link {
+  margin-top: auto;
+  align-self: flex-start;
+  font-size: 15px;
+  color: var(--v-ink);
+  text-decoration: none;
+  transition: color var(--motion-fast) var(--ease-out);
+}
+
+.platform-link:hover {
+  color: var(--v-ink-2);
+}
+
+.guide {
+  flex: 1 1 300px;
+  min-width: 0;
+  gap: 18px;
+  padding: 24px;
+}
+
+/* The printed cover is dark in either theme, so its frame is too. */
+.guide-cover {
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #0f1214;
+  box-shadow:
+    0 0 0 1px var(--v-line-strong),
+    var(--v-shadow-sm);
+}
+
+.guide-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+}
+
+.guide-text {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.guide-text p:not(.eyebrow) {
+  font-size: 15px;
+  color: var(--v-ink-2);
+  text-wrap: pretty;
+}
+
+.guide-download {
+  margin-top: auto;
+  gap: 10px;
+}
+
+.then {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.then-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 0 32px;
+}
+
+.then-steps li {
+  display: flex;
+  gap: 18px;
+  padding: 20px 0;
+  border-top: 1px solid var(--v-line);
+}
+
+.then-steps li > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.then-num {
+  flex: 0 0 auto;
+  font-family: var(--v-mono);
+  font-size: 28px;
+  line-height: 1;
+  color: var(--v-accent);
+}
+
+.then-steps h3 {
+  font-size: 17px;
+}
+
+.then-steps p {
+  font-size: 15px;
+  color: var(--v-ink-2);
+  text-wrap: pretty;
+}
+
+.inline-path {
+  font-family: var(--v-mono);
+  font-size: 13.5px;
+  color: var(--v-ink);
+}
+
+/* ---- Pricing ----------------------------------------------------------- */
 
 .pricing-card {
   gap: 6px;
@@ -783,27 +1518,11 @@ html[data-theme='light'] [data-set-theme='light'] {
   color: var(--v-ink-2);
 }
 
-/* ---- Status and waitlist ----------------------------------------------- */
-
-.status {
-  padding: 72px 24px 24px;
-  display: flex;
-  justify-content: center;
+.pricing-card a {
+  color: var(--v-ink);
 }
 
-.status-body {
-  max-width: 680px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  text-align: center;
-}
-
-.status-body p:not(.eyebrow) {
-  color: var(--v-ink-2);
-  text-wrap: pretty;
-}
+/* ---- Waitlist ---------------------------------------------------------- */
 
 .waitlist {
   padding: 56px 24px 112px;
@@ -813,7 +1532,7 @@ html[data-theme='light'] [data-set-theme='light'] {
 
 .waitlist-panel {
   width: 100%;
-  max-width: 640px;
+  max-width: 680px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -832,10 +1551,13 @@ html[data-theme='light'] [data-set-theme='light'] {
 .waitlist-panel h2 {
   font-size: 32px;
   line-height: 1.15;
+  text-wrap: balance;
 }
 
 .waitlist-panel > p:not(.eyebrow, .form-message, .fine-print) {
+  max-width: 52ch;
   color: var(--v-ink-2);
+  text-wrap: pretty;
 }
 
 .waitlist-form {
@@ -847,6 +1569,7 @@ html[data-theme='light'] [data-set-theme='light'] {
   gap: 8px;
 }
 
+/* 16px, not 15: iOS zooms into any field under 16px when it's focused. */
 .waitlist-form input {
   flex: 1 1 220px;
   min-width: 0;
@@ -858,7 +1581,7 @@ html[data-theme='light'] [data-set-theme='light'] {
   box-shadow: inset 0 0 0 1px var(--v-line-strong);
   color: var(--v-ink);
   font-family: var(--v-mono);
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .waitlist-form input::placeholder {
@@ -942,6 +1665,22 @@ html[data-theme='light'] [data-set-theme='light'] {
 
 .footer-legal a:hover {
   text-decoration: underline;
+}
+
+.home-footer {
+  max-width: 1248px;
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 10px;
+}
+
+.footer-links a {
+  text-decoration: none;
 }
 
 .footer-credit {
@@ -1032,4 +1771,289 @@ mark.todo {
   color: var(--v-on-accent);
   font-family: var(--v-mono);
   font-size: 0.9em;
+}
+
+/* ---- Up to 860px: the filmstrip and the Tour's tabs scroll sideways ---- */
+
+@media (max-width: 860px) {
+  /* Bled to the screen edges, so a phone peeks in from the right. */
+  .film {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    gap: 16px;
+    margin: 0 -24px;
+    padding: 4px 24px 16px;
+  }
+
+  .film-item {
+    flex: 0 0 56%;
+    scroll-snap-align: center;
+  }
+
+  .tour-tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+
+  /* The right edge fades while there's more row to scroll to; main.ts sets
+   * data-more, and drops it at the end so the last chip isn't faded. */
+  .tour-tabs[data-more] {
+    -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+    mask-image: linear-gradient(90deg, #000 85%, transparent);
+  }
+
+  .tour-tabs [role='tab'] {
+    flex: 0 0 auto;
+  }
+}
+
+/* ---- Up to 720px: phones ------------------------------------------------ */
+
+/* A layout of its own rather than a reflow: 20px gutters, a menu in place of
+ * the nav, three phones in place of the window, a vertical timeline, phone
+ * crops of the tour, and full-width actions. Every touch target is at least
+ * 44px; inline links in body text are the only exception. */
+@media (max-width: 720px) {
+  .home-header .row {
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 10px 20px;
+  }
+
+  /* Taller box, same drawing: the mask is contained, so the L keeps its size
+   * and gains a 44px target. */
+  .home-header .logo {
+    height: 44px;
+  }
+
+  .home-header .theme-toggle {
+    display: none;
+  }
+
+  .header-cta {
+    margin-left: auto;
+    height: 40px;
+    padding: 0 16px;
+  }
+
+  .menu-button {
+    display: inline-flex;
+  }
+
+  .menu {
+    flex-direction: column;
+    padding: 4px 20px 20px;
+    border-top: 1px solid var(--v-line);
+  }
+
+  .menu:not([hidden]) {
+    display: flex;
+  }
+
+  .section {
+    padding: 64px 20px;
+  }
+
+  .card,
+  .feedback {
+    padding: 22px;
+  }
+
+  .hero {
+    padding: 40px 20px 16px;
+    gap: 40px;
+  }
+
+  .hero h1 {
+    font-size: 33px;
+  }
+
+  .lede {
+    font-size: 17px;
+  }
+
+  .hero-actions {
+    flex-direction: column;
+    align-self: stretch;
+  }
+
+  .hero-media {
+    display: none;
+  }
+
+  .hero-phones {
+    display: block;
+  }
+
+  /* The status track turns into a vertical timeline: each rail runs down
+   * beside its text. */
+  .waves {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .wave {
+    flex-direction: row;
+    gap: 16px;
+    padding: 0 0 28px;
+  }
+
+  .wave:last-child {
+    padding-bottom: 0;
+  }
+
+  .rail {
+    flex-direction: column;
+    align-self: stretch;
+    width: 16px;
+    height: auto;
+    gap: 8px;
+    padding-top: 3px;
+  }
+
+  .rail-line {
+    width: 2px;
+    height: auto;
+  }
+
+  .rail-line-now {
+    background: linear-gradient(180deg, var(--v-accent), var(--v-line-strong));
+  }
+
+  .rail-line-dash {
+    background: repeating-linear-gradient(180deg, var(--v-line-strong) 0 6px, transparent 6px 12px);
+  }
+
+  .rail-line-fade {
+    -webkit-mask-image: linear-gradient(180deg, #000 30%, transparent);
+    mask-image: linear-gradient(180deg, #000 30%, transparent);
+  }
+
+  .film {
+    margin: 0 -20px;
+    padding: 4px 20px 16px;
+  }
+
+  .film-item {
+    flex-basis: 62%;
+  }
+
+  .feedback > .btn {
+    flex: 1 1 100%;
+  }
+
+  .tour-frame {
+    aspect-ratio: 4 / 5;
+  }
+
+  .tour-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    margin-bottom: -4px;
+  }
+
+  .pager-button {
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--v-wash);
+    color: var(--v-ink);
+    font: inherit;
+    font-size: 18px;
+    cursor: pointer;
+  }
+
+  .tour-count {
+    min-width: 44px;
+    text-align: center;
+    font-family: var(--v-mono);
+    font-size: 12px;
+    color: var(--v-ink-3);
+  }
+
+  .platform {
+    padding: 20px;
+  }
+
+  .platform-tabs {
+    align-self: stretch;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    border-radius: 999px;
+  }
+
+  .platform-tabs button {
+    flex: 0 0 auto;
+    height: 40px;
+    padding: 0 14px;
+  }
+
+  /* At 390px the fifth tab starts past the track's end, so nothing would
+   * peek in; the same fade as the Tour's row says there's more. */
+  .platform-tabs[data-more] {
+    -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+    mask-image: linear-gradient(90deg, #000 85%, transparent);
+  }
+
+  .platform-title h3 {
+    font-size: 20px;
+  }
+
+  .code pre {
+    padding: 12px 16px 14px;
+    font-size: 13px;
+  }
+
+  .guide {
+    padding: 20px;
+    gap: 16px;
+  }
+
+  .guide-cover {
+    aspect-ratio: 16 / 9;
+  }
+
+  .guide-cover img {
+    object-position: 50% 40%;
+  }
+
+  .waitlist {
+    padding: 40px 20px 80px;
+  }
+
+  .waitlist-panel h2 {
+    font-size: 26px;
+  }
+
+  .waitlist-form .btn {
+    flex: 1 1 100%;
+  }
+
+  .home-footer {
+    padding: 28px 20px 48px;
+  }
+
+  .home-footer .footer-meta {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  /* Each link becomes a full 44px row target; the dots sit between them. */
+  .home-footer .footer-links {
+    justify-content: flex-start;
+    gap: 0 10px;
+  }
+
+  .home-footer .footer-links a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
