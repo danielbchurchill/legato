@@ -212,7 +212,9 @@ function QualityRow() {
           storeQualityPreference(value)
           setPreference(value)
         }}
-        className="absolute inset-0 cursor-pointer appearance-none opacity-0"
+        // Unseen, but iOS Safari still zooms the page into a select whose
+        // text is under 16px when it opens (#411).
+        className="absolute inset-0 cursor-pointer appearance-none text-[16px] opacity-0"
       >
         {QUALITY_OPTIONS.map((option) => (
           <option key={option.value} value={option.value}>

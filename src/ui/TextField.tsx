@@ -6,8 +6,9 @@ import type { Ref } from 'react'
  * 25% accent ring outside it (index.css's .focus-ring-well).
  *
  * `lg` is the phone's (#389): 44px, a tap target, with its text at 16px,
- * prose or mono, under which iOS Safari zooms the page into a field it
- * focuses. */
+ * prose or mono. On a touch screen `md`'s text is 16px too (#411): under
+ * that, iOS Safari zooms the page into a field it focuses and leaves it
+ * zoomed. The desktop keeps 13 and 12. */
 
 type TextFieldProps = {
   value: string
@@ -66,8 +67,8 @@ export function TextField({
           size === 'lg'
             ? `text-[16px] ${prose ? '' : 'mono'}`
             : prose
-              ? 'text-[length:var(--text-secondary)]'
-              : 'mono text-[length:var(--text-mono)]'
+              ? 'text-[length:var(--text-secondary)] pointer-coarse:text-[16px]'
+              : 'mono text-[length:var(--text-mono)] pointer-coarse:text-[16px]'
         }`}
       />
     </div>
