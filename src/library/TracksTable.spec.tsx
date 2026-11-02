@@ -44,9 +44,17 @@ beforeEach(() => {
     vi.fn(async (input: string) => {
       const route = new URL(input).pathname.replace(/^.*\/api\/v1/, '')
       if (route === '/library/tracks') return Response.json({ items: TRACKS, total: TRACKS.length })
+      if (route === '/playlists') return Response.json([{ id: 7, name: 'Road trip', track_count: 0 }])
       return Response.json({})
     }),
   )
+  // The playlist picker's popover asks about reduced motion.
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  }))
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -162,6 +170,46 @@ describe('the tracks table', () => {
   it('leaves a track with no artist or album tag as text', async () => {
     const { container } = await render()
     const untagged = row(container, 'Untagged')
-    expect([...untagged.querySelectorAll('[role="cell"] button')].map((b) => b.getAttribute('aria-label'))).toEqual(['Play Untagged'])
+    // Its number plays it and its time cell's + adds it to a playlist (#447).
+    expect([...untagged.querySelectorAll('[role="cell"] button')].map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Play Untagged',
+      'Add to playlist',
+    ])
+  })
+})
+
+// #447: add to playlist where the duration sits.
+describe("the tracks table's add to playlist", () => {
+  it("swaps the time cell's duration for the + on the row's hover or focus", async () => {
+    const { container } = await render()
+    const track = row(container, 'Like a Rolling Stone')
+    const cells = [...track.querySelectorAll('[role="cell"]')]
+    const time = cells.find((c) => c.textContent === '6:13')!
+    expect(time.querySelector('button[aria-label="Add to playlist"]')).not.toBeNull()
+    const [duration, add] = time.querySelectorAll('[class*="grid-area"]')
+    expect(duration.className).toContain('group-hover:opacity-0')
+    expect(add.className).toContain('group-hover:opacity-100')
+    expect(add.className).toContain('group-focus-within:opacity-100')
+    expect(track.className.split(' ')).toContain('group')
+  })
+
+  it('opens the picker without opening the track, and adds it from there', async () => {
+    const { container, onOpen, onPlay } = await render()
+    const track = row(container, 'Like a Rolling Stone')
+    await act(async () => track.querySelector<HTMLButtonElement>('button[aria-label="Add to playlist"]')!.click())
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    }
+    const picker = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Add to playlist"]')!
+    await act(async () => {
+      ;[...picker.querySelectorAll('button')].find((b) => b.textContent === 'Road trip')!.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(onPlay).not.toHaveBeenCalled()
+    const post = vi.mocked(fetch).mock.calls.find(([url, init]) => String(url).endsWith('/playlists/7/tracks') && init?.method === 'POST')
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ nodeId: 200 })
   })
 })
