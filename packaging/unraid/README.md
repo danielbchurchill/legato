@@ -19,9 +19,9 @@
 
 ## Submitting to Community Applications
 
-CA lists templates from a **public** GitHub repository with an OSI-approved license, a `ca_profile.xml` at its root and one XML per app under `templates/`. This repository is private and unlicensed, so the template is published from a small separate repository. Only the template files are public, not Legato's code.
+CA lists templates from a **public** GitHub repository with an OSI-approved license, a `ca_profile.xml` at its root and one XML per app under `templates/`. This repository is public and AGPL-3.0, but its root is Legato's, not a template list's, so the template is published from a small separate repository.
 
-1. **Publish the image.** Tag a release so `.github/workflows/release.yml` pushes `ghcr.io/danielbchurchill/legato-server:latest`. Then **GitHub → your profile → Packages → legato-server → Package settings → Change visibility → Public**. Check from a machine that isn't signed in to GHCR: `docker logout ghcr.io && docker pull ghcr.io/danielbchurchill/legato-server:latest`.
+1. **The image is already public.** Each release tag makes `.github/workflows/release.yml` push `ghcr.io/danielbchurchill/legato-server:latest`, and the package is public. To check from a machine that isn't signed in to GHCR: `docker logout ghcr.io && docker pull ghcr.io/danielbchurchill/legato-server:latest`.
 2. **Create the template repository**, public: `danielbchurchill/unraid-templates`. `legato.xml`'s `<TemplateURL>` already points at `main/templates/legato.xml` there. If you pick another name, change that URL to match. Add:
    - `LICENSE`, MIT. It covers the template files only.
    - `ca_profile.xml`, copied from this folder.

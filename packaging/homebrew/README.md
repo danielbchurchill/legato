@@ -1,6 +1,6 @@
 # Homebrew formula
 
-`legato.rb` is the formula for the `danielbchurchill/homebrew-legato` tap (issue #109). The tap is live, and the release workflow bumps the copy there. This copy is what the workflow starts from (see [Moving it to the tap](#moving-it-to-the-tap)).
+`legato.rb` is the formula for the `danielbchurchill/homebrew-legato` tap (issue #109). The tap is live, and the release workflow bumps the copy there. The tap's copy started as this one (see [How the tap is set up](#how-the-tap-is-set-up)).
 
 To install:
 
@@ -34,21 +34,18 @@ Current Homebrew won't load a formula from a tap you haven't trusted. `brew inst
 
 `release.yml`'s `homebrew` job runs after `release` on every stable version tag (pre-release tags such as `v1.0.0-rc.1` are skipped). It downloads the release's own `SHA256SUMS` and runs `scripts/bump-homebrew-formula.mjs` on the tap's `Formula/legato.rb`, which rewrites each archive's url to the new version and fills in that archive's sha256. Then it opens a PR against the tap. The job stays skipped until the `HOMEBREW_TAP_REPO` repository variable is set.
 
-The formula has no `version` line. Homebrew reads the version from the `/releases/download/v<version>/` url, and `brew audit --strict` rejects a `version` line that repeats it. The `0.0.0` urls and zero checksums committed here are placeholders, and the first release's bump replaces them.
+The formula has no `version` line. Homebrew reads the version from the `/releases/download/v<version>/` url, and `brew audit --strict` rejects a `version` line that repeats it. The `0.0.0` urls and zero checksums committed here are placeholders. Releases bump the tap's copy, not this one.
 
-## Moving it to the tap
+## How the tap is set up
 
-Each of these steps is Daniel's to take.
-
-1. **Make the release archives downloadable without a login.** `danielbchurchill/legato` is private, and Homebrew downloads release assets anonymously, so every install would fail with a 404 even after a release exists. Either make the repo (or at least its releases) public, or publish the archives somewhere public and change the formula's url lines and `scripts/bump-homebrew-formula.mjs`'s `URL_LINE` pattern to match.
-2. Create `danielbchurchill/homebrew-legato`. Homebrew requires the `homebrew-` prefix, and `brew install danielbchurchill/legato/legato` drops it.
-3. Copy `legato.rb` to `Formula/legato.rb` in the tap and commit it. Then `git rm packaging/homebrew/legato.rb` here, and reword this README to point at the tap, so two copies can't drift apart.
-4. Create a fine-grained personal access token scoped to the tap only, with Contents and Pull requests set to read and write. Add it to this repo as the Actions secret `HOMEBREW_TAP_TOKEN`.
-5. Add the Actions repository variable `HOMEBREW_TAP_REPO` = `danielbchurchill/homebrew-legato`. The next stable tag push then opens a bump PR on the tap.
+- **The release archives download without a login.** Homebrew fetches release assets anonymously, and `danielbchurchill/legato` and its releases are public.
+- **The tap is `danielbchurchill/homebrew-legato`**, with the formula at `Formula/legato.rb`. Homebrew requires the `homebrew-` prefix, and `brew tap danielbchurchill/legato` drops it.
+- **Releases open the bump PRs.** The Actions secret `HOMEBREW_TAP_TOKEN` is a fine-grained token scoped to the tap only, with Contents and Pull requests set to read and write. The repository variable `HOMEBREW_TAP_REPO` is `danielbchurchill/homebrew-legato`. With both set, every stable tag opens a bump PR on the tap: 0.1.0's and 0.2.0's are its PRs #1 and #2.
+- **This copy is still here.** Apart from the version and checksums, it matches the tap's. A change to the formula goes into both, or this copy can be removed (`git rm packaging/homebrew/legato.rb`) and this README pointed at the tap, so the two can't drift apart.
 
 ## Testing it locally
 
-There's no release to download yet, so the formula was tested against a locally built archive. Homebrew only installs formulae from a tap, so a throwaway local one stands in:
+To test a change to the formula before a release, test it against a locally built archive. Homebrew only installs formulae from a tap, so a throwaway local one stands in:
 
 ```sh
 LEGATO_RELEASE_VERSION=0.0.1 npm --prefix server run compile -- darwin-arm64
