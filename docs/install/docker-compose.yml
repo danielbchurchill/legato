@@ -3,7 +3,9 @@
 #
 #   LEGATO_MUSIC_DIR=/path/to/your/music docker compose up -d
 #
-# then open http://<this machine>:8899 and add /music as a library folder.
+# then open http://<this machine>:8899/setup, create the owner account, and
+# add /music as a library folder. `docker compose logs | grep "setup code"`
+# prints the setup code, if the page asks for it.
 services:
   legato:
     image: ghcr.io/danielbchurchill/legato-server:latest
