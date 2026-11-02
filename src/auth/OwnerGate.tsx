@@ -20,8 +20,10 @@ type Mode = 'create-owner' | 'sign-in'
 // before the round trip; the server enforces it.
 const MIN_PASSWORD_LENGTH = 8
 
+// 16px on a touch screen (#411), as every field is: under that, iOS Safari
+// zooms the page into the field and leaves it zoomed (DESIGN.md).
 const FIELD_CLASSES =
-  'w-full rounded-[var(--radius-control)] border border-[var(--color-hairline)] bg-[var(--color-inset)] px-[12px] py-[8px] text-[length:var(--text-base)] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]'
+  'w-full rounded-[var(--radius-control)] border border-[var(--color-hairline)] bg-[var(--color-inset)] px-[12px] py-[8px] text-[length:var(--text-base)] pointer-coarse:text-[16px] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]'
 
 type ErrorBody = { error?: string; reason?: string; retryAfter?: number }
 

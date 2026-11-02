@@ -2,7 +2,17 @@
 // The server is a fake fetch over a hand-built fragmented MP4 whose boxes
 // say what they are, so every piece handed on can be checked by name.
 import { describe, expect, it, vi } from 'vitest'
-import { BoxSplitter, MAX_RESUMES, openTrackFeed, TrackUnavailable, WINDOW_BYTES, type FeedDeps, type FragmentIndex } from './trackFeed'
+import {
+  BoxSplitter,
+  LAYOUTS_KEPT,
+  MAX_RESUMES,
+  openTrackFeed,
+  TrackLayouts,
+  TrackUnavailable,
+  WINDOW_BYTES,
+  type FeedDeps,
+  type FragmentIndex,
+} from './trackFeed'
 
 function box(type: string, payload: Uint8Array | number = 0): Uint8Array {
   const body = typeof payload === 'number' ? new Uint8Array(payload).fill(0x61) : payload
@@ -198,7 +208,7 @@ describe('openTrackFeed, an AAC rung from the top', () => {
 })
 
 describe('openTrackFeed, the original and scrubs', () => {
-  it('fetches the init segment, then about a megabyte of whole fragments at a time by Range', async () => {
+  it('fetches the index, then the init segment beside the first fragment alone, then one more, then windows twice as wide each time up to about a megabyte (#439)', async () => {
     const size = 300 * 1024
     const { file, init, fragments, index } = fragmentedMp4(10, size)
     const { deps: d, served } = deps(serveFile(file, index))
@@ -213,12 +223,77 @@ describe('openTrackFeed, the original and scrubs', () => {
     expect(pieces.every((piece, i) => piece.length === want[i].length && piece.every((byte, j) => byte === want[i][j]))).toBe(true)
     expect(served[0].url).toMatch(/\/files\/3\/stream\/index\?quality=original-fmp4$/)
     expect(served[1].range).toBe(`bytes=0-${index.initEnd - 1}`)
+    expect(served[2].range).toBe(`bytes=${index.fragments[0].offset}-${index.fragments[1].offset - 1}`)
     const windows = served.slice(2).map((s) => rangeOf(s.range, file.length))
     for (const [start, end] of windows) {
       expect(index.fragments.some((f) => f.offset === start)).toBe(true)
       expect(end + 1 - start).toBeLessThanOrEqual(WINDOW_BYTES + size)
     }
+    // Fragments per window, 300 KB each: one, one, two, then the megabyte.
+    expect(windows.map(([start, end]) => index.fragments.filter((f) => f.offset >= start && f.offset <= end).length)).toEqual([
+      1, 1, 2, 4, 2,
+    ])
     expect(windows.at(-1)![1]).toBe(index.end - 1)
+  })
+
+  it("keeps a track's index and init segment on the tape, so a scrub asks only for the fragment holding its target (#439)", async () => {
+    const { file, init, fragments, index } = fragmentedMp4(10)
+    const { deps: d, served } = deps(serveFile(file, index), { layouts: new TrackLayouts() })
+    await drain(await openTrackFeed({ fileId: 3, rung: 'original-fmp4', fromS: 0, signal: signal() }, d))
+    served.length = 0
+
+    const feed = await openTrackFeed({ fileId: 3, rung: 'original-fmp4', fromS: 6.9, signal: signal() }, d)
+    expect(feed.type).toBe('audio/mp4; codecs="fLaC"')
+    expect(feed.fromTime).toBe(6)
+    expect(served.map((s) => s.range)).toEqual([`bytes=${index.fragments[6].offset}-${index.fragments[7].offset - 1}`])
+    const pieces = await drain(feed)
+    expect(pieces[0]).toEqual(init)
+    expect(pieces.slice(1)).toEqual(fragments.slice(6))
+    expect(served.some((s) => s.url.includes('/stream/index'))).toBe(false)
+  })
+
+  it('asks for the index and init segment again when the bytes have moved under them (#439)', async () => {
+    const before = fragmentedMp4(10)
+    // A tag write: a bigger moov under the same file id moves every fragment.
+    const init = concat([box('ftyp', 16), box('moov', 260)])
+    const fragments = before.fragments
+    const after = { file: concat([init, ...fragments, box('mfra', 30)]), index: { ...before.index, initEnd: init.length } }
+    let offset = init.length
+    after.index.fragments = fragments.map((fragment, i) => {
+      const entry = { offset, time: i }
+      offset += fragment.length
+      return entry
+    })
+    after.index.end = offset
+    let serving: { file: Uint8Array; index: FragmentIndex } = before
+    const { deps: d, served } = deps((url, range) => serveFile(serving.file, serving.index)(url, range), { layouts: new TrackLayouts() })
+    await drain(await openTrackFeed({ fileId: 3, rung: 'original-fmp4', fromS: 0, signal: signal() }, d))
+    serving = after
+    served.length = 0
+
+    const pieces = await drain(await openTrackFeed({ fileId: 3, rung: 'original-fmp4', fromS: 6.5, signal: signal() }, d))
+    expect(pieces[0]).toEqual(init)
+    expect(pieces.slice(1)).toEqual(fragments.slice(6))
+    expect(served[1].url).toMatch(/\/stream\/index/)
+
+    // Kept again, now as the file is.
+    served.length = 0
+    await openTrackFeed({ fileId: 3, rung: 'original-fmp4', fromS: 2, signal: signal() }, d)
+    expect(served.map((s) => s.range)).toEqual([`bytes=${after.index.fragments[2].offset}-${after.index.fragments[3].offset - 1}`])
+  })
+
+  it('keeps the layouts of the tracks used last, a rung apart from another', () => {
+    const layouts = new TrackLayouts()
+    const layout = (n: number) => ({ index: { codecs: 'fLaC', initEnd: n, fragments: [], end: n }, init: new Uint8Array(n) })
+    for (let id = 1; id <= LAYOUTS_KEPT; id++) layouts.set(id, 'original-fmp4', layout(id))
+    // Using the first makes the second the oldest.
+    expect(layouts.get(1, 'original-fmp4')?.index.initEnd).toBe(1)
+    layouts.set(99, 'original-fmp4', layout(99))
+    expect(layouts.get(2, 'original-fmp4')).toBeUndefined()
+    expect(layouts.get(1, 'original-fmp4')).toBeDefined()
+    expect(layouts.get(1, 'aac256')).toBeUndefined()
+    layouts.forget(1, 'original-fmp4')
+    expect(layouts.get(1, 'original-fmp4')).toBeUndefined()
   })
 
   it('starts a scrub at the fragment holding the target, without fetching the audio before it', async () => {

@@ -49,6 +49,11 @@ export const NEXT_REPEAT_MODE: Record<RepeatMode, RepeatMode> = {
   one: 'off',
 }
 
+// #438: previous restarts the track once it's more than this far in, and
+// only goes back a track within it, as the iPhone's Music app and Spotify
+// do. On the queue's first track it always restarts.
+export const PREVIOUS_RESTARTS_AFTER_MS = 3000
+
 // 'album' falls back to track gain when a recording's release has none
 // (an untagged single, a compilation with mixed source masters) — "no
 // adjustment at all" is a worse default than "adjust some other way" for
@@ -1141,22 +1146,6 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     [serialized, advanceWebTrack, jumpToIndexTauri, stop],
   )
 
-  const previous = useCallback(
-    () =>
-      serialized(async () => {
-        if (currentIndex.current <= 0) return
-        const targetIndex = currentIndex.current - 1
-
-        if (!IS_TAURI) {
-          startWebTrack(targetIndex)
-          return
-        }
-
-        await jumpToIndexTauri(targetIndex)
-      }),
-    [jumpToIndexTauri, startWebTrack, serialized],
-  )
-
   // #81: pause/resume used to run outside `serialized`, the one queue-
   // mutating operation that did — a click here could fire its single
   // queue_pause/queue_play invoke() in the middle of another operation's
@@ -1372,7 +1361,73 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       audioRef.current.currentTime = positionMs / 1000
     }
     setStatus((s) => ({ ...s, positionMs }))
+    // Now, not once React has rendered: an operation queued right behind
+    // this one, such as a second press of previous (#438), reads where the
+    // player went.
+    statusRef.current = { ...statusRef.current, positionMs }
   }, [])
+
+  // How far into the current track the player is now. The browser asks its
+  // element rather than the last timeupdate: locked, a phone may have run
+  // on for a while without one.
+  const positionNowMs = useCallback(() => {
+    if (IS_TAURI) return statusRef.current.positionMs
+    if (USE_TAPE) return (tapeRef.current?.current()?.positionS ?? 0) * 1000
+    return (audioRef.current?.currentTime ?? 0) * 1000
+  }, [])
+
+  // The current track from its start (#438). Hearing it again is a play of
+  // its own, as repeat one's is, so the one before is reported as far as it
+  // got rather than cut short by the positions that follow. Paused stays
+  // paused: it's a seek.
+  const restartCurrent = useCallback(async () => {
+    // Nothing started (#184), or nothing at the tape's playhead: there's no
+    // audio to rewind, so start it again, as play does then.
+    if (IS_TAURI && failedStart.current) {
+      await jumpToIndexTauri(currentIndex.current)
+      return
+    }
+    if (USE_TAPE && !tapeRef.current?.current()) {
+      startWebTrack(currentIndex.current)
+      return
+    }
+    const entry = playSequence.current[currentIndex.current]
+    const info = entry && trackInfo.current.get(entry.recordingNodeId)
+    finalizeCurrentPlay()
+    if (info) {
+      currentPlay.current = {
+        recordingNodeId: entry.recordingNodeId,
+        fileId: info.fileId,
+        startedAt: new Date().toISOString(),
+        lastPositionMs: 0,
+      }
+    }
+    await seek(0)
+  }, [finalizeCurrentPlay, jumpToIndexTauri, seek, startWebTrack])
+
+  // #438: more than PREVIOUS_RESTARTS_AFTER_MS into a track, or on the
+  // queue's first, previous restarts it; nearer its start, it goes back a
+  // track. The lock screen's and headphones' previoustrack come here too
+  // (mediaSession.ts).
+  const previous = useCallback(
+    () =>
+      serialized(async () => {
+        if (currentIndex.current < 0) return
+        if (currentIndex.current === 0 || positionNowMs() > PREVIOUS_RESTARTS_AFTER_MS) {
+          await restartCurrent()
+          return
+        }
+        const targetIndex = currentIndex.current - 1
+
+        if (!IS_TAURI) {
+          startWebTrack(targetIndex)
+          return
+        }
+
+        await jumpToIndexTauri(targetIndex)
+      }),
+    [jumpToIndexTauri, positionNowMs, restartCurrent, serialized, startWebTrack],
+  )
 
   const setVolume = useCallback(async (value: number) => {
     const clamped = Math.min(1, Math.max(0, value))

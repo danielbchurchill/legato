@@ -133,7 +133,7 @@ export function Combobox<T extends string>({
             setOpen(true)
           }}
           onKeyDown={handleKeyDown}
-          className={`min-w-0 flex-1 bg-transparent text-[length:var(--text-sm)] text-[var(--color-ink)] outline-none placeholder:text-[color:var(--color-muted)] ${
+          className={`min-w-0 flex-1 bg-transparent text-[length:var(--text-sm)] pointer-coarse:text-[16px] text-[var(--color-ink)] outline-none placeholder:text-[color:var(--color-muted)] ${
             monospace ? 'font-[family-name:var(--font-mono)]' : ''
           }`}
         />

@@ -118,7 +118,7 @@ export function NumberInput({
         onKeyDown={handleKeyDown}
         className={`w-full min-w-0 flex-1 bg-transparent text-center text-[var(--color-ink)] tabular-nums outline-none ${
           textSize === 'base' ? 'text-[length:var(--text-base)]' : 'text-[length:var(--text-sm)]'
-        } ${monospace ? 'font-[family-name:var(--font-mono)]' : ''}`}
+        } pointer-coarse:text-[16px] ${monospace ? 'font-[family-name:var(--font-mono)]' : ''}`}
       />
       <button
         type="button"
