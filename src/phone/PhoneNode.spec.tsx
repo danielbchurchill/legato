@@ -218,7 +218,10 @@ describe("a node's detail on the phone", () => {
     expect(container.textContent).toContain('Highway Blues')
     expect(button(container, 'More')).toBeUndefined()
     act(() => button(container, 'play')!.click())
-    expect(playback.playTracks).toHaveBeenCalledWith([3, 4], 0, '')
+    expect(playback.playTracks).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: 3, title: "Dylan's Dream" }), expect.objectContaining({ id: 4, title: 'Highway Blues' })],
+      0,
+    )
   })
 })
 

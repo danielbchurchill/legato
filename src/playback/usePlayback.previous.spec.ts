@@ -139,7 +139,10 @@ describe('previous on native playback (#438)', () => {
   async function playing(startIndex: number) {
     const harness = await renderPlayback(true)
     await act(async () => {
-      await harness.playback.current.playTracks([1, 2, 3], startIndex, 'A track')
+      await harness.playback.current.playTracks(
+        [1, 2, 3].map((id) => ({ id, title: 'A track' })),
+        startIndex,
+      )
     })
     act(() => handlers.get('playback://track-changed')!({ payload: { recording_node_id: startIndex + 1, streaming: false } }))
     invokeMock.mockClear()
@@ -217,7 +220,10 @@ describe('previous on the plain <audio> player (#438)', () => {
   async function playing(startIndex: number) {
     const harness = await renderPlayback(false)
     await act(async () => {
-      await harness.playback.current.playTracks([1, 2, 3], startIndex, 'A track')
+      await harness.playback.current.playTracks(
+        [1, 2, 3].map((id) => ({ id, title: 'A track' })),
+        startIndex,
+      )
     })
     return { ...harness, audio: FakeAudio.made[0] }
   }

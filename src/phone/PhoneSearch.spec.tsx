@@ -240,7 +240,10 @@ describe('the phone search results', () => {
     expect(playlists).toEqual([7])
     // The artist's tracks, as the palette plays them.
     act(() => button(container, 'Play Dylan Moss').click())
-    expect(playback.playTracks).toHaveBeenCalledWith([3, 4], 0, '')
+    expect(playback.playTracks).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: 3, title: "Dylan's Dream" }), expect.objectContaining({ id: 4, title: 'Highway Blues' })],
+      0,
+    )
     expect(onPlayed).toHaveBeenCalled()
   })
 

@@ -179,14 +179,7 @@ export function PlaylistPage({ playlistId, onBack, onFocusNode, playback }: Play
             <CoverArt nodeId={track.id} size="thumb" radius="sm" className="size-[36px]" />
             <button
               type="button"
-              onClick={() =>
-                void playback.playTracks(
-                  tracks!.map((t) => t.id),
-                  i,
-                  title,
-                  { kind: 'playlist', playlistId },
-                )
-              }
+              onClick={() => void playback.playTracks(tracks!, i, { kind: 'playlist', playlistId })}
               onDoubleClick={() => onFocusNode(track.id)}
               disabled={playback.queueBusy}
               className="flex min-w-0 flex-col text-left"
