@@ -202,9 +202,10 @@ function HeaderSkeleton() {
 }
 
 /* "more": what the desktop's panel has beside the heart, for a record or a
- * track. Add to queue, add to playlist (a track; the menu turns into the
- * playlist picker), and edit tags, which opens the metadata tab where Edit
- * is, as the desktop's pencil does. */
+ * track. Add to queue, add to playlist (the menu turns into the playlist
+ * picker; a record's goes in whole, in its order, #448), and edit tags,
+ * which opens the metadata tab where Edit is, as the desktop's pencil
+ * does. */
 function MoreMenu({ details, playback, onEditTags }: { details: NodeDetailsData; playback: Playback; onEditTags: () => void }) {
   const [open, setOpen] = useState(false)
   const [picking, setPicking] = useState(false)
@@ -236,7 +237,7 @@ function MoreMenu({ details, playback, onEditTags }: { details: NodeDetailsData;
     >
       {(close) =>
         picking ? (
-          <PlaylistPicker nodeId={node.id} onDone={close} sheet />
+          <PlaylistPicker {...(node.type === 'release' ? { albumId: node.id } : { nodeId: node.id })} onDone={close} sheet />
         ) : (
           <ul className="flex flex-col">
             <MenuItem
@@ -247,7 +248,7 @@ function MoreMenu({ details, playback, onEditTags }: { details: NodeDetailsData;
             >
               add to queue
             </MenuItem>
-            {node.type === 'recording' && <MenuItem onClick={() => setPicking(true)}>add to playlist</MenuItem>}
+            <MenuItem onClick={() => setPicking(true)}>add to playlist</MenuItem>
             <MenuItem
               onClick={() => {
                 onEditTags()

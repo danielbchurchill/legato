@@ -110,6 +110,7 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
         <span className="ml-auto flex">
           <FavouriteButton node={node} />
           {node.type === 'recording' && <AddToPlaylistButton nodeId={node.id} />}
+          {node.type === 'release' && <AddToPlaylistButton albumId={node.id} />}
           {(node.type === 'recording' || node.type === 'release') && (
             <IconButton icon="pencil" label="Edit tags" active={tab === 'metadata'} onClick={() => onTabChange('metadata')} />
           )}

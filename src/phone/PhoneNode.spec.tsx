@@ -197,12 +197,12 @@ describe("a node's detail on the phone", () => {
     expect(button(byline, 'Dylan Moss Live')!.className).toContain('touch-target')
   })
 
-  it('offers add to queue and edit tags for a record, and edit tags opens the metadata tab', async () => {
+  it('offers add to queue, add to playlist and edit tags for a record, and edit tags opens the metadata tab', async () => {
     const playback = fakePlayback()
     const container = await render(2, playback)
     act(() => button(container, 'More')!.click())
     const menu = document.querySelector('[role="dialog"]')!
-    expect([...menu.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['add to queue', 'edit tags'])
+    expect([...menu.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['add to queue', 'add to playlist', 'edit tags'])
     act(() => button(menu, 'edit tags')!.click())
     expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('metadata')
   })
@@ -214,6 +214,23 @@ describe("a node's detail on the phone", () => {
     expect([...menu().querySelectorAll('button')].map((b) => b.textContent)).toEqual(['add to queue', 'add to playlist', 'edit tags'])
     act(() => button(menu(), 'add to playlist')!.click())
     expect(menu().querySelector('input[aria-label="New playlist name"]')).not.toBeNull()
+  })
+
+  it("adds a record's tracks to a playlist in its order, and says how many went in (#448)", async () => {
+    const container = await render(2)
+    act(() => button(container, 'More')!.click())
+    act(() => button(document.querySelector('[role="dialog"]')!, 'add to playlist')!.click())
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    await act(async () => {
+      button(document.querySelector('[role="dialog"]')!, 'Road trip')!.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const post = vi.mocked(fetch).mock.calls.find(([url, init]) => String(url).endsWith('/playlists/7/tracks') && init?.method === 'POST')
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ nodeIds: [3, 4] })
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('added 2 tracks')
+    expect(document.querySelector('[role="status"]')?.textContent).toBe('Added 2 tracks to Road trip')
   })
 
   it('gives an artist a round photo and the heart alone', async () => {
