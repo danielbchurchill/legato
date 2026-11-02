@@ -43,10 +43,12 @@ import {
  * the free space. It replaces the 514×121 transport dock.
  *
  * Left to right: the cover, title over artist, the transport over its
- * scrubber, then the queue and volume buttons. The bar picks up the cover's
- * colour as a wash from its left edge, so what's playing tints the chrome
- * that controls it. As the bar narrows, the parts give way in the order
- * layout.ts sets out, down to previous, play/pause and next (#293).
+ * scrubber, then the queue and volume buttons. The cover opens and closes
+ * now playing as the queue button does (#449); the title opens the track's
+ * article and the artist goes to the artist (#451). The bar picks up the
+ * cover's colour as a wash from its left edge, so what's playing tints the
+ * chrome that controls it. As the bar narrows, the parts give way in the
+ * order layout.ts sets out, down to previous, play/pause and next (#293).
  *
  * With nothing loaded, the bar gives way to a small idle pill with one way
  * back in (Shuffle library). It never shows every control disabled — that
@@ -199,13 +201,21 @@ function Waveform({
 type PlayerProps = {
   title: string
   artist: string | null
+  /** The artist's node, which the artist line opens (#451). */
+  artistId: number | null
   status: PlaybackStatus
   shuffled: boolean
   queueBusy: boolean
   repeatMode: RepeatMode
   problem: PlaybackProblem | null
   queueOpen: boolean
+  /** Opens and closes now playing: the queue button, and the cover (#449). */
   onToggleQueue: () => void
+  /** Goes to a node, as now playing's artist link does: the artist line. */
+  onFocusNode: (id: number) => void
+  /** Opens a node's article in the right panel: the title, for the playing
+   * track. */
+  onOpenDetails: (id: number) => void
   onResolveProblem: () => void
   onPause: () => void
   onResume: () => void
@@ -220,6 +230,7 @@ type PlayerProps = {
 export function Player({
   title,
   artist,
+  artistId,
   status,
   shuffled,
   queueBusy,
@@ -227,6 +238,8 @@ export function Player({
   problem,
   queueOpen,
   onToggleQueue,
+  onFocusNode,
+  onOpenDetails,
   onResolveProblem,
   onPause,
   onResume,
@@ -243,6 +256,12 @@ export function Player({
   const background = color
     ? `linear-gradient(90deg, ${withAlpha(color, 0.38)}, ${withAlpha(color, 0)} 42%), var(--color-surface)`
     : undefined
+  const nowPlayingLabel = queueOpen ? 'Hide now playing' : 'Show now playing'
+  // The title and artist are links only while they're on screen: once the
+  // title column gives way they stay for screen readers, and a link no one
+  // can see shouldn't take the focus.
+  const trackId = parts.titleWidth > 0 ? status.currentRecordingNodeId : null
+  const linkedArtistId = trackId != null ? artistId : null
 
   return (
     <Surface
@@ -260,26 +279,66 @@ export function Player({
         background,
       }}
     >
+      {/* #449: the cover opens and closes now playing, as the queue button
+       * does, since it's what people reach for first. It keeps its look at
+       * rest. On hover the wash the bar's other controls take shows around
+       * it, 4px out, so its corners come to their 10px, and the art itself
+       * is never tinted. */}
       {parts.cover && (
-        <CoverArt
-          nodeId={status.currentRecordingNodeId}
-          size="thumb"
-          style={{ width: PLAYER_COVER_SIZE, height: PLAYER_COVER_SIZE }}
-          alt=""
-        />
+        <Tooltip label={nowPlayingLabel} placement="top">
+          <button
+            type="button"
+            aria-label={nowPlayingLabel}
+            aria-pressed={queueOpen}
+            onClick={onToggleQueue}
+            className="shrink-0 rounded-[var(--radius-art)] hover:shadow-[0_0_0_4px_var(--color-wash)]"
+            style={{ width: PLAYER_COVER_SIZE, height: PLAYER_COVER_SIZE }}
+          >
+            <CoverArt
+              nodeId={status.currentRecordingNodeId}
+              size="thumb"
+              style={{ width: PLAYER_COVER_SIZE, height: PLAYER_COVER_SIZE }}
+              alt=""
+            />
+          </button>
+        </Tooltip>
       )}
 
       <div
         className={parts.titleWidth > 0 ? 'flex min-w-0 shrink-0 flex-col' : 'sr-only'}
         style={parts.titleWidth > 0 ? { width: parts.titleWidth } : undefined}
       >
-        <span title={title} className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
-          {title}
-        </span>
-        <span className="flex min-w-0 text-small">
-          <span title={artist ?? undefined} className="truncate text-[var(--color-ink-2)]">
-            {artist ?? ''}
+        {/* #451: the title opens the playing track's article, and the
+         * artist goes to the artist, as now playing's own line does. */}
+        {trackId != null ? (
+          <button
+            type="button"
+            title={title}
+            onClick={() => onOpenDetails(trackId)}
+            className="max-w-full min-w-0 self-start text-left text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)] hover:underline"
+          >
+            <span className="block truncate">{title}</span>
+          </button>
+        ) : (
+          <span title={title} className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
+            {title}
           </span>
+        )}
+        <span className="flex min-w-0 text-small">
+          {artist && linkedArtistId != null ? (
+            <button
+              type="button"
+              title={artist}
+              onClick={() => onFocusNode(linkedArtistId)}
+              className="min-w-0 text-left text-[var(--color-ink-2)] hover:text-[var(--color-ink)]"
+            >
+              <span className="block truncate">{artist}</span>
+            </button>
+          ) : (
+            <span title={artist ?? undefined} className="truncate text-[var(--color-ink-2)]">
+              {artist ?? ''}
+            </span>
+          )}
           {/* #185: the file isn't on this computer, so the track came from
            * the server. Said quietly, in words in the quietest ink, and the
            * artist truncates before it does. */}

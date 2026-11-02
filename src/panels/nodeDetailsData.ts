@@ -3,7 +3,7 @@ import { useGraph } from '../canvas/graphContext'
 import { useReconnectEpoch } from '../connect/reconnect'
 import type { DetailsTab } from '../shell/panels'
 import type { usePlayback } from '../playback/usePlayback'
-import { API, useNodeDetail, type NodeDetail } from './useNodeDetail'
+import { API, release, useNodeDetail, type NodeDetail } from './useNodeDetail'
 
 /* What both node-detail surfaces read about a node: the desktop's details
  * panel (NodeDetails.tsx) and the phone's sheet (#389, phone/PhoneNode.tsx).
@@ -75,6 +75,10 @@ export type NodeDetailsData = {
   /** Who it's by, and their node, for anything but an artist. */
   artistName: string | null
   artistId: number | null
+  /** The album a track is on, and its node (#451). Null for anything but a
+   * track. */
+  albumName: string | null
+  albumId: number | null
   canPlay: boolean
   canShuffle: boolean
   play: () => void
@@ -120,6 +124,7 @@ export function useNodeDetails(nodeId: number | null, playback: Playback): NodeD
   const artistEdge = node.edges.find((e) => e.direction === 'out' && e.type === 'performed_by')
   const artistName = node.type === 'artist' ? null : (artistEdge?.other_title ?? graph.byId.get(node.id)?.subtitle ?? null)
   const artistId = artistEdge?.other_id ?? null
+  const albumEdge = node.type === 'recording' ? release(node) : null
   const year = summary && (summary.kind === 'release' || summary.kind === 'recording') ? summary.releaseDate?.slice(0, 4) : null
   const releaseType = node.files[0]?.release_type?.toLowerCase()
   const kindLine = [node.type === 'release' ? (releaseType ?? 'album') : (TYPE_WORD[node.type] ?? node.type), year]
@@ -135,6 +140,8 @@ export function useNodeDetails(nodeId: number | null, playback: Playback): NodeD
     kindLine,
     artistName,
     artistId,
+    albumName: albumEdge?.other_title ?? null,
+    albumId: albumEdge?.other_id ?? null,
     canPlay: node.type === 'release' || node.type === 'recording' || credits.tracks.length > 0,
     canShuffle: node.type !== 'recording' && credits.tracks.length > 1,
     play: () => {

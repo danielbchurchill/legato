@@ -182,6 +182,17 @@ describe("a node's detail on the phone", () => {
     expect(opened).toEqual([1])
   })
 
+  it('heads a track with "Artist · Album", each opening its node over this one (#451)', async () => {
+    const opened: number[] = []
+    const container = await render(3, fakePlayback(), (id) => opened.push(id))
+    const byline = container.querySelector('h2')!.nextElementSibling!
+    expect(byline.textContent).toBe('Dylan Moss · Dylan Moss Live')
+    act(() => button(byline, 'Dylan Moss Live')!.click())
+    act(() => button(byline, 'Dylan Moss')!.click())
+    expect(opened).toEqual([2, 1])
+    expect(button(byline, 'Dylan Moss Live')!.className).toContain('touch-target')
+  })
+
   it('offers add to queue and edit tags for a record, and edit tags opens the metadata tab', async () => {
     const playback = fakePlayback()
     const container = await render(2, playback)
