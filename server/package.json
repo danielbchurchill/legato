@@ -25,7 +25,7 @@
     "@fastify/websocket": "^11.3.1",
     "chokidar": "^5.0.0",
     "fast-glob": "^3.3.3",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.6",
     "multicast-dns": "^7.2.5",
     "music-metadata": "^11.16.1",
     "node-taglib-sharp": "^6.0.3"
