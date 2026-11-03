@@ -639,8 +639,16 @@ html[data-theme='light'] [data-set-theme='light'] {
 }
 
 /* A phone screenshot. The captures have no status bar or notch, and none is
- * drawn: just the screen, in a thin bezel. */
+ * drawn: just the screen, in a thin bezel.
+ *
+ * The ratio alone sets the height. Under min-height: auto, WebKit let the
+ * image's height: 100% plus the padding stretch the frame past its ratio,
+ * and on iOS it grew again with every relayout. As a grid item the image
+ * fills the content box; as a block in the absolutely positioned hero
+ * phones, WebKit sized it to the border box and ran it past the bezel. */
 .phone {
+  display: grid;
+  min-height: 0;
   aspect-ratio: 786 / 1704;
   padding: 5px;
   border-radius: 30px;
