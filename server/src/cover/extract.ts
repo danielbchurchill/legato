@@ -119,6 +119,21 @@ export function coverTargetNode(db: Database, nodeId: number): number {
   return album?.node_id ?? nodeId;
 }
 
+// Issue #461: every node that shows this node's art, itself included: an
+// album's tracks, which inherit it, and the artist who borrows it as their
+// most-represented album (coverTargetNode's G-7 fallback). A client told a
+// cover changed asks for these nodes' images again and no others.
+export function coverDependents(db: Database, nodeId: number): number[] {
+  const tracks = db
+    .prepare("SELECT from_node AS id FROM edges WHERE to_node = ? AND type = 'appears_on'")
+    .all(nodeId) as { id: number }[];
+  const artist = db.prepare("SELECT primary_artist_node_id AS id FROM albums WHERE node_id = ?").get(nodeId) as
+    | { id: number | null }
+    | undefined;
+  const borrower = artist?.id != null && coverTargetNode(db, artist.id) === nodeId ? [artist.id] : [];
+  return [...new Set([nodeId, ...tracks.map((t) => t.id), ...borrower])];
+}
+
 export function recordCover(
   db: Database,
   entry: {
