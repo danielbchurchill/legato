@@ -3,16 +3,21 @@ import { parseTags } from "../scan/tags.js";
 import path from "node:path";
 import { attachCoverForFile, resolveCover } from "../cover/extract.js";
 import { enqueueCoverArtLookupIfNeeded, isEnrichmentEnabled } from "../enrich/queue.js";
-import { albumIdentity, stripDiscSuffix, type AlbumIdentity } from "./albumIdentity.js";
-import { deriveRecordingEdges, NODE_LOOKUP_SQL } from "./edges.js";
+import { albumIdentities, stripDiscSuffix, type AlbumFile, type AlbumIdentity } from "./albumIdentity.js";
+import { deriveRecordingEdges } from "./edges.js";
+import { ALBUM_FILE_COLUMNS } from "./releases.js";
 import { mergeNodeInto } from "./people.js";
 
-// Issue #465: brings a library from before album identity forward, once, at
-// the first start after migration 0045. Until then an album node was the
-// ALBUM tag string, so a set's discs were one node each and two artists'
-// same-titled albums shared one. This files every album under the rule
-// match/albumIdentity.ts and match/releases.ts follow from now on, keeping
-// the nodes a library already has wherever it can:
+// Issue #465: re-files a library's albums under the rule match/
+// albumIdentity.ts and match/releases.ts follow, once, at the first start
+// after a migration that changed the rule: 0045 (albums found by the ALBUM
+// tag string alone before it: a set's discs one node each, two artists'
+// same-titled albums one node) and 0053 (each file's album artist decided
+// alone before it: a live compilation tagged with each performer as
+// ALBUMARTIST was an album per performer, and an album tagged in one folder
+// and not in another was two). The album a file is on before the upgrade is
+// its recording's appears_on edge. The upgrade keeps the nodes a library
+// already has wherever it can:
 //
 // - The parts of one album become one node. The oldest part (lowest id) is
 //   kept and the rest are merged into it with mergeNodeInto, which carries a
@@ -39,7 +44,7 @@ type UpgradeFile = {
   discNo: number | null;
   firstSeenAt: string;
   identity: AlbumIdentity;
-  /** The node the file's ALBUM tag found before: the old rule. */
+  /** The album node the file is on before the upgrade. */
   oldNodeId: number | null;
 };
 
@@ -79,46 +84,52 @@ function addKey(keys: Map<string, Album>, key: string, album: Album, isArtistKey
   if (isArtistKey) album.hasArtistKey = true;
 }
 
+// Every present file with an ALBUM tag: the album the rule puts it on,
+// decided with all of its folder's files at once, and the album node it's on
+// now. That's its recording's appears_on edge, where whatever rule filed it
+// last put it, but a recording has one edge however many files it has: two
+// copies of "Yellow Submarine", one on Revolver and one on Yellow
+// Submarine, are one recording on whichever album was derived last. So the
+// edge counts as a file's own only when the album's title is the file's,
+// disc suffix aside.
 function readFiles(db: Database): UpgradeFile[] {
   const rows = db
     .prepare(
-      `SELECT id, recording_node_id AS recordingNodeId, file_path AS filePath, tags_raw AS tagsRaw, disc_no AS discNo,
-              first_seen_at AS firstSeenAt
-         FROM files WHERE missing_since IS NULL AND tags_raw IS NOT NULL ORDER BY id`,
+      `SELECT ${ALBUM_FILE_COLUMNS}, recording_node_id AS recordingNodeId, disc_no AS discColumn,
+              first_seen_at AS firstSeenAt,
+              (SELECT e.to_node FROM edges e
+                WHERE e.from_node = files.recording_node_id AND e.type = 'appears_on' AND e.source = 'local'
+                ORDER BY e.id LIMIT 1) AS oldNodeId
+         FROM files WHERE missing_since IS NULL ORDER BY id`,
     )
-    .all() as {
-    id: number;
+    .all() as (AlbumFile & {
     recordingNodeId: number;
-    filePath: string;
-    tagsRaw: string;
-    discNo: number | null;
+    discColumn: number | null;
     firstSeenAt: string;
-  }[];
-  const oldLookup = db.prepare(NODE_LOOKUP_SQL);
-  const oldNodes = new Map<string, number | null>();
+    oldNodeId: number | null;
+  })[];
+  const identities = albumIdentities(rows);
+  const readTitle = db.prepare("SELECT title FROM nodes WHERE id = ?");
+  const titles = new Map<number, string | null>();
+  const titleOf = (nodeId: number) => {
+    if (!titles.has(nodeId)) {
+      const node = readTitle.get(nodeId) as { title: string } | undefined;
+      titles.set(nodeId, node ? stripDiscSuffix(node.title).title.toLowerCase() : null);
+    }
+    return titles.get(nodeId);
+  };
   const files: UpgradeFile[] = [];
   for (const row of rows) {
-    let tags: { album?: string | null; albumartist?: string | null };
-    try {
-      tags = JSON.parse(row.tagsRaw) as typeof tags;
-    } catch {
-      continue;
-    }
-    const identity = albumIdentity(tags, row.filePath);
+    const identity = identities.get(row.id);
     if (!identity) continue;
-    const album = tags.album!;
-    let oldNodeId = oldNodes.get(album);
-    if (oldNodeId === undefined) {
-      oldNodeId = (oldLookup.get("release", album) as { id: number } | undefined)?.id ?? null;
-      oldNodes.set(album, oldNodeId);
-    }
+    const own = row.oldNodeId !== null && titleOf(row.oldNodeId) === identity.title.toLowerCase();
     files.push({
       id: row.id,
       recordingNodeId: row.recordingNodeId,
-      discNo: row.discNo,
+      discNo: row.discColumn,
       firstSeenAt: row.firstSeenAt,
       identity,
-      oldNodeId,
+      oldNodeId: own ? row.oldNodeId : null,
     });
   }
   return files;
@@ -227,14 +238,24 @@ export function upgradeReleaseIdentities(db: Database): ReleaseUpgradeResult | n
         result.split++;
       }
     }
+    // An old node may since have been merged into its keeper's other part.
+    const current = (nodeId: number): number => mergedInto.get(nodeId) ?? nodeId;
 
     const readTitle = db.prepare("SELECT title FROM nodes WHERE id = ?");
     const retitle = db.prepare("UPDATE nodes SET title = ?, updated_at = datetime('now') WHERE id = ?");
-    const insertKey = db.prepare("INSERT OR IGNORE INTO release_keys (key, node_id) VALUES (?, ?)");
+    // Keys are written afresh for every album with a present file. Keys of an
+    // album whose files are all missing (a drive that's away) stay, so it
+    // finds its node when they're back, unless a present album now holds
+    // one of them: what's here decides.
+    const clearKeys = db.prepare("DELETE FROM release_keys WHERE node_id = ?");
+    for (const nodeId of new Set(files.map((f) => f.oldNodeId).filter((id): id is number => id !== null))) {
+      clearKeys.run(current(nodeId));
+    }
+    const insertKey = db.prepare("INSERT OR REPLACE INTO release_keys (key, node_id) VALUES (?, ?)");
     for (const album of albums) {
-      const current = (readTitle.get(album.nodeId!) as { title: string }).title;
-      const title = keptTitle(current, album.title);
-      if (title !== current) {
+      const shown = (readTitle.get(album.nodeId!) as { title: string }).title;
+      const title = keptTitle(shown, album.title);
+      if (title !== shown) {
         retitle.run(title, album.nodeId!);
         result.retitled++;
       }
@@ -267,8 +288,6 @@ export function upgradeReleaseIdentities(db: Database): ReleaseUpgradeResult | n
     );
     const hasOwnArt = db.prepare("SELECT 1 FROM cover_art WHERE node_id = ? AND source IN ('embedded', 'folder')");
     const rederive = new Set<number>();
-    // A lost node may since have been merged into its keeper's other part.
-    const current = (nodeId: number): number => mergedInto.get(nodeId) ?? nodeId;
     for (const [album, lost] of splitFrom) {
       for (const file of album.files) {
         if (file.oldNodeId === null || !lost.includes(file.oldNodeId)) continue;

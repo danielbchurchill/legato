@@ -344,6 +344,211 @@ describe("after the upgrade", () => {
   });
 });
 
+// Issue #465's second pass: a library 0045's rule filed, where each file's
+// ALBUMARTIST was decided alone, opened by the release with 0053.
+describe("migration 0053", () => {
+  type Filed = { fileId: number; recording: number };
+
+  function filedLibrary(
+    write: (old: {
+      db: Database;
+      album: (title: string, keys: string[]) => number;
+      file: (filePath: string, album: number, tags: Record<string, unknown>) => Filed;
+    }) => void,
+  ): Database {
+    const dbPath = path.join(dataDir, "legato.db");
+    const db = openDbAt(dbPath, 52);
+    const root = (db.prepare("INSERT INTO library_roots (path) VALUES ('/m') RETURNING id").get() as { id: number }).id;
+    const album = (title: string, keys: string[]) => {
+      const id = (
+        db.prepare("INSERT INTO nodes (type, title) VALUES ('release', ?) RETURNING id").get(title) as { id: number }
+      ).id;
+      for (const key of keys) db.prepare("INSERT INTO release_keys (key, node_id) VALUES (?, ?)").run(key, id);
+      return id;
+    };
+    const file = (filePath: string, albumId: number, tags: Record<string, unknown>) => {
+      const recording = (
+        db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', ?) RETURNING id").get(filePath) as {
+          id: number;
+        }
+      ).id;
+      db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(recording);
+      const fileId = (
+        db
+          .prepare(
+            `INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size, tags_raw, disc_no, track_no)
+             VALUES (?, ?, ?, datetime('now'), 0, ?, ?, ?) RETURNING id`,
+          )
+          .get(
+            recording,
+            root,
+            filePath,
+            JSON.stringify(tags),
+            (tags.discNo as number | undefined) ?? null,
+            (tags.trackNo as number | undefined) ?? null,
+          ) as {
+          id: number;
+        }
+      ).id;
+      db.prepare("INSERT INTO edges (from_node, to_node, type, source) VALUES (?, ?, 'appears_on', 'local')").run(
+        recording,
+        albumId,
+      );
+      return { fileId, recording };
+    };
+    write({ db, album, file });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM release_identity_upgrade").get()).toEqual({ n: 0 });
+    db.close();
+    return openDb(dbPath, { log: () => {} });
+  }
+
+  const AMCHITKA = "Amchitka-The 1970 Concert That Launched Greenpeace";
+  const amchitkaPath = (sub: string, n: number, performer: string) =>
+    `/m/Various Artists/${AMCHITKA} CD1/${sub}/${String(n).padStart(2, "0")} - ${performer}.flac`;
+  const amchitkaTags = (sub: string, n: number, performer: string, disc: number) => ({
+    album: `${AMCHITKA} ${sub}`,
+    albumartist: performer,
+    artist: performer,
+    discNo: disc,
+    trackNo: n,
+  });
+
+  it("merges a compilation 0045 split by performer into one album, keeping the favourite and the oldest node", () => {
+    let joni = 0;
+    let phil = 0;
+    let james = 0;
+    const files: Filed[] = [];
+    const db = filedLibrary(({ db, album, file }) => {
+      const t = AMCHITKA.toLowerCase();
+      const folder = `/m/Various Artists/${AMCHITKA} CD1`;
+      joni = album(AMCHITKA, [JSON.stringify(["artist", t, "joni mitchell"]), JSON.stringify(["folder", t, folder])]);
+      phil = album(AMCHITKA, [JSON.stringify(["artist", t, "phil ochs"])]);
+      james = album(AMCHITKA, [JSON.stringify(["artist", t, "james taylor"])]);
+      files.push(file(amchitkaPath("CD1", 1, "Phil Ochs"), phil, amchitkaTags("CD1", 1, "Phil Ochs", 1)));
+      files.push(file(amchitkaPath("CD1", 12, "James Taylor"), james, amchitkaTags("CD1", 12, "James Taylor", 1)));
+      files.push(file(amchitkaPath("CD2", 1, "Joni Mitchell"), joni, amchitkaTags("CD2", 1, "Joni Mitchell", 2)));
+      db.prepare("INSERT INTO favourites (node_id) VALUES (?)").run(james);
+    });
+
+    const result = upgradeReleaseIdentities(db)!;
+    expect(result).toMatchObject({ albums: 1, merged: 2, split: 0 });
+    for (const f of files) expect(albumOf(db, f.recording)).toBe(joni);
+    expect(releaseCount(db)).toBe(1);
+    expect(db.prepare("SELECT node_id FROM favourites").all()).toEqual([{ node_id: joni }]);
+    expect(db.prepare("SELECT disc_no FROM files ORDER BY id").all()).toEqual([
+      { disc_no: 1 },
+      { disc_no: 1 },
+      { disc_no: 2 },
+    ]);
+    // The performers' keys are gone: another Phil Ochs album of that title
+    // elsewhere wouldn't land here.
+    expect(db.prepare("SELECT key FROM release_keys").all()).toEqual([
+      { key: JSON.stringify(["folder", AMCHITKA.toLowerCase(), `/m/Various Artists/${AMCHITKA} CD1`]) },
+    ]);
+    // And a re-derive changes nothing.
+    for (const f of files) deriveLocalEdges(db, f.fileId);
+    for (const f of files) expect(albumOf(db, f.recording)).toBe(joni);
+    expect(releaseCount(db)).toBe(1);
+  });
+
+  it("merges one artist's album tagged with ALBUMARTIST in one folder and only ARTIST in another", () => {
+    let own = 0;
+    let reissue = 0;
+    const files: Filed[] = [];
+    const db = filedLibrary(({ album, file }) => {
+      const t = "i ain't marching anymore";
+      own = album("I Ain't Marching Anymore", [JSON.stringify(["artist", t, "phil ochs"])]);
+      reissue = album("I Ain't Marching Anymore", [
+        JSON.stringify(["folder", t, "/m/Phil Ochs/All News That's Fit to Sing"]),
+      ]);
+      files.push(
+        file("/m/Phil Ochs/I Ain't Marching Anymore/01.flac", own, {
+          album: "I Ain't Marching Anymore",
+          albumartist: "Phil Ochs",
+          artist: "Phil Ochs",
+          trackNo: 1,
+        }),
+      );
+      files.push(
+        file("/m/Phil Ochs/All News That's Fit to Sing/CD2/01.flac", reissue, {
+          album: "I Ain't Marching Anymore",
+          artist: "Phil Ochs",
+          discNo: 2,
+          trackNo: 1,
+        }),
+      );
+    });
+    expect(upgradeReleaseIdentities(db)).toMatchObject({ albums: 1, merged: 1, split: 0 });
+    expect(albumOf(db, files[0]!.recording)).toBe(own);
+    expect(albumOf(db, files[1]!.recording)).toBe(own);
+    expect(title(db, reissue)).toBeUndefined();
+  });
+
+  it("doesn't read a recording with files on two albums as a split", () => {
+    let revolver = 0;
+    let yellowSubmarine = 0;
+    let shared: Filed = { fileId: 0, recording: 0 };
+    const db = filedLibrary(({ db, album, file }) => {
+      revolver = album("Revolver", [JSON.stringify(["artist", "revolver", "beatles"])]);
+      yellowSubmarine = album("Yellow Submarine", [JSON.stringify(["artist", "yellow submarine", "beatles"])]);
+      const beatles = (folder: string, title: string, n: number, node: number) =>
+        file(`/m/The Beatles/${folder}/${n}.flac`, node, {
+          album: title,
+          albumartist: "The Beatles",
+          artist: "The Beatles",
+          trackNo: n,
+        });
+      beatles("Revolver", "Revolver", 1, revolver);
+      beatles("Yellow Submarine", "Yellow Submarine", 2, yellowSubmarine);
+      // One recording, one copy on each album: its one appears_on edge is
+      // the copy derived last's.
+      shared = beatles("Yellow Submarine", "Yellow Submarine", 1, yellowSubmarine);
+      const copy = db
+        .prepare(
+          `INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size, tags_raw, track_no)
+           SELECT recording_node_id, library_root_id, '/m/The Beatles/Revolver/6.flac', file_mtime, 0, ?, 6
+             FROM files WHERE id = ? RETURNING id`,
+        )
+        .get(
+          JSON.stringify({ album: "Revolver", albumartist: "The Beatles", artist: "The Beatles", trackNo: 6 }),
+          shared.fileId,
+        ) as { id: number };
+      expect(copy.id).toBeGreaterThan(shared.fileId);
+    });
+    const result = upgradeReleaseIdentities(db)!;
+    expect(result).toMatchObject({ albums: 2, merged: 0, split: 0, needCovers: [] });
+    expect(albumOf(db, shared.recording)).toBe(yellowSubmarine);
+    expect(title(db, revolver)).toBe("Revolver");
+  });
+
+  it("leaves two artists' Greatest Hits apart, in one folder with colliding numbers and in two folders", () => {
+    const files: Filed[] = [];
+    const db = filedLibrary(({ album, file }) => {
+      const t = "greatest hits";
+      const queen = album("Greatest Hits", [JSON.stringify(["artist", t, "queen"])]);
+      const abba = album("Greatest Hits", [JSON.stringify(["artist", t, "abba"])]);
+      const hits = (folder: string, name: string, n: number, node: number) =>
+        files.push(
+          file(`/m/${folder}/${name} ${n}.flac`, node, {
+            album: "Greatest Hits",
+            albumartist: name,
+            artist: name,
+            trackNo: n,
+          }),
+        );
+      hits("Hits", "Queen", 1, queen);
+      hits("Hits", "ABBA", 1, abba);
+      hits("Hits", "Queen", 2, queen);
+      hits("ABBA/Greatest Hits", "ABBA", 2, abba);
+    });
+    expect(upgradeReleaseIdentities(db)).toMatchObject({ albums: 2, merged: 0, split: 0 });
+    expect(albumOf(db, files[2]!.recording)).toBe(albumOf(db, files[0]!.recording));
+    expect(albumOf(db, files[1]!.recording)).not.toBe(albumOf(db, files[0]!.recording));
+    expect(albumOf(db, files[3]!.recording)).toBe(albumOf(db, files[1]!.recording));
+    expect(releaseCount(db)).toBe(2);
+  });
+});
+
 describe("attachUpgradedCovers", () => {
   it("reads an album's art from its own files and puts it on the album", async () => {
     const folder = path.join(dataDir, "music", "ABBA", "Greatest Hits");

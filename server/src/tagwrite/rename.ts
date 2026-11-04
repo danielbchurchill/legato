@@ -1,8 +1,8 @@
 import type { Database } from "../sqlite.js";
-import { albumIdentity, type AlbumIdentity } from "../match/albumIdentity.js";
+import type { AlbumIdentity } from "../match/albumIdentity.js";
 import { artistMbidOf, artistsByKeyQuery, isSameSpelling } from "../match/artistLookup.js";
 import { mergeNodeInto } from "../match/people.js";
-import { findOrCreateRelease, findRelease } from "../match/releases.js";
+import { albumIdentitiesWith, findOrCreateRelease, findRelease } from "../match/releases.js";
 import type { FieldDiff } from "./diff.js";
 
 /* Issue #464: what an edit does to an artist's or an album's node.
@@ -50,31 +50,51 @@ type NodeRow = { id: number; type: string; title: string };
 /** One file an edit writes, as the identity of its album is worked out
  *  from: its path, its tags as the last scan read them, and what the edit
  *  changes in them. */
-export type EditedFile = { filePath: string; tagsRaw: string | null; diff: FieldDiff[] };
+export type EditedFile = { fileId: number; filePath: string; tagsRaw: string | null; diff: FieldDiff[] };
 
 function nodeRow(db: Database, id: number | null): NodeRow | null {
   if (id == null) return null;
   return (db.prepare("SELECT id, type, title FROM nodes WHERE id = ?").get(id) as NodeRow | undefined) ?? null;
 }
 
-/** The albums the edited files will be on, by #465's albumIdentity, each
- *  once. */
-export function identitiesAfter(files: EditedFile[]): AlbumIdentity[] {
-  const identities = new Map<string, AlbumIdentity>();
-  for (const file of files) {
-    let tags: { album?: string | null; albumartist?: string | null } = {};
+/** The albums the edited files will be on, by #465's album rule, each
+ *  once. The rule weighs each file's album folder as a whole, so it's asked
+ *  with the edited files' new tags and their folders' other files as they
+ *  are (match/releases.ts's albumIdentitiesWith). */
+export function identitiesAfter(db: Database, files: EditedFile[]): AlbumIdentity[] {
+  const edited = files.map((file) => {
+    let tags: {
+      album?: string | null;
+      albumartist?: string | null;
+      artist?: string | null;
+      discNo?: number | null;
+      trackNo?: number | null;
+    } = {};
     try {
       tags = file.tagsRaw ? JSON.parse(file.tagsRaw) : {};
     } catch {}
-    const written = (field: string) => {
-      const value = file.diff.find((d) => d.field === field)?.newValue;
+    const written = (field: string) => file.diff.find((d) => d.field === field)?.newValue;
+    const text = (field: string) => {
+      const value = written(field);
       return typeof value === "string" ? value : undefined;
     };
-    const identity = albumIdentity(
-      { album: written("album") ?? tags.album, albumartist: written("albumArtist") ?? tags.albumartist },
-      file.filePath,
-    );
-    if (identity) identities.set(JSON.stringify([identity.artistKey, identity.folderKey]), identity);
+    const number = (field: string) => {
+      const value = written(field);
+      return typeof value === "number" ? value : undefined;
+    };
+    return {
+      id: file.fileId,
+      path: file.filePath,
+      album: text("album") ?? tags.album ?? null,
+      albumartist: text("albumArtist") ?? tags.albumartist ?? null,
+      artist: text("artist") ?? tags.artist ?? null,
+      discNo: number("discNo") ?? tags.discNo ?? null,
+      trackNo: number("trackNo") ?? tags.trackNo ?? null,
+    };
+  });
+  const identities = new Map<string, AlbumIdentity>();
+  for (const identity of albumIdentitiesWith(db, edited).values()) {
+    identities.set(JSON.stringify([identity.artistKey, identity.folderKey]), identity);
   }
   return [...identities.values()];
 }
@@ -83,11 +103,16 @@ function editedFiles(db: Database, editId: number): EditedFile[] {
   return (
     db
       .prepare(
-        `SELECT f.file_path, f.tags_raw, w.diff_json FROM tag_writes w JOIN files f ON f.id = w.file_id
+        `SELECT f.id, f.file_path, f.tags_raw, w.diff_json FROM tag_writes w JOIN files f ON f.id = w.file_id
           WHERE w.edit_id = ? AND w.status IN ('pending_review', 'written')`,
       )
-      .all(editId) as { file_path: string; tags_raw: string | null; diff_json: string }[]
-  ).map((row) => ({ filePath: row.file_path, tagsRaw: row.tags_raw, diff: JSON.parse(row.diff_json) as FieldDiff[] }));
+      .all(editId) as { id: number; file_path: string; tags_raw: string | null; diff_json: string }[]
+  ).map((row) => ({
+    fileId: row.id,
+    filePath: row.file_path,
+    tagsRaw: row.tags_raw,
+    diff: JSON.parse(row.diff_json) as FieldDiff[],
+  }));
 }
 
 // Another artist the scanner's lookup takes `name` to mean: one spelled
@@ -152,7 +177,7 @@ export function applyNodeEdit(db: Database, editId: number): number | null {
   const node = nodeRow(db, edit.node_id);
   if (!node) return null;
 
-  const identities = node.type === "release" ? identitiesAfter(editedFiles(db, edit.id)) : [];
+  const identities = node.type === "release" ? identitiesAfter(db, editedFiles(db, edit.id)) : [];
   const target = mergeTarget(db, node, edit.new_title, identities);
   db.transaction(() => {
     if (target) {

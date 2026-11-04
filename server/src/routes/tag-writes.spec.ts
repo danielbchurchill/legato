@@ -319,10 +319,25 @@ describe("editing an album", () => {
     expect(db.prepare("SELECT 1 FROM favourites WHERE node_id = ?").get(queenAlbum)).toBeTruthy();
   });
 
-  // Without ALBUMARTIST, #465 tells albums apart by folder.
-  it("doesn't merge two same-titled albums without an album artist in different folders", async () => {
+  // Without ALBUMARTIST, #465 takes an album's artist from its files' ARTIST
+  // when they agree, so one artist's album of a title is one album wherever
+  // its files are, and two artists' are two.
+  it("merges one artist's same-titled albums without an album artist in different folders", async () => {
     const one = await addTrack("Live/one", { title: "One", artist: "Low", album: "Live" });
     const two = await addTrack("Live at Glastonbury/two", { title: "Two", artist: "Low", album: "Live at Glastonbury" });
+    const renamed = linked(two.recordingId, "appears_on")[0]!.id;
+    const other = linked(one.recordingId, "appears_on")[0]!.id;
+
+    const { review: r } = await edit(renamed, { album: "Live" });
+    expect(r.merge).toEqual({ id: other, title: "Live" });
+    recompute(db);
+    expect(linked(two.recordingId, "appears_on")).toEqual([{ id: other, title: "Live" }]);
+    expect(linked(one.recordingId, "appears_on")).toEqual([{ id: other, title: "Live" }]);
+  });
+
+  it("doesn't merge two artists' same-titled albums without an album artist in different folders", async () => {
+    const one = await addTrack("Live/one", { title: "One", artist: "Low", album: "Live" });
+    const two = await addTrack("Live at Glastonbury/two", { title: "Two", artist: "Yo La Tengo", album: "Live at Glastonbury" });
     const renamed = linked(two.recordingId, "appears_on")[0]!.id;
     const other = linked(one.recordingId, "appears_on")[0]!.id;
 

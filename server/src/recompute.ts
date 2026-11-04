@@ -1,5 +1,6 @@
 import type { Database } from "./sqlite.js";
 import { deriveLocalEdges } from "./match/edges.js";
+import { AlbumFolders } from "./match/releases.js";
 import { mergeDuplicatePeople } from "./match/people.js";
 import { enqueueEnrichmentIfNeeded, enqueueLookupsInBound } from "./enrich/queue.js";
 import { recomputeEntities } from "./entities/aggregate.js";
@@ -29,8 +30,11 @@ import { refreshPlannerStatistics, reloadPlannerStatistics } from "./db.js";
 export function recompute(db: Database): void {
   const files = db.prepare("SELECT id FROM files WHERE missing_since IS NULL").all() as { id: number }[];
   // Each file is its own transaction (match/edges.ts); a piece of them
-  // commits together, rather than every statement on its own.
-  writeInChunks(db, files, ({ id }) => deriveLocalEdges(db, id));
+  // commits together, rather than every statement on its own. Issue #465:
+  // which album a file is on depends on its album folder's other files, and
+  // each folder is read once for the whole pass.
+  const albums = new AlbumFolders(db);
+  writeInChunks(db, files, ({ id }) => deriveLocalEdges(db, id, albums));
 
   // Issue #273: one node per person. New credits already land on the artist
   // (match/edges.ts's findOrCreatePerson); this catches an artist node the
