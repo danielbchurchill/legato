@@ -1,5 +1,6 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { TooltipBubble } from './Tooltip'
+import { useTouchLayout } from './touchLayout'
 import {
   clamp,
   fractionToValue,
@@ -37,6 +38,10 @@ import {
  * track jumps the nearest thumb there and keeps dragging it with the
  * pointer captured, so a drag that leaves the track (or the window) still
  * tracks. `onChange` fires on every move, `onCommit` once on release.
+ *
+ * In the phone's touch layout (touchLayout.ts) a horizontal slider takes a
+ * touch anywhere in a 44px band and draws a 22px thumb, big enough to see
+ * under a finger (#467's map options sheet).
  *
  * Values never ease between positions — the thumb and fill track the
  * pointer exactly (DESIGN.md "Never animate live data" and "direct
@@ -87,6 +92,8 @@ export function Slider<V extends SliderValue>({
 }: SliderProps<V>) {
   const isRange = Array.isArray(value)
   const vertical = orientation === 'vertical'
+  const touch = useTouchLayout() && !vertical
+  const band = touch ? 'h-[44px]' : 'h-[24px]'
   const [start, end] = toPair(value)
   const startFraction = valueToFraction(start, min, max, scale)
   const endFraction = valueToFraction(end, min, max, scale)
@@ -195,7 +202,7 @@ export function Slider<V extends SliderValue>({
   return (
     <div
       className={`flex touch-none select-none ${
-        vertical ? 'h-[120px] w-[24px] justify-center' : 'h-[24px] w-full min-w-0 flex-1 items-center'
+        vertical ? 'h-[120px] w-[24px] justify-center' : `${band} w-full min-w-0 flex-1 items-center`
       } ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} ${className}`}
     >
       <div
@@ -204,7 +211,7 @@ export function Slider<V extends SliderValue>({
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        className={`relative flex ${vertical ? 'h-full w-[24px] justify-center' : 'h-[24px] w-full items-center'}`}
+        className={`relative flex ${vertical ? 'h-full w-[24px] justify-center' : `${band} w-full items-center`}`}
       >
         {/* v2: a 4px --color-wash-2 track with an ink fill — the slider is
          * a quantity, not an on/off, so it stays out of the accent. */}
@@ -250,7 +257,7 @@ export function Slider<V extends SliderValue>({
                 if (e.currentTarget.matches(':focus-visible')) setFocused(thumb)
               }}
               onBlur={() => setFocused((f) => (f === thumb ? null : f))}
-              className="absolute size-[14px] rounded-full"
+              className={`absolute rounded-full ${touch ? 'size-[22px]' : 'size-[14px]'}`}
               style={
                 vertical
                   ? { bottom: `${fraction * 100}%`, left: '50%', transform: 'translate(-50%, 50%)' }

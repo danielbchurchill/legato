@@ -4,8 +4,8 @@ import type { WorklistKind } from '../shell/panels'
 /* Where the phone is (#389): the pushed pages, full-screen over the map,
  * such as Settings and Library health, each with the platform's own back,
  * and Now playing, with its collapse chevron for one; the overlays the
- * sheet shows in place of its tabs, search and node detail; and a view
- * open in its collections tab (below).
+ * sheet shows in place of its tabs, search, node detail and the map
+ * options; and a view open in its collections tab (below).
  *
  * All three live in the browser's history, so Android's back gesture, the
  * browser's back button and the app's own back all go back the same way:
@@ -18,8 +18,9 @@ import type { WorklistKind } from '../shell/panels'
 /* Library health's lists each push as a page of their own. */
 export type PhonePage = 'settings' | 'health' | `worklist:${WorklistKind}` | 'now-playing'
 
-/** What the sheet shows over its tabs: search, or a node's detail. */
-export type SheetOverlay = { kind: 'search' } | { kind: 'node'; id: number }
+/** What the sheet shows over its tabs: search, a node's detail, or the
+ * map options (#467). */
+export type SheetOverlay = { kind: 'search' } | { kind: 'node'; id: number } | { kind: 'map-options' }
 
 const WORKLISTS: readonly WorklistKind[] = ['duplicates', 'missing', 'enrichment', 'tag-writes', 'gaps']
 const PAGES: readonly PhonePage[] = ['settings', 'health', ...WORKLISTS.map((list) => `worklist:${list}` as const), 'now-playing']
@@ -45,7 +46,13 @@ function entry(state: unknown, key: string): unknown[] {
 function isOverlay(value: unknown): value is SheetOverlay {
   if (value == null || typeof value !== 'object') return false
   const overlay = value as Record<string, unknown>
-  return overlay.kind === 'search' || (overlay.kind === 'node' && typeof overlay.id === 'number')
+  return overlay.kind === 'search' || overlay.kind === 'map-options' || (overlay.kind === 'node' && typeof overlay.id === 'number')
+}
+
+/** Whether two overlays show the same thing. */
+export function sameOverlay(a: SheetOverlay | undefined, b: SheetOverlay): boolean {
+  if (a == null || a.kind !== b.kind) return false
+  return a.kind !== 'node' || (b.kind === 'node' && a.id === b.id)
 }
 
 /* A view opened inside the sheet, which back leaves the way it pops a page:
@@ -131,10 +138,6 @@ export function popPhonePageThen(then: () => void) {
 export function closePhonePages() {
   if (place.pages.length === 0) return
   history.go(-place.pages.length)
-}
-
-function sameOverlay(a: SheetOverlay | undefined, b: SheetOverlay): boolean {
-  return a != null && a.kind === b.kind && (a.kind === 'search' || (b.kind === 'node' && a.id === b.id))
 }
 
 /** Shows an overlay in the sheet, over whatever it shows now; back returns

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { EDGE_MIN_PX, EDGE_PX_AT_OVERVIEW, edgeWidthPx } from './edgeWidth'
+import { EDGE_MIN_PX, EDGE_PX_AT_OVERVIEW, EDGE_WIDTH_SCALE_KEY, edgeWidthPx, resolveEdgeWidthScale } from './edgeWidth'
 
 describe('edgeWidthPx', () => {
   it('draws the overview at its own width', () => {
@@ -16,7 +16,7 @@ describe('edgeWidthPx', () => {
 
   it('thins by the fourth root of the zoom going out, down to the floor', () => {
     const ratios = [1, 1.5, 2.25, 3.375, 5]
-    const widths = ratios.map(edgeWidthPx)
+    const widths = ratios.map((ratio) => edgeWidthPx(ratio))
     for (let i = 1; i < widths.length; i++) expect(widths[i]).toBeLessThan(widths[i - 1])
     expect(edgeWidthPx(4)).toBeCloseTo(EDGE_PX_AT_OVERVIEW / Math.SQRT2)
     expect(edgeWidthPx(100)).toBe(EDGE_MIN_PX)
@@ -40,5 +40,24 @@ describe('edgeWidthPx', () => {
   it('falls back to the overview width for a ratio sigma never reports', () => {
     expect(edgeWidthPx(0)).toBe(EDGE_PX_AT_OVERVIEW)
     expect(edgeWidthPx(Number.NaN)).toBe(EDGE_PX_AT_OVERVIEW)
+  })
+})
+
+// #467: the map options' line width scales the whole rule.
+describe('edgeWidthPx with a line width', () => {
+  it('scales every zoom by the same factor, floor included', () => {
+    for (const ratio of [0.01, 1, 4, 100, 1e6]) expect(edgeWidthPx(ratio, 2)).toBeCloseTo(edgeWidthPx(ratio) * 2)
+    expect(edgeWidthPx(1e6, 0.5)).toBe(EDGE_MIN_PX * 0.5)
+  })
+
+  it("reads the setting, falling back to 1 for anything that isn't a positive number", () => {
+    expect(resolveEdgeWidthScale({ [EDGE_WIDTH_SCALE_KEY]: '1.75' })).toBe(1.75)
+    for (const raw of [undefined, '', 'wide', '0', '-1']) {
+      expect(resolveEdgeWidthScale(raw == null ? {} : { [EDGE_WIDTH_SCALE_KEY]: raw })).toBe(1)
+    }
+  })
+
+  it("doesn't read the shipped panel's edge thickness, which nothing has set since v2", () => {
+    expect(resolveEdgeWidthScale({ edgeThicknessMultiplier: '0.2' })).toBe(1)
   })
 })

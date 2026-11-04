@@ -339,8 +339,29 @@ describe("the sheet's overlays", () => {
   })
 
   it('reads the overlays already in the history, as after a reload, dropping anything else', () => {
-    history.replaceState({ legatoSheetOverlays: [{ kind: 'search' }, { kind: 'node', id: 'x' }, { kind: 'node', id: 9 }, 'nonsense'] }, '')
+    history.replaceState(
+      {
+        legatoSheetOverlays: [{ kind: 'search' }, { kind: 'node', id: 'x' }, { kind: 'node', id: 9 }, 'nonsense', { kind: 'map-options' }],
+      },
+      '',
+    )
     mountOverlays()
-    expect(overlays.at(-1)).toEqual([{ kind: 'search' }, { kind: 'node', id: 9 }])
+    expect(overlays.at(-1)).toEqual([{ kind: 'search' }, { kind: 'node', id: 9 }, { kind: 'map-options' }])
+  })
+
+  // #467: the map options are an overlay like search: one at a time, and a
+  // node opened from the map over them goes back to them.
+  it('pushes the map options once, and a node over them comes back to them', async () => {
+    mountOverlays()
+    act(() => pushSheetOverlay({ kind: 'map-options' }))
+    const once = history.length
+    act(() => pushSheetOverlay({ kind: 'map-options' }))
+    expect(history.length).toBe(once)
+    act(() => pushSheetOverlay({ kind: 'node', id: 4 }))
+    expect(overlays.at(-1)).toEqual([{ kind: 'map-options' }, { kind: 'node', id: 4 }])
+    const back = popped()
+    popSheetOverlay()
+    await back
+    expect(overlays.at(-1)).toEqual([{ kind: 'map-options' }])
   })
 })

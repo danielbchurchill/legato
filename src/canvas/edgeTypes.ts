@@ -64,7 +64,7 @@ export function edgeTypes(): EdgeTypeInfo[] {
   }))
 }
 
-const EDGE_COLOR_SETTING_PREFIX = 'edgeColor:'
+export const EDGE_COLOR_SETTING_PREFIX = 'edgeColor:'
 
 export function edgeColorSettingKey(type: string): string {
   return `${EDGE_COLOR_SETTING_PREFIX}${type}`

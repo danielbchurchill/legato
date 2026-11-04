@@ -9,10 +9,12 @@ import { plural } from '../ui/format'
 import { useCoverColor, withAlpha } from '../ui/coverColor'
 import { useLibraryChanges, useLibraryStats } from '../library/useLibraryChanges'
 import { ServerUnreachableOverShell, type UnreachableView } from '../connect/ServerUnreachable'
+import type { MapPresetHistory } from '../hooks/useMapPresetHistory'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
 import { NEXT_REPEAT_MODE, type RepeatMode, type usePlayback } from '../playback/usePlayback'
 import { MAP_CONTROLS_CLEARANCE, MapControls } from './MapControls'
+import { MapOptionsBody, MapOptionsHeader } from './MapOptionsSheet'
 import { MiniPlayer } from './MiniPlayer'
 import { NowPlayingScreen } from './NowPlayingScreen'
 import { PhoneCollections } from './PhoneCollections'
@@ -58,8 +60,9 @@ import { usePlayingFrom, usePlayingTrack } from './usePlayingTrack'
  * of the mini player. A tap on either's cover opens Now playing (screen 7)
  * over everything, as a pushed page of its own.
  *
- * Search and a node's detail are overlays the sheet shows in place of its
- * tabs (PhoneSearch.tsx, PhoneNode.tsx), kept in the history
+ * Search, a node's detail and the map options are overlays the sheet shows
+ * in place of its tabs (PhoneSearch.tsx, PhoneNode.tsx, MapOptionsSheet.tsx),
+ * kept in the history
  * (navigation.ts) so back walks back through them. Each takes the sheet's
  * header and covers its tabs, which stay where they were underneath; the
  * controls over the map change with them. The node on top of that history
@@ -100,6 +103,8 @@ type PhoneShellProps = {
   selectedNodeId: number | null
   settings: Settings
   updateSettings: (partial: Settings) => Promise<void>
+  /** The map's layout presets, for the map options sheet. */
+  mapPresets: MapPresetHistory
   themePreference: ThemePreference
   onSetThemePreference: (preference: ThemePreference) => void
   /** ⌘K and / ask for search: the workspace's palette state, which the
@@ -121,6 +126,7 @@ export function PhoneShell({
   onCentreNode,
   settings,
   updateSettings,
+  mapPresets,
   themePreference,
   onSetThemePreference,
   searchOpen,
@@ -316,6 +322,7 @@ export function PhoneShell({
               updateSettings={updateSettings}
               onOpenSearch={openSearch}
               onOpenSettings={() => pushPhonePage('settings')}
+              onOpenMapOptions={() => pushSheetOverlay({ kind: 'map-options' })}
               hidden={detent === 'large'}
             />
           )}
@@ -334,7 +341,9 @@ export function PhoneShell({
                 ? 'Search results'
                 : overlay?.kind === 'node'
                   ? (node.details?.node.title ?? 'Details')
-                  : 'Library and player'
+                  : overlay?.kind === 'map-options'
+                    ? 'Map options'
+                    : 'Library and player'
             }
             detent={detent}
             onDetentChange={onDetentChange}
@@ -357,11 +366,15 @@ export function PhoneShell({
                 />
               ) : overlay?.kind === 'node' ? (
                 <NodeBody node={node} playback={playback} onOpenNode={openFromSheet} />
+              ) : overlay?.kind === 'map-options' ? (
+                <MapOptionsBody settings={settings} updateSettings={updateSettings} mapPresets={mapPresets} />
               ) : undefined
             }
             header={
               overlay?.kind === 'node' ? (
                 <NodeHeader node={node} playback={playback} onOpenNode={openFromSheet} />
+              ) : overlay?.kind === 'map-options' ? (
+                <MapOptionsHeader onDone={popSheetOverlay} />
               ) : overlay?.kind === 'search' ? null : (
                 <>
                   {upNextOpen ? (
@@ -393,7 +406,7 @@ export function PhoneShell({
               )
             }
             peek={
-              overlay?.kind === 'node' ? undefined : overlay?.kind === 'search' ? (
+              overlay?.kind === 'node' || overlay?.kind === 'map-options' ? undefined : overlay?.kind === 'search' ? (
                 <div className="px-[20px] pt-[4px] pb-[4px]">
                   <span className="block truncate text-secondary text-[var(--color-ink-2)]">{searchPeekLine(search)}</span>
                 </div>

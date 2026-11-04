@@ -4,6 +4,7 @@ import { overlayTransition, type Depth } from './sheetOverlays'
 import type { Detent } from './sheetGeometry'
 
 const search: SheetOverlay = { kind: 'search' }
+const mapOptions: SheetOverlay = { kind: 'map-options' }
 const node = (id: number): SheetOverlay => ({ kind: 'node', id })
 const none = new Map<Depth, Detent>()
 
@@ -16,6 +17,14 @@ describe("the sheet's detent as its overlays change", () => {
   it('opens search at large and a node at medium, remembering the tabs under them', () => {
     expect(overlayTransition([], [search], 'peek', none)).toEqual({ detent: 'large', saved: new Map([[-1, 'peek']]) })
     expect(overlayTransition([], [node(1)], 'large', none)).toEqual({ detent: 'medium', saved: new Map([[-1, 'large']]) })
+  })
+
+  // #467: the map they change stays in sight above them.
+  it('opens the map options at medium, and back finds the player where it was', () => {
+    const opened = overlayTransition([], [mapOptions], 'peek', none)!
+    expect(opened).toEqual({ detent: 'medium', saved: new Map([[-1, 'peek']]) })
+    expect(overlayTransition([mapOptions], [mapOptions], 'large', opened.saved)).toBeNull()
+    expect(overlayTransition([mapOptions], [], 'large', opened.saved)).toEqual({ detent: 'peek', saved: new Map() })
   })
 
   it('goes back to the library as tall as it was', () => {

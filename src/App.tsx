@@ -9,6 +9,7 @@ import { GraphDataProvider } from './canvas/graphData'
 import { useGraph } from './canvas/graphContext'
 import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
 import { resolveNodeSizeMultipliers } from './canvas/nodeTypes'
+import { resolveEdgeWidthScale } from './canvas/edgeWidth'
 import { NEXT_REPEAT_MODE, usePlayback } from './playback/usePlayback'
 import { AppShell } from './shell/AppShell'
 import { Rail } from './shell/Rail'
@@ -19,6 +20,7 @@ import { LeftPanel, RightPanel } from './shell/SidePanel'
 import { ShellLayoutContext, computeShellLayout, useWindowSize } from './shell/layout'
 import { railOwner, type DetailsTab, type LeftView, type NowPlayingTab, type RailItem, type RightView } from './shell/panels'
 import { MapOptions } from './panels/MapOptions'
+import { isSharedMapSetting } from './panels/mapOptionSettings'
 import { CollectionsPanel } from './panels/CollectionsPanel'
 import { HealthPanel } from './panels/HealthPanel'
 import { SettingsPanel } from './panels/SettingsPanel'
@@ -177,7 +179,8 @@ function Workspace({
   const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('next')
   const [detailsTab, setDetailsTab] = useState<DetailsTab>('overview')
   const [searchOpen, setSearchOpen] = useState(false)
-  const { settings, loaded: settingsLoaded, updateSettings } = useSettings()
+  // #467: another device's change to the map options shows here live.
+  const { settings, loaded: settingsLoaded, updateSettings } = useSettings({ live: isSharedMapSetting })
   // #127: held here rather than inside the map options popover, which
   // unmounts whenever it closes; its undo also answers Cmd/Ctrl+Z below.
   const mapPresets = useMapPresetHistory(settings, updateSettings)
@@ -236,9 +239,11 @@ function Workspace({
   // Producer/engineer credits are opt-in (#24): new to an already-tuned map.
   const showCreditNodes = settings.showCreditNodes === 'true'
   const showArtistLabels = settings.showArtistLabels !== 'false'
+  const showCreditLabels = settings.showCreditLabels !== 'false'
   const colourEdgesByType = settings.colourEdgesByType === 'true'
   const edgeColorOverrides = useMemo(() => resolveEdgeColorOverrides(settings), [settings])
   const nodeSizeMultipliers = useMemo(() => resolveNodeSizeMultipliers(settings), [settings])
+  const edgeWidthScale = resolveEdgeWidthScale(settings)
   const nodesLocked = settings.nodePositionsLocked === 'true'
   const forceCenterStrength = Number(settings.forceCenterStrength ?? '0.03')
   const forceRepelStrength = Number(settings.forceRepelStrength ?? '150')
@@ -445,9 +450,11 @@ function Workspace({
       showTracks={showTracks}
       showCreditNodes={showCreditNodes}
       showArtistLabels={showArtistLabels}
+      showCreditLabels={showCreditLabels}
       colourEdgesByType={colourEdgesByType}
       nodeSizeMultipliers={nodeSizeMultipliers}
       edgeColorOverrides={edgeColorOverrides}
+      edgeWidthScale={edgeWidthScale}
       nodesLocked={nodesLocked}
       forceCenterStrength={forceCenterStrength}
       forceRepelStrength={forceRepelStrength}
@@ -480,6 +487,7 @@ function Workspace({
         selectedNodeId={selectedNodeId}
         settings={settings}
         updateSettings={updateSettings}
+        mapPresets={mapPresets}
         themePreference={themePreference}
         onSetThemePreference={onSetThemePreference}
         searchOpen={searchOpen}

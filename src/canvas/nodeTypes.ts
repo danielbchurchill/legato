@@ -43,3 +43,20 @@ export function resolveNodeSizeMultipliers(settings: Record<string, string>): Re
   }
   return result
 }
+
+/* #467: the map options size every kind of node with one slider. It writes
+ * the same `nodeSize:<type>` settings the canvas has always read, all to one
+ * value, rather than adding a fifth multiplier over them. The shipped panel
+ * set them one type at a time, so a library may still have them apart: the
+ * slider then shows their mean, and the first move brings them together. */
+
+/** The node size slider's value: the per-type multipliers' mean. */
+export function nodeSizeScale(settings: Record<string, string>): number {
+  const multipliers = Object.values(resolveNodeSizeMultipliers(settings))
+  return multipliers.reduce((sum, m) => sum + m, 0) / multipliers.length
+}
+
+/** Every type's multiplier at `scale`, as settings. */
+export function nodeSizeSettings(scale: number): Record<string, string> {
+  return Object.fromEntries(NODE_TYPES.map(({ type }) => [nodeSizeSettingKey(type), scale.toFixed(2)]))
+}

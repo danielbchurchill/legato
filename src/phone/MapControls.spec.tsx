@@ -18,14 +18,15 @@ function render(settings: Settings, hidden = false) {
   const updateSettings = vi.fn(async () => undefined)
   const onOpenSearch = vi.fn()
   const onOpenSettings = vi.fn()
+  const onOpenMapOptions = vi.fn()
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
-  act(() => root.render(createElement(MapControls, { settings, updateSettings, onOpenSearch, onOpenSettings, hidden })))
+  act(() => root.render(createElement(MapControls, { settings, updateSettings, onOpenSearch, onOpenSettings, onOpenMapOptions, hidden })))
   const chip = (label: string) =>
     [...container.querySelectorAll<HTMLButtonElement>('[role="group"] button')].find((b) => b.textContent === label)!
-  return { container, chip, updateSettings, onOpenSearch, onOpenSettings }
+  return { container, chip, updateSettings, onOpenSearch, onOpenSettings, onOpenMapOptions }
 }
 
 describe('MapControls', () => {
@@ -60,6 +61,17 @@ describe('MapControls', () => {
     act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Settings"]')!.click())
     expect(onOpenSearch).toHaveBeenCalledOnce()
     expect(onOpenSettings).toHaveBeenCalledOnce()
+  })
+
+  // #467: the rest of the map options, in the sheet.
+  it('opens the map options from the button leading the chips', () => {
+    const { container, onOpenMapOptions } = render({})
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Map options"]')!
+    // Beside the chips' row, not in it, so it stays put when they scroll.
+    expect(button.closest('[role="group"]')).toBeNull()
+    expect(button.nextElementSibling?.getAttribute('role')).toBe('group')
+    act(() => button.click())
+    expect(onOpenMapOptions).toHaveBeenCalledOnce()
   })
 
   it('takes itself out of reach while the sheet is large', () => {

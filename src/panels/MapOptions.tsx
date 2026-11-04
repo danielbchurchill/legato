@@ -4,28 +4,23 @@ import { Switch } from '../ui/Switch'
 import { Tabs } from '../ui/Tabs'
 import { SectionLabel } from '../ui/SectionLabel'
 import { Button } from '../ui/Button'
-import { MAP_PRESET_IDS, MAP_PRESET_LABELS, type MapPresetId } from '../canvas/mapPresets'
+import type { MapPresetId } from '../canvas/mapPresets'
 import type { MapPresetHistory } from '../hooks/useMapPresetHistory'
 import type { Settings } from '../hooks/useSettings'
 import { SHOW, isOn } from './mapShow'
+import { MAP_LAYOUTS, MAP_SLIDERS, MAP_SWITCHES, mapOptionDefaults } from './mapOptionSettings'
 
 /* The map options popover, opened from the map toolbar. It replaces the
- * shipped Music Map settings panel with the handful of choices that change
- * how the map reads: a layout preset, which kinds of node to show, three
- * switches and two forces. Everything saves to the server's settings, so
- * it's per library rather than per device.
+ * shipped Music Map settings panel with the choices that change how the
+ * map reads: a layout preset, which kinds of node to show, four switches,
+ * and five sliders: three forces, node size and line width (#467).
+ * Everything saves to the server's settings, so it's per library rather
+ * than per device, and another device's change shows here as it's made.
+ * The phone lays out the same options in a sheet (phone/MapOptionsSheet.tsx).
  *
- * The two sliders are the presets' own axes: spacing is the repel force,
- * "pull of related music" the link force. Moving one off a preset leaves
- * no preset selected, rather than claiming a preset the map isn't in. */
-
-const LAYOUTS = MAP_PRESET_IDS.map((id) => ({ value: id, label: MAP_PRESET_LABELS[id] }))
-
-const SWITCHES = [
-  { key: 'showArtistLabels', label: 'Artist labels', defaultOn: true },
-  { key: 'colourEdgesByType', label: 'Colour edges by type', defaultOn: false },
-  { key: 'nodePositionsLocked', label: 'Lock layout', defaultOn: false },
-] as const
+ * Spacing and "pull of related music" are the presets' own axes: the repel
+ * and link forces. Moving one, or gravity, off a preset leaves no preset
+ * selected, rather than claiming a preset the map isn't in. */
 
 type MapOptionsProps = {
   settings: Settings
@@ -34,15 +29,6 @@ type MapOptionsProps = {
 }
 
 export function MapOptions({ settings, updateSettings, mapPresets }: MapOptionsProps) {
-  const { current } = mapPresets
-
-  const restoreDefaults = () => {
-    mapPresets.restoreDefaults()
-    const defaults: Settings = {}
-    for (const item of [...SHOW, ...SWITCHES]) defaults[item.key] = String(item.defaultOn)
-    void updateSettings(defaults)
-  }
-
   return (
     <>
       <div className="flex items-baseline justify-between">
@@ -54,7 +40,7 @@ export function MapOptions({ settings, updateSettings, mapPresets }: MapOptionsP
         <SectionLabel>layout</SectionLabel>
         <Tabs
           label="layout"
-          options={LAYOUTS}
+          options={MAP_LAYOUTS}
           value={(mapPresets.activePreset ?? '') as MapPresetId}
           onChange={(id) => mapPresets.applyPreset(id)}
           className="self-start"
@@ -76,7 +62,7 @@ export function MapOptions({ settings, updateSettings, mapPresets }: MapOptionsP
       </div>
 
       <div className="flex flex-col gap-[10px]">
-        {SWITCHES.map((item) => (
+        {MAP_SWITCHES.map((item) => (
           <div key={item.key} className="flex items-center justify-between gap-[12px]">
             <span className="text-[length:var(--text-body)] leading-[20px] text-[var(--color-ink)]">{item.label}</span>
             <Switch
@@ -89,27 +75,23 @@ export function MapOptions({ settings, updateSettings, mapPresets }: MapOptionsP
       </div>
 
       <div className="flex flex-col gap-[8px]">
-        <SectionLabel>spacing</SectionLabel>
-        <Slider
-          label="spacing"
-          min={0}
-          max={200}
-          step={1}
-          value={current.forceRepelStrength}
-          onChange={(v) => void updateSettings({ forceRepelStrength: v.toFixed(0) })}
-        />
-        <SectionLabel>pull of related music</SectionLabel>
-        <Slider
-          label="pull of related music"
-          min={0}
-          max={1}
-          step={0.01}
-          value={current.forceLinkStrength}
-          onChange={(v) => void updateSettings({ forceLinkStrength: v.toFixed(2) })}
-        />
+        {MAP_SLIDERS.map((slider) => (
+          <div key={slider.key} className="flex flex-col gap-[8px]">
+            <SectionLabel>{slider.label}</SectionLabel>
+            <Slider
+              label={slider.label}
+              min={slider.min}
+              max={slider.max}
+              step={slider.step}
+              format={slider.format}
+              value={slider.value(settings)}
+              onChange={(v) => void updateSettings(slider.write(v))}
+            />
+          </div>
+        ))}
       </div>
 
-      <Button onClick={restoreDefaults} className="self-start">
+      <Button onClick={() => void updateSettings(mapOptionDefaults())} className="self-start">
         Restore defaults
       </Button>
     </>

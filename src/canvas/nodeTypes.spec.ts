@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NODE_TYPES, nodeSizeSettingKey, resolveNodeSizeMultipliers } from './nodeTypes'
+import { NODE_TYPES, nodeSizeScale, nodeSizeSettingKey, nodeSizeSettings, resolveNodeSizeMultipliers } from './nodeTypes'
 
 describe('NODE_TYPES', () => {
   it('lists every type a label, and no duplicates', () => {
@@ -26,5 +26,24 @@ describe('resolveNodeSizeMultipliers', () => {
     for (const { type } of NODE_TYPES) {
       expect(result[type]).toBe(1)
     }
+  })
+})
+
+// #467: one node size slider for every kind of node.
+describe('nodeSizeScale and nodeSizeSettings', () => {
+  it('writes every type at one value', () => {
+    const written = nodeSizeSettings(1.5)
+    expect(Object.keys(written).sort()).toEqual(NODE_TYPES.map(({ type }) => nodeSizeSettingKey(type)).sort())
+    expect(new Set(Object.values(written))).toEqual(new Set(['1.50']))
+    expect(nodeSizeScale(written)).toBe(1.5)
+  })
+
+  it('reads 1 for a library that never set a size', () => {
+    expect(nodeSizeScale({})).toBe(1)
+  })
+
+  it('shows the mean of sizes the shipped panel set one type at a time', () => {
+    const settings = { [nodeSizeSettingKey('artist')]: '0.6', [nodeSizeSettingKey('release')]: '0.6' }
+    expect(nodeSizeScale(settings)).toBeCloseTo((0.6 * 2 + (NODE_TYPES.length - 2)) / NODE_TYPES.length)
   })
 })
