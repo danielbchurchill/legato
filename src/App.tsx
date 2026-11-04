@@ -20,6 +20,7 @@ import { LeftPanel, RightPanel } from './shell/SidePanel'
 import { ShellLayoutContext, computeShellLayout, useWindowSize } from './shell/layout'
 import { railOwner, type DetailsTab, type LeftView, type NowPlayingTab, type RailItem, type RightView } from './shell/panels'
 import { MapOptions } from './panels/MapOptions'
+import { isSharedMapSetting } from './panels/mapOptionSettings'
 import { CollectionsPanel } from './panels/CollectionsPanel'
 import { HealthPanel } from './panels/HealthPanel'
 import { SettingsPanel } from './panels/SettingsPanel'
@@ -178,7 +179,8 @@ function Workspace({
   const [nowPlayingTab, setNowPlayingTab] = useState<NowPlayingTab>('next')
   const [detailsTab, setDetailsTab] = useState<DetailsTab>('overview')
   const [searchOpen, setSearchOpen] = useState(false)
-  const { settings, loaded: settingsLoaded, updateSettings } = useSettings()
+  // #467: another device's change to the map options shows here live.
+  const { settings, loaded: settingsLoaded, updateSettings } = useSettings({ live: isSharedMapSetting })
   // #127: held here rather than inside the map options popover, which
   // unmounts whenever it closes; its undo also answers Cmd/Ctrl+Z below.
   const mapPresets = useMapPresetHistory(settings, updateSettings)
