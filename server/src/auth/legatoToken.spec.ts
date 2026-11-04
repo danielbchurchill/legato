@@ -125,6 +125,31 @@ describe("verifyLegatoToken", () => {
     const result = verifyLegatoToken(signTestToken(key, testClaims(SERVER_ID, NOW, { email_verified: "true" })), options);
     expect(result.ok && result.claims.emailVerified).toBe(false);
   });
+
+  // Issue #470: the account's Google or GitHub picture.
+  describe("the picture claim", () => {
+    const picture = (value: unknown) => {
+      const result = verifyLegatoToken(signTestToken(key, testClaims(SERVER_ID, NOW, { picture: value })), options);
+      if (!result.ok) throw new Error(`refused: ${result.reason}`);
+      return result.claims;
+    };
+
+    it("reads an https address, and null as no picture", () => {
+      expect(picture("https://lh3.googleusercontent.com/a/x=s96-c").picture).toBe("https://lh3.googleusercontent.com/a/x=s96-c");
+      expect(picture(null).picture).toBeNull();
+    });
+
+    it("leaves it unsaid when a legato.fm from before the claim doesn't send one", () => {
+      const result = verifyLegatoToken(signTestToken(key, testClaims(SERVER_ID, NOW)), options);
+      expect(result.ok && "picture" in result.claims).toBe(false);
+    });
+
+    it("reads anything else as unsaid, and never refuses the token over it", () => {
+      for (const value of ["http://example.com/a.jpg", "not a url", "", 42, { url: "https://x" }, `https://x.test/${"a".repeat(2100)}`]) {
+        expect("picture" in picture(value)).toBe(false);
+      }
+    });
+  });
 });
 
 describe("importEd25519Jwk", () => {

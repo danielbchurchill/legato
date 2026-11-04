@@ -24,6 +24,7 @@ import { isSharedMapSetting } from './panels/mapOptionSettings'
 import { CollectionsPanel } from './panels/CollectionsPanel'
 import { HealthPanel } from './panels/HealthPanel'
 import { SettingsPanel } from './panels/SettingsPanel'
+import { AccountPanel } from './panels/AccountPanel'
 import { NowPlaying } from './panels/NowPlaying'
 import { NodeDetails } from './panels/NodeDetails'
 import { performer, useNodeDetail } from './panels/useNodeDetail'
@@ -37,7 +38,7 @@ import { LibraryView } from './library/LibraryView'
 import { AddMusic } from './library/AddMusic'
 import { useAuth } from './auth/useAuth'
 import { OwnerGate } from './auth/OwnerGate'
-import { AccountContext, initialsFor, useAccount } from './auth/accountContext'
+import { AccountContext, useAccount } from './auth/accountContext'
 import { Button } from './ui/Button'
 import { ErrorBoundary, RenderError } from './ui/ErrorBoundary'
 import { useCoverColor, withAlpha } from './ui/coverColor'
@@ -73,6 +74,7 @@ const PANEL_LABEL: Record<RailItem, string> = {
   collections: 'Collections',
   health: 'Library health',
   settings: 'Settings',
+  account: 'Account',
 }
 
 function shuffled<T>(items: T[]): T[] {
@@ -421,6 +423,8 @@ function Workspace({
             onSetThemePreference={onSetThemePreference}
           />
         )
+      case 'account':
+        return <AccountPanel />
     }
   })()
 
@@ -540,7 +544,7 @@ function Workspace({
           active={owner}
           onToggle={toggleRail}
           theme={resolvedTheme}
-          initials={initialsFor(account)}
+          account={account}
           accountLabel={account?.displayName ?? account?.email ?? 'Account'}
           status={
             <ConnectionIndicator

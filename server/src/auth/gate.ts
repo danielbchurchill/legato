@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Database } from "../sqlite.js";
+import { pictures } from "../account/pictures.js";
 import { legatoIdentity } from "./legatoIdentity.js";
 import { looksLikeJws, VERIFY_FAILURE_MESSAGES, type LegatoClaims } from "./legatoToken.js";
 import { anyLinkedAccount, userForLegatoClaims } from "./legatoUsers.js";
@@ -139,6 +140,11 @@ function resolveLegatoToken(db: Database, token: string): Resolved {
       reason: "not_a_member",
     };
   }
+  // The account's Google or GitHub picture rides in the token (issue #470).
+  // A new address is stored and fetched in the background; the same one
+  // writes nothing. A token from a legato.fm older than the claim leaves
+  // the picture as it was.
+  pictures(db).note(user.id, result.claims.picture, user.avatar_url);
   return { user, claims: result.claims };
 }
 

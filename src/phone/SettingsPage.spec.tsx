@@ -12,15 +12,6 @@ import { ToastProvider } from '../ui/Toast'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const auth = vi.hoisted(() => ({ signOut: vi.fn(async () => undefined) }))
-vi.mock('../auth/useAuth', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../auth/useAuth')>()),
-  signOut: auth.signOut,
-}))
-// The legato.fm group is the desktop's own, with its own specs; here it
-// would only talk to legato.fm.
-vi.mock('../panels/LegatoAccountRow', () => ({ LegatoAccountRow: () => null }))
-
 import { SettingsPage } from './SettingsPage'
 
 const roots: Root[] = []
@@ -30,7 +21,6 @@ beforeEach(() => {
   localStorage.clear()
   history.replaceState(null, '')
   requests.length = 0
-  auth.signOut.mockClear()
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({ matches: false, addEventListener: () => undefined, removeEventListener: () => undefined })),
@@ -92,7 +82,7 @@ async function render(settings: Record<string, string> = {}, server: ServerVersi
           { server, name: 'raspberrypi' },
           createElement(
             AccountContext.Provider,
-            { value: { role: 'owner', provider: 'local', displayName: 'Sam Rivera', email: null } },
+            { value: { id: 1, role: 'owner', provider: 'local', displayName: 'Sam Rivera', email: null, picture: null } },
             createElement(SettingsPage, { settings, updateSettings, themePreference: 'dark', onSetThemePreference }),
           ),
         ),
@@ -219,12 +209,20 @@ describe('Settings on the phone', () => {
     expect(container.querySelector('button[aria-label="Dismiss until a newer release"]')).toBeNull()
   })
 
-  it('names who is signed in, and signs out', async () => {
+  // #470: the account and legato.fm cards moved to the Account page; a row
+  // at the top names who's signed in and pushes it.
+  it('names who is signed in at the top, with their initials, and pushes the Account page', async () => {
     const { container } = await render()
-    expect(container.textContent).toContain('Sam Rivera')
-    expect(container.textContent).toContain("this server's owner")
-    act(() => row(container, 'Sign out')!.click())
-    expect(auth.signOut).toHaveBeenCalledOnce()
+    const account = container.querySelector<HTMLButtonElement>('button[aria-label="Account: Sam Rivera"]')!
+    expect(container.querySelector('button')).toBe(account)
+    expect(account.textContent).toContain('SR')
+    expect(account.textContent).toContain("this server's owner")
+    expect(container.textContent).not.toContain('Sign out')
+    expect(container.textContent).not.toContain('legato.fm account')
+    act(() => account.click())
+    // On top of whatever an earlier test pushed: nothing here mounts the
+    // shell that would read the history afresh.
+    expect((history.state as { legatoPhonePages: string[] }).legatoPhonePages.at(-1)).toBe('account')
   })
 
   it("leaves out what a phone can't use and what has nothing behind it", async () => {

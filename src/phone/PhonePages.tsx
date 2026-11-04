@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
 import { DEFAULT_GAP_VIEW, type GapView } from '../panels/healthData'
+import { AccountSettings } from '../panels/AccountSettings'
 import { Worklist } from '../panels/Worklists'
 import { Icon } from '../ui/Icon'
 import { TouchLayoutContext } from '../ui/touchLayout'
@@ -16,9 +17,9 @@ import type { PhonePlatform } from './phoneLayout'
  * a 64px app bar with its back arrow and a 22/500 title. Back pops the
  * page, as the system's back does (navigation.ts).
  *
- * Settings pushes from the button over the map, Library health from
- * Settings, and each of health's lists from health, as the desktop's
- * worklists open from its panel. Inside a page the layout is for a finger
+ * Settings pushes from the button over the map, Account (#470) and Library
+ * health from Settings, and each of health's lists from health, as the
+ * desktop's worklists open from its panel. Inside a page the layout is for a finger
  * (TouchLayoutContext): the desktop controls a page borrows, its worklists
  * and the legato.fm account group, take 44px targets there. */
 
@@ -27,6 +28,7 @@ type PushedPage = Exclude<PhonePage, 'now-playing'>
 
 const PAGE_TITLE: Record<PushedPage, string> = {
   settings: 'Settings',
+  account: 'Account',
   health: 'Library health',
   'worklist:duplicates': 'Possible duplicates',
   'worklist:missing': 'Missing files',
@@ -78,6 +80,8 @@ export function PhonePages({ platform, settings, updateSettings, themePreference
         onSetThemePreference={onSetThemePreference}
       />
     )
+  } else if (page === 'account') {
+    content = <AccountSettings />
   } else {
     content = (
       <HealthPage

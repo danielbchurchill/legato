@@ -1,5 +1,5 @@
 import type { Database } from "../sqlite.js";
-import type { SessionUser } from "./sessions.js";
+import { SESSION_USER_COLUMNS, type SessionUser } from "./sessions.js";
 
 // The local owner (issue #112): one password account per server, stored
 // only here, usable with no internet and no legato.fm account. Hashed with
@@ -28,8 +28,6 @@ export function passwordProblem(password: unknown): string | null {
   return null;
 }
 
-const OWNER_COLUMNS = "id, provider, role, email, display_name, avatar_url";
-
 // Returns null when an owner already exists: the partial unique index
 // users_one_owner (0029) is what actually decides that, so two first-run
 // requests racing past the route's own ownerExists() check still produce
@@ -49,12 +47,12 @@ export async function createOwner(
     if (err instanceof Error && /UNIQUE constraint failed/.test(err.message)) return null;
     throw err;
   }
-  return db.prepare(`SELECT ${OWNER_COLUMNS} FROM users WHERE role = 'owner'`).get() as SessionUser;
+  return db.prepare(`SELECT ${SESSION_USER_COLUMNS} FROM users WHERE role = 'owner'`).get() as SessionUser;
 }
 
 export async function verifyOwnerPassword(db: Database, password: string): Promise<SessionUser | null> {
   const row = db
-    .prepare(`SELECT ${OWNER_COLUMNS}, password_hash FROM users WHERE role = 'owner'`)
+    .prepare(`SELECT ${SESSION_USER_COLUMNS}, password_hash FROM users WHERE role = 'owner'`)
     .get() as (SessionUser & { password_hash: string }) | undefined;
   if (!row || !(await Bun.password.verify(password, row.password_hash))) return null;
   db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(row.id);

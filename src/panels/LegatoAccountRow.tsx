@@ -37,7 +37,8 @@ type RowState =
   | { kind: 'signed-in'; user: RelayUser }
 
 /* The desktop app's legato.fm account (issue #215), as distinct from the
- * home server's own account in the group above it: who this app is signed in
+ * home server's own account in the card above it on the Account panel
+ * (#470, AccountSettings.tsx): who this app is signed in
  * to legato.fm as, and the Google/GitHub sign-in that gets it there.
  * Signing in opens the system browser through the Rust loopback listener
  * (src-tauri/src/relay_sign_in.rs); see src/auth/relaySession.ts for the
@@ -125,8 +126,10 @@ export function LegatoAccountRow() {
 
       {state.kind === 'signed-in' && (
         <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
+          {/* No picture here (#470): this one would load from Google or
+           * GitHub, and a device never does. The account card above shows
+           * the server's copy of it once this server is linked. */}
           <div className="flex min-w-0 items-center gap-[var(--spacing-sm)]">
-            {state.user.avatarUrl && <img src={state.user.avatarUrl} alt="" className="h-[24px] w-[24px] shrink-0 rounded-full" />}
             <div className="min-w-0">
               <p
                 className="truncate text-[length:var(--text-sm)] text-[var(--color-ink)]"

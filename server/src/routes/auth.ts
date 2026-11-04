@@ -11,6 +11,7 @@ import {
   SERVER_NAME,
 } from "../config.js";
 import { USER_AGENT } from "../enrich/mbClient.js";
+import { pictures } from "../account/pictures.js";
 import { ServerClaims, type ClaimCheck } from "../auth/claim.js";
 import { SESSION_COOKIE, bearerToken } from "../auth/gate.js";
 import { legatoIdentity, type LegatoIdentity } from "../auth/legatoIdentity.js";
@@ -231,14 +232,25 @@ function messagePage(message: string): string {
 
 const PROVIDER_NAMES: Record<Provider, string> = { google: "Google", github: "GitHub" };
 
-function publicUser(user: SessionUser) {
+// picture (issue #470) is the one to show, by hash, for GET
+// /account/pictures/:hash: the uploaded one, else this server's copy of the
+// legato.fm one, else none. source says which, so the Account panel knows
+// whether there's an upload to remove. Never the Google or GitHub address
+// itself: a device doesn't load the picture from there. avatarUrl, which
+// was that address, is gone; a client from before reads it as none.
+export function publicUser(user: SessionUser) {
+  const picture = user.avatar_upload_hash
+    ? { hash: user.avatar_upload_hash, source: "upload" as const }
+    : user.avatar_remote_hash
+      ? { hash: user.avatar_remote_hash, source: "legato" as const }
+      : null;
   return {
     id: user.id,
     provider: user.provider,
     role: user.role,
     email: user.email,
     displayName: user.display_name,
-    avatarUrl: user.avatar_url,
+    picture,
   };
 }
 
@@ -591,6 +603,9 @@ export function authRoutes(
       const accountId = linkedAccountId(db, request.authUser.id);
       unlinkAccount(db, request.authUser.id);
       if (accountId) forgetTunnelCredential(db, accountId);
+      // The picture legato.fm sent was that account's (issue #470). An
+      // uploaded one stays.
+      await pictures(db).forgetRemote(request.authUser.id);
       identity.syncSchedule();
       syncRelayTunnelOnceAnswered(db, reply);
       const legatoNotified = accountId && identity.enabled ? (await identity.recordUnlink(accountId)).ok : null;

@@ -48,7 +48,10 @@ export function linkedServerRoutes(
         return { error: PROOF_FAILURE_MESSAGES[result.reason], reason: result.reason };
       }
       if (result.changed) request.log.info(`linked-servers: account ${result.relayUserId} linked server ${result.serverId}`);
-      const linked = { accountId: String(result.relayUserId), serverId: result.serverId };
+      // picture (issue #470) is the account's Google or GitHub picture, for
+      // the server to fetch and keep for whoever it linked. A server from
+      // before it ignores it.
+      const linked = { accountId: String(result.relayUserId), serverId: result.serverId, picture: result.picture };
       return { linked, tunnel: { credential: result.tunnel.token, expiresAt: result.tunnel.expiresAt.toISOString() } };
     });
 

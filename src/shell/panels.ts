@@ -18,8 +18,9 @@ export type LeftView =
   | { kind: 'health' }
   | { kind: 'worklist'; list: WorklistKind }
   | { kind: 'settings' }
+  | { kind: 'account' }
 
-export type RailItem = 'collections' | 'health' | 'settings'
+export type RailItem = 'collections' | 'health' | 'settings' | 'account'
 
 export const RAIL_ITEMS: { id: RailItem; icon: IconName; label: string }[] = [
   { id: 'collections', icon: 'list', label: 'Collections' },
@@ -31,6 +32,9 @@ export const SETTINGS_ITEM = { id: 'settings', icon: 'settings', label: 'Setting
   icon: IconName
   label: string
 }
+
+/* The avatar at the rail's foot (#470): the user's picture, not an icon. */
+export const ACCOUNT_ITEM = { id: 'account', label: 'Account' } as const satisfies { id: RailItem; label: string }
 
 /** The rail item a view belongs to, so a sub-page keeps its parent lit. */
 export function railOwner(view: LeftView | null): RailItem | null {
@@ -45,6 +49,8 @@ export function railOwner(view: LeftView | null): RailItem | null {
       return 'health'
     case 'settings':
       return 'settings'
+    case 'account':
+      return 'account'
   }
 }
 

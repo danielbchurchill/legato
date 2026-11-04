@@ -124,6 +124,10 @@ export function signServerToken(
     email: input.user.email,
     email_verified: input.user.email !== null && input.user.email_verified === 1,
     name: input.user.display_name,
+    // The Google or GitHub picture's address (issue #470), so a linked server
+    // can fetch it and show it to every device. Null when there's none. A
+    // server from before it ignores it.
+    picture: input.user.avatar_url,
   };
   const signingInput = `${b64(header)}.${b64(claims)}`;
   const signature = sign(null, Buffer.from(signingInput), keys.signing.privateKey).toString("base64url");
