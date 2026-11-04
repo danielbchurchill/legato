@@ -3,6 +3,7 @@ import { extraCreditedArtists, splitArtistCredit, splitJoinedNames } from "../sc
 import { creditEvidence, performerEvidence } from "./evidence.js";
 import { retireNodeInto } from "./people.js";
 import { markBoundMayHaveShrunk } from "../enrich/members.js";
+import { findArtistByName } from "./artistLookup.js";
 
 type LocalTags = {
   artist?: string | null;
@@ -13,6 +14,7 @@ type LocalTags = {
   engineer?: string[] | null;
   featuredArtists?: string[] | null;
   artists?: string[] | null;
+  mbArtistId?: string | null;
 };
 
 // releaseDate is a date string ("1969-09-26", "1969-09", or just "1969") —
@@ -67,9 +69,13 @@ function findOrCreateNode(db: Database, type: string, title: string): number {
  *  roles are carried by the edges, which is where the details panel reads
  *  them from (nodeCredits.ts). Existing pairs are merged by
  *  match/people.ts. Exported for enrich/credits.ts's MusicBrainz credits. */
-export function findOrCreatePerson(db: Database, role: "artist" | "credit", name: string): number {
-  const artist = db.prepare(NODE_LOOKUP_SQL).get("artist", name) as { id: number } | undefined;
-  if (artist) return artist.id;
+export function findOrCreatePerson(db: Database, role: "artist" | "credit", name: string, mbid?: string | null): number {
+  // Issue #466: the artist is found by match/artistLookup.ts's rule, so
+  // "Traveling Wilburys" in one file and "The Traveling Wilburys" in another
+  // are one artist, unless `mbid` (the file's MusicBrainz artist id) and the
+  // node's differ.
+  const artist = findArtistByName(db, name, mbid);
+  if (artist !== undefined) return artist;
   const credit = db.prepare(NODE_LOOKUP_SQL).get("credit", name) as { id: number } | undefined;
   if (!credit) return findOrCreateNode(db, role, name);
   if (role === "artist") {
@@ -188,8 +194,12 @@ function deriveFileEdges(db: Database, fileId: number): void {
   // Issue #273: the evidence is what splits a line joined by "," or "&",
   // which the separators alone never do (match/evidence.ts).
   const performers = performerEvidence(db, recordingNodeId, tags);
-  for (const name of splitArtistCredit(tags.artist, performers)) {
-    insertEdge(db, recordingNodeId, findOrCreatePerson(db, "artist", name), "performed_by");
+  const credit = splitArtistCredit(tags.artist, performers);
+  // The tag's MusicBrainz artist id is the first credited artist's, so it
+  // only says who a name is when the credit names one artist.
+  const performerMbid = credit.length === 1 ? tags.mbArtistId : null;
+  for (const name of credit) {
+    insertEdge(db, recordingNodeId, findOrCreatePerson(db, "artist", name, performerMbid), "performed_by");
   }
   // M-7: derived from the same originaldate-first precedence releaseDate
   // itself uses (scan/tags.ts) — previously this read music-metadata's own

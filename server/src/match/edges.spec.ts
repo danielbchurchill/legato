@@ -438,3 +438,77 @@ describe("deriveLocalEdges — one transaction", () => {
     expect(edgesFrom(recording)).toEqual(before);
   });
 });
+
+// Issue #466: an artist from a tag is found by match/artistLookup.ts's
+// rule, as a band-membership answer's artist is.
+describe("deriveLocalEdges — artist names that differ only by 'The'", () => {
+  function performerOf(fileId: number): number {
+    deriveLocalEdges(db, fileId);
+    const row = db
+      .prepare(
+        `SELECT e.to_node AS id FROM edges e JOIN files f ON f.recording_node_id = e.from_node
+          WHERE f.id = ? AND e.type = 'performed_by' ORDER BY e.id LIMIT 1`,
+      )
+      .get(fileId) as { id: number };
+    return row.id;
+  }
+
+  function artistTitles(): string[] {
+    return (db.prepare("SELECT title FROM nodes WHERE type = 'artist' ORDER BY id").all() as { title: string }[]).map(
+      (r) => r.title,
+    );
+  }
+
+  function giveMbid(nodeId: number, mbid: string): void {
+    db.prepare(
+      "INSERT INTO field_provenance (node_id, field, value, source, confidence) VALUES (?, 'artist_mbid', ?, 'musicbrainz', 0.9)",
+    ).run(nodeId, mbid);
+  }
+
+  it("makes 'Traveling Wilburys' in one file and 'The Traveling Wilburys' in another one artist", () => {
+    const first = performerOf(insertFile({ artist: "The Traveling Wilburys", album: "Vol. 1" }));
+    const second = performerOf(insertFile({ artist: "Traveling Wilburys", album: "Vol. 3" }));
+    const third = performerOf(insertFile({ artist: "the traveling wilburys ", album: "Collection" }));
+
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(artistTitles()).toEqual(["The Traveling Wilburys"]);
+  });
+
+  it("keeps them two artists when the file's MusicBrainz artist id and the node's differ", () => {
+    const tagged = performerOf(insertFile({ artist: "The Doors", album: "L.A. Woman" }));
+    giveMbid(tagged, "mbid-the-doors");
+
+    const other = performerOf(insertFile({ artist: "Doors", album: "Tribute", mbArtistId: "mbid-tribute-act" }));
+    const same = performerOf(insertFile({ artist: "Doors", album: "Strange Days", mbArtistId: "mbid-the-doors" }));
+
+    expect(other).not.toBe(tagged);
+    expect(same).toBe(tagged);
+    expect(artistTitles()).toEqual(["The Doors", "Doors"]);
+  });
+
+  it("doesn't read the tag's MusicBrainz id against anyone but a credit's only artist", () => {
+    // The id is the first credited artist's, so it says nothing about
+    // "Doors" in a credit that names two.
+    const tagged = performerOf(insertFile({ artist: "The Doors", album: "L.A. Woman" }));
+    giveMbid(tagged, "mbid-the-doors");
+
+    performerOf(insertFile({ artist: "Jim Morrison; Doors", album: "An American Prayer", mbArtistId: "mbid-jim" }));
+
+    expect(artistTitles()).toEqual(["The Doors", "Jim Morrison"]);
+  });
+
+  it("lands a producer credit on the artist whose name differs only by 'The'", () => {
+    const band = performerOf(insertFile({ artist: "The Traveling Wilburys", album: "Vol. 1" }));
+    const fileId = insertFile({ artist: "Roy Orbison", album: "Mystery Girl", producer: ["Traveling Wilburys"] });
+    deriveLocalEdges(db, fileId);
+
+    const producer = db
+      .prepare(
+        `SELECT e.to_node AS id FROM edges e JOIN files f ON f.recording_node_id = e.from_node
+          WHERE f.id = ? AND e.type = 'produced_by'`,
+      )
+      .get(fileId) as { id: number };
+    expect(producer.id).toBe(band);
+  });
+});

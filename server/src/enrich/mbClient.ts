@@ -500,14 +500,15 @@ export async function searchArtist(name: string): Promise<MbArtistCandidate[]> {
 // relation is the natural/forward direction and the API omits the
 // direction key entirely. `name` is always the *other* artist's name, so
 // the caller has to read `direction` to know which side of "X is a member
-// of Y" the queried artist is on.
-export type MbArtistRelation = { direction: "forward" | "backward"; name: string };
+// of Y" the queried artist is on. Issue #466: `mbid` is the other artist's
+// MusicBrainz id, which enrich/members.ts finds its node by before its name.
+export type MbArtistRelation = { direction: "forward" | "backward"; name: string; mbid?: string };
 
 type RawArtistMemberRel = {
   type?: string;
   "target-type"?: string;
   direction?: string;
-  artist?: { name?: string };
+  artist?: { name?: string; id?: string };
 };
 
 // Split from the fetch below so the field mapping is unit-testable against
@@ -518,6 +519,7 @@ export function parseArtistMemberRelations(relations: RawArtistMemberRel[]): MbA
     .map((r) => ({
       direction: r.direction === "backward" ? ("backward" as const) : ("forward" as const),
       name: r.artist!.name!,
+      ...(r.artist!.id ? { mbid: r.artist!.id } : {}),
     }));
 }
 
