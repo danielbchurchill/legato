@@ -14,34 +14,39 @@ import { PhoneCollections } from './PhoneCollections'
 let playlists: PlaylistSummary[]
 let favourites: Favourite[]
 let created: string[]
+let asked: string[]
 let root: Root | null = null
 
 const GRAPH: GraphData = { nodes: [], edges: [], loading: false, refetch: async () => undefined, byId: new Map() }
 
 beforeEach(() => {
   history.replaceState(null, '')
+  // Each playlist's cover as the server picks it (#462): four cells.
   playlists = [
-    { id: 1, name: 'Sunday mornings', track_count: 6 },
-    { id: 2, name: 'Road trip', track_count: 1 },
+    { id: 1, name: 'Sunday mornings', track_count: 6, cover_ids: [21, 22, 23, 24] },
+    { id: 2, name: 'Road trip', track_count: 1, cover_ids: [25, null, null, null] },
   ]
   favourites = [
     { id: 10, type: 'artist', title: 'Bob Dylan' },
     { id: 11, type: 'release', title: 'Highway 61 Revisited' },
   ]
   created = []
+  asked = []
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string, init?: RequestInit) => {
       const route = new URL(input).pathname.replace(/^.*\/api\/v1/, '')
+      asked.push(route)
       if (route === '/playlists' && init?.method === 'POST') {
         const { name } = JSON.parse(String(init.body)) as { name: string }
         created.push(name)
-        const playlist = { id: 99, name, track_count: 0 }
+        const playlist = { id: 99, name, track_count: 0, cover_ids: [null, null, null, null] }
         playlists = [...playlists, playlist]
         return Response.json(playlist)
       }
       if (route === '/playlists') return Response.json(playlists)
       if (route === '/favourites') return Response.json(favourites)
+      if (route === '/favourites/cover') return Response.json({ cover_ids: [11, 10, null, null] })
       if (/^\/playlists\/\d+\/tracks$/.test(route)) return Response.json([])
       // A playlist that wasn't imported has no import report.
       return Response.json(null)
@@ -121,6 +126,19 @@ describe('the phone collections tab', () => {
     const { container } = await render()
     expect(container.textContent).toContain('3 collections')
     expect(tiles(container)).toEqual(['Favourites2 favourites', 'Sunday mornings6 tracks', 'Road trip1 track'])
+  })
+
+  it("draws each tile's cover from the server's cells, asking for no tracks", async () => {
+    const { container } = await render()
+    const covers = [...container.querySelectorAll('[aria-label="Collections"] > li')].map((li) =>
+      [...li.querySelectorAll('img')].map((img) => new URL(img.src).pathname.replace(/^.*\/api\/v1/, '')),
+    )
+    expect(covers).toEqual([
+      ['/nodes/11/cover', '/nodes/10/cover'],
+      ['/nodes/21/cover', '/nodes/22/cover', '/nodes/23/cover', '/nodes/24/cover'],
+      ['/nodes/25/cover'],
+    ])
+    expect(asked.some((route) => /^\/playlists\/\d+\/tracks$/.test(route))).toBe(false)
   })
 
   it('leaves favourites out when there are none', async () => {

@@ -219,9 +219,10 @@ function MenuItem({ onClick, children }: { onClick: () => void; children: string
   )
 }
 
-/* A playlist: its mosaic, its name, how much music it holds. The tracks are
- * fetched per row for the mosaic and the length — a library's playlists
- * are tens, not thousands. Hover shows the play button. */
+/* A playlist: its mosaic, its name, how much music it holds. The mosaic's
+ * albums come with the playlist (#462); the tracks are fetched per row for
+ * the length — a library's playlists are tens, not thousands. Hover shows
+ * the play button. */
 function PlaylistRow({
   playlist,
   onOpen,
@@ -238,7 +239,7 @@ function PlaylistRow({
   return (
     <li className="group relative flex items-center gap-[12px] rounded-[12px] px-[8px] py-[6px] transition-colors duration-[var(--motion-fast)] hover:bg-[var(--color-wash)]">
       <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 items-center gap-[12px] text-left">
-        <Mosaic nodeIds={(tracks ?? []).slice(0, 4).map((t) => t.id)} size={48} />
+        <Mosaic nodeIds={playlist.cover_ids} size={48} />
         <span className="flex min-w-0 flex-col">
           <span
             title={playlist.name}

@@ -108,7 +108,7 @@ export function PlaylistPage({ playlistId, onBack, onFocusNode, playback }: Play
       <BackRow label="Collections" onBack={onBack} />
 
       <div className="mt-[8px] flex items-end gap-[14px]">
-        <Mosaic nodeIds={(tracks ?? []).slice(0, 4).map((t) => t.id)} size={120} radius={8} />
+        <Mosaic nodeIds={playlist?.cover_ids ?? []} size={120} radius={8} />
         <div className="flex min-w-0 flex-col gap-[2px]">
           <span className="text-small text-[var(--color-ink-2)]">playlist</span>
           {renaming ? (

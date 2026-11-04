@@ -47,6 +47,7 @@ import m0042_album_artist_map_rule from "./0042_album_artist_map_rule.sql" with 
 import m0043_member_bound_prune from "./0043_member_bound_prune.sql" with { type: "text" };
 import m0044_tunnel_credential_previous from "./0044_tunnel_credential_previous.sql" with { type: "text" };
 import m0048_artist_name_fold from "./0048_artist_name_fold.sql" with { type: "text" };
+import m0052_mosaic_cells from "./0052_mosaic_cells.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -99,4 +100,5 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 43, file: "0043_member_bound_prune.sql", sql: m0043_member_bound_prune },
   { version: 44, file: "0044_tunnel_credential_previous.sql", sql: m0044_tunnel_credential_previous },
   { version: 48, file: "0048_artist_name_fold.sql", sql: m0048_artist_name_fold },
+  { version: 52, file: "0052_mosaic_cells.sql", sql: m0052_mosaic_cells },
 ];

@@ -1,9 +1,12 @@
 import { CoverArt } from './CoverArt'
 
-/* A collection's cover: a 2×2 grid of the first four member covers, clipped
- * by the outer radius so the four read as one object. Fewer than four
- * members leave quiet wash cells rather than repeating a cover — repetition
- * would claim the playlist is more uniform than it is.
+/* A collection's cover: a 2×2 grid of four of its albums' covers, clipped
+ * by the outer radius so the four read as one object. The server picks
+ * which four and keeps which cell each is in (#462, server/src/cover/
+ * mosaic.ts); this only draws the cells it's given. A null cell, or a
+ * collection with fewer than four albums, leaves a quiet wash cell rather
+ * than repeating a cover — repetition would claim the playlist is more
+ * uniform than it is.
  *
  * Without a size it fills the box its className gives it, as the phone's
  * collections grid does, and `gap` parts the four cells with whatever is
@@ -16,7 +19,8 @@ export function Mosaic({
   gap = 0,
   className = '',
 }: {
-  nodeIds: number[]
+  /** The four cells, in order: an album's node id, or null for wash. */
+  nodeIds: readonly (number | null)[]
   size?: number
   radius?: number
   gap?: number

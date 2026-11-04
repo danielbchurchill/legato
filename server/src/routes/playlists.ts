@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { broadcast } from "../ws.js";
+import { playlistMosaic, playlistMosaics, type Mosaic } from "../cover/mosaic.js";
 
 // The ordered, multi-membership counterpart to favourites (see 0022's
 // migration comment for why that's a separate table rather than an
@@ -10,7 +11,9 @@ import { broadcast } from "../ws.js";
 // route functions own instead.
 
 export type PlaylistRow = { id: number; name: string; created_at: string; updated_at: string };
-export type PlaylistListRow = PlaylistRow & { track_count: number };
+/** A playlist as the lists show it. `cover_ids` is its mosaic (#462): four
+ * cells, each an album's node id or null (cover/mosaic.ts). */
+export type PlaylistListRow = PlaylistRow & { track_count: number; cover_ids: Mosaic };
 export type PlaylistTrackRow = {
   id: number;
   playlist_id: number;
@@ -29,14 +32,16 @@ export type PlaylistTrackDetail = {
 };
 
 export function listPlaylists(db: Database): PlaylistListRow[] {
-  return db
+  const rows = db
     .prepare(
       `SELECT p.id, p.name, p.created_at, p.updated_at,
               (SELECT COUNT(*) FROM playlist_tracks pt WHERE pt.playlist_id = p.id) AS track_count
        FROM playlists p
        ORDER BY p.updated_at DESC`,
     )
-    .all() as PlaylistListRow[];
+    .all() as Omit<PlaylistListRow, "cover_ids">[];
+  const mosaics = playlistMosaics(db);
+  return rows.map((row) => ({ ...row, cover_ids: mosaics.get(row.id) ?? [null, null, null, null] }));
 }
 
 export function createPlaylist(db: Database, name: string): PlaylistRow {
@@ -101,6 +106,8 @@ export function addTracksToPlaylist(db: Database, playlistId: number, nodeIds: r
     const rows = nodeIds.map((nodeId, i) => insert.get(playlistId, nodeId, start + i) as PlaylistTrackRow);
 
     db.prepare("UPDATE playlists SET updated_at = datetime('now') WHERE id = ?").run(playlistId);
+    // A new album may rank into the cover (#462).
+    playlistMosaic(db, playlistId);
 
     return rows;
   })();
@@ -166,6 +173,8 @@ export function removeTrackFromPlaylist(db: Database, playlistId: number, trackR
     rows.forEach((row, index) => updatePosition.run(index + 1, row.id));
 
     db.prepare("UPDATE playlists SET updated_at = datetime('now') WHERE id = ?").run(playlistId);
+    // Changes the cover only if that was its album's last track (#462).
+    playlistMosaic(db, playlistId);
   })();
 }
 
