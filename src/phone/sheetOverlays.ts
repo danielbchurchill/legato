@@ -1,16 +1,17 @@
-import type { SheetOverlay } from './navigation'
+import { sameOverlay, type SheetOverlay } from './navigation'
 import type { Detent } from './sheetGeometry'
 
 /* What the sheet's detent does as its overlays come and go (#389), kept apart
  * from the shell so it can be tested on its own. An overlay opens at its own
  * detent: search's results at large, under the field, and a node's detail
- * at medium, with the node centred on the map above it. Going back puts
+ * at medium, with the node centred on the map above it, and the map options
+ * at medium too, so the map they change shows above them. Going back puts
  * the sheet where it was when the overlay went over it, so back from a node
  * opened in the library finds the library as tall as it was, and back from
  * a node opened on the map finds the player at peek. */
 
 /** The detent each overlay opens at. */
-export const OVERLAY_DETENT: Record<SheetOverlay['kind'], Detent> = { search: 'large', node: 'medium' }
+export const OVERLAY_DETENT: Record<SheetOverlay['kind'], Detent> = { search: 'large', node: 'medium', 'map-options': 'medium' }
 
 /** Where the sheet goes back to with nothing remembered: the tabs at peek,
  * an overlay at its own detent. */
@@ -27,10 +28,6 @@ export type OverlayTransition = {
   saved: Map<Depth, Detent>
 }
 
-function same(a: SheetOverlay, b: SheetOverlay): boolean {
-  return a.kind === b.kind && (a.kind === 'search' || (b.kind === 'node' && a.id === b.id))
-}
-
 /** Where the sheet goes when its overlays change from `before` to `after`,
  * with the sheet at `detent` and `saved` remembered; null when nothing
  * changed. */
@@ -41,7 +38,7 @@ export function overlayTransition(
   saved: ReadonlyMap<Depth, Detent>,
 ): OverlayTransition | null {
   let common = 0
-  while (common < before.length && common < after.length && same(before[common], after[common])) common++
+  while (common < before.length && common < after.length && sameOverlay(before[common], after[common])) common++
   if (common === before.length && common === after.length) return null
 
   // Nothing deeper than what's left in common is coming back.

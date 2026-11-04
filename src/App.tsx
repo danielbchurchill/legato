@@ -487,6 +487,7 @@ function Workspace({
         selectedNodeId={selectedNodeId}
         settings={settings}
         updateSettings={updateSettings}
+        mapPresets={mapPresets}
         themePreference={themePreference}
         onSetThemePreference={onSetThemePreference}
         searchOpen={searchOpen}
