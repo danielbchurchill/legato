@@ -11,7 +11,7 @@ import { collapseFile } from "../match/collapse.js";
 import { deriveLocalEdges } from "../match/edges.js";
 import { RateEstimator } from "./rate.js";
 import { createProgressGate } from "./throttle.js";
-import { parseTags } from "./tags.js";
+import { parseTags, type NormalizedTags } from "./tags.js";
 import { checkLibraryRoot, type CheckOptions } from "./reachability.js";
 import { walkLibraryRoot } from "./walk.js";
 import { createDecodeWindow, scanDecodeShare } from "./decode-window.js";
@@ -70,7 +70,32 @@ async function readFileTags(db: Database, libraryRootId: number, filePath: strin
   }
 
   const [parsed, fileHash] = await Promise.all([parseTags(filePath), hashFilePrefix(filePath)]);
-  const { tags, picture } = parsed;
+  const read: DiskTags = { mtime, size: st.size, tags: parsed.tags, picture: parsed.picture, fileHash };
+  const { outcome, fileId } = storeFileTags(db, libraryRootId, filePath, existing, read);
+  return { outcome, fileId, picture: read.picture };
+}
+
+/** Issue #464: what a file's tags say on disk, read without touching the
+ *  database, so a caller can store them in the same transaction as
+ *  whatever has to change with them (tagwrite/refresh.ts). */
+export type DiskTags = { mtime: string; size: number; tags: NormalizedTags; picture: EmbeddedPicture | null; fileHash: string };
+
+export async function readDiskTags(filePath: string): Promise<DiskTags> {
+  const st = await stat(filePath);
+  const [parsed, fileHash] = await Promise.all([parseTags(filePath), hashFilePrefix(filePath)]);
+  return { mtime: st.mtime.toISOString(), size: st.size, tags: parsed.tags, picture: parsed.picture, fileHash };
+}
+
+// The upsert half of readFileTags: the file's row, its recording and its
+// recording node's title, from tags already read.
+function storeFileTags(
+  db: Database,
+  libraryRootId: number,
+  filePath: string,
+  existing: FileRow | undefined,
+  read: DiskTags,
+): { outcome: ScanOutcome; fileId: number } {
+  const { tags, mtime, fileHash } = read;
   const title = tags.title ?? path.basename(filePath, path.extname(filePath));
 
   const upsert = db.transaction((): { outcome: ScanOutcome; fileId: number } => {
@@ -107,7 +132,7 @@ async function readFileTags(db: Database, libraryRootId: number, filePath: strin
         tags.releaseType,
         tags.genre ? JSON.stringify(tags.genre) : null,
         mtime,
-        st.size,
+        read.size,
         fileHash,
         JSON.stringify(tags),
         existing.id,
@@ -151,15 +176,14 @@ async function readFileTags(db: Database, libraryRootId: number, filePath: strin
         tags.releaseType,
         tags.genre ? JSON.stringify(tags.genre) : null,
         mtime,
-        st.size,
+        read.size,
         fileHash,
         JSON.stringify(tags),
       ) as { id: number };
     return { outcome: "added", fileId: insertedFile.id };
   });
 
-  const { outcome, fileId } = upsert();
-  return { outcome, fileId, picture };
+  return upsert();
 }
 
 // The second half of the old scanFile(): match, collapse, enqueue for
@@ -216,6 +240,43 @@ export async function scanFile(
   if (result.outcome === "unchanged") return "unchanged";
   await finishFileMatch(db, result.fileId, filePath, result.picture, onWarn);
   return result.outcome;
+}
+
+/** Issue #464: a file Legato just wrote tags to, stored as read back by
+ *  readDiskTags. Returns its id. */
+export function storeWrittenFileTags(db: Database, libraryRootId: number, filePath: string, read: DiskTags): number {
+  const existing = db
+    .prepare<FileRow>("SELECT id, recording_node_id, file_mtime, file_size, missing_since FROM files WHERE file_path = ?")
+    .get(filePath);
+  return storeFileTags(db, libraryRootId, filePath, existing, read).fileId;
+}
+
+/** The rest of finishFileMatch for a written file whose edges were already
+ *  derived along with its new tags: match, enrichment and cover art, but
+ *  not the waveform. The audio didn't change, only the hash its peaks are
+ *  cached under, and GET /files/:id/peaks makes them again on first play
+ *  rather than this decoding every file an edit wrote. */
+export async function finishWrittenFile(
+  db: Database,
+  fileId: number,
+  filePath: string,
+  picture: EmbeddedPicture | null,
+  onWarn: (message: string) => void = (message) => console.warn(message),
+): Promise<void> {
+  const recordingOf = () =>
+    (db.prepare("SELECT recording_node_id FROM files WHERE id = ?").get(fileId) as { recording_node_id: number } | undefined)
+      ?.recording_node_id;
+  const before = recordingOf();
+  await collapseFile(db, fileId);
+  const after = recordingOf();
+  if (after == null) return;
+  if (after !== before) deriveLocalEdges(db, fileId);
+  enqueueEnrichmentIfNeeded(db, after);
+  try {
+    await attachCoverForFile(db, { id: fileId, path: filePath, recordingNodeId: after }, picture);
+  } catch (err) {
+    onWarn(`cover art failed for ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 // Marks a file missing without deleting it — vanished files preserve their

@@ -49,6 +49,7 @@ import m0044_tunnel_credential_previous from "./0044_tunnel_credential_previous.
 import m0045_release_keys from "./0045_release_keys.sql" with { type: "text" };
 import m0046_user_pictures from "./0046_user_pictures.sql" with { type: "text" };
 import m0048_artist_name_fold from "./0048_artist_name_fold.sql" with { type: "text" };
+import m0049_tag_edits from "./0049_tag_edits.sql" with { type: "text" };
 import m0052_mosaic_cells from "./0052_mosaic_cells.sql" with { type: "text" };
 
 export interface MigrationFile {
@@ -104,5 +105,6 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 45, file: "0045_release_keys.sql", sql: m0045_release_keys },
   { version: 46, file: "0046_user_pictures.sql", sql: m0046_user_pictures },
   { version: 48, file: "0048_artist_name_fold.sql", sql: m0048_artist_name_fold },
+  { version: 49, file: "0049_tag_edits.sql", sql: m0049_tag_edits },
   { version: 52, file: "0052_mosaic_cells.sql", sql: m0052_mosaic_cells },
 ];
