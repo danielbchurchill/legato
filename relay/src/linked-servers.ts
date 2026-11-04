@@ -178,7 +178,7 @@ export type ProofResult = { ok: true; relayUserId: number; serverId: string; cha
 
 // tunnel is the credential every link mints (issues #237, #325 and #348).
 export type LinkProofResult =
-  | { ok: true; relayUserId: number; serverId: string; changed: boolean; tunnel: TunnelCredentialMinted }
+  | { ok: true; relayUserId: number; serverId: string; changed: boolean; tunnel: TunnelCredentialMinted; picture: string | null }
   | { ok: false; reason: ProofFailure };
 
 function strings<K extends string>(body: Record<string, unknown> | null | undefined, keys: K[]): Record<K, string> | null {
@@ -231,12 +231,17 @@ export function acceptLinkProof(
 
   const relayUserId = Number(claims.sub);
   return db.transaction((): LinkProofResult => {
-    if (!db.prepare("SELECT 1 FROM relay_users WHERE id = ?").get(relayUserId)) return { ok: false, reason: "no_account" };
+    // The account's Google or GitHub picture goes back in the answer (issue
+    // #470), as it is now rather than as the link token carried it.
+    const account = db.prepare("SELECT avatar_url FROM relay_users WHERE id = ?").get(relayUserId) as
+      | { avatar_url: string | null }
+      | undefined;
+    if (!account) return { ok: false, reason: "no_account" };
     if (!spendProof(db, `link:${claims.jti}`, claims.exp, nowSeconds)) return { ok: false, reason: "used" };
     const changed = !isLinkedServer(db, relayUserId, claims.aud);
     recordLinkedServer(db, relayUserId, claims.aud, proof.publicKey);
     const tunnel = mintTunnelCredential(db, relayUserId, claims.aud);
-    return { ok: true, relayUserId, serverId: claims.aud, changed, tunnel };
+    return { ok: true, relayUserId, serverId: claims.aud, changed, tunnel, picture: account.avatar_url };
   })();
 }
 

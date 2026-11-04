@@ -139,6 +139,29 @@ describe("POST /auth/server-token", () => {
     expect(payload.email_verified).toBe(false);
   });
 
+  // Issue #470: the account's Google or GitHub picture goes to linked
+  // servers in the token, which the server's verifier reads.
+  it("carries the account's picture, and says null when it has none", async () => {
+    const keys = parseSigningKeys(JSON.stringify([keyEntry()]))!;
+    const { db, app } = setup(keys);
+    const picture = "https://lh3.googleusercontent.com/a/owner=s96-c";
+    const withPicture = upsertUser(db, "google", { providerUserId: "g-2", email: null, displayName: "Pic", avatarUrl: picture });
+    const issue = async (userId: number) => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/server-token",
+        headers: { authorization: `Bearer ${createSession(db, userId).token}` },
+        payload: { serverId: SERVER_ID },
+      });
+      return verifyLegatoToken(res.json().token, { keys: serverKeys(keys.published), issuer: ISSUER, audience: SERVER_ID });
+    };
+
+    const verified = await issue(withPicture.id);
+    expect(verified.ok && verified.claims.picture).toBe(picture);
+    const none = await issue(signIn(db).user.id);
+    expect(none.ok && none.claims.picture).toBeNull();
+  });
+
   it("works from the browser session cookie too", async () => {
     const keys = parseSigningKeys(JSON.stringify([keyEntry()]))!;
     const { db, app } = setup(keys);

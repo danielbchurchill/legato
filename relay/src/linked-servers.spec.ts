@@ -4,6 +4,8 @@ import type { FastifyInstance } from "fastify";
 // The home server's real proof signer, not a copy: the point is that what a
 // server sends is exactly what this relay accepts, and nothing else is.
 import { linkProof, rotateProof, unlinkProof, serverIdForPublicKey as serverSideId, type ServerKey } from "../../server/src/auth/serverKey.js";
+import { LegatoIdentity } from "../../server/src/auth/legatoIdentity.js";
+import { openDb as openServerDb } from "../../server/src/db.js";
 import { createSession, upsertUser } from "./accounts.js";
 import { buildApp } from "./app.js";
 import { openDb } from "./db.js";
@@ -147,6 +149,43 @@ describe("a link token from /auth/server-token mints a tunnel credential when it
     expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 89 * 24 * 3600 * 1000);
     expect(tunnelCredentialHolder(h.db, body.tunnel.credential)).toEqual({ relayUserId: user.id, serverId: server.serverId });
     expect(credentials(h.db)).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
+  });
+
+  // Issue #470: the account's picture as it is when the server reports the
+  // link, which may be newer than the one its link token carried.
+  it("answers with the account's picture, as it is now", async () => {
+    const h = setup();
+    const { headers } = h.signIn();
+    const server = homeServer();
+    const { token } = await h.serverToken(headers, server.serverId, "link");
+    const current = "https://avatars.githubusercontent.com/u/1?v=4";
+    const profile = { providerUserId: "g-1", email: "g-1@example.com", emailVerified: true, displayName: "g-1" };
+    upsertUser(h.db, "google", { ...profile, avatarUrl: current });
+    const res = await h.postLink(linkProof(server, token));
+    expect(res.statusCode).toBe(200);
+    expect(res.json().linked.picture).toBe(current);
+
+    const none = homeServer();
+    upsertUser(h.db, "google", { ...profile, avatarUrl: null });
+    expect((await h.link(headers, none)).json().linked).toEqual({ accountId: expect.any(String), serverId: none.serverId, picture: null });
+  });
+
+  // The home server's real report and its real reading of the answer, so
+  // the two sides can't drift apart on where the picture is.
+  it("reaches a home server's link report as the picture it keeps", async () => {
+    const h = setup();
+    const picture = "https://lh3.googleusercontent.com/a/someone=s96-c";
+    const user = upsertUser(h.db, "github", { providerUserId: "gh-7", email: null, displayName: "gh", avatarUrl: picture });
+    const serverDb = openServerDb(":memory:");
+    const identity = new LegatoIdentity(serverDb, {
+      origin: ISSUER,
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        const res = await h.app.inject({ method: "POST", url: new URL(String(input)).pathname, payload: JSON.parse(String(init!.body)) });
+        return new Response(res.body, { status: res.statusCode, headers: { "Content-Type": "application/json" } });
+      }) as typeof fetch,
+    });
+    const { token } = signServerToken(h.keys, { issuer: ISSUER, user, serverId: identity.serverId(), scope: "link" });
+    expect(await identity.recordLink(token)).toMatchObject({ ok: true, picture });
   });
 
   // Issue #348: no claim in the token decides it, so a signer that never

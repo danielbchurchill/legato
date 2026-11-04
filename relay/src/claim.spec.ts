@@ -130,7 +130,8 @@ describe("a claim, start to finish", () => {
     const reported = await h.report(linkProof(server, linkToken));
     expect(reported.statusCode).toBe(200);
     const body = reported.json() as { linked: unknown; tunnel: { credential: string; expiresAt: string } };
-    expect(body.linked).toEqual({ accountId: String(user.id), serverId: server.serverId });
+    // picture is the account's (issue #470); this one signed in without one.
+    expect(body.linked).toEqual({ accountId: String(user.id), serverId: server.serverId, picture: null });
     expect(body.tunnel.credential).toMatch(/^[0-9a-f]{64}$/);
     expect(new Date(body.tunnel.expiresAt).getTime()).toBeGreaterThan(Date.now() + 89 * 24 * 3600 * 1000);
     expect(h.pairs()).toEqual([{ relay_user_id: user.id, server_id: server.serverId }]);
