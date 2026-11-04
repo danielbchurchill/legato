@@ -328,7 +328,9 @@ export function NodeBody({ node, playback, onOpenNode }: NodeSheetProps) {
           )}
         </TrackHold>
         {node.tab === 'credits' && <CreditsTab sheet node={detail} people={credits.people} reload={reload} onFocusNode={onOpenNode} />}
-        {node.tab === 'metadata' && <MetadataTab sheet key={detail.id} node={detail} summary={summary} reload={reload} />}
+        {node.tab === 'metadata' && (
+          <MetadataTab sheet key={detail.id} node={detail} summary={summary} reload={reload} onOpenNode={onOpenNode} />
+        )}
       </div>
     </TouchLayoutContext.Provider>
   )
