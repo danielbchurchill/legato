@@ -360,10 +360,11 @@ describe("renaming an artist", () => {
   });
 
   it("merges into the artist already called that", async () => {
-    const a = await addTrack("a", { title: "One", artist: "Beatles" });
+    const a = await addTrack("a", { title: "One", artist: "Beetles" });
     const b = await addTrack("b", { title: "Two", artist: "The Beatles" });
     const renamed = linked(a.recordingId, "performed_by")[0]!.id;
     const existing = linked(b.recordingId, "performed_by")[0]!.id;
+    expect(renamed).not.toBe(existing);
     db.prepare("INSERT INTO favourites (node_id) VALUES (?)").run(renamed);
 
     const { review: r, approved } = await edit(renamed, { name: "The Beatles" });
@@ -372,6 +373,31 @@ describe("renaming an artist", () => {
     expect(linked(a.recordingId, "performed_by")).toEqual([{ id: existing, title: "The Beatles" }]);
     expect(db.prepare("SELECT 1 FROM nodes WHERE id = ?").get(renamed)).toBeFalsy();
     expect(db.prepare("SELECT 1 FROM favourites WHERE node_id = ?").get(existing)).toBeTruthy();
+  });
+
+  // #466's lookup: a leading "The" doesn't make two artists, so a rename
+  // that differs from an existing artist only by it merges, as the scanner
+  // would put the files there anyway. Unless their MusicBrainz ids differ.
+  it("merges into the artist whose name differs only by a leading 'The', unless their ids differ", async () => {
+    const a = await addTrack("a", { title: "One", artist: "Wilburys" });
+    const b = await addTrack("b", { title: "Two", artist: "The Traveling Wilburys" });
+    const renamed = linked(a.recordingId, "performed_by")[0]!.id;
+    const existing = linked(b.recordingId, "performed_by")[0]!.id;
+
+    const remember = (nodeId: number, mbid: string) =>
+      db
+        .prepare("INSERT INTO field_provenance (node_id, field, value, source, confidence) VALUES (?, 'artist_mbid', ?, 'musicbrainz', 1)")
+        .run(nodeId, mbid);
+    remember(renamed, "mbid-one");
+    remember(existing, "mbid-two");
+    expect((await review(renamed, { name: "Traveling Wilburys" })).body.merge).toBeNull();
+    await app.inject({ method: "DELETE", url: "/api/v1/tag-writes/edits/1" });
+
+    db.prepare("DELETE FROM field_provenance WHERE node_id = ?").run(existing);
+    const { review: r, approved } = await edit(renamed, { name: "Traveling Wilburys" });
+    expect(r.merge).toEqual({ id: existing, title: "The Traveling Wilburys" });
+    expect(approved.nodeId).toBe(existing);
+    expect(linked(a.recordingId, "performed_by")).toEqual([{ id: existing, title: "The Traveling Wilburys" }]);
   });
 });
 

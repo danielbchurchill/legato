@@ -1,4 +1,5 @@
 import type { Database } from "../sqlite.js";
+import { artistMbidOf, artistsByKeyQuery, isSameSpelling } from "../match/artistLookup.js";
 import { NODE_LOOKUP_SQL } from "../match/edges.js";
 import { mergeNodeInto } from "../match/people.js";
 import { normalName } from "./credits.js";
@@ -14,9 +15,11 @@ import { normalName } from "./credits.js";
  *
  * When a node of the same kind already has the new name, the rename merges
  * into it with match/people.ts's mergeNodeInto, which keeps the survivor's
- * own where both have one and carries the rest across. For an album "the
- * same" is the same title and the same album artist, so one artist's
- * Greatest Hits never merges into another's.
+ * own where both have one and carries the rest across. "The same name" is
+ * the scanner's own: for an artist, match/artistLookup.ts's rule (#466),
+ * where case, outer spaces and a leading "The" don't make two artists unless
+ * their MusicBrainz ids differ; for an album, the same title and the same
+ * album artist, so one artist's Greatest Hits never merges into another's.
  *
  * The rename happens when the first of an edit's writes is approved, and is
  * undone when the last one is reverted, so a node never carries a name none
@@ -66,16 +69,31 @@ function nodeRow(db: Database, id: number | null): NodeRow | null {
   return (db.prepare("SELECT id, type, title FROM nodes WHERE id = ?").get(id) as NodeRow | undefined) ?? null;
 }
 
+// Another artist the scanner's lookup takes `name` to mean: one spelled
+// the same, else one that differs only by a leading "The", unless both have
+// MusicBrainz ids and they differ.
+function otherArtistNamed(db: Database, nodeId: number, name: string): NodeRow | null {
+  const { sql, params } = artistsByKeyQuery(name);
+  const others = (db.prepare(sql).all(...params) as { id: number }[])
+    .map((row) => nodeRow(db, row.id)!)
+    .filter((other) => other.id !== nodeId);
+  const exact = others.find((other) => isSameSpelling(other.title, name));
+  if (exact) return exact;
+  const own = artistMbidOf(db, nodeId);
+  return others.find((other) => own == null || [own, null].includes(artistMbidOf(db, other.id))) ?? null;
+}
+
 /** Another node of `node`'s kind already called `title` (and, for an album,
  *  by `albumArtist`), which a rename to that name would merge into. Found
- *  through the scanner's own name lookup, so it's the node the files would
- *  land on. */
+ *  by the scanner's own name rules, so it's the node the files would land
+ *  on. */
 export function existingNodeNamed(
   db: Database,
   node: { id: number; type: string },
   title: string,
   albumArtist: string | null,
 ): NodeRow | null {
+  if (node.type === "artist") return otherArtistNamed(db, node.id, title);
   const named = db
     .prepare(`SELECT id, type, title FROM nodes WHERE id IN (${NODE_LOOKUP_SQL}) AND id != ? ORDER BY id`)
     .all(node.type, title, node.id) as NodeRow[];
