@@ -21,7 +21,7 @@ import { NodeByline } from './NodeByline'
 import { useFavourite } from './useFavourite'
 import { API, type NodeDetail } from './useNodeDetail'
 import { TYPE_WORD, useJson, useNodeDetails, type CreditedPerson, type Summary, type TracklistEntry } from './nodeDetailsData'
-import { LABELS, useTagEdit, type EditableKey } from './useTagEdit'
+import { EDITABLE, labelFor, useTagEdit, type Draft, type EditableKey, type SkippedFile } from './useTagEdit'
 import { formatWhen } from './healthData'
 
 /* Node details, in the right-hand panel: everything about one artist,
@@ -134,7 +134,7 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
           <FavouriteButton node={node} />
           {node.type === 'recording' && <AddToPlaylistButton nodeId={node.id} />}
           {node.type === 'release' && <AddToPlaylistButton albumId={node.id} />}
-          {(node.type === 'recording' || node.type === 'release') && (
+          {(node.type === 'recording' || node.type === 'release' || node.type === 'artist') && (
             <IconButton icon="pencil" label="Edit tags" active={tab === 'metadata'} onClick={() => onTabChange('metadata')} />
           )}
         </span>
@@ -162,7 +162,7 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
       )}
       {tab === 'tracks' && <TracksTab node={node} tracklist={tracklist} playback={playback} onFocusNode={onFocusNode} />}
       {tab === 'credits' && <CreditsTab node={node} people={credits.people} reload={reload} onFocusNode={onFocusNode} />}
-      {tab === 'metadata' && <MetadataTab key={node.id} node={node} summary={summary} reload={reload} />}
+      {tab === 'metadata' && <MetadataTab key={node.id} node={node} summary={summary} reload={reload} onOpenNode={onFocusNode} />}
     </div>
   )
 }
@@ -769,6 +769,7 @@ function NewConnection({
 
 type MetadataValue = { value: string; source: 'tags' | 'musicbrainz' }
 type NodeMetadata = Record<'releaseDate' | 'releaseType' | 'label' | 'mbid', MetadataValue | null>
+type NodeTags = { type: string; values: Draft }
 
 // A value from the files' own tags reads as plain text. One only
 // MusicBrainz has is marked, so it's never taken for something the files
@@ -784,54 +785,93 @@ function metadataValue(entry: MetadataValue | null): ReactNode {
   )
 }
 
+const PLACEHOLDER: Partial<Record<EditableKey, string>> = {
+  releaseDate: 'YYYY-MM-DD',
+  trackNo: '1',
+  discNo: '1',
+  genre: 'Rock; Pop',
+  bpm: '120',
+}
+
+function fileName(path: string): string {
+  return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
+}
+
+const SKIPPED_SHOWN = 8
+
+/* The files an edit leaves out (#464), by why: each reason once, the files
+ * it covers under it by name. */
+function SkippedFiles({ files }: { files: SkippedFile[] }) {
+  if (files.length === 0) return null
+  const byReason = new Map<string, SkippedFile[]>()
+  for (const file of files) byReason.set(file.reason, [...(byReason.get(file.reason) ?? []), file])
+  return (
+    <div className="flex flex-col gap-[8px] rounded-[var(--radius-card)] border border-[var(--color-line)] p-[12px]">
+      <span className="flex items-center gap-[8px] text-[length:var(--text-secondary)] text-[var(--color-ink)]">
+        <StatusDot status="warn" size={6} />
+        Leaves out {plural(files.length, 'file')}
+      </span>
+      {[...byReason].map(([reason, list]) => (
+        <div key={reason} className="flex flex-col gap-[2px]">
+          <p className="text-small text-[var(--color-ink-2)]">{reason}.</p>
+          <ul className="mono flex flex-col text-[11px] leading-[16px] text-[var(--color-ink-3)]">
+            {list.slice(0, SKIPPED_SHOWN).map((file) => (
+              <li key={file.fileId} data-selectable title={file.path} className="truncate">
+                {fileName(file.path)}
+              </li>
+            ))}
+            {list.length > SKIPPED_SHOWN && <li>and {plural(list.length - SKIPPED_SHOWN, 'more file')}</li>}
+          </ul>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const KIND: Record<string, string> = { artist: 'artist', release: 'album' }
+
 export function MetadataTab({
   node,
   summary,
   reload,
+  onOpenNode,
   sheet = false,
 }: {
   node: NodeDetail
   summary: Summary | null
   reload: () => void
+  /** Opens the node an edit merged this one into (#464). */
+  onOpenNode?: (id: number) => void
   sheet?: boolean
 }) {
-  const edit = useTagEdit(node, reload)
-  const file = node.files[0]
-  const editable: EditableKey[] =
-    node.type === 'recording'
-      ? ['releaseDate', 'releaseType', 'label', 'bpm']
-      : node.type === 'release'
-        ? ['releaseDate', 'releaseType', 'label']
-        : []
-
-  // Release date, type and label as GET /nodes/:id/metadata resolves them
-  // (server/src/nodeMetadata.ts): a record's first track's tags, falling
-  // back to what MusicBrainz matched where a tag is empty. bpm is a track's
-  // own tag, read straight off its file. Refetched after a write, when the
-  // node reloads.
+  // What the files' tags say now, as the edit form starts from them
+  // (server/src/routes/tag-writes.ts). Release date, type and label come as
+  // GET /nodes/:id/metadata resolves them (server/src/nodeMetadata.ts): the
+  // tags, falling back to what MusicBrainz matched where a tag is empty.
+  // Both are fetched again after a write, when the node reloads.
+  const tags = useJson<NodeTags>(`/tag-writes/node/${node.id}`, node)
   const metadata = useJson<NodeMetadata>(`/nodes/${node.id}/metadata`, node)
-  const resolved: Record<EditableKey, MetadataValue | null> = {
-    releaseDate: metadata?.releaseDate ?? null,
-    releaseType: metadata?.releaseType ?? null,
-    label: metadata?.label ?? null,
-    bpm: file?.bpm != null ? { value: String(file.bpm), source: 'tags' } : null,
+  const edit = useTagEdit(node, tags?.values ?? null, reload, onOpenNode)
+  const file = node.files[0]
+  const values = tags?.values ?? {}
+
+  const resolved = (key: EditableKey): ReactNode => {
+    if (key === 'releaseDate' || key === 'releaseType' || key === 'label') return metadataValue(metadata?.[key] ?? null)
+    return values[key] || NO_VALUE
   }
   const fixed: { label: string; value: ReactNode }[] = [
     ...(node.type === 'release' && summary?.kind === 'release' ? [{ label: 'tracks', value: summary.tracks }] : []),
-    ...(node.type === 'recording'
-      ? [
-          { label: 'track', value: file?.track_no ?? NO_VALUE },
-          { label: 'length', value: formatDuration(node.recording?.canonical_duration_ms) },
-        ]
-      : []),
+    ...(node.type === 'recording' ? [{ label: 'length', value: formatDuration(node.recording?.canonical_duration_ms) }] : []),
     { label: 'mbid', value: metadataValue(metadata?.mbid ?? null) },
   ]
 
   if (edit.phase === 'review' && edit.review) {
+    const { review } = edit
+    const formats = review.formats.length === 1 ? `${review.formats[0]} file` : 'file'
     return (
       <div className="mt-[14px] flex flex-col gap-[10px]">
         <SectionLabel>review before writing</SectionLabel>
-        {edit.review.fields.map((f) => (
+        {review.fields.map((f) => (
           <div key={f.field} className="flex flex-col gap-[4px] rounded-[var(--radius-card)] bg-[var(--color-wash)] p-[12px]">
             <span className="text-[length:var(--text-secondary)] text-[var(--color-ink-2)]">{f.field}</span>
             <span className="mono flex flex-wrap items-baseline gap-x-[8px] text-[length:var(--text-mono)]">
@@ -843,14 +883,24 @@ export function MetadataTab({
             </span>
           </div>
         ))}
+        {review.merge && (
+          <p className="flex items-start gap-[8px] text-[length:var(--text-secondary)] text-[var(--color-ink)]">
+            <StatusDot status="accent" size={6} className="mt-[6px]" />
+            <span>
+              An {KIND[node.type] ?? node.type} called <span className="font-medium">{review.merge.title}</span> already exists, so this
+              merges into it, bringing this one's favourite and connections along. Reverting the files won't split them again.
+            </span>
+          </p>
+        )}
         <p className="flex items-center gap-[8px] text-small text-[var(--color-ink-2)]">
           <Icon name="info" size={14} />
-          Writes tags to {plural(edit.review.fileCount, `${edit.review.format ?? ''} file`.trim())}. You can revert from Library health.
+          Writes tags to {plural(review.fileCount, formats)}. You can revert from Library health.
         </p>
+        <SkippedFiles files={review.skipped} />
         {edit.problem && <p className="text-small text-[var(--color-warn)]">{edit.problem}</p>}
         <div className="flex gap-[8px]">
           <Button variant="primary" disabled={edit.busy} onClick={edit.write}>
-            Write to {plural(edit.review.fileCount, 'file')}
+            {edit.busy ? 'Writing…' : `Write to ${plural(review.fileCount, 'file')}`}
           </Button>
           <Button variant="secondary" disabled={edit.busy} onClick={edit.discard}>
             discard
@@ -868,36 +918,42 @@ export function MetadataTab({
           {edit.changeCount === 0 ? 'Nothing changed yet' : `${plural(edit.changeCount, 'change')}`} · nothing is written until you review
           it
         </p>
-        {editable.map((key) => (
-          <div key={key} className="grid min-h-[44px] grid-cols-[110px_minmax(0,1fr)] items-center">
-            <span className="flex items-center gap-[6px] text-[length:var(--text-secondary)] text-[var(--color-ink-2)]">
-              {LABELS[key]}
-              {edit.pending[key] && <StatusDot status="accent" size={6} />}
-            </span>
-            <TextField
-              size={sheet ? 'lg' : 'md'}
-              label={LABELS[key]}
-              value={edit.draft[key] ?? ''}
-              onChange={(v) => edit.update(key, v)}
-              // A value only MusicBrainz has is offered, not filled in:
-              // the field shows what the file says, which is nothing.
-              placeholder={
-                resolved[key]?.source === 'musicbrainz'
-                  ? resolved[key].value
-                  : key === 'releaseDate'
-                    ? 'YYYY-MM-DD'
-                    : key === 'bpm'
-                      ? '120'
-                      : undefined
-              }
-              inputMode={key === 'bpm' ? 'numeric' : undefined}
-              onEnter={edit.submit}
-              onEscape={edit.cancel}
-            />
-          </div>
-        ))}
-        <DetailRows rows={fixed.filter((r) => r.label !== 'mbid')} />
+        {edit.keys.map((key) => {
+          const fromMusicBrainz =
+            (key === 'releaseDate' || key === 'releaseType' || key === 'label') && metadata?.[key]?.source === 'musicbrainz'
+          return (
+            // The sheet's 44px fields get a 52px row, so they don't touch.
+            <div key={key} className={`grid grid-cols-[110px_minmax(0,1fr)] items-center ${sheet ? 'min-h-[52px]' : 'min-h-[44px]'}`}>
+              <span className="flex items-center gap-[6px] text-[length:var(--text-secondary)] text-[var(--color-ink-2)]">
+                {labelFor(node.type, key)}
+                {edit.pending[key] && <StatusDot status="accent" size={6} />}
+              </span>
+              <TextField
+                size={sheet ? 'lg' : 'md'}
+                label={labelFor(node.type, key)}
+                value={edit.draft[key] ?? ''}
+                onChange={(v) => edit.update(key, v)}
+                // A value only MusicBrainz has is offered, not filled in:
+                // the field shows what the file says, which is nothing.
+                placeholder={fromMusicBrainz ? metadata?.[key]?.value : PLACEHOLDER[key]}
+                inputMode={key === 'bpm' || key === 'trackNo' || key === 'discNo' ? 'numeric' : undefined}
+                onEnter={edit.submit}
+                onEscape={edit.cancel}
+              />
+            </div>
+          )
+        })}
+        {node.type === 'artist' && (
+          <p className="mt-[6px] text-small text-[var(--color-ink-2)]">
+            Renames them on every file that credits them. In a line like “A; B” or “A feat. B”, only their part changes.
+          </p>
+        )}
         {edit.problem && <p className="mt-[8px] text-small text-[var(--color-warn)]">{edit.problem}</p>}
+        {edit.skipped.length > 0 && (
+          <div className="mt-[8px]">
+            <SkippedFiles files={edit.skipped} />
+          </div>
+        )}
         <div className="mt-[14px] flex gap-[8px]">
           <Button variant="primary" disabled={edit.changeCount === 0 || edit.busy} onClick={edit.submit}>
             {edit.changeCount > 1 ? 'Review changes' : 'Review change'}
@@ -910,18 +966,13 @@ export function MetadataTab({
     )
   }
 
-  const rows = [
-    ...editable
-      .filter((k) => k !== 'bpm' || node.type === 'recording')
-      .map((key) => ({ label: LABELS[key], value: metadataValue(resolved[key]) })),
-    ...fixed,
-  ]
+  const rows = [...(EDITABLE[node.type] ?? []).map((key) => ({ label: labelFor(node.type, key), value: resolved(key) })), ...fixed]
   const folder = file?.file_path ? file.file_path.slice(0, file.file_path.lastIndexOf('/') + 1) : null
   return (
     <div className="mt-[8px] flex flex-col">
       <DetailRows rows={rows} />
-      {editable.length > 0 && (
-        <Button variant="secondary" icon="pencil" className="mt-[12px] self-start" disabled={edit.busy} onClick={edit.start}>
+      {edit.keys.length > 0 && (
+        <Button variant="secondary" icon="pencil" className="mt-[12px] self-start" disabled={edit.busy || !tags} onClick={edit.start}>
           Edit
         </Button>
       )}
