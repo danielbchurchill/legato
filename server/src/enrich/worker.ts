@@ -2,6 +2,8 @@ import type { Database } from "../sqlite.js";
 import { coverTargetNode, recordCover, resolveCover } from "../cover/extract.js";
 import { storeCover } from "../cover/store.js";
 import { computeFingerprint } from "../match/fingerprint.js";
+import { albumIdentity, stripDiscSuffix, type AlbumIdentity } from "../match/albumIdentity.js";
+import { findRelease } from "../match/releases.js";
 import { broadcast } from "../ws.js";
 import { libraryChanged } from "../libraryRevision.js";
 import { ACOUSTID_API_KEY } from "../config.js";
@@ -78,21 +80,24 @@ function getNextDueJob(db: Database): EnrichJob | undefined {
     .get() as EnrichJob | undefined;
 }
 
-type SearchInput = LocalMatchInput & RecordingSearchInput & { albumartist: string | null };
+type SearchInput = LocalMatchInput &
+  RecordingSearchInput & { albumartist: string | null; albumIdentity: AlbumIdentity | null };
 
 // M-2: everything the local tags already hold, not just title/artist —
 // album, track number, total tracks and date all feed the widened
 // MusicBrainz query and, for whatever comes back, M-3's weighted scorer.
 // albumartist feeds M-6's release search specifically — the *track*
 // artist (a featured guest, say) isn't necessarily who the album search
-// should be scoped to.
+// should be scoped to. Issue #465: the album is searched for by its title
+// without a disc suffix, which is how MusicBrainz titles a release, and
+// albumIdentity is what tryAlbumMatch groups this file's album by.
 function getSearchInput(db: Database, nodeId: number): SearchInput | null {
   const node = db.prepare("SELECT title FROM nodes WHERE id = ?").get(nodeId) as { title: string } | undefined;
   if (!node) return null;
 
   const file = db
-    .prepare("SELECT tags_raw FROM files WHERE recording_node_id = ? ORDER BY id LIMIT 1")
-    .get(nodeId) as { tags_raw: string | null } | undefined;
+    .prepare("SELECT file_path, tags_raw FROM files WHERE recording_node_id = ? ORDER BY id LIMIT 1")
+    .get(nodeId) as { file_path: string; tags_raw: string | null } | undefined;
   const tags = file?.tags_raw
     ? (JSON.parse(file.tags_raw) as {
         artist?: string | null;
@@ -108,12 +113,14 @@ function getSearchInput(db: Database, nodeId: number): SearchInput | null {
   const recording = db.prepare("SELECT canonical_duration_ms FROM recordings WHERE node_id = ?").get(nodeId) as
     | { canonical_duration_ms: number | null }
     | undefined;
+  const album = file ? albumIdentity(tags, file.file_path) : null;
 
   return {
     title: node.title,
     artist: tags.artist,
     albumartist: tags.albumartist ?? null,
-    album: tags.album ?? null,
+    album: album?.title ?? null,
+    albumIdentity: album,
     trackNo: tags.trackNo ?? null,
     totalTracks: tags.totalTracks ?? null,
     date: tags.releaseDate ?? null,
@@ -179,22 +186,31 @@ export function applyMatch(db: Database, nodeId: number, mbid: string, confidenc
 
 type SiblingFile = { fileId: number; nodeId: number; trackNo: number | null; discNo: number | null; durationMs: number | null };
 
-// Every currently-unmatched file sharing this album (and, when both sides
-// have one, this album artist) — the group M-6's single release lookup
-// resolves at once instead of issuing one independent search per file.
-// Filtered in JS rather than a json_extract() WHERE clause: this library
-// runs to hundreds of files, not enough for the difference to matter, and
-// it keeps this working the same way regardless of whether the SQLite
-// build has JSON1 compiled in.
-function findUnmatchedAlbumSiblings(db: Database, album: string, albumartist: string | null): SiblingFile[] {
+// Every currently-unmatched file on this album — the group M-6's single
+// release lookup resolves at once instead of issuing one independent search
+// per file. Issue #465: on the same album by the rule match/edges.ts files
+// it by, so every disc of a set is in the group and another artist's album
+// of the same title isn't. That's the album node each file's identity finds
+// (match/releases.ts), compared only for files whose title, disc suffix
+// aside, is the same. Filtered in JS rather than a json_extract() WHERE
+// clause: this library runs to hundreds of files, not enough for the
+// difference to matter, and it keeps this working the same way regardless
+// of whether the SQLite build has JSON1 compiled in.
+function findUnmatchedAlbumSiblings(db: Database, album: AlbumIdentity): SiblingFile[] {
   const rows = db
     .prepare(
-      `SELECT f.id AS fileId, f.recording_node_id AS nodeId, f.tags_raw AS tagsRaw,
+      `SELECT f.id AS fileId, f.recording_node_id AS nodeId, f.file_path AS filePath, f.tags_raw AS tagsRaw,
               r.canonical_duration_ms AS durationMs
        FROM files f JOIN recordings r ON r.node_id = f.recording_node_id
        WHERE f.match_source != 'mbid' AND f.missing_since IS NULL`,
     )
-    .all() as { fileId: number; nodeId: number; tagsRaw: string | null; durationMs: number | null }[];
+    .all() as { fileId: number; nodeId: number; filePath: string; tagsRaw: string | null; durationMs: number | null }[];
+
+  // Not found only for an album no file has been filed under yet; its key
+  // stands in for the node then.
+  const releaseNodeId = findRelease(db, album);
+  const titleKey = album.title.toLowerCase();
+  const albumKey = album.artistKey ?? album.folderKey;
 
   const siblings: SiblingFile[] = [];
   for (const row of rows) {
@@ -205,8 +221,14 @@ function findUnmatchedAlbumSiblings(db: Database, album: string, albumartist: st
       trackNo?: number | null;
       discNo?: number | null;
     };
-    if (tags.album !== album) continue;
-    if (albumartist && tags.albumartist && tags.albumartist !== albumartist) continue;
+    if (!tags.album || stripDiscSuffix(tags.album).title.toLowerCase() !== titleKey) continue;
+    const identity = albumIdentity(tags, row.filePath);
+    if (!identity) continue;
+    const sameAlbum =
+      releaseNodeId !== null
+        ? findRelease(db, identity) === releaseNodeId
+        : (identity.artistKey ?? identity.folderKey) === albumKey;
+    if (!sameAlbum) continue;
     siblings.push({
       fileId: row.fileId,
       nodeId: row.nodeId,
@@ -226,9 +248,9 @@ function findUnmatchedAlbumSiblings(db: Database, album: string, albumartist: st
 // first) gets applied and its own pending job marked done — the actual
 // point of grouping by album at all.
 async function tryAlbumMatch(db: Database, targetNodeId: number, input: SearchInput): Promise<boolean> {
-  if (!input.album) return false;
+  if (!input.album || !input.albumIdentity) return false;
 
-  const siblings = findUnmatchedAlbumSiblings(db, input.album, input.albumartist);
+  const siblings = findUnmatchedAlbumSiblings(db, input.albumIdentity);
   if (siblings.length === 0) return false;
 
   const releaseCandidates = await searchRelease({
