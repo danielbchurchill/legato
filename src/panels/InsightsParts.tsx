@@ -55,8 +55,21 @@ export function MapButton({ focus, label = 'Show on map' }: { focus: number[]; l
   )
 }
 
-/** A row: a sentence, a quieter line under it, and its map button. */
-export function Row({ children, meta, focus, cover }: { children: ReactNode; meta?: ReactNode; focus: number[]; cover?: number }) {
+/** A row: a sentence, who it's by, a quieter line under it, and its map
+ * button. */
+export function Row({
+  children,
+  by,
+  meta,
+  focus,
+  cover,
+}: {
+  children: ReactNode
+  by?: Ref | null
+  meta?: ReactNode
+  focus: number[]
+  cover?: number
+}) {
   const touch = useTouchLayout()
   return (
     <li className="flex items-start gap-[10px]">
@@ -71,6 +84,13 @@ export function Row({ children, meta, focus, cover }: { children: ReactNode; met
         >
           {children}
         </p>
+        {by && (
+          <p
+            className={`[overflow-wrap:anywhere] text-[var(--color-ink-2)] ${touch ? '-mt-[8px] text-[13px] leading-[44px]' : 'text-small'}`}
+          >
+            by <Name node={by} />
+          </p>
+        )}
         {meta && <p className={`text-[var(--color-ink-2)] ${touch ? '-mt-[4px] text-[13px] leading-[18px]' : 'text-small'}`}>{meta}</p>}
       </div>
       <MapButton focus={focus} />
@@ -93,7 +113,7 @@ export function Name({ node }: { node: Ref }) {
       onClick={() => onOpenNode(node.id)}
       className={
         touch
-          ? 'touch-target inline h-[32px] rounded-full bg-[var(--color-wash-2)] px-[12px] align-middle font-medium text-[var(--color-ink)] [box-decoration-break:clone]'
+          ? 'touch-target inline-flex h-[32px] max-w-full items-center rounded-full bg-[var(--color-wash-2)] px-[12px] text-left align-baseline font-medium text-[var(--color-ink)]'
           : 'inline text-left font-medium text-[var(--color-ink)] decoration-[var(--color-line-strong)] underline-offset-2 transition-colors duration-[var(--motion-fast)] hover:underline'
       }
     >
@@ -112,7 +132,8 @@ export function Names({ nodes, total = nodes.length, max = 3 }: { nodes: Ref[]; 
     if (i > 0) out.push(i === parts.length - 1 && more === 0 ? ' and ' : ', ')
     out.push(part)
   })
-  if (more > 0) out.push(` and ${plural(more, 'more', 'more')}`)
+  // Kept on one line, so "and 2 more" never breaks after the number.
+  if (more > 0) out.push(<span key="more" className="whitespace-nowrap">{` and ${plural(more, 'more', 'more')}`}</span>)
   return <>{out}</>
 }
 

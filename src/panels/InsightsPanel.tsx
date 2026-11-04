@@ -246,16 +246,10 @@ const CARD: Record<CardId, (insights: ReadyInsights) => ReactNode> = {
             <SectionLabel className="mb-[6px]">{label}</SectionLabel>
             <Rows>
               {rows.map((row) => (
-                <Row key={row.node.id} focus={row.focus} cover={label === 'albums' ? row.node.id : undefined}>
+                <Row key={row.node.id} focus={row.focus} by={row.by} cover={label === 'albums' ? row.node.id : undefined}>
                   <span className="flex items-baseline justify-between gap-[8px]">
                     <span className="min-w-0">
                       <Name node={row.node} />
-                      {row.by && (
-                        <span className="text-[var(--color-ink-2)]">
-                          {' '}
-                          by <Name node={row.by} />
-                        </span>
-                      )}
                     </span>
                     <Count>{plural(row.plays, 'play')}</Count>
                   </span>
@@ -271,14 +265,8 @@ const CARD: Record<CardId, (insights: ReadyInsights) => ReactNode> = {
     <Card title="On repeat" about="Played three times or more in the last 30 days.">
       <Rows>
         {onRepeat.map((row) => (
-          <Row key={row.node.id} focus={row.focus} meta={`${plural(row.plays, 'play')} this month`}>
+          <Row key={row.node.id} focus={row.focus} by={row.by} meta={`${plural(row.plays, 'play')} in the last 30 days`}>
             <Name node={row.node} />
-            {row.by && (
-              <>
-                {' '}
-                by <Name node={row.by} />
-              </>
-            )}
           </Row>
         ))}
       </Rows>
@@ -301,14 +289,8 @@ const CARD: Record<CardId, (insights: ReadyInsights) => ReactNode> = {
     <Card title="Waiting for you" about={`${plural(waiting.total, 'album')} you've never played. The newest:`}>
       <Rows>
         {waiting.albums.map((row) => (
-          <Row key={row.album.id} focus={row.focus} cover={row.album.id} meta={row.year != null ? String(row.year) : undefined}>
+          <Row key={row.album.id} focus={row.focus} cover={row.album.id} by={row.by} meta={row.year != null ? String(row.year) : undefined}>
             <Name node={row.album} />
-            {row.by && (
-              <>
-                {' '}
-                by <Name node={row.by} />
-              </>
-            )}
           </Row>
         ))}
       </Rows>
