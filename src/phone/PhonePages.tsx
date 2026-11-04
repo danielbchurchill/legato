@@ -7,8 +7,10 @@ import { Worklist } from '../panels/Worklists'
 import { Icon } from '../ui/Icon'
 import { TouchLayoutContext } from '../ui/touchLayout'
 import { HealthPage } from './HealthPage'
+import { InsightsPanel } from '../panels/InsightsPanel'
+import { openPhoneNode } from './nodeDetail'
 import { SettingsPage } from './SettingsPage'
-import { closePhonePages, popPhonePage, pushPhonePage, usePhonePages, worklistOf, type PhonePage } from './navigation'
+import { closePhonePages, closePhonePagesThen, popPhonePage, pushPhonePage, usePhonePages, worklistOf, type PhonePage } from './navigation'
 import type { PhonePlatform } from './phoneLayout'
 
 /* Pushed pages on the phone (#389): full screen and opaque over the map,
@@ -17,9 +19,9 @@ import type { PhonePlatform } from './phoneLayout'
  * a 64px app bar with its back arrow and a 22/500 title. Back pops the
  * page, as the system's back does (navigation.ts).
  *
- * Settings pushes from the button over the map, Account (#470) and Library
- * health from Settings, and each of health's lists from health, as the
- * desktop's worklists open from its panel. Inside a page the layout is for a finger
+ * Settings pushes from the button over the map, Account (#470), Library
+ * health and Insights (#468) from Settings, and each of health's lists from
+ * health, as the desktop's worklists open from its panel. Inside a page the layout is for a finger
  * (TouchLayoutContext): the desktop controls a page borrows, its worklists
  * and the legato.fm account group, take 44px targets there. */
 
@@ -30,6 +32,7 @@ const PAGE_TITLE: Record<PushedPage, string> = {
   settings: 'Settings',
   account: 'Account',
   health: 'Library health',
+  insights: 'Insights',
   'worklist:duplicates': 'Possible duplicates',
   'worklist:missing': 'Missing files',
   'worklist:enrichment': 'Enrichment to confirm',
@@ -45,9 +48,19 @@ type PhonePagesProps = {
   onSetThemePreference: (preference: ThemePreference) => void
   /** Select a node and show it on the map. */
   onShowOnMap: (id: number) => void
+  /** Show nodes on the map: one selected, several lit together (#468). */
+  onShowAllOnMap: (ids: number[]) => void
 }
 
-export function PhonePages({ platform, settings, updateSettings, themePreference, onSetThemePreference, onShowOnMap }: PhonePagesProps) {
+export function PhonePages({
+  platform,
+  settings,
+  updateSettings,
+  themePreference,
+  onSetThemePreference,
+  onShowOnMap,
+  onShowAllOnMap,
+}: PhonePagesProps) {
   const pages = usePhonePages()
   // The gaps list's filter and order. Kept here, under the pages, so they
   // survive the list being popped and pushed again, as the desktop's do.
@@ -82,6 +95,19 @@ export function PhonePages({ platform, settings, updateSettings, themePreference
     )
   } else if (page === 'account') {
     content = <AccountSettings />
+  } else if (page === 'insights') {
+    // A name opens its detail over the map, and back from it goes to the
+    // map: a detail opens in the sheet, which a pushed page covers.
+    content = (
+      <InsightsPanel
+        phone
+        onOpenNode={(id) => closePhonePagesThen(() => openPhoneNode(id))}
+        onShowOnMap={(ids) => {
+          closePhonePages()
+          onShowAllOnMap(ids)
+        }}
+      />
+    )
   } else {
     content = (
       <HealthPage

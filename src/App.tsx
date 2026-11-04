@@ -23,6 +23,7 @@ import { MapOptions } from './panels/MapOptions'
 import { isSharedMapSetting } from './panels/mapOptionSettings'
 import { CollectionsPanel } from './panels/CollectionsPanel'
 import { HealthPanel } from './panels/HealthPanel'
+import { InsightsPanel } from './panels/InsightsPanel'
 import { SettingsPanel } from './panels/SettingsPanel'
 import { AccountPanel } from './panels/AccountPanel'
 import { NowPlaying } from './panels/NowPlaying'
@@ -73,6 +74,7 @@ const LIBRARY_ROOTS_RETRY_MS = 3000
 const PANEL_LABEL: Record<RailItem, string> = {
   collections: 'Collections',
   health: 'Library health',
+  insights: 'Insights',
   settings: 'Settings',
   account: 'Account',
 }
@@ -316,6 +318,43 @@ function Workspace({
     if (id == null) setRightView((current) => (current === 'details' ? null : current))
   }
 
+  // #468: "show on map" from Insights. One node is selected and flown to, as
+  // every other "show on map" is. Several are lit together and framed, with
+  // nothing selected (CanvasHandle.focusNodes): a bridge and the artists it
+  // links, a family, a path. From the library view the map opens first, and
+  // the set is lit once the map has drawn it.
+  const pendingFocus = useRef<number[] | null>(null)
+  const showOnMap = useCallback(
+    (ids: number[]) => {
+      if (ids.length === 0) return
+      if (viewMode !== 'map') void updateSettings({ viewMode: 'map' })
+      if (ids.length === 1) {
+        setSelectedNodeId(ids[0]!)
+        canvasRef.current?.flyToNode(ids[0]!)
+        return
+      }
+      setSelectedNodeId(null)
+      setRightView((current) => (current === 'details' ? null : current))
+      if (viewMode === 'map') canvasRef.current?.focusNodes(ids)
+      else pendingFocus.current = ids
+    },
+    [viewMode, updateSettings],
+  )
+  useEffect(() => {
+    if (viewMode !== 'map' || pendingFocus.current == null) return
+    const ids = pendingFocus.current
+    let frames = 0
+    let handle = 0
+    // The map mounts, then draws its graph: a frame or two, up to two
+    // seconds on a large library.
+    const attempt = () => {
+      if (canvasRef.current?.focusNodes(ids) || ++frames > 120) pendingFocus.current = null
+      else handle = requestAnimationFrame(attempt)
+    }
+    handle = requestAnimationFrame(attempt)
+    return () => cancelAnimationFrame(handle)
+  }, [viewMode])
+
   // #389: on the phone a tap on a node opens its detail in the sheet, which
   // selects it (PhoneShell), and a tap on the empty map goes back from it.
   const selectOnPhoneMap = (id: number | null) => {
@@ -413,6 +452,8 @@ function Workspace({
       case 'health':
       case 'worklist':
         return <HealthPanel view={leftView} onNavigate={setLeftView} onFocusNode={focusNode} />
+      case 'insights':
+        return <InsightsPanel onOpenNode={openDetails} onShowOnMap={showOnMap} />
       case 'settings':
         return (
           <SettingsPanel
@@ -488,6 +529,10 @@ function Workspace({
         onFocusNode={(id) => {
           setSelectedNodeId(id)
           canvasRef.current?.flyToNode(id)
+        }}
+        onFocusNodes={(ids) => {
+          setSelectedNodeId(null)
+          canvasRef.current?.focusNodes(ids)
         }}
         onSelectNode={setSelectedNodeId}
         onCentreNode={(id, options) => canvasRef.current?.centreNodeAbove(id, options)}

@@ -75,6 +75,7 @@ export function SettingsPage({ settings, updateSettings, themePreference, onSetT
         <UpdateRow />
         <PageRow label="Change server" onClick={() => openConnectScreen()} chevron />
         <HealthRow />
+        <PageRow label="Insights" onClick={() => pushPhonePage('insights')} chevron />
       </PageGroup>
 
       <PageGroup

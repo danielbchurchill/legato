@@ -61,6 +61,7 @@ function render(platform: PhonePlatform, onShowOnMap = vi.fn()) {
     themePreference: 'dark' as const,
     onSetThemePreference: () => undefined,
     onShowOnMap,
+    onShowAllOnMap: () => undefined,
   }
   act(() => root.render(createElement('div', null, createElement(Probe), createElement(PhonePages, props))))
   return { container, onShowOnMap }
