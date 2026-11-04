@@ -1,6 +1,6 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
-import { getWorklist } from "../hygiene.js";
+import { getDuplicatePair, getWorklist } from "../hygiene.js";
 import { matchRecordingByHand } from "../enrich/manualMatch.js";
 import { applyMatch } from "../enrich/worker.js";
 import { broadcast } from "../ws.js";
@@ -10,6 +10,19 @@ export function hygieneRoutes(db: Database) {
     app.get<{ Querystring: { type?: string } }>("/hygiene/worklist", async (request) =>
       getWorklist(db, request.query.type),
     );
+
+    // #469: what a possible duplicate's two sides are (format, bitrate,
+    // sample rate, bit depth, size, path) and which file the track would
+    // play after a merge. Asked per card rather than folded into the
+    // worklist, because bit depth means reading each file's header.
+    app.get<{ Params: { fileId: string } }>("/hygiene/duplicates/:fileId", async (request, reply) => {
+      const pair = await getDuplicatePair(db, Number(request.params.fileId));
+      if (!pair) {
+        reply.code(404);
+        return { error: "not a possible duplicate" };
+      }
+      return pair;
+    });
 
     // M-5: the candidates behind an "ambiguous" enrichment_flag worklist
     // item — real rows now (server/src/migrations/0018), not a wall of

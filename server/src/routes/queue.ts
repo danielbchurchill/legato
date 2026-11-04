@@ -1,5 +1,6 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
+import { PLAYBACK_FILE_ORDER } from "../playbackFile.js";
 
 type ResolvedTrack = {
   recordingNodeId: number;
@@ -30,7 +31,7 @@ export function resolveQueueTracks(db: Database, ids: number[]): (ResolvedTrack 
     `SELECT id, file_path, format, bitrate, duration_ms, replaygain_track_gain, replaygain_album_gain
      FROM files
      WHERE recording_node_id = ? AND missing_since IS NULL
-     ORDER BY bitrate DESC, id ASC
+     ORDER BY ${PLAYBACK_FILE_ORDER}
      LIMIT 1`,
   );
 
