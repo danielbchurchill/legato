@@ -19,8 +19,25 @@
 export const EDGE_PX_AT_OVERVIEW = 1.3
 export const EDGE_MIN_PX = 0.8
 
-export function edgeWidthPx(cameraRatio: number): number {
+/* The map options' "line width" (#467) scales the whole rule: every zoom,
+ * focused edges included, by one multiplier. The rule's floor scales with
+ * it, so a thinner setting is the same curve drawn thinner. It's a new
+ * setting rather than the shipped panel's `edgeThicknessMultiplier`, which
+ * no control has written since v2: a library that set it long ago would
+ * otherwise find its edges changed under it. */
+export const EDGE_WIDTH_SCALE_KEY = 'edgeWidthScale'
+export const EDGE_WIDTH_SCALE_DEFAULT = 1
+
+/** The saved line width multiplier, or 1 when it's missing or isn't a
+ * positive number. */
+export function resolveEdgeWidthScale(settings: Record<string, string>): number {
+  const raw = settings[EDGE_WIDTH_SCALE_KEY]
+  const n = Number(raw)
+  return raw != null && raw !== '' && Number.isFinite(n) && n > 0 ? n : EDGE_WIDTH_SCALE_DEFAULT
+}
+
+export function edgeWidthPx(cameraRatio: number, scale = EDGE_WIDTH_SCALE_DEFAULT): number {
   // Closer than the overview, or a ratio sigma never reports (0, NaN).
-  if (!(cameraRatio > 1)) return EDGE_PX_AT_OVERVIEW
-  return Math.max(EDGE_MIN_PX, EDGE_PX_AT_OVERVIEW * cameraRatio ** -0.25)
+  if (!(cameraRatio > 1)) return EDGE_PX_AT_OVERVIEW * scale
+  return Math.max(EDGE_MIN_PX, EDGE_PX_AT_OVERVIEW * cameraRatio ** -0.25) * scale
 }

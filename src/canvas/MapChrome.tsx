@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { IconButton } from '../ui/IconButton'
-import { useShellLayout } from '../shell/layout'
+import { CAPSULE_HEIGHT, INSET, useShellLayout } from '../shell/layout'
 
 /* The map's own floating chrome, sitting on the player's row at the right:
  * the toolbar, and the map options popover it opens. Both follow the right
@@ -70,11 +70,18 @@ export function MapToolbar({ onZoomIn, onZoomOut, onFit, options }: MapToolbarPr
         />
       </div>
       {open && (
+        // Five sliders make it taller than a short window has room for
+        // between the player's row and the capsule, so past that it
+        // scrolls rather than running under the capsule (#467).
         <div
           role="dialog"
           aria-label="Map options"
-          className="glass absolute z-20 flex w-[300px] flex-col gap-[14px] rounded-[var(--radius-rail)] p-[16px]"
-          style={{ right: layout.rightOccupancy + 68, bottom: layout.floatingBottom }}
+          className="glass absolute z-20 flex w-[300px] flex-col gap-[14px] overflow-y-auto overscroll-contain rounded-[var(--radius-rail)] p-[16px]"
+          style={{
+            right: layout.rightOccupancy + 68,
+            bottom: layout.floatingBottom,
+            maxHeight: `calc(100vh - ${layout.floatingBottom + INSET + CAPSULE_HEIGHT + INSET}px)`,
+          }}
         >
           {options}
         </div>

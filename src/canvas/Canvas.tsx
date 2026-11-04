@@ -654,16 +654,22 @@ type Props = {
   showCreditNodes: boolean
   /** Map options "artist labels". */
   showArtistLabels: boolean
+  /** Map options "producer labels" (#467): with it off, producer and
+   * engineer nodes stay on the map without their names. */
+  showCreditLabels: boolean
   /** Map options "colour edges by type": type hues on every edge, not just
    * a selection's cluster. */
   colourEdgesByType: boolean
-  /** The shipped map settings' per-type size multipliers (#29) and user
-   * edge colours. No v2 control writes them any more, but a library that
-   * set them keeps them. Their edge thickness setting isn't read: edge
-   * width follows the zoom now (edgeWidth.ts), and a stale multiplier with
-   * no control left to change it would scale that curve out of sight. */
+  /** Per-type size multipliers (#29), which the map options' one node
+   * size slider sets together (#467), and the shipped map settings' user
+   * edge colours, which no v2 control writes any more, though a library
+   * that set them keeps them. */
   nodeSizeMultipliers: Record<string, number>
   edgeColorOverrides: Record<string, string>
+  /** Map options "line width" (#467): scales every edge's width on top of
+   * the zoom rule (edgeWidth.ts). The shipped settings' edge thickness
+   * isn't read, so a stale value from before v2 can't come back. */
+  edgeWidthScale: number
   /** Map options "lock layout" — freezes the live simulation, keeps drag. */
   nodesLocked: boolean
   /** Map options' layout presets and sliders — live simulation inputs. */
@@ -742,9 +748,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     showTracks,
     showCreditNodes,
     showArtistLabels,
+    showCreditLabels,
     colourEdgesByType,
     nodeSizeMultipliers,
     edgeColorOverrides,
+    edgeWidthScale,
     nodesLocked,
     forceCenterStrength,
     forceRepelStrength,
@@ -904,9 +912,11 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     showReleases,
     showTracks,
     showArtistLabels,
+    showCreditLabels,
     colourEdgesByType,
     nodeSizeMultipliers,
     edgeColorOverrides,
+    edgeWidthScale,
   })
   useEffect(() => {
     liveRef.current = {
@@ -914,12 +924,24 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       showReleases,
       showTracks,
       showArtistLabels,
+      showCreditLabels,
       colourEdgesByType,
       nodeSizeMultipliers,
       edgeColorOverrides,
+      edgeWidthScale,
     }
     rendererRef.current?.refresh()
-  }, [showArtists, showReleases, showTracks, showArtistLabels, colourEdgesByType, nodeSizeMultipliers, edgeColorOverrides])
+  }, [
+    showArtists,
+    showReleases,
+    showTracks,
+    showArtistLabels,
+    showCreditLabels,
+    colourEdgesByType,
+    nodeSizeMultipliers,
+    edgeColorOverrides,
+    edgeWidthScale,
+  ])
 
   // #136: theme changes are rare, so the palette is resolved once per change
   // rather than read from the DOM per node per frame. useTheme has already
@@ -1457,7 +1479,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       let labelKind: LabelKind | null = null
       if (selectedId == null || node !== nodeKey(selectedId)) {
         if (type === 'artist') labelKind = live.showArtistLabels ? 'artist' : null
-        else if (type === 'credit') labelKind = 'credit'
+        else if (type === 'credit') labelKind = live.showCreditLabels ? 'credit' : null
         else if (type === 'release' && currentFocus != null && focusProgress > 0 && currentFocus.keys.has(node)) labelKind = 'release'
       } else if (phoneRef.current) {
         labelKind = type === 'artist' || type === 'credit' ? type : 'release'
@@ -1483,9 +1505,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       }
       // Sigma divides an edge's size by sqrt(ratio) on screen. Multiplying
       // that back in makes `width` a width in screen pixels, which
-      // edgeWidthPx then picks for the current zoom.
+      // edgeWidthPx then picks for the current zoom and the line width
+      // setting. A focused edge draws wider than that again.
       const { ratio } = renderer.getCamera()
-      const width = edgeWidthPx(ratio) * Math.sqrt(ratio)
+      const width = edgeWidthPx(ratio, live.edgeWidthScale) * Math.sqrt(ratio)
       const relType = data.relType as string
       const colors = themeColorsRef.current
       const focusing = currentFocus != null && focusProgress > 0

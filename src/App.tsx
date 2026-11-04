@@ -9,6 +9,7 @@ import { GraphDataProvider } from './canvas/graphData'
 import { useGraph } from './canvas/graphContext'
 import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
 import { resolveNodeSizeMultipliers } from './canvas/nodeTypes'
+import { resolveEdgeWidthScale } from './canvas/edgeWidth'
 import { NEXT_REPEAT_MODE, usePlayback } from './playback/usePlayback'
 import { AppShell } from './shell/AppShell'
 import { Rail } from './shell/Rail'
@@ -236,9 +237,11 @@ function Workspace({
   // Producer/engineer credits are opt-in (#24): new to an already-tuned map.
   const showCreditNodes = settings.showCreditNodes === 'true'
   const showArtistLabels = settings.showArtistLabels !== 'false'
+  const showCreditLabels = settings.showCreditLabels !== 'false'
   const colourEdgesByType = settings.colourEdgesByType === 'true'
   const edgeColorOverrides = useMemo(() => resolveEdgeColorOverrides(settings), [settings])
   const nodeSizeMultipliers = useMemo(() => resolveNodeSizeMultipliers(settings), [settings])
+  const edgeWidthScale = resolveEdgeWidthScale(settings)
   const nodesLocked = settings.nodePositionsLocked === 'true'
   const forceCenterStrength = Number(settings.forceCenterStrength ?? '0.03')
   const forceRepelStrength = Number(settings.forceRepelStrength ?? '150')
@@ -445,9 +448,11 @@ function Workspace({
       showTracks={showTracks}
       showCreditNodes={showCreditNodes}
       showArtistLabels={showArtistLabels}
+      showCreditLabels={showCreditLabels}
       colourEdgesByType={colourEdgesByType}
       nodeSizeMultipliers={nodeSizeMultipliers}
       edgeColorOverrides={edgeColorOverrides}
+      edgeWidthScale={edgeWidthScale}
       nodesLocked={nodesLocked}
       forceCenterStrength={forceCenterStrength}
       forceRepelStrength={forceRepelStrength}
