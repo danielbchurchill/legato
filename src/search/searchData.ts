@@ -32,8 +32,10 @@ export type Filter = 'all' | Item['kind']
 export type Group = { type: Item['kind']; rows: Item[] }
 
 const DEBOUNCE_MS = 120
-const SEARCH_LIMIT = 100
 export const GROUP_LIMIT: Record<Item['kind'], number> = { artist: 3, release: 4, recording: 6, credit: 3, playlist: 3 }
+/** The most rows one kind shows under its filter. The server sends this many
+ * of each kind (`perKind`), so a query that matches thousands of artists
+ * still brings its albums, tracks and producers. */
 const FILTERED_LIMIT = 40
 
 /** The groups under the top result, on the desktop and the phone alike:
@@ -50,7 +52,7 @@ function useSearch(query: string): { hits: Hit[] | null; pending: boolean } {
     if (!q) return
     let cancelled = false
     const timer = setTimeout(() => {
-      fetch(`${API}/search?${new URLSearchParams({ q, limit: String(SEARCH_LIMIT) })}`)
+      fetch(`${API}/search?${new URLSearchParams({ q, perKind: String(FILTERED_LIMIT) })}`)
         .then((r) => r.json())
         .then((hits: Hit[]) => !cancelled && setState({ query, hits }))
         .catch(() => !cancelled && setState({ query, hits: [] }))

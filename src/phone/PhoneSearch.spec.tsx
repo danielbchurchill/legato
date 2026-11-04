@@ -204,7 +204,7 @@ describe('the phone search results', () => {
   it("asks the palette's search, and groups what it finds in the palette's order", async () => {
     const container = render(<Search query="dyl" playback={fakePlayback()} />)
     await answered()
-    expect(asked.some((url) => url.includes('/search?q=dyl&limit=100'))).toBe(true)
+    expect(asked.some((url) => url.includes('/search?q=dyl&perKind=40'))).toBe(true)
     const labels = [...container.querySelectorAll('h3')].map((h) => h.textContent)
     // The artist is the top result, so its group has nothing left to show.
     expect(labels).toEqual(['top result', 'albums', 'tracks', 'producers', 'playlists'])

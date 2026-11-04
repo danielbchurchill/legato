@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import Fastify from "fastify";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
-import { foldTitle, matchTier, search, searchLimit, searchRoutes } from "./search.js";
+import { foldTitle, matchTier, search, searchLimits, searchRoutes } from "./search.js";
+import { libraryChanged } from "../libraryRevision.js";
 
 let db: Database;
 
@@ -54,7 +55,13 @@ function album(title: string, trackCount = 0): number {
   return id;
 }
 
-const titles = (query: string, limit = 100) => search(db, query, limit).map((hit) => hit.title);
+// As the palette and the phone ask: up to 40 of each kind.
+const perKind = (n: number) => ({ perKind: n, total: Infinity });
+// As the connection picker asks: a few rows, whatever their kind.
+const total = (n: number) => ({ perKind: n, total: n });
+const titles = (query: string) => search(db, query, perKind(40)).map((hit) => hit.title);
+const kinds = (hits: { type: string }[]) => hits.map((hit) => hit.type);
+const KIND_ORDER = ["artist", "release", "recording", "credit"];
 
 describe("search ranking (#463)", () => {
   it("puts the most played artist before a producer of the same name, as on the reference library", () => {
@@ -62,7 +69,7 @@ describe("search ranking (#463)", () => {
     const brown = artist("Danny Brown", 12);
     play(track("Ain't It Funny", { artist: brown, producer: tomczak }), 3);
     expect(titles("Danny")).toEqual(["Danny Brown", "Danny Tomczak"]);
-    expect(search(db, "Danny", 1)).toEqual([{ id: brown, type: "artist", title: "Danny Brown" }]);
+    expect(search(db, "Danny", total(1))).toEqual([{ id: brown, type: "artist", title: "Danny Brown" }]);
   });
 
   it("orders kinds artists, albums, tracks, then producers and engineers", () => {
@@ -81,7 +88,7 @@ describe("search ranking (#463)", () => {
     expect(titles("Danny")[0]).toBe("Danny");
 
     const exactArtist = artist("Danny");
-    const first = search(db, "Danny", 10);
+    const first = search(db, "Danny", perKind(10));
     // Two exact matches: the artist, then the album, by the kind order.
     expect(first.slice(0, 2).map((hit) => [hit.type, hit.title])).toEqual([
       ["artist", "Danny"],
@@ -134,6 +141,30 @@ describe("search ranking (#463)", () => {
     expect(titles("rick")).toEqual(["Rick Engineer", "Rick Producer"]);
   });
 
+  it("counts a track's plays once for a producer who also engineered it", () => {
+    const both = node("credit", "Rick Both");
+    const other = node("credit", "Rick Other");
+    const shared = track("G", { producer: both });
+    edge(shared, both, "engineered_by");
+    play(shared, 2);
+    play(track("H", { producer: other }), 3);
+    expect(titles("rick")).toEqual(["Rick Other", "Rick Both"]);
+  });
+
+  it("reads listening and credits again once the library changes", () => {
+    const busy = node("credit", "Rick Busy");
+    const idle = node("credit", "Rick Idle");
+    const tracks = [track("I", { producer: busy }), track("J", { producer: busy })];
+    track("K", { producer: idle });
+    expect(titles("rick")).toEqual(["Rick Busy", "Rick Idle"]);
+    // A merge or recompute takes edges away without adding one: the next
+    // revision shows it.
+    db.prepare("DELETE FROM edges WHERE to_node = ? AND from_node = ?").run(busy, tracks[1]);
+    db.prepare("DELETE FROM edges WHERE to_node = ? AND from_node = ?").run(busy, tracks[0]);
+    libraryChanged();
+    expect(titles("rick")).toEqual(["Rick Idle", "Rick Busy"]);
+  });
+
   it("ranks a better text match first within a kind, before plays", () => {
     const steely = artist("Steely Dan");
     artist("Tommy Danford");
@@ -160,17 +191,48 @@ describe("search ranking (#463)", () => {
     // Short track titles are what bm25 alone put first.
     for (let i = 0; i < 120; i++) track(`Danny ${i}`);
     artist("Danny Brown And The Very Long Band Name");
-    const hits = search(db, "danny", 100);
+    const hits = search(db, "danny", total(100));
     expect(hits).toHaveLength(100);
     expect(hits[0].title).toBe("Danny Brown And The Very Long Band Name");
     expect(hits.slice(1).every((hit) => hit.type === "recording")).toBe(true);
   });
 
+  it("never starves a kind: more artist matches than the share still leaves albums, tracks and producers", () => {
+    for (let i = 0; i < 60; i++) artist(`Sam ${i}`, 60 - i);
+    const records = Array.from({ length: 50 }, (_, i) => album(`Sam's Album ${i}`));
+    for (let i = 0; i < 50; i++) track(`Sam Song ${i}`, { album: records[i] });
+    for (let i = 0; i < 5; i++) node("credit", `Sam Producer ${i}`);
+
+    const hits = search(db, "sam", perKind(40));
+    // The kind order decides the groups' order and the top result...
+    expect(hits[0]).toMatchObject({ type: "artist", title: "Sam 0" });
+    const order = kinds(hits);
+    expect(order).toEqual([...order].sort((a, b) => KIND_ORDER.indexOf(a) - KIND_ORDER.indexOf(b)));
+    // ...and each kind gets its own share, so every group and filter has rows.
+    const count = (type: string) => order.filter((t) => t === type).length;
+    expect([count("artist"), count("release"), count("recording"), count("credit")]).toEqual([40, 40, 40, 5]);
+    // The share takes each kind's best: the artists with the most tracks.
+    expect(hits.filter((hit) => hit.type === "artist").at(-1)!.title).toBe("Sam 39");
+  });
+
+  it("counts an exact match towards its kind's share", () => {
+    for (let i = 0; i < 5; i++) album(`Sam's Album ${i}`);
+    album("Sam");
+    track("Sam");
+    const hits = search(db, "sam", perKind(3));
+    expect(hits.map((hit) => [hit.type, hit.title])).toEqual([
+      ["release", "Sam"],
+      ["recording", "Sam"],
+      ["release", "Sam's Album 0"],
+      ["release", "Sam's Album 1"],
+    ]);
+  });
+
   it("finds nothing for nothing, or for only punctuation", () => {
     artist("Danny Brown");
-    expect(search(db, "", 20)).toEqual([]);
-    expect(search(db, "  ", 20)).toEqual([]);
-    expect(search(db, "!!!", 20)).toEqual([]);
+    expect(search(db, "", perKind(20))).toEqual([]);
+    expect(search(db, "  ", perKind(20))).toEqual([]);
+    expect(search(db, "!!!", perKind(20))).toEqual([]);
   });
 });
 
@@ -188,11 +250,29 @@ describe("GET /search", () => {
     ]);
   });
 
+  it("gives each kind its share with perKind, as the palette and the phone ask", async () => {
+    const app = Fastify();
+    await app.register(searchRoutes(db), { prefix: "/api/v1" });
+    for (let i = 0; i < 5; i++) artist(`Danny ${i}`);
+    album("Danny's Album");
+    track("Danny Boy");
+    node("credit", "Danny Tomczak");
+    const shared = await app.inject({ method: "GET", url: "/api/v1/search?q=danny&perKind=2" });
+    expect(kinds(shared.json())).toEqual(["artist", "artist", "release", "recording", "credit"]);
+    // limit alone is the whole answer's cap, best first.
+    const capped = await app.inject({ method: "GET", url: "/api/v1/search?q=danny&limit=2" });
+    expect(kinds(capped.json())).toEqual(["artist", "artist"]);
+  });
+
   it("keeps the limit between 1 and 100, 20 when it isn't a number", () => {
-    expect(searchLimit(undefined)).toBe(20);
-    expect(searchLimit("5")).toBe(5);
-    expect(searchLimit("500")).toBe(100);
-    expect(searchLimit("0")).toBe(20);
-    expect(searchLimit("abc")).toBe(20);
+    expect(searchLimits({})).toEqual({ perKind: 20, total: 20 });
+    expect(searchLimits({ limit: "5" })).toEqual({ perKind: 5, total: 5 });
+    expect(searchLimits({ limit: "500" })).toEqual({ perKind: 100, total: 100 });
+    expect(searchLimits({ limit: "0" })).toEqual({ perKind: 20, total: 20 });
+    expect(searchLimits({ limit: "abc" })).toEqual({ perKind: 20, total: 20 });
+    // perKind caps each kind and nothing else.
+    expect(searchLimits({ perKind: "40" })).toEqual({ perKind: 40, total: Infinity });
+    expect(searchLimits({ perKind: "40", limit: "6" })).toEqual({ perKind: 40, total: Infinity });
+    expect(searchLimits({ perKind: "x" })).toEqual({ perKind: 20, total: Infinity });
   });
 });

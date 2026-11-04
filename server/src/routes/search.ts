@@ -1,5 +1,6 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
+import { libraryRevision } from "../libraryRevision.js";
 
 /* What the search palette and the phone's search ask while someone types
  * (#463). FTS5 finds the titles; the order is decided here, so every client
@@ -19,8 +20,17 @@ import type { FastifyInstance } from "fastify";
  *     search together (a one-letter query on 30,000 albums).
  *
  * Only the kinds a client shows are searched: labels, years and works never
- * reach the limit. The limit applies after ranking, so a strong artist match
- * is never cut off behind weaker tracks. */
+ * reach the limit.
+ *
+ * The kind order says which group comes first and which kind the top result
+ * is from; it never starves a kind. The palette and the phone ask with
+ * `perKind`, and get up to that many of each kind, exact matches included:
+ * a one-letter query that matches thousands of artists still brings its
+ * albums, tracks and producers, so each group and each filter has rows to
+ * show. `limit` alone caps the whole answer instead, best first, for a
+ * picker that wants a few rows whatever their kind (the personal
+ * connection's target in NodeDetails.tsx). Either way the cap applies after
+ * ranking, so a strong artist match is never cut off behind weaker tracks. */
 
 const KIND_ORDER = ["artist", "release", "recording", "credit"] as const;
 export type SearchKind = (typeof KIND_ORDER)[number];
@@ -28,6 +38,10 @@ export type SearchHit = { id: number; type: SearchKind; title: string };
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
+
+/** How much a search answers: up to `perKind` rows of each kind, and up to
+ * `total` rows in all. */
+export type SearchLimits = { perKind: number; total: number };
 
 // Strips FTS5 query-syntax characters and turns the rest into a
 // prefix-match AND query: safe for arbitrary user input. FTS5's unicode61
@@ -69,30 +83,9 @@ export function matchTier(title: string, query: string): Tier {
 
 type Candidate = SearchHit & { folded: string; plays: number; tracks: number };
 
-// The listening behind a node: its own plays for a track, its tracks' plays
-// for anything else, through the edges the map draws (performed_by,
-// appears_on, produced_by/engineered_by, all from the recording). Asked per
-// candidate, from the candidate's side, so the cost follows the matches
-// rather than the whole play history.
-const PLAYS_SQL: Record<SearchKind, string> = {
-  recording: `SELECT c.value AS id, (SELECT COUNT(*) FROM plays p WHERE p.recording_node_id = c.value) AS n
-              FROM json_each(?) c`,
-  artist: viaEdges("'performed_by'"),
-  release: viaEdges("'appears_on'"),
-  credit: viaEdges("'produced_by', 'engineered_by'"),
-};
-
-function viaEdges(types: string): string {
-  return `SELECT c.value AS id,
-                 (SELECT COUNT(DISTINCT p.id) FROM edges e JOIN plays p ON p.recording_node_id = e.from_node
-                  WHERE e.to_node = c.value AND e.type IN (${types})) AS n
-          FROM json_each(?) c`;
-}
-
 // How much music is under a node: the aggregate tables' counts for artists
 // and albums, the tracks credited for a producer or engineer. A track is one.
-const TRACKS_SQL: Record<SearchKind, string | null> = {
-  recording: null,
+const TRACKS_SQL: Record<Exclude<SearchKind, "recording">, string> = {
   artist: "SELECT node_id AS id, track_count AS n FROM artists WHERE node_id IN (SELECT value FROM json_each(?))",
   release: "SELECT node_id AS id, track_count AS n FROM albums WHERE node_id IN (SELECT value FROM json_each(?))",
   credit: `SELECT e.to_node AS id, COUNT(DISTINCT e.from_node) AS n FROM edges e
@@ -100,34 +93,86 @@ const TRACKS_SQL: Record<SearchKind, string | null> = {
            GROUP BY e.to_node`,
 };
 
+// The listening behind every node that has any: a track's own plays, and
+// for an artist, an album or a producer its tracks' plays, through the
+// edges the map draws (performed_by, appears_on, produced_by and
+// engineered_by, all from the recording). A track with two edges to one
+// node counts once. Read from the plays' side, so the cost follows the
+// listening history rather than the matches: counting each of the 5,000
+// albums a one-letter query matches on the 30,000-album fixture took 52 ms
+// by itself.
+const PLAYS_SQL = `
+  WITH played AS (SELECT recording_node_id AS r, COUNT(*) AS n FROM plays GROUP BY recording_node_id)
+  SELECT r AS id, n FROM played
+  UNION ALL
+  SELECT to_node AS id, SUM(n) AS n FROM (
+    SELECT e.to_node, played.n
+    FROM played CROSS JOIN edges e ON e.from_node = played.r
+    WHERE e.type IN ('performed_by', 'appears_on', 'produced_by', 'engineered_by')
+    GROUP BY played.r, e.to_node
+  ) GROUP BY to_node`;
+
+type Listening = { key: string; plays: Map<number, number>; creditTracks: Map<number, number> };
+
+// Kept between keystrokes until something it counts could have changed: a
+// recompute or a merge (the library's revision), a newer edge (enrichment
+// adds credits a job at a time without a revision, as routes/library.ts
+// notes) or a play added or taken away. A producer's track count is read
+// the first time a search ranks them, and kept with the rest.
+const listeningCache = new WeakMap<Database, Listening>();
+
+function listening(db: Database): Listening {
+  const now = db
+    .prepare(
+      `SELECT (SELECT COALESCE(MAX(id), 0) FROM edges) AS edge, (SELECT COALESCE(MAX(id), 0) FROM plays) AS play,
+              (SELECT COUNT(*) FROM plays) AS plays`,
+    )
+    .get() as { edge: number; play: number; plays: number };
+  const key = `${libraryRevision()} ${now.edge} ${now.play} ${now.plays}`;
+  let known = listeningCache.get(db);
+  if (known?.key !== key) {
+    const plays = new Map<number, number>();
+    for (const row of db.prepare(PLAYS_SQL).all() as { id: number; n: number }[]) plays.set(row.id, (plays.get(row.id) ?? 0) + row.n);
+    known = { key, plays, creditTracks: new Map() };
+    listeningCache.set(db, known);
+  }
+  return known;
+}
+
 function counted(db: Database, sql: string, ids: number[]): Map<number, number> {
   const rows = db.prepare(sql).all(JSON.stringify(ids)) as { id: number; n: number }[];
   return new Map(rows.map((row) => [row.id, row.n]));
 }
 
+function trackCounts(db: Database, kind: SearchKind, ids: number[], known: Listening): Map<number, number> | null {
+  if (kind === "recording") return null;
+  if (kind !== "credit") return counted(db, TRACKS_SQL[kind], ids);
+  const missing = ids.filter((id) => !known.creditTracks.has(id));
+  if (missing.length > 0) {
+    const read = counted(db, TRACKS_SQL.credit, missing);
+    for (const id of missing) known.creditTracks.set(id, read.get(id) ?? 0);
+  }
+  return known.creditTracks;
+}
+
 // Fills in plays and tracks for one kind's candidates.
-function addCounts(db: Database, kind: SearchKind, group: Candidate[]): void {
+function addCounts(db: Database, kind: SearchKind, group: Candidate[], known: Listening): void {
   if (group.length === 0) return;
-  const ids = group.map((c) => c.id);
-  const plays = counted(db, PLAYS_SQL[kind], ids);
-  const tracksSql = TRACKS_SQL[kind];
-  const tracks = tracksSql ? counted(db, tracksSql, ids) : null;
+  const tracks = trackCounts(db, kind, group.map((c) => c.id), known);
   for (const c of group) {
-    c.plays = plays.get(c.id) ?? 0;
+    c.plays = known.plays.get(c.id) ?? 0;
     c.tracks = tracks ? (tracks.get(c.id) ?? 0) : 1;
   }
 }
-
-const kindRank = (kind: SearchKind) => KIND_ORDER.indexOf(kind);
 
 function byListening(a: Candidate, b: Candidate): number {
   return b.plays - a.plays || b.tracks - a.tracks || (a.title < b.title ? -1 : a.title > b.title ? 1 : 0) || a.id - b.id;
 }
 
-/** Every match for `query`, best first, up to `limit`. */
-export function search(db: Database, query: string, limit: number): SearchHit[] {
+/** Every match for `query`, best first, within `limits`. */
+export function search(db: Database, query: string, { perKind, total }: SearchLimits): SearchHit[] {
   const ftsQuery = toFtsQuery(query);
-  if (!ftsQuery || limit <= 0) return [];
+  if (!ftsQuery || perKind <= 0 || total <= 0) return [];
   const rows = db
     .prepare(
       `SELECT n.id, n.type, n.title
@@ -146,41 +191,58 @@ export function search(db: Database, query: string, limit: number): SearchHit[] 
     else byKind.get(row.type)!.push(candidate);
   }
 
-  // Exact matches are few; all of them come first, by kind, then listening.
-  for (const kind of KIND_ORDER) addCounts(db, kind, exact.filter((c) => c.type === kind));
-  exact.sort((a, b) => kindRank(a.type) - kindRank(b.type) || byListening(a, b));
-  const ranked: Candidate[] = exact.slice(0, limit);
+  const known = listening(db);
+  const ranked: Candidate[] = [];
+  const taken = new Map<SearchKind, number>(KIND_ORDER.map((kind) => [kind, 0]));
+  const roomFor = (kind: SearchKind) => Math.min(perKind - taken.get(kind)!, total - ranked.length);
+  const take = (kind: SearchKind, rows: Candidate[]) => {
+    ranked.push(...rows);
+    taken.set(kind, taken.get(kind)! + rows.length);
+  };
 
-  // Then each kind in turn, a tier at a time. Plays and tracks are only
-  // counted for a tier that still reaches into the limit, so one letter
-  // typed against a large library doesn't count the plays of every track
-  // whose title has a word starting with it.
+  // Exact matches are few; all of them come first, by kind, then listening,
+  // each counting towards its kind's share.
   for (const kind of KIND_ORDER) {
-    if (ranked.length >= limit) break;
+    const own = exact.filter((c) => c.type === kind);
+    addCounts(db, kind, own, known);
+    take(kind, own.sort(byListening).slice(0, Math.max(0, roomFor(kind))));
+  }
+
+  // Then each kind in turn, a tier at a time, up to its own share. Track
+  // counts are only read for a tier that still reaches into that share, so
+  // a producer's tracks are counted only when producers are being ranked.
+  for (const kind of KIND_ORDER) {
     const tiers: Candidate[][] = [[], [], [], []];
     for (const c of byKind.get(kind)!) tiers[tierOf(c.folded, q, queryWords)].push(c);
     for (const inTier of tiers.slice(1)) {
-      const room = limit - ranked.length;
+      const room = roomFor(kind);
       if (room <= 0) break;
-      addCounts(db, kind, inTier);
-      ranked.push(...inTier.sort(byListening).slice(0, room));
+      addCounts(db, kind, inTier, known);
+      take(kind, inTier.sort(byListening).slice(0, room));
     }
   }
 
   return ranked.map(({ id, type, title }) => ({ id, type, title }));
 }
 
-/** The limit asked for, within 1–100; 20 when it's missing or isn't a
- * number. */
-export function searchLimit(raw: string | undefined): number {
-  const asked = Math.floor(Number(raw ?? DEFAULT_LIMIT));
+// A count asked for, within 1–100; 20 when it isn't a positive number.
+function clampCount(raw: string): number {
+  const asked = Math.floor(Number(raw));
   return Number.isFinite(asked) && asked > 0 ? Math.min(asked, MAX_LIMIT) : DEFAULT_LIMIT;
+}
+
+/** What a request asks for. `perKind` (1–100) caps each kind and nothing
+ * else; without it, `limit` (1–100, 20 by default) caps the whole answer. */
+export function searchLimits(params: { limit?: string; perKind?: string }): SearchLimits {
+  if (params.perKind !== undefined) return { perKind: clampCount(params.perKind), total: Infinity };
+  const limit = clampCount(params.limit ?? String(DEFAULT_LIMIT));
+  return { perKind: limit, total: limit };
 }
 
 export function searchRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
-    app.get<{ Querystring: { q?: string; limit?: string } }>("/search", async (request) =>
-      search(db, request.query.q ?? "", searchLimit(request.query.limit)),
+    app.get<{ Querystring: { q?: string; limit?: string; perKind?: string } }>("/search", async (request) =>
+      search(db, request.query.q ?? "", searchLimits(request.query)),
     );
   };
 }
