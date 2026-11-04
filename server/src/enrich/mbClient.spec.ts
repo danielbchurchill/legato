@@ -3,7 +3,9 @@ import {
   buildRecordingQuery,
   parseArtistCredit,
   parseArtistMemberRelations,
+  parseGroupReleases,
   parseReleaseDetail,
+  parseReleaseGroupSearch,
   type RawReleaseDetail,
 } from "./mbClient.js";
 
@@ -261,5 +263,98 @@ describe("parseArtistMemberRelations — issue #61", () => {
       { type: "member of band", "target-type": "artist" },
     ]);
     expect(relations).toEqual([]);
+  });
+});
+
+// Issue #461: shapes trimmed from live responses for Fleetwood Mac's
+// Rumours, captured 2026-11-03.
+describe("parseReleaseGroupSearch", () => {
+  it("reads each group's id, score, title and whole artist credit", () => {
+    const groups = parseReleaseGroupSearch({
+      "release-groups": [
+        {
+          id: "416bb5e5-c7d1-3977-8fd7-7c9daf6c2be6",
+          score: 100,
+          title: "Rumours",
+          "primary-type": "Album",
+          "first-release-date": "1977-02-04",
+          "artist-credit": [{ name: "Fleetwood Mac", artist: { name: "Fleetwood Mac" } }],
+        },
+        {
+          id: "00000000-0000-0000-0000-000000000001",
+          score: 80,
+          title: "Bookends",
+          "artist-credit": [
+            { name: "Simon", joinphrase: " & ", artist: { name: "Paul Simon" } },
+            { name: "Garfunkel", artist: { name: "Art Garfunkel" } },
+          ],
+        },
+      ],
+    });
+    expect(groups).toEqual([
+      {
+        mbid: "416bb5e5-c7d1-3977-8fd7-7c9daf6c2be6",
+        score: 100,
+        title: "Rumours",
+        artist: "Fleetwood Mac",
+        primaryType: "Album",
+        firstReleaseDate: "1977-02-04",
+      },
+      {
+        mbid: "00000000-0000-0000-0000-000000000001",
+        score: 80,
+        title: "Bookends",
+        artist: "Simon & Garfunkel",
+        primaryType: null,
+        firstReleaseDate: null,
+      },
+    ]);
+  });
+});
+
+describe("parseGroupReleases", () => {
+  it("keeps what the Cover Art Archive holds for each edition", () => {
+    const releases = parseGroupReleases({
+      releases: [
+        {
+          id: "02face5e-6a23-4402-b4d7-fa752d031a35",
+          title: "Rumours",
+          date: "2011",
+          country: "XW",
+          status: "Official",
+          disambiguation: "2001 remaster",
+          "cover-art-archive": { darkened: false, front: true, artwork: true, count: 1, back: false },
+        },
+        {
+          id: "0474591d-c366-44ee-b0e1-bc5ecd53e4d6",
+          title: "Rumours",
+          date: "",
+          country: "AU",
+          status: "Official",
+          disambiguation: "",
+          "cover-art-archive": { artwork: false, front: false, darkened: false, back: false, count: 0 },
+        },
+      ],
+    });
+    expect(releases).toEqual([
+      {
+        mbid: "02face5e-6a23-4402-b4d7-fa752d031a35",
+        title: "Rumours",
+        date: "2011",
+        country: "XW",
+        status: "Official",
+        disambiguation: "2001 remaster",
+        art: { artwork: true, front: true, back: false, count: 1, darkened: false },
+      },
+      {
+        mbid: "0474591d-c366-44ee-b0e1-bc5ecd53e4d6",
+        title: "Rumours",
+        date: null,
+        country: "AU",
+        status: "Official",
+        disambiguation: null,
+        art: { artwork: false, front: false, back: false, count: 0, darkened: false },
+      },
+    ]);
   });
 });

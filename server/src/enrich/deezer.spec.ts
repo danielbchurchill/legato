@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { isPlaceholderImageUrl, pickArtistImageUrl } from "./deezer.js";
+import { deezerCoverUrl, isPlaceholderImageUrl, parseDeezerAlbums, pickArtistImageUrl } from "./deezer.js";
 
 // Both URL shapes are verbatim from live responses — the real one for Genesis
 // Owusu, the placeholder one for "The Beatles With Billy Preston (Karaoke)".
@@ -53,5 +53,51 @@ describe("pickArtistImageUrl", () => {
 
   it("returns nothing for an empty result set", () => {
     expect(pickArtistImageUrl("Genesis Owusu", [])).toBeNull();
+  });
+});
+
+// Issue #461: album search results, trimmed from a live answer for
+// artist:"Fleetwood Mac" album:"Rumours".
+describe("parseDeezerAlbums", () => {
+  it("reads each album's id, title, artist and cover md5", () => {
+    const albums = parseDeezerAlbums({
+      data: [
+        {
+          id: 6612817,
+          title: "Rumours (Super Deluxe)",
+          md5_image: "0199f3f00d23ed0916cf748d9b5d5030",
+          record_type: "album",
+          nb_tracks: 58,
+          artist: { name: "Fleetwood Mac" },
+        },
+      ],
+    });
+    expect(albums).toEqual([
+      {
+        id: 6612817,
+        title: "Rumours (Super Deluxe)",
+        artist: "Fleetwood Mac",
+        md5: "0199f3f00d23ed0916cf748d9b5d5030",
+        recordType: "album",
+        tracks: 58,
+      },
+    ]);
+  });
+
+  // The album twin of the artist placeholder: no md5, and a cover URL with
+  // an empty path segment, which serves a grey square.
+  it("leaves out an album with no cover", () => {
+    const albums = parseDeezerAlbums({
+      data: [{ id: 1, title: "Untitled", md5_image: "", cover_xl: "https://cdn-images.dzcdn.net/images/cover//1000x1000-000000-80-0-0.jpg" }],
+    });
+    expect(albums).toEqual([]);
+  });
+});
+
+describe("deezerCoverUrl", () => {
+  it("names the size the CDN serves under the md5", () => {
+    expect(deezerCoverUrl("9732751ce91d786dcf30069853697078", 1000)).toBe(
+      "https://cdn-images.dzcdn.net/images/cover/9732751ce91d786dcf30069853697078/1000x1000-000000-80-0-0.jpg",
+    );
   });
 });

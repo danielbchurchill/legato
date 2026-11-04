@@ -197,12 +197,17 @@ describe("a node's detail on the phone", () => {
     expect(button(byline, 'Dylan Moss Live')!.className).toContain('touch-target')
   })
 
-  it('offers add to queue, add to playlist and edit tags for a record, and edit tags opens the metadata tab', async () => {
+  it('offers add to queue, add to playlist, edit tags and change cover for a record, and edit tags opens the metadata tab', async () => {
     const playback = fakePlayback()
     const container = await render(2, playback)
     act(() => button(container, 'More')!.click())
     const menu = document.querySelector('[role="dialog"]')!
-    expect([...menu.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['add to queue', 'add to playlist', 'edit tags'])
+    expect([...menu.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'add to queue',
+      'add to playlist',
+      'edit tags',
+      'change cover',
+    ])
     act(() => button(menu, 'edit tags')!.click())
     expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('metadata')
   })
@@ -211,12 +216,30 @@ describe("a node's detail on the phone", () => {
     const container = await render(3)
     act(() => button(container, 'More')!.click())
     const menu = () => document.querySelector('[role="dialog"]')!
-    expect([...menu().querySelectorAll('button')].map((b) => b.textContent)).toEqual(['add to queue', 'add to playlist', 'edit tags'])
+    expect([...menu().querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'add to queue',
+      'add to playlist',
+      'edit tags',
+      'change cover',
+    ])
     await act(async () => {
       button(menu(), 'add to playlist')!.click()
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     expect(menu().querySelector('input[aria-label="New playlist name"]')).not.toBeNull()
+  })
+
+  // #461: a track's "change cover" changes its album's.
+  it("opens the cover picker on a track's album from change cover", async () => {
+    const container = await render(3)
+    act(() => button(container, 'More')!.click())
+    await act(async () => {
+      button(document.querySelector('[role="dialog"]')!, 'change cover')!.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const picker = document.querySelector('[role="dialog"][aria-modal="true"]')
+    expect(picker?.querySelector('h2')?.textContent).toBe('Change cover')
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => new URL(String(url), 'http://test').pathname.endsWith('/nodes/2/cover/picker'))).toBe(true)
   })
 
   it("adds a record's tracks to a playlist in its order, and says how many went in (#448)", async () => {
