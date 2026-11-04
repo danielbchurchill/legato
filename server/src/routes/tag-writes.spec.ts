@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
@@ -18,6 +18,7 @@ import { applyTagWrite } from "../tagwrite/writer.js";
 mock.module("../match/fingerprint.js", () => ({ computeFingerprint: async () => null }));
 const { scanFile } = await import("../scan/scanner.js");
 const { tagWritesRoutes } = await import("./tag-writes.js");
+const { recompute } = await import("../recompute.js");
 
 // Issue #464, end to end: real files scanned into a database, edited
 // through the routes the details panel uses, written, and read back.
@@ -55,8 +56,11 @@ afterEach(async () => {
 
 type Track = { fileId: number; recordingId: number; path: string };
 
+// `name` can name a subfolder ("Queen/one"): #465 tells albums without an
+// ALBUMARTIST apart by their folder.
 async function addTrack(name: string, tags: TagFields): Promise<Track> {
   const file = path.join(dir, `${name}.flac`);
+  mkdirSync(path.dirname(file), { recursive: true });
   copyFileSync(templates.flac, file);
   await applyTagWrite(file, tags);
   await scanFile(db, rootId, file);
@@ -291,12 +295,56 @@ describe("editing an album", () => {
 
   // Album identity is title and album artist (#465): one artist's Greatest
   // Hits never merges into another's.
-  it("doesn't offer to merge into another artist's album of the same title", async () => {
-    const queen = await addTrack("a", { title: "One", artist: "Queen", album: "Greatest Hits I" });
-    await addTrack("b", { title: "Two", artist: "ABBA", album: "Greatest Hits" });
-    const renamed = linked(queen.recordingId, "appears_on")[0]!.id;
-    const { body } = await review(renamed, { album: "Greatest Hits" });
-    expect(body.merge).toBeNull();
+  // #465's album identity, asked through findRelease: an album with an
+  // ALBUMARTIST is that artist's, so another artist's same title is another
+  // album, even in the same folder. The review says so, and approving and
+  // the scanner afterwards keep them apart.
+  it("doesn't merge into another artist's album of the same title, and the scanner keeps them apart", async () => {
+    const queen = await addTrack("a", { title: "One", artist: "Queen", albumArtist: "Queen", album: "Greatest Hits I" });
+    const abba = await addTrack("b", { title: "Two", artist: "ABBA", albumArtist: "ABBA", album: "Greatest Hits" });
+    const queenAlbum = linked(queen.recordingId, "appears_on")[0]!.id;
+    const abbaAlbum = linked(abba.recordingId, "appears_on")[0]!.id;
+    db.prepare("INSERT INTO favourites (node_id) VALUES (?)").run(queenAlbum);
+
+    const { review: r, approved } = await edit(queenAlbum, { album: "Greatest Hits" });
+    expect(r.merge).toBeNull();
+    expect(approved.nodeId).toBe(queenAlbum);
+    expect(linked(queen.recordingId, "appears_on")).toEqual([{ id: queenAlbum, title: "Greatest Hits" }]);
+    expect(linked(abba.recordingId, "appears_on")).toEqual([{ id: abbaAlbum, title: "Greatest Hits" }]);
+
+    // The scanner, re-deriving from scratch, finds the same two albums.
+    recompute(db);
+    expect(linked(queen.recordingId, "appears_on")).toEqual([{ id: queenAlbum, title: "Greatest Hits" }]);
+    expect(linked(abba.recordingId, "appears_on")).toEqual([{ id: abbaAlbum, title: "Greatest Hits" }]);
+    expect(db.prepare("SELECT 1 FROM favourites WHERE node_id = ?").get(queenAlbum)).toBeTruthy();
+  });
+
+  // Without ALBUMARTIST, #465 tells albums apart by folder.
+  it("doesn't merge two same-titled albums without an album artist in different folders", async () => {
+    const one = await addTrack("Live/one", { title: "One", artist: "Low", album: "Live" });
+    const two = await addTrack("Live at Glastonbury/two", { title: "Two", artist: "Low", album: "Live at Glastonbury" });
+    const renamed = linked(two.recordingId, "appears_on")[0]!.id;
+    const other = linked(one.recordingId, "appears_on")[0]!.id;
+
+    const { review: r } = await edit(renamed, { album: "Live" });
+    expect(r.merge).toBeNull();
+    recompute(db);
+    expect(linked(two.recordingId, "appears_on")).toEqual([{ id: renamed, title: "Live" }]);
+    expect(linked(one.recordingId, "appears_on")).toEqual([{ id: other, title: "Live" }]);
+  });
+
+  it("keeps each file's disc suffix when the album is retitled", async () => {
+    const discs = [1, 2].map((n) => `Farewells & Fantasies (disc ${n})`);
+    const one = await addTrack("one", { title: "One", artist: "Phil Ochs", album: discs[0] });
+    const two = await addTrack("two", { title: "Two", artist: "Phil Ochs", album: discs[1] });
+    const albumId = linked(one.recordingId, "appears_on")[0]!.id;
+    expect(linked(two.recordingId, "appears_on")[0]!.id).toBe(albumId);
+
+    await edit(albumId, { album: "Farewells and Fantasies" });
+    expect((await parseFile(one.path)).common.album).toBe("Farewells and Fantasies (disc 1)");
+    expect((await parseFile(two.path)).common.album).toBe("Farewells and Fantasies (disc 2)");
+    for (const track of [one, two]) expect(linked(track.recordingId, "appears_on")).toEqual([{ id: albumId, title: "Farewells and Fantasies" }]);
+    expect(db.prepare("SELECT disc_no FROM files WHERE id = ?").get(two.fileId)).toEqual({ disc_no: 2 });
   });
 
   it("skips the files the writer can't write, names them, and writes the rest", async () => {
@@ -314,9 +362,9 @@ describe("editing an album", () => {
 
     expect((await parseFile(flac.path)).common.album).toBe("Things We Lost in the Fire");
     expect(linked(flac.recordingId, "appears_on")).toEqual([{ id: albumId, title: "Things We Lost in the Fire" }]);
-    // The WAV still says the old title, so it's on an album of that name,
-    // not on the renamed one.
-    expect(linked(wav.recordingId, "appears_on").map((n) => n.title)).toEqual(["Things We Lost"]);
+    // The WAV still says the old title, and its old keys (#465's
+    // release_keys) still lead to the album, so it stays on it.
+    expect(linked(wav.recordingId, "appears_on")).toEqual([{ id: albumId, title: "Things We Lost in the Fire" }]);
   });
 });
 
@@ -417,13 +465,16 @@ describe("reviewing and reverting", () => {
     const albumId = linked(tracks[0]!.recordingId, "appears_on")[0]!.id;
     db.prepare("INSERT INTO favourites (node_id) VALUES (?)").run(albumId);
     const { review: r } = await edit(albumId, { album: "New Name" });
+    const newKeys = () =>
+      db.prepare(`SELECT COUNT(*) AS n FROM release_keys WHERE node_id = ? AND key LIKE '%"new name"%'`).get(albumId) as { n: number };
+    expect(newKeys().n).toBeGreaterThan(0);
 
     const revert = (id: number) => app.inject({ method: "POST", url: `/api/v1/tag-writes/${id}/revert` });
     expect((await revert(r.writeIds[0])).statusCode).toBe(200);
-    // Half reverted: that file is back on an album of the old name, the
-    // other still on the renamed one.
-    expect(linked(tracks[0]!.recordingId, "appears_on").map((n) => n.title)).toEqual(["Old Name"]);
-    expect(linked(tracks[1]!.recordingId, "appears_on")).toEqual([{ id: albumId, title: "New Name" }]);
+    // Half reverted: both files are still on the album, the reverted one
+    // found by its old keys (#465's release_keys), and it keeps the new
+    // name while a file still says it.
+    for (const track of tracks) expect(linked(track.recordingId, "appears_on")).toEqual([{ id: albumId, title: "New Name" }]);
 
     expect((await revert(r.writeIds[1])).statusCode).toBe(200);
     for (const track of tracks) {
@@ -432,6 +483,9 @@ describe("reviewing and reverting", () => {
     }
     expect(named("release", "Old Name")).toEqual([{ id: albumId }]);
     expect(db.prepare("SELECT 1 FROM favourites WHERE node_id = ?").get(albumId)).toBeTruthy();
+    // The keys the rename added are gone, so a file that says "New Name"
+    // later is a new album, as it was before the edit.
+    expect(newKeys().n).toBe(0);
   });
 
   // The bug #464 reported: the watcher skips Legato's own writes, so the

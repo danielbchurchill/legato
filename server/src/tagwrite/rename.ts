@@ -1,72 +1,93 @@
 import type { Database } from "../sqlite.js";
+import { albumIdentity, type AlbumIdentity } from "../match/albumIdentity.js";
 import { artistMbidOf, artistsByKeyQuery, isSameSpelling } from "../match/artistLookup.js";
-import { NODE_LOOKUP_SQL } from "../match/edges.js";
 import { mergeNodeInto } from "../match/people.js";
-import { normalName } from "./credits.js";
+import { findOrCreateRelease, findRelease } from "../match/releases.js";
+import type { FieldDiff } from "./diff.js";
 
 /* Issue #464: what an edit does to an artist's or an album's node.
  *
- * The scanner finds a node by its name (match/edges.ts), so files that now
- * say "The Beatles" re-derive onto whichever node is called that. Left to
- * itself, a rename would make a new node and strand the old one, along with
- * everything the listener gave it: the favourite, the map position, the
- * photo, the description, their own connections, a cover they chose. So the
- * node is renamed first, in place, and the files re-derive back onto it.
+ * The scanner finds the node a file belongs to from its tags: an artist by
+ * name (match/artistLookup.ts, #466), an album by its identity
+ * (match/albumIdentity.ts, #465), through the keys match/releases.ts keeps
+ * for it. Left to itself, a rename would make a new node and strand the old
+ * one, along with everything the listener gave it: the favourite, the map
+ * position, the photo, the description, their own connections, a cover they
+ * chose. So before the renamed files are derived again, the node is made
+ * the one their new tags lead to:
  *
- * When a node of the same kind already has the new name, the rename merges
- * into it with match/people.ts's mergeNodeInto, which keeps the survivor's
- * own where both have one and carries the rest across. "The same name" is
- * the scanner's own: for an artist, match/artistLookup.ts's rule (#466),
- * where case, outer spaces and a leading "The" don't make two artists unless
- * their MusicBrainz ids differ; for an album, the same title and the same
- * album artist, so one artist's Greatest Hits never merges into another's.
+ * - an artist is renamed in place, and the name lookup finds it;
+ * - an album gets the keys of the identity its renamed files will have.
+ *   findOrCreateRelease makes them, on a node of their own, and that node is
+ *   folded into the album with mergeNodeInto, so the keys are exactly the
+ *   ones the scanner makes and this file keeps no copy of the rule. The
+ *   files' old keys stay on the album too, which keeps a file the writer
+ *   couldn't write on it.
+ *
+ * When the new tags already lead to another node, the edit merges into it
+ * instead, with mergeNodeInto, which keeps the survivor's own where both
+ * have one and carries the rest across. That's asked of the scanner's own
+ * lookups: otherArtistNamed below for an artist, and findRelease on each
+ * renamed file's new identity for an album. So one artist's Greatest Hits
+ * never merges into another's, nor two same-titled albums without an album
+ * artist in different folders, because the scanner keeps those apart too.
  *
  * The rename happens when the first of an edit's writes is approved, and is
- * undone when the last one is reverted, so a node never carries a name none
- * of its files say for longer than a review takes. A merge isn't undone:
- * the review says so before it's approved. */
+ * undone when the last one is reverted. A merge isn't undone: the review
+ * says so before it's approved. */
 
 export type TagEditRow = {
   id: number;
   node_id: number | null;
   old_title: string | null;
   new_title: string | null;
-  old_album_artist: string | null;
-  new_album_artist: string | null;
+  claimed_keys: string | null;
   applied: "renamed" | "merged" | null;
 };
 
 type NodeRow = { id: number; type: string; title: string };
 
-/** The album artist an album is known by: the ALBUMARTIST its files carry,
- *  or, without one, their artist line, whichever most of its present files
- *  say. Case and spacing don't count, as in the scanner's own lookup. */
-export function albumArtistKey(db: Database, releaseId: number): string | null {
-  const rows = db
-    .prepare(
-      `SELECT f.tags_raw FROM edges e JOIN files f ON f.recording_node_id = e.from_node
-        WHERE e.to_node = ? AND e.type = 'appears_on' AND f.missing_since IS NULL`,
-    )
-    .all(releaseId) as { tags_raw: string | null }[];
-  const counts = new Map<string, number>();
-  for (const { tags_raw } of rows) {
-    let tags: { albumartist?: string | null; artist?: string | null } = {};
-    try {
-      tags = tags_raw ? JSON.parse(tags_raw) : {};
-    } catch {}
-    const name = tags.albumartist?.trim() || tags.artist?.trim();
-    if (!name) continue;
-    const key = normalName(name);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  let best: string | null = null;
-  for (const [key, count] of counts) if (best == null || count > counts.get(best)!) best = key;
-  return best;
-}
+/** One file an edit writes, as the identity of its album is worked out
+ *  from: its path, its tags as the last scan read them, and what the edit
+ *  changes in them. */
+export type EditedFile = { filePath: string; tagsRaw: string | null; diff: FieldDiff[] };
 
 function nodeRow(db: Database, id: number | null): NodeRow | null {
   if (id == null) return null;
   return (db.prepare("SELECT id, type, title FROM nodes WHERE id = ?").get(id) as NodeRow | undefined) ?? null;
+}
+
+/** The albums the edited files will be on, by #465's albumIdentity, each
+ *  once. */
+export function identitiesAfter(files: EditedFile[]): AlbumIdentity[] {
+  const identities = new Map<string, AlbumIdentity>();
+  for (const file of files) {
+    let tags: { album?: string | null; albumartist?: string | null } = {};
+    try {
+      tags = file.tagsRaw ? JSON.parse(file.tagsRaw) : {};
+    } catch {}
+    const written = (field: string) => {
+      const value = file.diff.find((d) => d.field === field)?.newValue;
+      return typeof value === "string" ? value : undefined;
+    };
+    const identity = albumIdentity(
+      { album: written("album") ?? tags.album, albumartist: written("albumArtist") ?? tags.albumartist },
+      file.filePath,
+    );
+    if (identity) identities.set(JSON.stringify([identity.artistKey, identity.folderKey]), identity);
+  }
+  return [...identities.values()];
+}
+
+function editedFiles(db: Database, editId: number): EditedFile[] {
+  return (
+    db
+      .prepare(
+        `SELECT f.file_path, f.tags_raw, w.diff_json FROM tag_writes w JOIN files f ON f.id = w.file_id
+          WHERE w.edit_id = ? AND w.status IN ('pending_review', 'written')`,
+      )
+      .all(editId) as { file_path: string; tags_raw: string | null; diff_json: string }[]
+  ).map((row) => ({ filePath: row.file_path, tagsRaw: row.tags_raw, diff: JSON.parse(row.diff_json) as FieldDiff[] }));
 }
 
 // Another artist the scanner's lookup takes `name` to mean: one spelled
@@ -83,38 +104,47 @@ function otherArtistNamed(db: Database, nodeId: number, name: string): NodeRow |
   return others.find((other) => own == null || [own, null].includes(artistMbidOf(db, other.id))) ?? null;
 }
 
-/** Another node of `node`'s kind already called `title` (and, for an album,
- *  by `albumArtist`), which a rename to that name would merge into. Found
- *  by the scanner's own name rules, so it's the node the files would land
- *  on. */
-export function existingNodeNamed(
-  db: Database,
-  node: { id: number; type: string },
-  title: string,
-  albumArtist: string | null,
-): NodeRow | null {
-  if (node.type === "artist") return otherArtistNamed(db, node.id, title);
-  const named = db
-    .prepare(`SELECT id, type, title FROM nodes WHERE id IN (${NODE_LOOKUP_SQL}) AND id != ? ORDER BY id`)
-    .all(node.type, title, node.id) as NodeRow[];
-  if (node.type !== "release") return named[0] ?? null;
-  const wanted = albumArtist == null ? null : normalName(albumArtist);
-  return named.find((other) => albumArtistKey(db, other.id) === wanted) ?? null;
+// The album the most renamed files' identities already lead to, other than
+// this one, by findRelease.
+function otherRelease(db: Database, nodeId: number, identities: AlbumIdentity[]): NodeRow | null {
+  const counts = new Map<number, number>();
+  for (const identity of identities) {
+    const found = findRelease(db, identity);
+    if (found !== null && found !== nodeId) counts.set(found, (counts.get(found) ?? 0) + 1);
+  }
+  let best: number | null = null;
+  for (const [id, count] of counts) if (best === null || count > counts.get(best)!) best = id;
+  return nodeRow(db, best);
 }
 
-/** Where an edit's node goes once it's approved: the node it merges into,
- *  or null when it keeps its own (renamed, or not renamed at all). */
-export function mergeTarget(db: Database, edit: Omit<TagEditRow, "id" | "applied">): NodeRow | null {
-  const node = nodeRow(db, edit.node_id);
-  if (!node || (edit.new_title == null && edit.new_album_artist == null)) return null;
-  const title = edit.new_title ?? node.title;
-  const albumArtist = edit.new_album_artist ?? (node.type === "release" ? albumArtistKey(db, node.id) : null);
-  return existingNodeNamed(db, node, title, albumArtist);
+/** The node an edit to `node` merges into once it's approved, or null when
+ *  it keeps its own. `newTitle` is an artist's new name; `identities` are an
+ *  album's renamed files' (identitiesAfter). */
+export function mergeTarget(db: Database, node: NodeRow, newTitle: string | null, identities: AlbumIdentity[]): NodeRow | null {
+  if (node.type === "artist") return newTitle == null ? null : otherArtistNamed(db, node.id, newTitle);
+  if (node.type === "release") return otherRelease(db, node.id, identities);
+  return null;
+}
+
+// Points the keys of every identity that leads nowhere yet at the album, by
+// letting findOrCreateRelease make them on a node of its own and folding
+// that node in. Returns the keys it added, which undoNodeEdit takes back.
+function claimIdentities(db: Database, nodeId: number, identities: AlbumIdentity[]): string[] {
+  const claimed: string[] = [];
+  for (const identity of identities) {
+    if (findRelease(db, identity) !== null) continue;
+    const made = findOrCreateRelease(db, identity);
+    const keys = db.prepare("SELECT key FROM release_keys WHERE node_id = ?").all(made) as { key: string }[];
+    mergeNodeInto(db, made, nodeId);
+    claimed.push(...keys.map((k) => k.key));
+  }
+  return claimed;
 }
 
 /** Carries the edit's node over to its new name, once: renamed in place, or
- *  merged into the node that already has the name. Returns the node the
- *  edit's files belong to now. */
+ *  merged into the node the new name leads to. Returns the node the edit's
+ *  files belong to now. Runs before the written files are derived again
+ *  (tagwrite/refresh.ts), so they land on it. */
 export function applyNodeEdit(db: Database, editId: number): number | null {
   const edit = db.prepare("SELECT * FROM tag_edits WHERE id = ?").get(editId) as TagEditRow | undefined;
   if (!edit) return null;
@@ -122,38 +152,52 @@ export function applyNodeEdit(db: Database, editId: number): number | null {
   const node = nodeRow(db, edit.node_id);
   if (!node) return null;
 
-  const target = mergeTarget(db, edit);
+  const identities = node.type === "release" ? identitiesAfter(editedFiles(db, edit.id)) : [];
+  const target = mergeTarget(db, node, edit.new_title, identities);
   db.transaction(() => {
     if (target) {
       // Moves this edit's node_id along with everything else.
       mergeNodeInto(db, node.id, target.id);
       db.prepare("UPDATE tag_edits SET applied = 'merged' WHERE id = ?").run(edit.id);
-    } else if (edit.new_title != null && edit.new_title !== node.title) {
+      return;
+    }
+    const claimed = node.type === "release" ? claimIdentities(db, node.id, identities) : [];
+    const retitled = edit.new_title != null && edit.new_title !== node.title;
+    if (retitled) {
       db.prepare("UPDATE nodes SET title = ?, updated_at = datetime('now') WHERE id = ?").run(edit.new_title, node.id);
-      db.prepare("UPDATE tag_edits SET applied = 'renamed' WHERE id = ?").run(edit.id);
+    }
+    if (retitled || claimed.length > 0) {
+      db.prepare("UPDATE tag_edits SET applied = 'renamed', claimed_keys = ? WHERE id = ?").run(JSON.stringify(claimed), edit.id);
     }
   })();
   return target?.id ?? node.id;
 }
 
 /** Puts a renamed node back under its old name, once none of the edit's
- *  files say the new one. Files already reverted re-derived onto a node of
- *  the old name, made fresh; that node folds back into this one, which
- *  keeps its id and everything on it. */
+ *  files say the new one, and takes back the album keys the rename added.
+ *  An album's reverted files find it again by their old keys. An artist's
+ *  went to a node of the old name, made fresh; that node folds back into
+ *  this one, which keeps its id and everything on it. */
 export function undoNodeEdit(db: Database, editId: number): void {
   const edit = db.prepare("SELECT * FROM tag_edits WHERE id = ?").get(editId) as TagEditRow | undefined;
-  if (!edit || edit.applied !== "renamed" || edit.old_title == null) return;
+  if (!edit || edit.applied !== "renamed") return;
   const node = nodeRow(db, edit.node_id);
   if (!node) return;
 
-  const albumArtist = node.type === "release" ? (edit.old_album_artist ?? albumArtistKey(db, node.id)) : null;
   db.transaction(() => {
-    for (;;) {
-      const other = existingNodeNamed(db, node, edit.old_title!, albumArtist);
-      if (!other) break;
-      mergeNodeInto(db, other.id, node.id);
+    if (node.type === "artist" && edit.old_title != null) {
+      const { sql, params } = artistsByKeyQuery(edit.old_title);
+      for (const { id } of db.prepare(sql).all(...params) as { id: number }[]) {
+        const other = nodeRow(db, id)!;
+        if (other.id !== node.id && isSameSpelling(other.title, edit.old_title)) mergeNodeInto(db, other.id, node.id);
+      }
     }
-    db.prepare("UPDATE nodes SET title = ?, updated_at = datetime('now') WHERE id = ?").run(edit.old_title, node.id);
-    db.prepare("UPDATE tag_edits SET applied = NULL WHERE id = ?").run(edit.id);
+    const claimed = edit.claimed_keys ? (JSON.parse(edit.claimed_keys) as string[]) : [];
+    const forget = db.prepare("DELETE FROM release_keys WHERE key = ? AND node_id = ?");
+    for (const key of claimed) forget.run(key, node.id);
+    if (edit.old_title != null) {
+      db.prepare("UPDATE nodes SET title = ?, updated_at = datetime('now') WHERE id = ?").run(edit.old_title, node.id);
+    }
+    db.prepare("UPDATE tag_edits SET applied = NULL, claimed_keys = NULL WHERE id = ?").run(edit.id);
   })();
 }

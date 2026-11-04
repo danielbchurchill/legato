@@ -5,7 +5,7 @@ import { computeDiff, type FieldDiff } from "../tagwrite/diff.js";
 import { applyTagWrite, revertTagWrite } from "../tagwrite/writer.js";
 import type { TagFields } from "../tagwrite/fields.js";
 import { filesForNode, planNodeEdit, validateChanges } from "../tagwrite/nodeEdit.js";
-import { applyNodeEdit, mergeTarget, undoNodeEdit, type TagEditRow } from "../tagwrite/rename.js";
+import { applyNodeEdit, identitiesAfter, mergeTarget, undoNodeEdit, type TagEditRow } from "../tagwrite/rename.js";
 import { filesLinkedTo, refreshAfterWrite } from "../tagwrite/refresh.js";
 import { broadcast } from "../ws.js";
 
@@ -160,29 +160,15 @@ export function tagWritesRoutes(db: Database) {
         const skipped = plan.skipped.map(({ fileId, path, reason }) => ({ fileId, path, reason }));
         if (plan.writes.length === 0) return { noop: true, editId: null, writeIds: [], fileCount: 0, formats: [], skipped, merge: null };
 
+        // Asked the way approving will ask it (tagwrite/rename.ts), of the
+        // identities the written files will have, so the review says what
+        // approving does.
         const rename = plan.rename;
-        const target = rename
-          ? mergeTarget(db, {
-              node_id: node.id,
-              old_title: rename.oldTitle,
-              new_title: rename.newTitle,
-              old_album_artist: rename.oldAlbumArtist,
-              new_album_artist: rename.newAlbumArtist,
-            })
-          : null;
+        const target = rename ? mergeTarget(db, node, rename.newTitle, identitiesAfter(plan.writes)) : null;
         const { editId, writeIds } = db.transaction(() => {
           const edit = db
-            .prepare(
-              `INSERT INTO tag_edits (node_id, old_title, new_title, old_album_artist, new_album_artist)
-               VALUES (?, ?, ?, ?, ?) RETURNING id`,
-            )
-            .get(
-              node.id,
-              rename?.oldTitle ?? null,
-              rename?.newTitle ?? null,
-              rename?.oldAlbumArtist ?? null,
-              rename?.newAlbumArtist ?? null,
-            ) as { id: number };
+            .prepare("INSERT INTO tag_edits (node_id, old_title, new_title) VALUES (?, ?, ?) RETURNING id")
+            .get(node.id, rename?.oldTitle ?? null, rename?.newTitle ?? null) as { id: number };
           const insert = db.prepare(
             "INSERT INTO tag_writes (file_id, status, diff_json, edit_id) VALUES (?, 'pending_review', ?, ?) RETURNING id",
           );

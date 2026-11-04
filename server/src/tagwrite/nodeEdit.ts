@@ -1,10 +1,10 @@
 import { File as TagLibFile } from "node-taglib-sharp";
 import type { Database } from "../sqlite.js";
+import { stripDiscSuffix } from "../match/albumIdentity.js";
 import { creditEvidence, performerEvidence } from "../match/evidence.js";
-import { normalName, renameCredits, type CreditFields } from "./credits.js";
+import { renameCredits, type CreditFields } from "./credits.js";
 import { computeDiff, type FieldDiff } from "./diff.js";
 import { detectFormat, readFields, unwritableReason, type TagFields } from "./fields.js";
-import { albumArtistKey } from "./rename.js";
 
 /* Issue #464: an edit to a track, an album or an artist, as the tag writes
  * it takes. A track's fields go to its own files, an album's to every file
@@ -85,14 +85,12 @@ type FileRow = {
   linked?: number;
 };
 
-export type PlannedWrite = { fileId: number; filePath: string; diff: FieldDiff[] };
+export type PlannedWrite = { fileId: number; filePath: string; tagsRaw: string | null; diff: FieldDiff[] };
 export type SkippedFile = { fileId: number; path: string; reason: string };
-export type RenamePlan = {
-  oldTitle: string | null;
-  newTitle: string | null;
-  oldAlbumArtist: string | null;
-  newAlbumArtist: string | null;
-};
+/** What an edit does to the node's own name: an artist's or an album's new
+ *  name, or null when only the album artist changes, which changes the
+ *  album's identity but not its title (#465). */
+export type RenamePlan = { oldTitle: string; newTitle: string | null };
 export type NodeEditPlan = { writes: PlannedWrite[]; skipped: SkippedFile[]; rename: RenamePlan | null };
 
 const FILE_COLUMNS = "f.id, f.file_path, f.recording_node_id, f.missing_since, f.tags_raw";
@@ -132,6 +130,7 @@ export function filesForNode(db: Database, node: NodeRow): FileRow[] {
 }
 
 type RawTags = {
+  album?: string | null;
   artist?: string | null;
   albumartist?: string | null;
   artists?: string[] | null;
@@ -207,29 +206,43 @@ export function planNodeEdit(db: Database, node: NodeRow, changes: NodeEditChang
       continue;
     }
     try {
-      const wanted = node.type === "artist" && name != null ? renameFor(db, file, creditsOnDisk(file.file_path), node.title, name) : fields;
+      const wanted =
+        node.type === "artist" && name != null
+          ? renameFor(db, file, creditsOnDisk(file.file_path), node.title, name)
+          : node.type === "release" && fields.album != null
+            ? { ...fields, album: withDiscSuffix(fields.album, rawTags(file).album) }
+            : fields;
       if (Object.keys(wanted).length === 0) continue;
       const diff = computeDiff(file.file_path, wanted);
-      if (diff.length > 0) writes.push({ fileId: file.id, filePath: file.file_path, diff });
+      if (diff.length > 0) writes.push({ fileId: file.id, filePath: file.file_path, tagsRaw: file.tags_raw, diff });
     } catch (err) {
       skipped.push({ fileId: file.id, path: file.file_path, reason: `Its tags couldn't be read: ${message(err)}` });
     }
   }
 
-  return { writes, skipped, rename: renamePlan(db, node, changes) };
+  return { writes, skipped, rename: renamePlan(node, changes) };
+}
+
+// An album's title is its files' ALBUM tag without a disc suffix (#465's
+// stripDiscSuffix), and a file with no disc tag takes its disc number from
+// the suffix. So a new title keeps each file's own suffix: "Farewells &
+// Fantasies (disc 2)" retitled is "<new title> (disc 2)", and stays disc 2
+// of the same album.
+function withDiscSuffix(title: string, current: string | null | undefined): string {
+  const tag = (current ?? "").trim();
+  const bare = stripDiscSuffix(tag).title;
+  return bare !== tag && tag.startsWith(bare) ? title + tag.slice(bare.length) : title;
 }
 
 // An artist's new name and an album's new title rename the node itself; an
-// album artist is part of an album's identity (rename.ts), so it counts too.
-function renamePlan(db: Database, node: NodeRow, changes: NodeEditChanges): RenamePlan | null {
+// album artist is part of an album's identity (#465), so changing it moves
+// the album's keys (rename.ts) even with the title unchanged.
+function renamePlan(node: NodeRow, changes: NodeEditChanges): RenamePlan | null {
   if (node.type === "artist" && changes.name != null && changes.name !== node.title) {
-    return { oldTitle: node.title, newTitle: changes.name, oldAlbumArtist: null, newAlbumArtist: null };
+    return { oldTitle: node.title, newTitle: changes.name };
   }
   if (node.type !== "release") return null;
   const newTitle = changes.album != null && changes.album !== node.title ? changes.album : null;
-  const oldAlbumArtist = albumArtistKey(db, node.id);
-  const newAlbumArtist =
-    changes.albumArtist != null && normalName(changes.albumArtist) !== oldAlbumArtist ? changes.albumArtist : null;
-  if (newTitle == null && newAlbumArtist == null) return null;
-  return { oldTitle: node.title, newTitle, oldAlbumArtist, newAlbumArtist };
+  if (newTitle == null && changes.albumArtist == null) return null;
+  return { oldTitle: node.title, newTitle };
 }
