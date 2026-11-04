@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { API_BASE as API } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
+import { useCoverVersion, withCoverVersion } from './coverVersion'
 
 /* A cover's dominant colour, computed here from the thumbnail the client
  * already loads — the player's wash, the right panel's wash, and every
@@ -64,8 +65,8 @@ export function sampleCoverColor(url: string): Promise<string | null> {
   return pending
 }
 
-export function nodeCoverUrl(nodeId: number): string {
-  return withMediaTicket(`${API}/nodes/${nodeId}/cover?size=thumb`)
+export function nodeCoverUrl(nodeId: number, coverVersion = 0): string {
+  return withMediaTicket(withCoverVersion(`${API}/nodes/${nodeId}/cover?size=thumb`, coverVersion))
 }
 
 export function hashCoverUrl(hash: string): string {
@@ -97,15 +98,17 @@ export function withAlpha(hex: string, alpha: number): string {
  * until it has been sampled — callers draw nothing rather than a guess. */
 export function useCoverColor(nodeId: number | null): string | null {
   const [color, setColor] = useState<{ nodeId: number; hex: string | null } | null>(null)
+  // A changed cover (#461) is sampled again, so the wash follows it.
+  const coverVersion = useCoverVersion(nodeId)
   useEffect(() => {
     if (nodeId == null) return
     let cancelled = false
-    void sampleCoverColor(nodeCoverUrl(nodeId)).then((hex) => {
+    void sampleCoverColor(nodeCoverUrl(nodeId, coverVersion)).then((hex) => {
       if (!cancelled) setColor({ nodeId, hex })
     })
     return () => {
       cancelled = true
     }
-  }, [nodeId])
+  }, [nodeId, coverVersion])
   return color != null && color.nodeId === nodeId ? color.hex : null
 }

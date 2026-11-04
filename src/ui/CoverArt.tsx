@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { API_BASE as API } from '../config/serverHost'
 import { useServerBackEpoch } from '../connect/reconnect'
 import { withMediaTicket } from '../auth/session'
+import { useCoverVersion, withCoverVersion } from './coverVersion'
 
 /* Album art from the cover cache. v2 rounds every cover a little (6px; 4px
  * on a 36px row thumbnail, 8–10 on a hero) and lays a 1px inset edge over it,
@@ -45,7 +46,10 @@ export function CoverArt({ nodeId, size, className = '', alt = '', style, radius
 
   const imgRef = useRef<HTMLImageElement>(null)
 
-  const src = nodeId == null ? null : withMediaTicket(`${API}/nodes/${nodeId}/cover?size=${size}`)
+  // #461: a changed cover is a new URL, so it shows without a reload
+  // (coverVersion.ts).
+  const coverVersion = useCoverVersion(nodeId)
+  const src = nodeId == null ? null : withMediaTicket(withCoverVersion(`${API}/nodes/${nodeId}/cover?size=${size}`, coverVersion))
   // #119: art that failed while the server was out of reach is asked for
   // once more when it's back, after every outage, whether or not anything
   // else reads again. Art that loaded stays as it is.

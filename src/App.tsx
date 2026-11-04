@@ -55,6 +55,7 @@ import { useReconnectEpoch } from './connect/reconnect'
 import { UnreachableContext, useUnreachableInShell, type UnreachableSurface } from './connect/unreachableSurface'
 import { IS_TAURI } from './config/runtime'
 import { useInstallOffer } from './pwa/installOffer'
+import { useCoverChanges } from './ui/coverVersion'
 import { usePhoneLayout } from './phone/phoneLayout'
 import { PhoneShell } from './phone/PhoneShell'
 import { closePhoneNode, openPhoneNode } from './phone/nodeDetail'
@@ -194,6 +195,8 @@ function Workspace({
   // #128: the install offer, shown once after the first track plays. Over
   // plain http it says why there's none instead (#316).
   useInstallOffer()
+  // #461: a cover changed on another device shows here without a reload.
+  useCoverChanges()
   const canvasRef = useRef<CanvasHandle>(null)
 
   const windowSize = useWindowSize()
