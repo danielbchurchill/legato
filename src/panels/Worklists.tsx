@@ -1,29 +1,29 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '../ui/Button'
-import { Chip } from '../ui/Chip'
 import { CoverArt } from '../ui/CoverArt'
 import { StatusDot, type Status } from '../ui/StatusDot'
 import { TextField } from '../ui/TextField'
 import { useTouchLayout } from '../ui/touchLayout'
-import { formatCount, formatDuration, NO_VALUE } from '../ui/format'
+import { formatDuration, NO_VALUE } from '../ui/format'
 import { BackRow } from '../shell/SidePanel'
 import type { WorklistKind } from '../shell/panels'
 import { useGraph } from '../canvas/graphContext'
 import { API_BASE as API } from '../config/serverHost'
 import { useReconnectEpoch } from '../connect/reconnect'
+import { fileFactList, playsAfterMergeLine, type DuplicateFile, type DuplicatePair } from './duplicates'
 import {
-  GAP_FIELDS,
   formatDiffValue,
   formatWhen,
   parseDiff,
-  useGapCounts,
-  useGapRows,
   useTagWrites,
   useWorklist,
-  type GapField,
+  type GapView,
   type TagWrite,
   type WorklistItem,
 } from './healthData'
+import { MetadataGaps } from './MetadataGaps'
+import { TitledContext } from './titledContext'
+import { Card, Heading, Quiet } from './worklistParts'
 
 /* The worklists Library health opens: each a page with a way back, a title
  * and count, one line on what it is, then the items with the action each
@@ -33,18 +33,16 @@ import {
 
 type WorklistProps = {
   kind: WorklistKind
-  gapField: GapField
-  onGapFieldChange: (field: GapField) => void
+  /** The gaps list's filter and order, kept by whoever shows it. */
+  gapView: GapView
+  onGapViewChange: (view: GapView) => void
   /** Omitted on the phone (#389), where a worklist is a pushed page whose
    * top bar carries the way back and the title, so neither is drawn here. */
   onBack?: () => void
   onFocusNode: (id: number) => void
 }
 
-/* False when the page around the worklist already names it. */
-const TitledContext = createContext(true)
-
-export function Worklist({ kind, gapField, onGapFieldChange, onBack, onFocusNode }: WorklistProps) {
+export function Worklist({ kind, gapView, onGapViewChange, onBack, onFocusNode }: WorklistProps) {
   return (
     <TitledContext.Provider value={onBack != null}>
       <div className="flex flex-col">
@@ -53,88 +51,141 @@ export function Worklist({ kind, gapField, onGapFieldChange, onBack, onFocusNode
         {kind === 'missing' && <MissingFiles onFocusNode={onFocusNode} />}
         {kind === 'enrichment' && <EnrichmentToConfirm onFocusNode={onFocusNode} />}
         {kind === 'tag-writes' && <TagWrites />}
-        {kind === 'gaps' && <MetadataGaps field={gapField} onFieldChange={onGapFieldChange} onFocusNode={onFocusNode} />}
+        {kind === 'gaps' && <MetadataGaps view={gapView} onViewChange={onGapViewChange} onFocusNode={onFocusNode} />}
       </div>
     </TitledContext.Provider>
   )
 }
 
-function Heading({ title, count, children }: { title: string; count: number | null; children: ReactNode }) {
-  const titled = useContext(TitledContext)
-  if (!titled) {
-    return (
-      <div className="mt-[4px] mb-[14px] flex items-start justify-between gap-[12px]">
-        <p className="text-[length:var(--text-secondary)] leading-[18px] [text-wrap:pretty] text-[var(--color-ink-2)]">{children}</p>
-        {count != null && (
-          <span className="mono pt-[1px] text-[length:var(--text-mono)] text-[var(--color-ink-2)]">{formatCount(count)}</span>
-        )}
-      </div>
-    )
-  }
-  return (
-    <>
-      <div className="flex min-h-[36px] items-start justify-between gap-[8px]">
-        <h2 className="text-title text-[var(--color-ink)]">{title}</h2>
-        {count != null && (
-          <span className="mono pt-[6px] text-[length:var(--text-mono)] text-[var(--color-ink-2)]">{formatCount(count)}</span>
-        )}
-      </div>
-      <p className="mt-[6px] mb-[14px] text-[length:var(--text-secondary)] leading-[18px] [text-wrap:pretty] text-[var(--color-ink-2)]">
-        {children}
-      </p>
-    </>
-  )
-}
-
-function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return (
-    <div className={`flex flex-col gap-[10px] rounded-[var(--radius-card)] bg-[var(--color-wash)] p-[12px] ${className}`}>{children}</div>
-  )
-}
-
-function Quiet({ children }: { children: ReactNode }) {
-  return <p className="pt-[12px] text-center text-[length:var(--text-secondary)] text-[var(--color-ink-2)]">{children}</p>
-}
-
 /* ---- Possible duplicates --------------------------------------------------- */
 
-/* A recording's format isn't in the graph, so each side of a pair asks its
- * node once, and again after an outage (#119). */
-function useFormat(nodeId: number): string | null {
-  const [format, setFormat] = useState<string | null>(null)
+/* The two sides' files and which one a merge would play, asked once per
+ * card (bit depth means the server reads each file's header), and again
+ * after an outage (#119). */
+function useDuplicatePair(fileId: number): DuplicatePair | null {
+  const [pair, setPair] = useState<DuplicatePair | null>(null)
   const reconnects = useReconnectEpoch()
   useEffect(() => {
     let cancelled = false
-    fetch(`${API}/nodes/${nodeId}`)
-      .then((r) => r.json())
-      .then((node: { files: { format: string | null }[] }) => !cancelled && setFormat(node.files[0]?.format?.toUpperCase() ?? null))
+    fetch(`${API}/hygiene/duplicates/${fileId}`)
+      .then((r) => (r.ok ? (r.json() as Promise<DuplicatePair>) : null))
+      .then((value) => !cancelled && value && setPair(value))
       .catch(() => undefined)
     return () => {
       cancelled = true
     }
-  }, [nodeId, reconnects])
-  return format
+  }, [fileId, reconnects])
+  return pair
 }
 
-function DuplicateSide({ nodeId, title, onFocusNode }: { nodeId: number; title: string; onFocusNode: (id: number) => void }) {
+function DuplicateSide({
+  nodeId,
+  title,
+  file,
+  others,
+  plays,
+  onFocusNode,
+}: {
+  nodeId: number
+  title: string
+  file: DuplicateFile | null
+  /** More files the track already has, beyond `file`. */
+  others: number
+  plays: boolean
+  onFocusNode: (id: number) => void
+}) {
   const graph = useGraph()
-  const format = useFormat(nodeId)
   const releaseId = graph.edges.find((e) => e.type === 'appears_on' && e.from_node === nodeId)?.to_node
   const album = releaseId != null ? graph.byId.get(releaseId)?.title : null
   const duration = formatDuration(graph.byId.get(nodeId)?.canonical_duration_ms)
   return (
-    <button type="button" onClick={() => onFocusNode(nodeId)} className="flex min-w-0 flex-col gap-[8px] text-left">
-      <CoverArt nodeId={nodeId} size="thumb" className="aspect-square w-full" />
-      <span className="flex min-w-0 flex-col">
-        <span title={title} className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
-          {title}
+    <div className="flex min-w-0 flex-col gap-[8px]">
+      <button type="button" onClick={() => onFocusNode(nodeId)} className="flex min-w-0 flex-col gap-[8px] text-left">
+        <CoverArt nodeId={nodeId} size="thumb" className="aspect-square w-full" />
+        <span className="flex min-w-0 flex-col">
+          <span title={title} className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]">
+            {title}
+          </span>
+          <span title={album ?? undefined} className="truncate text-small text-[var(--color-ink-2)]">
+            {album ?? NO_VALUE}
+          </span>
         </span>
-        <span title={album ?? undefined} className="truncate text-small text-[var(--color-ink-2)]">
-          {album ?? NO_VALUE}
+      </button>
+      {file && (
+        <span className="flex min-w-0 flex-col gap-[4px]">
+          {/* Each fact whole, so a narrow side wraps between them. */}
+          <span className="mono flex flex-wrap gap-x-[8px] text-[11px] leading-[15px] text-[var(--color-ink)]">
+            {[duration, ...fileFactList(file)].filter(Boolean).map((fact) => (
+              <span key={fact} className="whitespace-nowrap">
+                {fact}
+              </span>
+            ))}
+          </span>
+          <span data-selectable className="mono text-[11px] leading-[15px] break-all text-[var(--color-ink-3)]">
+            {file.path}
+          </span>
+          {file.missing && <span className="text-small text-[var(--color-bad)]">not on disk</span>}
+          {others > 0 && (
+            <span className="text-small text-[var(--color-ink-2)]">
+              and {others} more {others === 1 ? 'file' : 'files'} on this track
+            </span>
+          )}
+          {plays && (
+            <span className="flex items-center gap-[6px] text-small text-[var(--color-ink)]">
+              <StatusDot status="accent" />
+              plays after a merge
+            </span>
+          )}
         </span>
-        <span className="mono text-[11px] text-[var(--color-ink-2)]">{[duration, format].filter(Boolean).join(' · ')}</span>
-      </span>
-    </button>
+      )}
+    </div>
+  )
+}
+
+function DuplicateCard({
+  item,
+  onResolve,
+  onFocusNode,
+}: {
+  item: Extract<WorklistItem, { type: 'fuzzy_pending' }>
+  onResolve: (forcedRecordingNodeId: number | null) => void
+  onFocusNode: (id: number) => void
+}) {
+  const pair = useDuplicatePair(item.fileId)
+  // The track it would join plays its best file today: the first of the
+  // candidate list, which the server orders by the playback rule.
+  const theirs = pair?.candidate[0] ?? null
+  const winner = pair?.playsAfterMerge
+  return (
+    <Card>
+      <div className="grid grid-cols-2 gap-[10px]">
+        <DuplicateSide
+          nodeId={item.nodeId}
+          title={item.nodeTitle}
+          file={pair?.file ?? null}
+          others={0}
+          plays={pair != null && winner === pair.file.id}
+          onFocusNode={onFocusNode}
+        />
+        <DuplicateSide
+          nodeId={item.candidateNodeId}
+          title={item.candidateTitle}
+          file={theirs}
+          others={Math.max(0, (pair?.candidate.length ?? 0) - 1)}
+          plays={pair != null && winner != null && winner !== pair.file.id}
+          onFocusNode={onFocusNode}
+        />
+      </div>
+      {pair && <p className="text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]">{playsAfterMergeLine(pair)}</p>}
+      <div className="flex gap-[8px]">
+        <Button variant="primary" onClick={() => onResolve(item.candidateNodeId)}>
+          Merge
+        </Button>
+        <Button variant="secondary" onClick={() => onResolve(null)}>
+          Keep both
+        </Button>
+      </div>
+    </Card>
   )
 }
 
@@ -152,24 +203,17 @@ function Duplicates({ onFocusNode }: { onFocusNode: (id: number) => void }) {
   return (
     <>
       <Heading title="Possible duplicates" count={data ? items.length : null}>
-        These files look like the same recording. Merging keeps both files under one track.
+        These files look like the same recording. Merge puts them under one track and deletes no file: both stay on disk, and the track
+        plays the one with the higher bitrate. Keep both leaves them as two tracks.
       </Heading>
       <div className="flex flex-col gap-[10px]">
         {items.map((item) => (
-          <Card key={item.fileId}>
-            <div className="grid grid-cols-2 gap-[10px]">
-              <DuplicateSide nodeId={item.nodeId} title={item.nodeTitle} onFocusNode={onFocusNode} />
-              <DuplicateSide nodeId={item.candidateNodeId} title={item.candidateTitle} onFocusNode={onFocusNode} />
-            </div>
-            <div className="flex gap-[8px]">
-              <Button variant="primary" onClick={() => void resolve(item.fileId, item.candidateNodeId)}>
-                Merge
-              </Button>
-              <Button variant="secondary" onClick={() => void resolve(item.fileId, null)}>
-                Keep both
-              </Button>
-            </div>
-          </Card>
+          <DuplicateCard
+            key={item.fileId}
+            item={item}
+            onResolve={(forced) => void resolve(item.fileId, forced)}
+            onFocusNode={onFocusNode}
+          />
         ))}
         {data && items.length === 0 && <Quiet>No possible duplicates.</Quiet>}
       </div>
@@ -540,152 +584,6 @@ function TagWrites() {
         })}
         {data && data.length === 0 && <Quiet>No tag writes yet. Edits from a track's details land here for review.</Quiet>}
       </div>
-    </>
-  )
-}
-
-/* ---- Metadata gaps ------------------------------------------------------------- */
-
-// The tag-write field each gap is filled through, and how its text becomes
-// a value. "Unmatched" has no field: rescanning is the only remedy.
-const GAP_WRITE: Partial<
-  Record<GapField, { key: 'bpm' | 'label' | 'releaseDate' | 'releaseType'; parse: (v: string) => string | number | null; hint: string }>
-> = {
-  bpm: { key: 'bpm', parse: (v) => (/^\d+(\.\d+)?$/.test(v) ? Math.round(Number(v)) : null), hint: '120' },
-  label: { key: 'label', parse: (v) => v || null, hint: 'Columbia' },
-  release_date: { key: 'releaseDate', parse: (v) => (/^\d{4}(-\d{2}(-\d{2})?)?$/.test(v) ? v : null), hint: 'YYYY-MM-DD' },
-  release_type: { key: 'releaseType', parse: (v) => v.toLowerCase() || null, hint: 'album' },
-}
-
-function MetadataGaps({
-  field,
-  onFieldChange,
-  onFocusNode,
-}: {
-  field: GapField
-  onFieldChange: (f: GapField) => void
-  onFocusNode: (id: number) => void
-}) {
-  const touch = useTouchLayout()
-  const counts = useGapCounts()
-  const { data: rows, reload } = useGapRows(field)
-  const [editing, setEditing] = useState<number | null>(null)
-  const [value, setValue] = useState('')
-  const [queued, setQueued] = useState<Set<number>>(new Set())
-  const [problem, setProblem] = useState<string | null>(null)
-  const write = GAP_WRITE[field]
-
-  // Filling a gap proposes a tag write; the file changes only once that
-  // write is approved under Tag writes.
-  const save = async (nodeId: number) => {
-    if (!write) return
-    const parsed = write.parse(value.trim())
-    if (parsed == null) {
-      setProblem(`That doesn't look like a ${GAP_FIELDS.find((g) => g.field === field)!.chip}.`)
-      return
-    }
-    const node = (await fetch(`${API}/nodes/${nodeId}`).then((r) => r.json())) as { files: { id: number }[] }
-    const file = node.files[0]
-    if (!file) return
-    const res = await fetch(`${API}/tag-writes`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileId: file.id, changes: { [write.key]: parsed } }),
-    })
-    if (!res.ok) {
-      setProblem("The server couldn't prepare that change.")
-      return
-    }
-    setQueued((prev) => new Set(prev).add(nodeId))
-    setEditing(null)
-    setProblem(null)
-  }
-
-  const rescan = async (nodeId: number) => {
-    await fetch(`${API}/nodes/${nodeId}/rescan`, { method: 'POST' })
-    reload()
-  }
-
-  return (
-    <>
-      <Heading title="Metadata gaps" count={rows ? rows.length : null}>
-        Tracks missing a tag the map and the library use. Anything you add waits under Tag writes until you write it.
-      </Heading>
-      {/* Rows of chips far enough apart that their 44px targets don't
-       * overlap, in the phone's touch layout. */}
-      <div className={`flex flex-wrap ${touch ? 'gap-x-[6px] gap-y-[16px]' : 'gap-[6px]'}`}>
-        {GAP_FIELDS.map((gap) => (
-          <Chip key={gap.field} active={gap.field === field} count={counts?.[gap.field]} onClick={() => onFieldChange(gap.field)}>
-            {gap.chip}
-          </Chip>
-        ))}
-      </div>
-      <ul className="-mx-[8px] mt-[12px] flex flex-col">
-        {(rows ?? []).map((row) => (
-          <li
-            key={row.id}
-            className={`flex flex-col rounded-[var(--radius-control)] px-[8px] ${editing === row.id ? 'bg-[var(--color-wash)] pb-[10px]' : ''}`}
-          >
-            <div className="flex h-[48px] items-center gap-[10px]">
-              <button
-                type="button"
-                onClick={() => onFocusNode(row.id)}
-                className={`flex min-w-0 flex-1 flex-col text-left ${touch ? 'touch-target' : ''}`}
-              >
-                <span
-                  title={row.title}
-                  className="truncate text-[length:var(--text-body)] leading-[20px] font-medium text-[var(--color-ink)]"
-                >
-                  {row.title}
-                </span>
-                <span className="truncate text-small text-[var(--color-ink-2)]">{row.artist ?? NO_VALUE}</span>
-              </button>
-              {queued.has(row.id) ? (
-                <span className="text-small text-[var(--color-ink-3)]">in Tag writes</span>
-              ) : (
-                <span className="flex shrink-0 gap-[12px]">
-                  {write && editing !== row.id && (
-                    <Button
-                      onClick={() => {
-                        setEditing(row.id)
-                        setValue('')
-                        setProblem(null)
-                      }}
-                    >
-                      add
-                    </Button>
-                  )}
-                  <Button onClick={() => void rescan(row.id)}>rescan</Button>
-                </span>
-              )}
-            </div>
-            {editing === row.id && write && (
-              <form
-                className="flex items-center gap-[8px]"
-                onSubmit={(e) => {
-                  e.preventDefault()
-                  void save(row.id)
-                }}
-              >
-                <TextField
-                  autoFocus
-                  label={GAP_FIELDS.find((g) => g.field === field)!.chip}
-                  placeholder={write.hint}
-                  value={value}
-                  onChange={setValue}
-                  onEscape={() => setEditing(null)}
-                  className="flex-1"
-                />
-                <Button variant="primary" type="submit" disabled={!value.trim()}>
-                  Save
-                </Button>
-              </form>
-            )}
-            {editing === row.id && problem && <p className="pt-[6px] text-small text-[var(--color-bad)]">{problem}</p>}
-          </li>
-        ))}
-      </ul>
-      {rows && rows.length === 0 && <Quiet>Nothing missing here.</Quiet>}
     </>
   )
 }

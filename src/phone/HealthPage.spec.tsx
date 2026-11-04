@@ -56,8 +56,8 @@ beforeEach(() => {
           ? server.worklist
           : path === '/tag-writes'
             ? server.tagWrites
-            : path === '/tag-manager?field=unmatched'
-              ? Array.from({ length: server.unmatched }, (_, id) => ({ id, title: `T${id}`, artist: null }))
+            : path === '/tag-manager/counts'
+              ? { unmatched: server.unmatched, label: 0, release_date: 0, release_type: 0, bpm: 0 }
               : path === '/db-inspector'
                 ? {
                     pipeline: { latestScan: null, enrichJobs: [] },
@@ -110,6 +110,18 @@ describe('Library health on the phone', () => {
     expect(onOpen).toHaveBeenLastCalledWith('gaps', 'unmatched')
     act(() => button(container, 'Possible duplicates')!.click())
     expect(onOpen).toHaveBeenLastCalledWith('duplicates', undefined)
+  })
+
+  it('counts unmatched tracks from the gaps count, not by fetching the list', async () => {
+    await render()
+    expect(requests.some((r) => r.path === '/tag-manager/counts')).toBe(true)
+    expect(requests.some((r) => r.path.startsWith('/tag-manager?') || r.path.startsWith('/tag-manager/albums'))).toBe(false)
+  })
+
+  it('opens the metadata gaps on every kind but BPM (#469)', async () => {
+    const { container, onOpen } = await render()
+    act(() => button(container, 'Metadata gaps')!.click())
+    expect(onOpen).toHaveBeenLastCalledWith('gaps')
   })
 
   it('draws every row at least 64px tall', async () => {

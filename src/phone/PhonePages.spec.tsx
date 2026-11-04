@@ -23,17 +23,17 @@ vi.mock('./HealthPage', () => ({
 vi.mock('../panels/Worklists', () => ({
   Worklist: ({
     kind,
-    gapField,
+    gapView,
     onBack,
     onFocusNode,
   }: {
     kind: WorklistKind
-    gapField: string
+    gapView: { kinds: string[] }
     onBack?: () => void
     onFocusNode: (id: number) => void
   }) => {
     opened.focus = onFocusNode
-    return createElement('p', null, `worklist ${kind} on ${gapField}${onBack ? ' with its own back' : ''}`)
+    return createElement('p', null, `worklist ${kind} on ${gapView.kinds.join('+')}${onBack ? ' with its own back' : ''}`)
   },
 }))
 
