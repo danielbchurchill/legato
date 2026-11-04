@@ -182,6 +182,122 @@ describe("applyMemberRelations — issue #61", () => {
   });
 });
 
+// Issue #466: the reference library's tags say "The Traveling Wilburys",
+// MusicBrainz says "Traveling Wilburys", and the exact-name lookup made a
+// second node every member's edge went to.
+describe("applyMemberRelations finds the other artist by MusicBrainz id, then by name", () => {
+  const WILBURYS = "4387b544-e4d0-4f18-b74e-d4a5ba1582ab";
+
+  function artistMbid(nodeId: number): string | null {
+    const row = db
+      .prepare("SELECT value FROM field_provenance WHERE node_id = ? AND field = 'artist_mbid' ORDER BY id DESC LIMIT 1")
+      .get(nodeId) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  function withMbid(title: string, mbid: string): number {
+    const id = makeNode("artist", title);
+    db.prepare(
+      "INSERT INTO field_provenance (node_id, field, value, source, confidence) VALUES (?, 'artist_mbid', ?, 'musicbrainz', 0.9)",
+    ).run(id, mbid);
+    return id;
+  }
+
+  it("puts Dylan's edge on the tags' 'The Traveling Wilburys', not a new 'Traveling Wilburys'", () => {
+    const dylan = makeNode("artist", "Bob Dylan");
+    const wilburys = makeNode("artist", "The Traveling Wilburys");
+
+    const created = applyMemberRelations(db, dylan, [{ direction: "forward", name: "Traveling Wilburys", mbid: WILBURYS }]);
+
+    expect(created).toEqual([]);
+    expect(artistTitles()).toEqual(["Bob Dylan", "The Traveling Wilburys"]);
+    expect(memberOfEdges()).toEqual([
+      { member: "Bob Dylan", group_title: "The Traveling Wilburys", source: "musicbrainz" },
+    ]);
+    // Matched only once "The" is ignored, so its id isn't stamped on the
+    // node: if that were a different artist, its photo would follow.
+    expect(artistMbid(wilburys)).toBeNull();
+  });
+
+  it("remembers the id on an artist whose name is the relation's exactly, so the next relation finds it by id", () => {
+    const harrison = makeNode("artist", "George Harrison");
+    const beatles = makeNode("artist", "The Beatles");
+
+    applyMemberRelations(db, harrison, [{ direction: "forward", name: "the beatles", mbid: "mbid-beatles" }]);
+
+    expect(artistMbid(beatles)).toBe("mbid-beatles");
+  });
+
+  it("finds an artist by its id whatever MusicBrainz calls it", () => {
+    const petty = makeNode("artist", "Tom Petty");
+    withMbid("Tom Petty & The Heartbreakers", "mbid-heartbreakers");
+
+    applyMemberRelations(db, petty, [
+      { direction: "forward", name: "Tom Petty and the Heartbreakers", mbid: "mbid-heartbreakers" },
+    ]);
+
+    expect(artistTitles()).toEqual(["Tom Petty", "Tom Petty & The Heartbreakers"]);
+    expect(memberOfEdges()).toEqual([
+      { member: "Tom Petty", group_title: "Tom Petty & The Heartbreakers", source: "musicbrainz" },
+    ]);
+  });
+
+  it("looks the id up before the name", () => {
+    // A node named exactly as MusicBrainz names the band, and the band's
+    // own node under another name: the id decides.
+    const harrison = makeNode("artist", "George Harrison");
+    makeNode("artist", "Wilburys");
+    const byId = withMbid("The Traveling Wilburys (band)", WILBURYS);
+
+    applyMemberRelations(db, harrison, [{ direction: "forward", name: "Wilburys", mbid: WILBURYS }]);
+
+    const target = db.prepare("SELECT to_node FROM edges WHERE type = 'member_of'").get() as { to_node: number };
+    expect(target.to_node).toBe(byId);
+  });
+
+  it("remembers the id of an artist it makes, so a later relation spelling it differently finds it", () => {
+    const dylan = makeNode("artist", "Bob Dylan");
+    const petty = makeNode("artist", "Tom Petty");
+    const [made] = applyMemberRelations(db, dylan, [{ direction: "forward", name: "Traveling Wilburys", mbid: WILBURYS }]);
+    expect(artistMbid(made!)).toBe(WILBURYS);
+
+    expect(applyMemberRelations(db, petty, [{ direction: "forward", name: "Wilburys, The", mbid: WILBURYS }])).toEqual([]);
+
+    expect(memberOfEdges()).toEqual([
+      { member: "Bob Dylan", group_title: "Traveling Wilburys", source: "musicbrainz" },
+      { member: "Tom Petty", group_title: "Traveling Wilburys", source: "musicbrainz" },
+    ]);
+  });
+
+  it("finds by the name rule when MusicBrainz gives no id", () => {
+    const dylan = makeNode("artist", "Bob Dylan");
+    makeNode("artist", "Traveling Wilburys");
+
+    expect(applyMemberRelations(db, dylan, [{ direction: "forward", name: "the traveling wilburys " }])).toEqual([]);
+    expect(artistTitles()).toEqual(["Bob Dylan", "Traveling Wilburys"]);
+  });
+
+  it("makes a second artist when the names differ only by 'The' and the ids differ", () => {
+    const morrison = makeNode("artist", "Jim Morrison");
+    withMbid("Doors", "mbid-tribute-act");
+
+    const created = applyMemberRelations(db, morrison, [{ direction: "forward", name: "The Doors", mbid: "mbid-the-doors" }]);
+
+    expect(created).toHaveLength(1);
+    expect(artistTitles()).toEqual(["Doors", "Jim Morrison", "The Doors"]);
+    expect(artistMbid(created[0]!)).toBe("mbid-the-doors");
+  });
+
+  it("leaves an id a node already has alone", () => {
+    const dylan = makeNode("artist", "Bob Dylan");
+    const wilburys = withMbid("The Traveling Wilburys", "mbid-from-a-search");
+
+    applyMemberRelations(db, dylan, [{ direction: "forward", name: "The Traveling Wilburys", mbid: WILBURYS }]);
+
+    expect(artistMbid(wilburys)).toBe("mbid-from-a-search");
+  });
+});
+
 // Issue #269.
 describe("pruneBeyondMemberBound", () => {
   function recordingWith(type: string, artistId: number): number {

@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import { writeInChunks } from "../writeInChunks.js";
 import { pickMode } from "./mode.js";
+import { findBridgeMembers, MEMBER_EDGES_SQL, type MemberEdge } from "./bridges.js";
 
 export type EdgeRef = { fromNode: number; toNode: number };
 
@@ -226,6 +227,11 @@ export function recomputeEntities(db: Database): void {
 
   const albums = computeAlbumAggregates(appearsOn, performedBy, recordingDurationMs, recordingYear);
   const artists = computeArtistAggregates(appearsOn, performerEdges);
+  // Issue #466: a member with no tracks who links two of these artists gets
+  // a row with none, which places them on the map (entities/bridges.ts).
+  const onMap = new Set(artists.map((a) => a.nodeId));
+  const memberEdges = db.prepare(MEMBER_EDGES_SQL).all() as MemberEdge[];
+  for (const nodeId of findBridgeMembers(memberEdges, onMap).keys()) artists.push({ nodeId, trackCount: 0, albumCount: 0 });
 
   // The map clusters release nodes only, so the row a hand-drawn appears_on
   // gives any other node has no artist either. Decided here, once per

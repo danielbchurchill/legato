@@ -238,6 +238,22 @@ describe("parseArtistMemberRelations — issue #61", () => {
     ]);
   });
 
+  it("carries the other artist's MusicBrainz id when the answer has one (issue #466)", () => {
+    const relations = parseArtistMemberRelations([
+      {
+        type: "member of band",
+        "target-type": "artist",
+        artist: { name: "Traveling Wilburys", id: "4387b544-e4d0-4f18-b74e-d4a5ba1582ab" },
+      },
+      { type: "member of band", "target-type": "artist", artist: { name: "The Beatles" } },
+    ]);
+    expect(relations).toEqual([
+      { direction: "forward", name: "Traveling Wilburys", mbid: "4387b544-e4d0-4f18-b74e-d4a5ba1582ab" },
+      { direction: "forward", name: "The Beatles" },
+    ]);
+    expect("mbid" in relations[1]!).toBe(false);
+  });
+
   it("drops relations of a different type or target-type, and ones missing an artist name", () => {
     const relations = parseArtistMemberRelations([
       { type: "founder of", "target-type": "artist", artist: { name: "Some Label" } },

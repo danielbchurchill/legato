@@ -2,24 +2,40 @@ import { createHash } from "node:crypto";
 import type { Database } from "../sqlite.js";
 import type { MbArtistRelation } from "./mbClient.js";
 import { BOUND_SQL, withBound } from "./queue.js";
+import { findArtistByMbid, findArtistByName, isSameSpelling, rememberArtistMbid } from "../match/artistLookup.js";
+import { refreshBridgeMembers } from "../entities/bridges.js";
 
-// Mirrors match/edges.ts's findOrCreateNode and credits.ts's
-// findOrCreateCreditNode, scoped to 'artist' nodes — same case/whitespace-
-// insensitive collapse, which is exactly what makes issue #61's example
-// work: a "George Harrison" node created here from a Beatles member
-// relation is the same node his own solo recordings later land on, if
-// they're ever scanned into the library. Returns whether the node was
-// created so the caller can cascade enrichment onto it — a member/group
-// discovered this way starts with no MBID, no photo, and no member
-// relations of its own looked up yet.
-function findOrCreateArtistNode(db: Database, title: string): { id: number; created: boolean } {
-  const existing = db
-    .prepare("SELECT id FROM nodes WHERE type = 'artist' AND lower(trim(title)) = lower(trim(?))")
-    .get(title) as { id: number } | undefined;
-  if (existing) return { id: existing.id, created: false };
-  const row = db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get(title) as {
+// Issue #466: the other end of a band-membership relation is found by its
+// MusicBrainz artist id first, then by name (match/artistLookup.ts: case,
+// outer spaces and a leading "The" ignored), and only made if neither finds
+// it. MusicBrainz names the Wilburys "Traveling Wilburys" and the tags say
+// "The Traveling Wilburys", and the exact-name lookup this replaces made a
+// second node for them that every member's edge went to.
+//
+// The id is remembered on a node this makes, and on one whose name is the
+// relation's exactly, so the next relation naming it finds it by id
+// whatever spelling it uses. Not on one that only matches once "The" is
+// ignored: the edge goes there by the rule, but if that's a different
+// artist after all, its photo and description (resolveArtistMbid in
+// worker.ts reads the id) shouldn't follow the other one.
+//
+// George Harrison made here from a Beatles relation is still the node his
+// own records land on if they're scanned later (issue #61). Returns whether
+// the node was made, so the caller can queue its photo and description: a
+// member or group found this way starts with neither.
+function findOrCreateArtistNode(db: Database, relation: MbArtistRelation): { id: number; created: boolean } {
+  const byId = relation.mbid ? findArtistByMbid(db, relation.mbid) : undefined;
+  if (byId !== undefined) return { id: byId, created: false };
+  const byName = findArtistByName(db, relation.name, relation.mbid);
+  if (byName !== undefined) {
+    const { title } = db.prepare("SELECT title FROM nodes WHERE id = ?").get(byName) as { title: string };
+    if (relation.mbid && isSameSpelling(title, relation.name)) rememberArtistMbid(db, byName, relation.mbid);
+    return { id: byName, created: false };
+  }
+  const row = db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', ?) RETURNING id").get(relation.name) as {
     id: number;
   };
+  if (relation.mbid) rememberArtistMbid(db, row.id, relation.mbid);
   return { id: row.id, created: true };
 }
 
@@ -65,7 +81,7 @@ export function applyMemberRelations(
   const newNodeIds: number[] = [];
   const seenPairs = new Set<string>();
   for (const relation of relations) {
-    const { id: otherNodeId, created } = findOrCreateArtistNode(db, relation.name);
+    const { id: otherNodeId, created } = findOrCreateArtistNode(db, relation);
     if (otherNodeId === artistNodeId) continue; // guard against a self-relation in MB's data
     if (created) newNodeIds.push(otherNodeId);
 
@@ -83,6 +99,14 @@ export function applyMemberRelations(
   }
 
   if (before.some((edge) => !seenPairs.has(`${edge.from_node}-${edge.to_node}`))) markBoundMayHaveShrunk(db);
+
+  // Issue #466: whoever an edge written or removed here touches may have
+  // become a bridge member or stopped being one, so the map shows it now
+  // rather than after the next scan.
+  const touched = new Set<number>([artistNodeId]);
+  for (const edge of before) touched.add(edge.from_node).add(edge.to_node);
+  for (const pair of seenPairs) for (const id of pair.split("-")) touched.add(Number(id));
+  refreshBridgeMembers(db, touched);
   return newNodeIds;
 }
 

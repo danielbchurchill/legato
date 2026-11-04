@@ -46,6 +46,7 @@ import m0041_clear_same_era_ties from "./0041_clear_same_era_ties.sql" with { ty
 import m0042_album_artist_map_rule from "./0042_album_artist_map_rule.sql" with { type: "text" };
 import m0043_member_bound_prune from "./0043_member_bound_prune.sql" with { type: "text" };
 import m0044_tunnel_credential_previous from "./0044_tunnel_credential_previous.sql" with { type: "text" };
+import m0048_artist_name_fold from "./0048_artist_name_fold.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -97,4 +98,5 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 42, file: "0042_album_artist_map_rule.sql", sql: m0042_album_artist_map_rule },
   { version: 43, file: "0043_member_bound_prune.sql", sql: m0043_member_bound_prune },
   { version: 44, file: "0044_tunnel_credential_previous.sql", sql: m0044_tunnel_credential_previous },
+  { version: 48, file: "0048_artist_name_fold.sql", sql: m0048_artist_name_fold },
 ];
