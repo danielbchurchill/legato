@@ -1,6 +1,7 @@
 import { parseFile } from "music-metadata";
 import type { ICommonTagsResult, IFormat } from "music-metadata";
 import { extraCreditedArtists } from "./artist-credit.js";
+import { stripDiscSuffix } from "../match/albumIdentity.js";
 import { pickFrontCover } from "../cover/extract.js";
 import type { EmbeddedPicture } from "../cover/extract.js";
 
@@ -64,7 +65,10 @@ export function normalizeTags(common: ICommonTagsResult, format: IFormat): Norma
     albumartist: common.albumartist ?? null,
     trackNo: common.track?.no ?? null,
     totalTracks: common.track?.of ?? null,
-    discNo: common.disk?.no ?? null,
+    // Issue #465: a file with no disc tag takes its disc from the album's
+    // suffix ("… CD2", "(disc 3)"), so a set's tracks sort by disc once its
+    // parts are one album (match/albumIdentity.ts).
+    discNo: common.disk?.no ?? (common.album ? stripDiscSuffix(common.album).disc : null),
     year: common.year ?? null,
     mbRecordingId: common.musicbrainz_recordingid ?? null,
     mbReleaseId: common.musicbrainz_albumid ?? null,

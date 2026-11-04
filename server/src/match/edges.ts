@@ -4,11 +4,14 @@ import { creditEvidence, performerEvidence } from "./evidence.js";
 import { retireNodeInto } from "./people.js";
 import { markBoundMayHaveShrunk } from "../enrich/members.js";
 import { findArtistByName } from "./artistLookup.js";
+import { albumIdentity } from "./albumIdentity.js";
+import { findOrCreateRelease } from "./releases.js";
 
 type LocalTags = {
   artist?: string | null;
   releaseDate?: string | null;
   album?: string | null;
+  albumartist?: string | null;
   label?: string | null;
   producer?: string[] | null;
   engineer?: string[] | null;
@@ -37,8 +40,9 @@ function parseTagsRaw(tagsRaw: string | null): LocalTags | null {
 // Non-recording node types are deduped by (type, title) at the application
 // level rather than a DB constraint — a blanket UNIQUE(type, title) index
 // would be wrong for 'recording' nodes (two different songs can share a
-// title), so this helper is only used for artist/release/year nodes, where
-// same-title-means-same-node is the correct v1 collapse rule. Matching is
+// title), so this helper is only used for artist/year/label nodes, where
+// same-title-means-same-node is the correct v1 collapse rule (albums have a
+// rule of their own since #465, match/releases.ts). Matching is
 // case/whitespace-insensitive (lower+trim on both sides) so "The Beatles"
 // and "the beatles " — the same artist, tagged inconsistently across a
 // real library — collapse into one node instead of fragmenting the entity
@@ -166,8 +170,8 @@ export function deriveLocalEdges(db: Database, fileId: number): void {
 }
 
 function deriveFileEdges(db: Database, fileId: number): void {
-  const file = db.prepare("SELECT recording_node_id, tags_raw FROM files WHERE id = ?").get(fileId) as
-    | { recording_node_id: number; tags_raw: string | null }
+  const file = db.prepare("SELECT recording_node_id, file_path, tags_raw FROM files WHERE id = ?").get(fileId) as
+    | { recording_node_id: number; file_path: string; tags_raw: string | null }
     | undefined;
   if (!file) return;
 
@@ -211,8 +215,11 @@ function deriveFileEdges(db: Database, fileId: number): void {
   if (year != null) {
     insertEdge(db, recordingNodeId, findOrCreateNode(db, "year", String(year)), "released_in");
   }
-  if (tags.album) {
-    insertEdge(db, recordingNodeId, findOrCreateNode(db, "release", tags.album), "appears_on");
+  // Issue #465: the album is its title without a disc suffix, by its album
+  // artist or in its folder (match/albumIdentity.ts), not the ALBUM tag alone.
+  const album = albumIdentity(tags, file.file_path);
+  if (album) {
+    insertEdge(db, recordingNodeId, findOrCreateRelease(db, album), "appears_on");
   }
   if (tags.label) {
     insertEdge(db, recordingNodeId, findOrCreateNode(db, "label", tags.label), "released_on");
