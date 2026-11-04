@@ -21,6 +21,7 @@ import { backfillFuzzyIndex } from "./match/backfill-fuzzy-index.js";
 import { mergeDuplicatePeople } from "./match/people.js";
 import { enqueueArtistCreditLookups } from "./enrich/artistCredit.js";
 import { pruneBeyondMemberBoundIfDue } from "./enrich/members.js";
+import { refreshBridgeMembers } from "./entities/bridges.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 import { startUpdateChecks } from "./update/check.js";
@@ -154,6 +155,21 @@ if (!ownerExists(db)) {
 // won't come back on afterwards. The time is in the line because a start
 // that prunes is held up while it runs.
 pruneBeyondMemberBoundIfDue(db, (level, message) => app.log[level](message));
+
+// Issue #466: bridge members, the artists with no tracks of their own who
+// link two of the library's artists (entities/bridges.ts). A scan places
+// them, and so does each band-membership lookup; this places the ones a
+// database already holds edges for, so George Harrison is on the map the
+// first time this build starts, without a scan. After the prune, so an edge
+// it removed doesn't count. It writes nothing when nothing has changed.
+try {
+  const bridges = refreshBridgeMembers(db);
+  if (bridges.added.length + bridges.removed.length > 0) {
+    app.log.info(`artists: placed ${bridges.added.length} bridge member(s), removed ${bridges.removed.length}`);
+  }
+} catch (err) {
+  app.log.error(`artists: couldn't place bridge members: ${err instanceof Error ? err.message : String(err)}`);
+}
 
 // Same one-line-diagnosis reasoning as the database log above: if a
 // packaged build silently falls back to PATH resolution instead of the

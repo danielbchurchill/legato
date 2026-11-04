@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import { writeInChunks } from "../writeInChunks.js";
 import { computeClusteredSeeds, type ClusterInput, type Seed } from "./cluster.js";
+import { seedBridgeMembers } from "../entities/bridges.js";
 
 export type { Seed };
 
@@ -114,7 +115,10 @@ export function recomputeTracksLayout(
   const seeds = computeClusteredSeeds(clusterInputs, options?.jitterSeed ?? 0);
 
   const releaseSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM albums", ["appears_on"]);
-  const artistSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM artists", ["performed_by"]);
+  const artistSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM artists WHERE track_count > 0", ["performed_by"]);
+  // Issue #466: a bridge member, the one artists row with no tracks, starts
+  // between the artists it links (entities/bridges.ts).
+  const bridgeSeeds = seedBridgeMembers(db, artistSeeds);
   // #24: 'credit' nodes (producer/engineer people — server/src/match/edges.ts's
   // local-tag credits and server/src/enrich/credits.ts's MusicBrainz-relation
   // credits both write these) get seeded the same way, scoped to nodes
@@ -145,6 +149,7 @@ export function recomputeTracksLayout(
   upsertSeeds(db, seeds, locked);
   upsertSeeds(db, releaseSeeds, locked);
   upsertSeeds(db, artistSeeds, locked);
+  upsertSeeds(db, bridgeSeeds, locked);
   upsertSeeds(db, creditSeeds, locked);
 
   // Installs that ran a recompute before this combined layout existed still

@@ -3,6 +3,7 @@ import type { Database } from "../sqlite.js";
 import type { MbArtistRelation } from "./mbClient.js";
 import { BOUND_SQL, withBound } from "./queue.js";
 import { findArtistByMbid, findArtistByName, isSameSpelling, rememberArtistMbid } from "../match/artistLookup.js";
+import { refreshBridgeMembers } from "../entities/bridges.js";
 
 // Issue #466: the other end of a band-membership relation is found by its
 // MusicBrainz artist id first, then by name (match/artistLookup.ts: case,
@@ -98,6 +99,14 @@ export function applyMemberRelations(
   }
 
   if (before.some((edge) => !seenPairs.has(`${edge.from_node}-${edge.to_node}`))) markBoundMayHaveShrunk(db);
+
+  // Issue #466: whoever an edge written or removed here touches may have
+  // become a bridge member or stopped being one, so the map shows it now
+  // rather than after the next scan.
+  const touched = new Set<number>([artistNodeId]);
+  for (const edge of before) touched.add(edge.from_node).add(edge.to_node);
+  for (const pair of seenPairs) for (const id of pair.split("-")) touched.add(Number(id));
+  refreshBridgeMembers(db, touched);
   return newNodeIds;
 }
 
