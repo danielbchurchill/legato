@@ -13,7 +13,6 @@ import type { usePlayback } from '../playback/usePlayback'
 import { AddToPlaylistButton } from '../panels/AddToPlaylistButton'
 import {
   enqueueItem,
-  filterOf,
   groupResults,
   playItem,
   useReleaseYears,
@@ -42,10 +41,9 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: 'artist', label: 'artists' },
   { id: 'release', label: 'albums' },
   { id: 'recording', label: 'tracks' },
+  { id: 'credit', label: 'producers' },
   { id: 'playlist', label: 'playlists' },
 ]
-
-const GROUP_ORDER = ['artist', 'release', 'recording', 'playlist'] as const
 
 type SearchPaletteProps = {
   onClose: () => void
@@ -68,12 +66,12 @@ export function SearchPalette({ onClose, onOpen, onOpenPlaylist, playback }: Sea
   const relations = useSearchRelations()
 
   const counts = useMemo(() => {
-    const c: Record<Exclude<Filter, 'all'>, number> = { artist: 0, release: 0, recording: 0, playlist: 0 }
-    for (const item of items) c[filterOf(item.kind)]++
+    const c: Record<Exclude<Filter, 'all'>, number> = { artist: 0, release: 0, recording: 0, credit: 0, playlist: 0 }
+    for (const item of items) c[item.kind]++
     return c
   }, [items])
 
-  const { top, groups } = groupResults(items, filter, GROUP_ORDER)
+  const { top, groups } = groupResults(items, filter)
   const order = [...(top ? [top] : []), ...groups.flatMap((g) => g.rows)]
   const selected = order[Math.min(cursor, order.length - 1)] ?? null
 

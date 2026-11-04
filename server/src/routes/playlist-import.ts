@@ -1,7 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { broadcast } from "../ws.js";
-import { addTrackToPlaylist, createPlaylist, type PlaylistRow } from "./playlists.js";
+import { addTracksToPlaylist, createPlaylist, type PlaylistRow } from "./playlists.js";
 import { longestCommonPathPrefix, normalizeSeparators, parseM3U } from "./m3u-parse.js";
 
 // #124: import a playlist exported on another machine. The paths inside
@@ -322,9 +322,10 @@ export function importM3U(
   const commit = db.transaction(() => {
     const playlist = createPlaylist(db, name);
 
-    for (const result of results) {
-      if (result.matchedNodeId != null) addTrackToPlaylist(db, playlist.id, result.matchedNodeId);
-    }
+    // In one call, in the file's order, so the cover (#462) is picked once
+    // from every album rather than once per track.
+    const matched = results.flatMap((result) => (result.matchedNodeId != null ? [result.matchedNodeId] : []));
+    if (matched.length > 0) addTracksToPlaylist(db, playlist.id, matched);
 
     const importRow = db
       .prepare("INSERT INTO playlist_imports (playlist_id, source_filename) VALUES (?, ?) RETURNING id")

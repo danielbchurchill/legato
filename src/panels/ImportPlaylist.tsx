@@ -7,6 +7,7 @@ import { StatusDot } from '../ui/StatusDot'
 import { formatCount, plural } from '../ui/format'
 import { BackRow, PanelHeader } from '../shell/SidePanel'
 import { API_BASE as API } from '../config/serverHost'
+import { usePlaylists } from './collectionsData'
 
 /* Playlist import, in three steps on one page: pick an .m3u, preview how
  * much of it Legato can find, then a report of what was added.
@@ -142,13 +143,12 @@ export function ImportPlaylist({ onBack, onOpenPlaylist }: { onBack: () => void;
     const byPath = result.entries.filter((e) => e.matchType === 'path').length
     const byMeta = result.entries.filter((e) => e.matchType === 'metadata').length
     const missing = result.entries.filter((e) => e.matchType === 'missing')
-    const matched = result.entries.filter((e) => e.matchedNodeId != null).map((e) => e.matchedNodeId!)
     return (
       <div className="flex flex-col">
         <BackRow label="Collections" onBack={onBack} />
         <PanelHeader title="Imported" />
         <div className="mt-[12px] flex items-center gap-[12px]">
-          <Mosaic nodeIds={matched.slice(0, 4)} size={56} />
+          <ImportedMosaic playlistId={result.playlist.id} />
           <div className="flex min-w-0 flex-col">
             <span className="text-heading [overflow-wrap:anywhere] text-[var(--color-ink)]">{result.playlist.name}</span>
             <span className="text-small text-[var(--color-ink-2)]">
@@ -304,4 +304,10 @@ export function ImportPlaylist({ onBack, onOpenPlaylist }: { onBack: () => void;
       </p>
     </div>
   )
+}
+
+/* The new playlist's cover, the four its row and page show (#462). */
+function ImportedMosaic({ playlistId }: { playlistId: number }) {
+  const { playlists } = usePlaylists()
+  return <Mosaic nodeIds={playlists?.find((p) => p.id === playlistId)?.cover_ids ?? []} size={56} />
 }

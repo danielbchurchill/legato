@@ -56,12 +56,13 @@ const edges = [
 ]
 const graph: GraphData = { nodes, edges, loading: false, refetch: async () => undefined, byId: new Map(nodes.map((n) => [n.id, n])) }
 
-// The server's answers, in its rank order.
+// The server's answers, in its rank order (#463): artists, albums, tracks,
+// then producers.
 const HITS = [
   { id: 1, type: 'artist', title: 'Dylan Moss' },
-  { id: 5, type: 'credit', title: 'Dylan Hart' },
-  { id: 3, type: 'recording', title: "Dylan's Dream" },
   { id: 2, type: 'release', title: 'Dylan Moss Live' },
+  { id: 3, type: 'recording', title: "Dylan's Dream" },
+  { id: 5, type: 'credit', title: 'Dylan Hart' },
 ]
 
 let hits = HITS
@@ -200,12 +201,31 @@ describe('the phone search field', () => {
 })
 
 describe('the phone search results', () => {
-  it("asks the palette's search, and groups what it finds as the handoff does", async () => {
+  it("asks the palette's search, and groups what it finds in the palette's order", async () => {
     const container = render(<Search query="dyl" playback={fakePlayback()} />)
     await answered()
-    expect(asked.some((url) => url.includes('/search?q=dyl&limit=100'))).toBe(true)
+    expect(asked.some((url) => url.includes('/search?q=dyl&perKind=40'))).toBe(true)
     const labels = [...container.querySelectorAll('h3')].map((h) => h.textContent)
-    expect(labels).toEqual(['top result', 'albums', 'people', 'tracks', 'playlists'])
+    // The artist is the top result, so its group has nothing left to show.
+    expect(labels).toEqual(['top result', 'albums', 'tracks', 'producers', 'playlists'])
+  })
+
+  it('shows producers in their own group after the tracks, not with the artists', async () => {
+    hits = [
+      { id: 2, type: 'release', title: 'Dylan Moss Live' },
+      { id: 1, type: 'artist', title: 'Dylan Moss' },
+      { id: 3, type: 'recording', title: "Dylan's Dream" },
+      { id: 5, type: 'credit', title: 'Dylan Hart' },
+    ]
+    const container = render(<Search query="dyl" playback={fakePlayback()} />)
+    await answered()
+    const groups = [...container.querySelectorAll('section')].map((section) => [
+      section.getAttribute('aria-label'),
+      [...section.querySelectorAll('button')].map((b) => b.textContent),
+    ])
+    expect(groups.map(([label]) => label)).toEqual(['artists', 'tracks', 'producers', 'playlists'])
+    expect(groups[0][1]).toEqual([expect.stringContaining('Dylan Moss')])
+    expect(groups[2][1]).toEqual([expect.stringContaining('Dylan Hart')])
   })
 
   it('says what each result is, from the graph', async () => {

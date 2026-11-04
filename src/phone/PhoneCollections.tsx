@@ -14,8 +14,8 @@ import { PlaylistPage } from '../panels/PlaylistPage'
 import {
   createPlaylist,
   useFavourites,
+  useFavouritesCover,
   usePlaylists,
-  usePlaylistTracks,
   type Favourite,
   type PlaylistSummary,
 } from '../panels/collectionsData'
@@ -89,6 +89,8 @@ function Page({ children }: { children: ReactNode }) {
 function CollectionsHome() {
   const { playlists } = usePlaylists()
   const favourites = useFavourites()
+  // Picked by album, as a playlist's is (#462).
+  const favouritesCover = useFavouritesCover()
   const [naming, setNaming] = useState(false)
   const [newName, setNewName] = useState('')
 
@@ -155,7 +157,7 @@ function CollectionsHome() {
             <Tile
               name="Favourites"
               count={plural(favourites.length, 'favourite')}
-              nodeIds={favourites.slice(0, 4).map((f) => f.id)}
+              nodeIds={favouritesCover}
               onOpen={() => openSheetView({ kind: 'favourites' })}
             />
           )}
@@ -229,7 +231,7 @@ function MenuItem({ onClick, children }: { onClick: () => void; children: string
 
 /* A collection: its mosaic, radius 10 with 2px between the covers, its
  * name and how much it holds, as the frame draws one. */
-function Tile({ name, count, nodeIds, onOpen }: { name: string; count: string; nodeIds: number[]; onOpen: () => void }) {
+function Tile({ name, count, nodeIds, onOpen }: { name: string; count: string; nodeIds: readonly (number | null)[]; onOpen: () => void }) {
   return (
     <li className="min-w-0">
       <button type="button" onClick={onOpen} className="flex w-full min-w-0 flex-col gap-[8px] text-left">
@@ -243,15 +245,14 @@ function Tile({ name, count, nodeIds, onOpen }: { name: string; count: string; n
   )
 }
 
-/* A playlist's tracks are fetched per tile for its mosaic, as the desktop's
- * rows fetch them: a library's playlists are tens, not thousands. */
+/* A playlist's mosaic comes with it (#462), the same four the desktop
+ * shows. */
 function PlaylistTile({ playlist }: { playlist: PlaylistSummary }) {
-  const { tracks } = usePlaylistTracks(playlist.id)
   return (
     <Tile
       name={playlist.name}
       count={plural(playlist.track_count, 'track')}
-      nodeIds={(tracks ?? []).slice(0, 4).map((t) => t.id)}
+      nodeIds={playlist.cover_ids}
       onOpen={() => openSheetView({ kind: 'playlist', playlistId: playlist.id })}
     />
   )

@@ -9,7 +9,12 @@ import { useReconnectEpoch } from '../connect/reconnect'
  * shows up here without a refresh. Each loads again after an outage (#119),
  * whose events never arrived. */
 
-export type PlaylistSummary = { id: number; name: string; track_count: number }
+/** A collection's cover (#462): four cells, each an album's node id or
+ * null for an empty one. The server picks them (cover/mosaic.ts) and keeps
+ * them, so every surface and every device shows the same four. */
+export type MosaicCells = (number | null)[]
+
+export type PlaylistSummary = { id: number; name: string; track_count: number; cover_ids: MosaicCells }
 export type PlaylistTrack = { id: number; title: string; canonical_duration_ms: number | null; position: number; playlist_track_id: number }
 export type Favourite = { id: number; type: string; title: string }
 
@@ -58,6 +63,22 @@ export function useFavourites(): Favourite[] | null {
   useEffect(load, [load, reconnects])
   useWsEvent(['favourites:changed'], load)
   return favourites
+}
+
+/** The favourites' cover, as a playlist's: kept live by the same event as
+ * the favourites themselves. */
+export function useFavouritesCover(): MosaicCells {
+  const [cells, setCells] = useState<MosaicCells>([])
+  const load = useCallback(() => {
+    fetch(`${API}/favourites/cover`)
+      .then((r) => r.json())
+      .then((body: { cover_ids: MosaicCells }) => setCells(body.cover_ids))
+      .catch(() => undefined)
+  }, [])
+  const reconnects = useReconnectEpoch()
+  useEffect(load, [load, reconnects])
+  useWsEvent(['favourites:changed'], load)
+  return cells
 }
 
 export function totalDuration(tracks: PlaylistTrack[]): number {

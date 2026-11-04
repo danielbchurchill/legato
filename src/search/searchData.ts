@@ -6,31 +6,41 @@ import { useReconnectEpoch } from '../connect/reconnect'
 import type { usePlayback } from '../playback/usePlayback'
 
 /* What a search finds, for both of its surfaces: the desktop's palette and
- * the phone's search (#389). Both ask /search's full-text index for the
- * matches, rank them the same way and take the same top result, so a query
- * finds the same things on either. How each lays the results out, and what
- * it says under a title, is its own.
+ * the phone's search (#389). Both ask /search for the matches and take the
+ * same top result, so a query finds the same things on either. How each
+ * lays the results out, and what it says under a title, is its own.
+ *
+ * The server ranks (#463, routes/search.ts): an exact title first, then
+ * artists, albums, tracks, then producers and engineers, each by how well
+ * it matches and then by listening. The rows arrive in that order and keep
+ * it; playlists, matched here by name, follow them.
  *
  * Everything shown about a match beyond its title (covers, artists, albums,
  * durations, counts) comes from the graph the client already holds. Only a
  * record's year needs asking for, and only for the few rows on screen. */
 
 type Hit = { id: number; type: string; title: string }
-export type Filter = 'all' | 'artist' | 'release' | 'recording' | 'playlist'
 export type Playlist = { id: number; name: string; track_count: number }
 
-/* One row anything in a search can be: a graph node, or a playlist. */
+/* One row anything in a search can be: a graph node, or a playlist. A
+ * credit is a producer or engineer. */
 export type Item = { key: string; kind: 'artist' | 'release' | 'recording' | 'credit' | 'playlist'; id: number; title: string }
 
-export type Group = { type: Exclude<Filter, 'all'>; rows: Item[] }
+/* Each kind is its own group, and its own filter. */
+export type Filter = 'all' | Item['kind']
+
+export type Group = { type: Item['kind']; rows: Item[] }
 
 const DEBOUNCE_MS = 120
-const SEARCH_LIMIT = 100
-export const GROUP_LIMIT: Record<Exclude<Filter, 'all'>, number> = { artist: 3, release: 4, recording: 6, playlist: 3 }
+export const GROUP_LIMIT: Record<Item['kind'], number> = { artist: 3, release: 4, recording: 6, credit: 3, playlist: 3 }
+/** The most rows one kind shows under its filter. The server sends this many
+ * of each kind (`perKind`), so a query that matches thousands of artists
+ * still brings its albums, tracks and producers. */
 const FILTERED_LIMIT = 40
 
-// Producers and engineers are people too: they search with the artists.
-export const filterOf = (kind: Item['kind']): Exclude<Filter, 'all'> => (kind === 'credit' ? 'artist' : kind)
+/** The groups under the top result, on the desktop and the phone alike:
+ * the server's kind order, then playlists. */
+export const GROUP_ORDER = ['artist', 'release', 'recording', 'credit', 'playlist'] as const satisfies readonly Item['kind'][]
 
 /* The full-text search, debounced, with stale responses dropped. Asked
  * again after an outage (#119), when an answer that failed came back empty. */
@@ -42,7 +52,7 @@ function useSearch(query: string): { hits: Hit[] | null; pending: boolean } {
     if (!q) return
     let cancelled = false
     const timer = setTimeout(() => {
-      fetch(`${API}/search?${new URLSearchParams({ q, limit: String(SEARCH_LIMIT) })}`)
+      fetch(`${API}/search?${new URLSearchParams({ q, perKind: String(FILTERED_LIMIT) })}`)
         .then((r) => r.json())
         .then((hits: Hit[]) => !cancelled && setState({ query, hits }))
         .catch(() => !cancelled && setState({ query, hits: [] }))
@@ -74,7 +84,8 @@ export type SearchResults = {
   hits: Hit[] | null
   /** A newer query than the answer showing is on its way. */
   pending: boolean
-  /** Every match, best first: graph nodes, then playlists by name. */
+  /** Every match, best first: graph nodes in the server's order, then
+   * playlists by name. */
   items: Item[]
   playlists: Playlist[]
 }
@@ -98,19 +109,20 @@ export function useSearchResults(query: string, enabled = true): SearchResults {
   return { hits, pending, items, playlists }
 }
 
-/** The top result is the best match in view; the groups list the rest, in
- * the order given, each up to its limit. */
+/** The top result is the best match in view, the first row in the
+ * server's order; the groups list the rest, in the order given, each up to
+ * its limit. */
 export function groupResults(
   items: readonly Item[],
   filter: Filter,
-  order: readonly Exclude<Filter, 'all'>[],
+  order: readonly Item['kind'][] = GROUP_ORDER,
 ): { visible: Item[]; top: Item | null; groups: Group[] } {
-  const visible = filter === 'all' ? [...items] : items.filter((item) => filterOf(item.kind) === filter)
+  const visible = filter === 'all' ? [...items] : items.filter((item) => item.kind === filter)
   const top = visible[0] ?? null
   const groups = (filter === 'all' ? order : [filter]).map((type) => ({
     type,
     rows: visible
-      .filter((item) => item !== top && filterOf(item.kind) === type)
+      .filter((item) => item !== top && item.kind === type)
       .slice(0, filter === 'all' ? GROUP_LIMIT[type] : FILTERED_LIMIT),
   }))
   return { visible, top, groups }

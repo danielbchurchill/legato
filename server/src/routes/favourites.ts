@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { broadcast } from "../ws.js";
+import { favouritesMosaic } from "../cover/mosaic.js";
 
 // The Favourites rail destination's whole API: a flat, manually-curated
 // list — no matching, no inference, nothing derived from play history.
@@ -24,17 +25,28 @@ export function listFavourites(db: Database): FavouriteRow[] {
 
 // Idempotent — the frontend flips its heart optimistically before this
 // resolves, so a stale double-click landing here twice must not error.
+// Each saves the favourites' cover with the change (#462, cover/mosaic.ts).
 export function addFavourite(db: Database, nodeId: number): void {
-  db.prepare("INSERT OR IGNORE INTO favourites (node_id) VALUES (?)").run(nodeId);
+  db.transaction(() => {
+    db.prepare("INSERT OR IGNORE INTO favourites (node_id) VALUES (?)").run(nodeId);
+    favouritesMosaic(db);
+  })();
 }
 
 export function removeFavourite(db: Database, nodeId: number): void {
-  db.prepare("DELETE FROM favourites WHERE node_id = ?").run(nodeId);
+  db.transaction(() => {
+    db.prepare("DELETE FROM favourites WHERE node_id = ?").run(nodeId);
+    favouritesMosaic(db);
+  })();
 }
 
 export function favouritesRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
     app.get("/favourites", async () => listFavourites(db));
+
+    // The phone's favourites tile: the cover's four cells, as a playlist's
+    // cover_ids (#462).
+    app.get("/favourites/cover", async () => ({ cover_ids: favouritesMosaic(db) }));
 
     app.post<{ Params: { nodeId: string } }>("/favourites/:nodeId", async (request) => {
       const nodeId = Number(request.params.nodeId);

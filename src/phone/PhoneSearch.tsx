@@ -15,8 +15,9 @@ import type { PhoneSearchState } from './searchState'
  * and the sheet comes up under it with the results. It's the palette's
  * search (searchData.ts): the same matches, ranked the same way, with the
  * same top result, laid out as the handoff draws it. Under the top result,
- * albums, people, tracks, then playlists; people are the palette's artists,
- * artists and the producers and engineers credited on tracks alike.
+ * the palette's groups in the palette's order (#463): artists, albums,
+ * tracks, producers (the producers and engineers credited on tracks), then
+ * playlists.
  *
  * Search is an overlay in the sheet (navigation.ts), so back closes it as
  * Cancel does, and back from a result opened from it comes back to it with
@@ -24,7 +25,13 @@ import type { PhoneSearchState } from './searchState'
 
 type Playback = ReturnType<typeof usePlayback>
 
-const GROUP_LABEL: Record<Group['type'], string> = { release: 'albums', artist: 'people', recording: 'tracks', playlist: 'playlists' }
+const GROUP_LABEL: Record<Group['type'], string> = {
+  artist: 'artists',
+  release: 'albums',
+  recording: 'tracks',
+  credit: 'producers',
+  playlist: 'playlists',
+}
 
 type SearchFieldProps = {
   search: PhoneSearchState
