@@ -82,3 +82,71 @@ export async function fetchArtistImage(name: string): Promise<ArtistImage | null
     sourceUrl: imageUrl,
   };
 }
+
+// Issue #461: album covers, for the cover picker only. The search is the
+// same keyless API as the artist photos above and needs no throttle of its
+// own for the same reason: the picker asks once or twice each time it opens,
+// nowhere near Deezer's 50 requests per 5 seconds.
+//
+// An album's art is named by `md5_image`, and every size of it lives under
+// one path on Deezer's CDN, so the md5 is all a candidate needs to carry:
+// https://cdn-images.dzcdn.net/images/cover/{md5}/1000x1000-000000-80-0-0.jpg
+// is the album's cover_xl, the largest Deezer serves.
+export type DeezerAlbum = {
+  id: number;
+  title: string;
+  artist: string | null;
+  md5: string;
+  recordType: string | null;
+  tracks: number | null;
+};
+
+type RawDeezerAlbum = {
+  id?: number;
+  title?: string;
+  md5_image?: string;
+  cover_xl?: string;
+  record_type?: string;
+  nb_tracks?: number;
+  artist?: { name?: string };
+};
+
+const MD5 = /^[0-9a-f]{32}$/;
+
+export function parseDeezerAlbums(data: { data?: RawDeezerAlbum[] }): DeezerAlbum[] {
+  return (data.data ?? []).flatMap((album) => {
+    // An album with no art answers with an empty md5 and a cover URL with
+    // an empty path segment, the album twin of isPlaceholderImageUrl.
+    const md5 = album.md5_image ?? "";
+    if (album.id == null || !album.title || !MD5.test(md5)) return [];
+    return [
+      {
+        id: album.id,
+        title: album.title,
+        artist: album.artist?.name ?? null,
+        md5,
+        recordType: album.record_type ?? null,
+        tracks: album.nb_tracks ?? null,
+      },
+    ];
+  });
+}
+
+export function deezerCoverUrl(md5: string, px: 250 | 500 | 1000): string {
+  return `https://cdn-images.dzcdn.net/images/cover/${md5}/${px}x${px}-000000-80-0-0.jpg`;
+}
+
+// `query` is Deezer's own search syntax: `artist:"…" album:"…"` narrows to
+// both fields, a bare string searches everything.
+export async function searchDeezerAlbums(query: string): Promise<DeezerAlbum[]> {
+  const url = `${API_ROOT}/search/album?${new URLSearchParams({ q: query, limit: "25" })}`;
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+  if (!res.ok) {
+    throw new Error(`Deezer album search failed: ${res.status} ${res.statusText}`);
+  }
+  // Deezer reports a refusal (over its quota, say) as a 200 with an error
+  // object, which would otherwise read as "no albums".
+  const body = (await res.json()) as { data?: RawDeezerAlbum[]; error?: { message?: string } };
+  if (body.error) throw new Error(`Deezer album search failed: ${body.error.message ?? "an error"}`);
+  return parseDeezerAlbums(body);
+}

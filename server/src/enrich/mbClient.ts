@@ -236,6 +236,125 @@ export async function searchRelease(input: ReleaseSearchInput): Promise<MbReleas
   }));
 }
 
+// Issue #461: the cover picker looks an album up by its release group, the
+// record as opposed to one edition of it, because every edition's art is a
+// candidate. An album M-8 never matched has no release-group id, so it's
+// found by its title and artist. `artist` is the whole credit as printed
+// ("Simon & Garfunkel"), joined the way MusicBrainz joins it.
+export type MbReleaseGroupCandidate = {
+  mbid: string;
+  score: number;
+  title: string;
+  artist: string | null;
+  primaryType: string | null;
+  firstReleaseDate: string | null;
+};
+
+type RawReleaseGroupSearchResult = {
+  id: string;
+  score: number;
+  title: string;
+  "primary-type"?: string;
+  "first-release-date"?: string;
+  "artist-credit"?: RawArtistCredit;
+};
+
+export function parseReleaseGroupSearch(data: { "release-groups"?: RawReleaseGroupSearchResult[] }): MbReleaseGroupCandidate[] {
+  return (data["release-groups"] ?? []).map((group) => {
+    const credit = parseArtistCredit(group["artist-credit"]);
+    return {
+      mbid: group.id,
+      score: group.score,
+      title: group.title,
+      artist: credit ? credit.map((c) => c.name + c.joinphrase).join("").trim() : null,
+      primaryType: group["primary-type"] ?? null,
+      firstReleaseDate: group["first-release-date"] || null,
+    };
+  });
+}
+
+export async function searchReleaseGroup(title: string, artist: string): Promise<MbReleaseGroupCandidate[]> {
+  await throttle();
+
+  const query = `releasegroup:"${escapeLucene(title)}" AND artist:"${escapeLucene(artist)}"`;
+  const url = `${API_ROOT}/release-group?query=${encodeURIComponent(query)}&fmt=json&limit=10`;
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+  if (!res.ok) {
+    throw new Error(`MusicBrainz release-group search failed: ${res.status} ${res.statusText}`);
+  }
+  return parseReleaseGroupSearch((await res.json()) as { "release-groups"?: RawReleaseGroupSearchResult[] });
+}
+
+// One edition of a release group, with what the Cover Art Archive holds for
+// it. MusicBrainz's release browse carries CAA's own summary of each release
+// (has a front, has a back, how many images, hidden for copyright), so the
+// picker knows which editions have art without asking CAA about each.
+export type MbGroupRelease = {
+  mbid: string;
+  title: string;
+  date: string | null;
+  country: string | null;
+  status: string | null;
+  disambiguation: string | null;
+  art: { artwork: boolean; front: boolean; back: boolean; count: number; darkened: boolean };
+};
+
+type RawGroupRelease = {
+  id: string;
+  title?: string;
+  date?: string;
+  country?: string | null;
+  status?: string | null;
+  disambiguation?: string;
+  "cover-art-archive"?: { artwork?: boolean; front?: boolean; back?: boolean; count?: number; darkened?: boolean };
+};
+
+export function parseGroupReleases(data: { releases?: RawGroupRelease[] }): MbGroupRelease[] {
+  return (data.releases ?? []).map((release) => {
+    const art = release["cover-art-archive"] ?? {};
+    return {
+      mbid: release.id,
+      title: release.title ?? "",
+      date: release.date || null,
+      country: release.country || null,
+      status: release.status || null,
+      disambiguation: release.disambiguation || null,
+      art: {
+        artwork: art.artwork === true,
+        front: art.front === true,
+        back: art.back === true,
+        count: art.count ?? 0,
+        darkened: art.darkened === true,
+      },
+    };
+  });
+}
+
+// MusicBrainz browses at most 100 a page. A release group with more than
+// MAX_GROUP_RELEASES editions is rare (Rumours has 81, Abbey Road 74), and
+// each page costs a second of the shared rate limit, so the browse stops
+// there rather than holding the picker for a minute.
+const BROWSE_PAGE = 100;
+export const MAX_GROUP_RELEASES = 400;
+
+export async function browseReleaseGroupReleases(releaseGroupMbid: string): Promise<MbGroupRelease[]> {
+  const releases: MbGroupRelease[] = [];
+  for (let offset = 0; offset < MAX_GROUP_RELEASES; offset += BROWSE_PAGE) {
+    await throttle();
+    const url = `${API_ROOT}/release?release-group=${releaseGroupMbid}&fmt=json&limit=${BROWSE_PAGE}&offset=${offset}`;
+    const res = await fetch(url, { headers: { "User-Agent": USER_AGENT, Accept: "application/json" } });
+    if (res.status === 404) return releases;
+    if (!res.ok) {
+      throw new Error(`MusicBrainz release browse failed: ${res.status} ${res.statusText}`);
+    }
+    const data = (await res.json()) as { "release-count"?: number; releases?: RawGroupRelease[] };
+    const page = parseGroupReleases(data);
+    releases.push(...page);
+    if (page.length < BROWSE_PAGE || releases.length >= (data["release-count"] ?? 0)) break;
+  }
+  return releases;
+}
+
 // M-8: an artist relation attached to a recording — producer, engineer,
 // mix, mastering, conductor, arranger, remixer, DJ-mixer are typically bare
 // (attributes: []); vocal/instrument/performer relations carry the actual
