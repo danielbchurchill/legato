@@ -19,6 +19,7 @@ import { watchLibraryRoot } from "./scan/watcher.js";
 import { reconcileInterruptedScans } from "./scan/scanner.js";
 import { backfillFuzzyIndex } from "./match/backfill-fuzzy-index.js";
 import { mergeDuplicatePeople } from "./match/people.js";
+import { attachUpgradedCovers, upgradeReleaseIdentities } from "./match/releaseUpgrade.js";
 import { enqueueArtistCreditLookups } from "./enrich/artistCredit.js";
 import { pruneBeyondMemberBoundIfDue } from "./enrich/members.js";
 import { foldArtistNameVariantsIfDue } from "./match/artistFold.js";
@@ -182,6 +183,35 @@ try {
   app.log.error(`artists: couldn't place bridge members: ${err instanceof Error ? err.message : String(err)}`);
 }
 
+// Issue #465: an album is its title without a disc suffix, by its album
+// artist or in its folder, no longer the ALBUM tag string alone. A library
+// from before that is brought forward once, here, on the first start after
+// migration 0045 (match/releaseUpgrade.ts): a set's discs merge into one
+// album and a node two artists' albums shared splits. The albums table and
+// the map catch up in the recompute after listen, shared with the artist
+// fold's, and art for split albums is read in the background.
+const releaseUpgrade = (() => {
+  const started = performance.now();
+  const upgraded = upgradeReleaseIdentities(db);
+  if (!upgraded) return null;
+  app.log.info(
+    `albums: filed ${upgraded.albums} album(s) by title, album artist and folder in ` +
+      `${Math.round(performance.now() - started)} ms: merged ${upgraded.merged} disc part(s), ` +
+      `split ${upgraded.split} album(s) off a shared node, retitled ${upgraded.retitled}, ` +
+      `took ${upgraded.discNumbers} file(s)' disc number from a suffix`,
+  );
+  if (upgraded.needCovers.length > 0) {
+    void attachUpgradedCovers(db, upgraded.needCovers).then(({ read, queued, failed, firstError }) => {
+      app.log.info(
+        `albums: read art for ${read} of ${upgraded.needCovers.length} split album(s) from their files, ` +
+          `queued ${queued} Cover Art Archive lookup(s)`,
+      );
+      if (failed > 0) app.log.warn(`albums: couldn't read art from ${failed} album(s)' files, first ${firstError}`);
+    });
+  }
+  return { recomputeAfter: upgraded.merged + upgraded.split + upgraded.retitled + upgraded.discNumbers > 0 };
+})();
+
 // Same one-line-diagnosis reasoning as the database log above: if a
 // packaged build silently falls back to PATH resolution instead of the
 // bundled binaries it should be finding, this is where that shows up.
@@ -299,9 +329,13 @@ app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
   app.log.info(`legato-server listening at ${address}`);
 
   // Issue #466: see the fold above. Off the request loop, like any recompute.
-  if (artistFold?.recomputeAfter) {
+  // Issue #465: the album upgrade's recompute is this same one, so a start
+  // that does both runs it once.
+  if (artistFold?.recomputeAfter || releaseUpgrade?.recomputeAfter) {
     void recomputeOffThread(db).catch((error) =>
-      app.log.error(`artists: recompute after the fold failed: ${error instanceof Error ? error.message : String(error)}`),
+      app.log.error(
+        `artists/albums: recompute after the upgrade failed: ${error instanceof Error ? error.message : String(error)}`,
+      ),
     );
   }
 
