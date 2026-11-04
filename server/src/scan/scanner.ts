@@ -9,6 +9,7 @@ import { attachCoverForFile, type EmbeddedPicture } from "../cover/extract.js";
 import { ensurePeaksForFile } from "../waveform/peaks.js";
 import { collapseFile } from "../match/collapse.js";
 import { deriveLocalEdges } from "../match/edges.js";
+import { AlbumFolders } from "../match/releases.js";
 import { RateEstimator } from "./rate.js";
 import { createProgressGate } from "./throttle.js";
 import { parseTags, type NormalizedTags } from "./tags.js";
@@ -860,6 +861,9 @@ export async function executeScan(
           emitFor("match", filesTotal),
         );
       } else if (stage === "collapse") {
+        // Issue #465: each album folder read once for the stage, not once
+        // per file (match/releases.ts).
+        const albums = new AlbumFolders(db);
         outcome = await runFileStage(
           db,
           job,
@@ -867,7 +871,7 @@ export async function executeScan(
           startCursor,
           // eslint-disable-next-line @typescript-eslint/require-await
           async (row) => {
-            deriveLocalEdges(db, row.file_id as number);
+            deriveLocalEdges(db, row.file_id as number, albums);
           },
           emitFor("collapse", filesTotal),
         );

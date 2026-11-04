@@ -164,7 +164,7 @@ export function tagWritesRoutes(db: Database) {
         // identities the written files will have, so the review says what
         // approving does.
         const rename = plan.rename;
-        const target = rename ? mergeTarget(db, node, rename.newTitle, identitiesAfter(plan.writes)) : null;
+        const target = rename ? mergeTarget(db, node, rename.newTitle, identitiesAfter(db, plan.writes)) : null;
         const { editId, writeIds } = db.transaction(() => {
           const edit = db
             .prepare("INSERT INTO tag_edits (node_id, old_title, new_title) VALUES (?, ?, ?) RETURNING id")

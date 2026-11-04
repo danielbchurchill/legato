@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { deriveLocalEdges } from "./edges.js";
-import { albumIdentity } from "./albumIdentity.js";
-import { findOrCreateRelease, findRelease } from "./releases.js";
+import { albumIdentities, type AlbumFile } from "./albumIdentity.js";
+import { ALBUM_FOLDER_SQL, albumFolderParams, findOrCreateRelease, findRelease } from "./releases.js";
 
 // Issue #465: which album node a file's appears_on edge lands on.
 
@@ -114,13 +114,84 @@ describe("disc suffixes", () => {
 });
 
 describe("an album's artist", () => {
-  it("keeps two artists' Greatest Hits apart, by ALBUMARTIST, even in one folder", () => {
-    const queen = addFile("/m/Hits/01.flac", { artist: "Queen", albumartist: "Queen", album: "Greatest Hits" });
-    const abba = addFile("/m/Hits/02.flac", { artist: "ABBA", albumartist: "ABBA", album: "Greatest Hits" });
-    const queenAgain = addFile("/m/Hits/03.flac", { artist: "Queen", albumartist: "Queen", album: "Greatest Hits" });
+  it("keeps two artists' Greatest Hits apart in one folder when their track numbers collide", () => {
+    const hits = (name: string, n: number, albumartist: string | null) =>
+      addFile(`/m/Hits/${name} ${n}.flac`, { artist: name, albumartist, album: "Greatest Hits", trackNo: n });
+    const queen = hits("Queen", 1, "Queen");
+    const abba = hits("ABBA", 1, "ABBA");
+    const queenAgain = hits("Queen", 2, "Queen");
     expect(albumsOf([queen, abba, queenAgain])).toEqual([
       { title: "Greatest Hits", files: [queen, queenAgain] },
       { title: "Greatest Hits", files: [abba] },
+    ]);
+  });
+
+  it("keeps them apart without ALBUMARTIST too", () => {
+    const hits = (name: string, n: number) =>
+      addFile(`/m/Hits/${name} ${n}.flac`, { artist: name, album: "Greatest Hits", trackNo: n });
+    const files = [hits("Queen", 1), hits("ABBA", 1), hits("Queen", 2), hits("ABBA", 2)];
+    expect(albumsOf(files).map((a) => a.files)).toEqual([
+      [files[0], files[2]],
+      [files[1], files[3]],
+    ]);
+  });
+
+  // The reference library's Amchitka: a live compilation whose ALBUMARTIST
+  // is each track's performer, on two discs in CD1/ and CD2/.
+  const amchitka = (sub: string, n: number, performer: string, disc: number) =>
+    addFile(
+      `/m/Various Artists/Amchitka-The 1970 Concert That Launched Greenpeace CD1/${sub}/${String(n).padStart(2, "0")} - ${performer}.flac`,
+      {
+        album: `Amchitka-The 1970 Concert That Launched Greenpeace ${sub}`,
+        albumartist: performer,
+        artist: performer,
+        discNo: disc,
+        trackNo: n,
+      },
+    );
+
+  it("keeps a compilation tagged with each performer as ALBUMARTIST as one album", () => {
+    const files = [
+      amchitka("CD1", 1, "Phil Ochs", 1),
+      amchitka("CD1", 12, "James Taylor", 1),
+      amchitka("CD2", 1, "Joni Mitchell", 2),
+    ];
+    expect(albumsOf(files)).toEqual([{ title: "Amchitka-The 1970 Concert That Launched Greenpeace", files }]);
+  });
+
+  it("ends with one album for a compilation whose files arrive one at a time, once they're all derived again", () => {
+    const one = amchitka("CD1", 1, "Phil Ochs", 1);
+    deriveLocalEdges(db, one);
+    const two = amchitka("CD1", 12, "James Taylor", 1);
+    deriveLocalEdges(db, two);
+    const three = amchitka("CD2", 1, "Joni Mitchell", 2);
+    expect(albumsOf([three, two, one])).toHaveLength(1);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM nodes WHERE type = 'release'").get()).toEqual({ n: 1 });
+  });
+
+  it("puts one artist's album tagged with ALBUMARTIST in one folder and only ARTIST in another together", () => {
+    const own = addFile("/m/Phil Ochs/I Ain't Marching Anymore/01.flac", {
+      album: "I Ain't Marching Anymore",
+      albumartist: "Phil Ochs",
+      artist: "Phil Ochs",
+      trackNo: 1,
+    });
+    // A two-albums-on-one-CD reissue, its second disc tagged as the album.
+    const reissue = addFile("/m/Phil Ochs/All News That's Fit to Sing/CD2/01.flac", {
+      album: "I Ain't Marching Anymore",
+      artist: "Phil Ochs",
+      discNo: 2,
+      trackNo: 1,
+    });
+    const other = addFile("/m/Phil Ochs/All News That's Fit to Sing/CD1/01.flac", {
+      album: "All News That's Fit to Sing",
+      artist: "Phil Ochs",
+      discNo: 1,
+      trackNo: 1,
+    });
+    expect(albumsOf([reissue, own, other])).toEqual([
+      { title: "I Ain't Marching Anymore", files: [own, reissue] },
+      { title: "All News That's Fit to Sing", files: [other] },
     ]);
   });
 
@@ -205,18 +276,64 @@ describe("an album's artist", () => {
 });
 
 describe("findRelease", () => {
+  const harvest = (filePath: string, tags: Partial<AlbumFile> = {}) =>
+    albumIdentities([
+      {
+        id: 1,
+        path: filePath,
+        album: "Harvest",
+        albumartist: null,
+        artist: null,
+        discNo: null,
+        trackNo: null,
+        ...tags,
+      },
+    ]).get(1)!;
+
   it("only reads: it finds what findOrCreateRelease made and makes nothing", () => {
-    const identity = albumIdentity({ album: "Harvest", albumartist: "Neil Young" }, "/m/Neil Young/Harvest/01.flac")!;
+    const identity = harvest("/m/Neil Young/Harvest/01.flac", { albumartist: "Neil Young" });
     expect(findRelease(db, identity)).toBeNull();
     expect(db.prepare("SELECT COUNT(*) AS n FROM release_keys").get()).toEqual({ n: 0 });
     const nodeId = findOrCreateRelease(db, identity);
     expect(findRelease(db, identity)).toBe(nodeId);
-    // The folder key is the way in for a track of the same album without
-    // the tag.
-    expect(findRelease(db, albumIdentity({ album: "Harvest" }, "/m/Neil Young/Harvest/02.flac")!)).toBe(nodeId);
+    // The folder key is the way in for an album with no artist at all.
+    expect(findRelease(db, harvest("/m/Neil Young/Harvest/02.flac"))).toBe(nodeId);
     // But not for another artist's album of that title in that folder.
+    expect(findRelease(db, harvest("/m/Neil Young/Harvest/03.flac", { albumartist: "X" }))).toBeNull();
+  });
+});
+
+describe("reading an album folder", () => {
+  it("is ranges of files.file_path's index, not a scan", () => {
+    const plan = (
+      db.prepare(`EXPLAIN QUERY PLAN ${ALBUM_FOLDER_SQL}`).all(...albumFolderParams("/m/a")) as { detail: string }[]
+    ).map((row) => row.detail);
+    expect(plan.join("\n")).not.toMatch(/SCAN files/);
     expect(
-      findRelease(db, albumIdentity({ album: "Harvest", albumartist: "X" }, "/m/Neil Young/Harvest/03.flac")!),
-    ).toBeNull();
+      plan.filter((detail) => /USING INDEX sqlite_autoindex_files_1 \(file_path>\? AND file_path<\?\)/.test(detail)),
+    ).toHaveLength(6);
+  });
+
+  it("doesn't read a folder whose name only starts with the album folder's", () => {
+    const five = addFile("/srv/music/5/01.flac", { album: "Five", artist: "A", trackNo: 1 });
+    addFile("/srv/music/50/01.flac", { album: "Five", artist: "B", trackNo: 1 });
+    addFile("/srv/music/5000/01.flac", { album: "Five", artist: "C", trackNo: 1 });
+    const rows = db.prepare(ALBUM_FOLDER_SQL).all(...albumFolderParams("/srv/music/5")) as { id: number }[];
+    expect(rows.map((row) => row.id)).toEqual([five]);
+  });
+
+  it("finds a disc folder's files and a sibling folder named after a disc, and nothing deeper or beside", () => {
+    const files = [
+      addFile("/m/Various/Amchitka/01.flac", { album: "Amchitka", artist: "A", trackNo: 1 }),
+      addFile("/m/Various/Amchitka/CD2/01.flac", { album: "Amchitka", artist: "B", trackNo: 1, discNo: 2 }),
+      addFile("/m/Various/Amchitka CD3/01.flac", { album: "Amchitka", artist: "C", trackNo: 1 }),
+    ];
+    // Same title, but another album folder: a live album beside it, and a
+    // folder inside the disc folder.
+    const beside = addFile("/m/Various/Amchitka Live/01.flac", { album: "Amchitka", artist: "D", trackNo: 1 });
+    const deeper = addFile("/m/Various/Amchitka/CD2/Bonus/01.flac", { album: "Amchitka", artist: "E", trackNo: 1 });
+    const albums = albumsOf([...files, beside, deeper]);
+    expect(albums.find((a) => a.files.includes(files[0]!))!.files).toEqual(files);
+    expect(albums).toHaveLength(3);
   });
 });

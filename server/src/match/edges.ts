@@ -4,14 +4,15 @@ import { creditEvidence, performerEvidence } from "./evidence.js";
 import { retireNodeInto } from "./people.js";
 import { markBoundMayHaveShrunk } from "../enrich/members.js";
 import { findArtistByName } from "./artistLookup.js";
-import { albumIdentity } from "./albumIdentity.js";
-import { findOrCreateRelease } from "./releases.js";
+import { albumIdentityOf, findOrCreateRelease, type AlbumFolders } from "./releases.js";
 
 type LocalTags = {
   artist?: string | null;
   releaseDate?: string | null;
   album?: string | null;
   albumartist?: string | null;
+  discNo?: number | null;
+  trackNo?: number | null;
   label?: string | null;
   producer?: string[] | null;
   engineer?: string[] | null;
@@ -165,14 +166,25 @@ function insertEdge(db: Database, fromNode: number, toNode: number, type: string
 // (recompute.ts) while a scan, the watcher or the enrichment worker can be
 // deriving one on the request loop's, and two runs of the delete and the
 // inserts interleaving on one recording would leave its edges doubled.
-export function deriveLocalEdges(db: Database, fileId: number): void {
-  db.transaction(() => deriveFileEdges(db, fileId))();
+//
+// Issue #465: a pass that derives many files (recompute, a scan's collapse
+// stage) passes one AlbumFolders, so each album folder is read once.
+export function deriveLocalEdges(db: Database, fileId: number, albums?: AlbumFolders): void {
+  db.transaction(() => deriveFileEdges(db, fileId, albums))();
 }
 
-function deriveFileEdges(db: Database, fileId: number): void {
-  const file = db.prepare("SELECT recording_node_id, file_path, tags_raw FROM files WHERE id = ?").get(fileId) as
-    | { recording_node_id: number; file_path: string; tags_raw: string | null }
-    | undefined;
+type FileRow = {
+  recording_node_id: number;
+  file_path: string;
+  disc_no: number | null;
+  track_no: number | null;
+  tags_raw: string | null;
+};
+
+function deriveFileEdges(db: Database, fileId: number, albums: AlbumFolders | undefined): void {
+  const file = db
+    .prepare("SELECT recording_node_id, file_path, disc_no, track_no, tags_raw FROM files WHERE id = ?")
+    .get(fileId) as FileRow | undefined;
   if (!file) return;
 
   const tags = parseTagsRaw(file.tags_raw);
@@ -215,9 +227,24 @@ function deriveFileEdges(db: Database, fileId: number): void {
   if (year != null) {
     insertEdge(db, recordingNodeId, findOrCreateNode(db, "year", String(year)), "released_in");
   }
-  // Issue #465: the album is its title without a disc suffix, by its album
-  // artist or in its folder (match/albumIdentity.ts), not the ALBUM tag alone.
-  const album = albumIdentity(tags, file.file_path);
+  // Issue #465: the album is its title without a disc suffix, by the artist
+  // its folder's files agree on, or a compilation in its folder
+  // (match/albumIdentity.ts), not the ALBUM tag alone.
+  // The same facts match/releases.ts's ALBUM_FILE_COLUMNS reads for its
+  // folder's other files.
+  const album = albumIdentityOf(
+    db,
+    {
+      id: fileId,
+      path: file.file_path,
+      album: tags.album ?? null,
+      albumartist: tags.albumartist ?? null,
+      artist: tags.artist ?? null,
+      discNo: file.disc_no ?? tags.discNo ?? null,
+      trackNo: file.track_no ?? tags.trackNo ?? null,
+    },
+    albums,
+  );
   if (album) {
     insertEdge(db, recordingNodeId, findOrCreateRelease(db, album), "appears_on");
   }
