@@ -711,13 +711,21 @@ export type CanvasHandle = {
    * sheet is at. On a phone the node's label then draws first. Snaps under
    * reduced motion. */
   centreNodeAbove: (nodeId: number, options: { bottomInset: number; topInset?: number }) => void
+  /** #468: lights a set of nodes and only the edges between them, and
+   * frames them in the map the shell leaves showing, selecting nothing: an
+   * Insights card's bridge, family or path, shown whole. Nodes not on the
+   * map are left out. Selecting a node, clicking the empty map or another
+   * call ends it. False, changing nothing, when none of them is on the map. */
+  focusNodes: (nodeIds: number[]) => boolean
 }
 
 type LabelKind = 'artist' | 'release' | 'credit'
 
 /* What a selection or a held hover brings forward: a set of node keys, and
- * — for a selection — the cluster whose glow stays at full strength. */
-type Focus = { keys: Set<string>; cluster: number | null }
+ * — for a selection — the cluster whose glow stays at full strength.
+ * `among` lights only the edges with both ends in the set, for a set shown
+ * whole (focusNodes), where its neighbours' edges would hide the path. */
+type Focus = { keys: Set<string>; cluster: number | null; among?: boolean }
 
 /* A selected node focuses its whole cluster, plus its own neighbours (so a
  * producer, who has no cluster, focuses everything they produced). */
@@ -833,6 +841,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     labelWeightsRef.current = labelWeights
   }, [labelWeights])
   const selectionFocusRef = useRef<Focus | null>(null)
+  // #468: a set shown by focusNodes, under a selection and over a hover.
+  const groupFocusRef = useRef<Focus | null>(null)
   // Set by the renderer effect: re-evaluates which focus applies after the
   // selection changes from outside it.
   const applyFocusRef = useRef<() => void>(() => {})
@@ -893,7 +903,49 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     [frameNode, visibleArea],
   )
 
-  useImperativeHandle(ref, () => ({ flyToNode: flyTo, centreNodeAbove }), [flyTo, centreNodeAbove])
+  // #468: frames a set as frameNode frames a cluster, its middle at the
+  // middle of the map left showing, and lights it in place of any hover.
+  const focusNodes = useCallback(
+    (nodeIds: number[]): boolean => {
+      const graph = graphRef.current
+      const renderer = rendererRef.current
+      if (!graph || !renderer) return false
+      const keys = new Set(nodeIds.map(nodeKey).filter((key) => graph.hasNode(key)))
+      if (keys.size === 0) return false
+      groupFocusRef.current = { keys, cluster: null, among: true }
+      applyFocusRef.current()
+
+      const area = visibleArea(renderer)
+      const normalize = createNormalizationFunction(renderer.getCustomBBox() ?? renderer.getBBox())
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      for (const key of keys) {
+        const p = normalize({ x: graph.getNodeAttribute(key, 'x') as number, y: graph.getNodeAttribute(key, 'y') as number })
+        minX = Math.min(minX, p.x)
+        maxX = Math.max(maxX, p.x)
+        minY = Math.min(minY, p.y)
+        maxY = Math.max(maxY, p.y)
+      }
+      const x = (minX + maxX) / 2
+      const y = (minY + maxY) / 2
+      const ratio = ratioToFit(renderer, graph, keys, area)
+      const camera = renderer.getCamera()
+      const landing = centreOf(area)
+      const atLanding = renderer.viewportToFramedGraph(landing, { cameraState: { x, y, ratio, angle: camera.angle } })
+      const middle = renderer.framedGraphToViewport({ x, y })
+      const duration =
+        osPrefersReducedMotion() || reducedMotionForcedRef.current
+          ? 0
+          : flyToDurationForDistance(Math.hypot(middle.x - landing.x, middle.y - landing.y))
+      void camera.animate({ x: 2 * x - atLanding.x, y: 2 * y - atLanding.y, ratio }, { duration })
+      return true
+    },
+    [visibleArea],
+  )
+
+  useImperativeHandle(ref, () => ({ flyToNode: flyTo, centreNodeAbove, focusNodes }), [flyTo, centreNodeAbove, focusNodes])
 
   // Held in refs so effects below don't list them as dependencies — a parent
   // re-render must never tear down the renderer or reset the camera.
@@ -1103,6 +1155,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     clusterMembersRef.current = clusterMembers
     selectionFocusRef.current =
       selectedNodeId != null ? focusFor(selectedNodeId, graphRef.current, clusters.clusterOf, clusterMembers) : null
+    if (selectedNodeId != null) groupFocusRef.current = null
     applyFocusRef.current()
   }, [selectedNodeId, clusters, clusterMembers])
 
@@ -1441,7 +1494,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       // A selection wins: it was a click, a hover is a passing glance — and
       // the pointer is still resting on the node the moment after it's
       // clicked, so a hover that won would undo the selection's focus.
-      const next = selectionFocusRef.current ?? (hoverActive ? hoverFocus : null)
+      const next = selectionFocusRef.current ?? groupFocusRef.current ?? (hoverActive ? hoverFocus : null)
       if (next) {
         currentFocus = next
         // Progress alone can't say focus is settled. Deselecting and
@@ -1513,7 +1566,8 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
       const colors = themeColorsRef.current
       const focusing = currentFocus != null && focusProgress > 0
 
-      if (focusing && (currentFocus!.keys.has(source) || currentFocus!.keys.has(target))) {
+      const keys = currentFocus?.keys
+      if (focusing && (currentFocus!.among ? keys!.has(source) && keys!.has(target) : keys!.has(source) || keys!.has(target))) {
         const hue = edgeHue(relType, live.edgeColorOverrides, colors)
         return { ...data, size: width * FOCUSED_EDGE_WIDTH, color: premultiplied(withAlphaFactor(hue, 1, FOCUSED_EDGE_ALPHA * focusProgress)) }
       }
@@ -1780,6 +1834,10 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     // that separately (and a marquee drag is claimed before it ever reaches
     // sigma's own drag tracking — see marqueeActive below).
     const clickStage = () => {
+      if (groupFocusRef.current != null) {
+        groupFocusRef.current = null
+        applyFocusRef.current()
+      }
       if (selectedNodeIdRef.current != null) onSelectNodeRef.current(null)
       if (multiSelectedRef.current.length > 0) setMultiSelected([])
     }
