@@ -149,4 +149,19 @@ describe("normalizeTags", () => {
     expect(result.durationMs).toBe(1235);
     expect(result.bitrate).toBe(320124);
   });
+
+  // Issue #465: a set's parts are one album now, so a file without a disc
+  // tag needs a disc number to sort by, and the suffix is the only one it has.
+  it("takes the disc number from the album's disc suffix when there's no disc tag", () => {
+    expect(normalizeTags(common({ album: "The Best Of The Doors [CD2]" }), format()).discNo).toBe(2);
+    expect(normalizeTags(common({ album: "Farewells & Fantasies (disc 3)" }), format()).discNo).toBe(3);
+    // The album tag itself is kept as the file has it.
+    expect(normalizeTags(common({ album: "Live CD1" }), format()).album).toBe("Live CD1");
+  });
+
+  it("prefers the disc tag to the suffix, and leaves a set marker without a disc", () => {
+    expect(normalizeTags(common({ album: "Live CD1", disk: { no: 2, of: 2 } }), format()).discNo).toBe(2);
+    expect(normalizeTags(common({ album: "The Traveling Wilburys Collection [2CD]" }), format()).discNo).toBeNull();
+    expect(normalizeTags(common({ album: undefined }), format()).discNo).toBeNull();
+  });
 });
