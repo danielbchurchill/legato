@@ -14,6 +14,7 @@ import { useGraph } from '../canvas/graphContext'
 import type { DetailsTab } from '../shell/panels'
 import type { usePlayback } from '../playback/usePlayback'
 import { AddToPlaylistButton, RowAddToPlaylist } from './AddToPlaylistButton'
+import { ChangeCover } from './CoverPicker'
 import { DetailRows } from './DetailRows'
 import { formatBitrate, formatFormat } from './format'
 import { NodeByline } from './NodeByline'
@@ -61,18 +62,34 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
   const details = useNodeDetails(nodeId, playback)
   if (!details) return <DetailsSkeleton />
   const { node, reload, summary, tracklist, credits, kindLine, artistName, artistId, albumName, albumId, tabs } = details
+  // #461: a record's cover, and a track's (its album's, or its own when
+  // it's on none), opens the cover picker. An artist's photo doesn't.
+  const coverTarget = node.type === 'release' ? node.id : node.type === 'recording' ? (albumId ?? node.id) : null
+  const coverLabel = node.type === 'recording' && albumId != null ? "Change the album's cover" : 'Change cover'
 
   return (
     <div className="flex flex-col">
       {tab === 'overview' ? (
         <>
-          <CoverArt
-            nodeId={node.id}
-            size="full"
-            radius={node.type === 'artist' ? 'round' : 'hero'}
-            alt={`Cover art for ${node.title}`}
-            className="aspect-square w-full shadow-[var(--shadow-panel)]"
-          />
+          {coverTarget != null ? (
+            <ChangeCover nodeId={coverTarget} label={coverLabel} className="w-full">
+              <CoverArt
+                nodeId={node.id}
+                size="full"
+                radius="hero"
+                alt={`Cover art for ${node.title}`}
+                className="aspect-square w-full shadow-[var(--shadow-panel)]"
+              />
+            </ChangeCover>
+          ) : (
+            <CoverArt
+              nodeId={node.id}
+              size="full"
+              radius={node.type === 'artist' ? 'round' : 'hero'}
+              alt={`Cover art for ${node.title}`}
+              className="aspect-square w-full shadow-[var(--shadow-panel)]"
+            />
+          )}
           <div className="mt-[16px] flex flex-col gap-[2px]">
             <span className="text-small text-[var(--color-ink-2)]">{kindLine}</span>
             <h2 className="text-[22px] leading-[28px] font-medium [overflow-wrap:anywhere] text-[var(--color-ink)]">{node.title}</h2>
@@ -81,13 +98,19 @@ export function NodeDetails({ nodeId, tab, onTabChange, playback, onFocusNode }:
         </>
       ) : (
         <div className="flex items-end gap-[12px]">
-          <CoverArt
-            nodeId={node.id}
-            size="thumb"
-            radius={node.type === 'artist' ? 'round' : 'hero'}
-            alt=""
-            className="size-[96px] shadow-[var(--shadow-sm)]"
-          />
+          {coverTarget != null ? (
+            <ChangeCover nodeId={coverTarget} label={coverLabel} compact>
+              <CoverArt nodeId={node.id} size="thumb" radius="hero" alt="" className="size-[96px] shadow-[var(--shadow-sm)]" />
+            </ChangeCover>
+          ) : (
+            <CoverArt
+              nodeId={node.id}
+              size="thumb"
+              radius={node.type === 'artist' ? 'round' : 'hero'}
+              alt=""
+              className="size-[96px] shadow-[var(--shadow-sm)]"
+            />
+          )}
           <div className="flex min-w-0 flex-col gap-[2px]">
             <span className="text-small text-[var(--color-ink-2)]">{kindLine}</span>
             <h2 className="line-clamp-2 text-[19px] leading-[24px] font-medium text-[var(--color-ink)]">{node.title}</h2>

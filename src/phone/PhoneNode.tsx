@@ -8,6 +8,7 @@ import { Tabs } from '../ui/Tabs'
 import { TouchLayoutContext } from '../ui/touchLayout'
 import { useCoverColor, withAlpha } from '../ui/coverColor'
 import { PlaylistPicker } from '../panels/AddToPlaylistButton'
+import { CoverPicker } from '../panels/CoverPicker'
 import { CreditsTab, FavouriteButton, MetadataTab, Overview, TracksTab } from '../panels/NodeDetails'
 import { NodeByline } from '../panels/NodeByline'
 import { shuffle, type NodeDetailsData } from '../panels/nodeDetailsData'
@@ -107,6 +108,9 @@ export function NodeHeader({ node, playback, onOpenNode }: NodeSheetProps) {
 function Header({ details, node, playback, onOpenNode }: NodeSheetProps & { details: NodeDetailsData }) {
   const { node: detail, kindLine, artistName, artistId } = details
   const credit = detail.type === 'credit'
+  // #461: "more" changes a record's cover, or a track's album's.
+  const [changingCover, setChangingCover] = useState(false)
+  const coverTarget = detail.type === 'release' ? detail.id : (details.albumId ?? detail.id)
   // A producer or engineer plays the tracks they're credited on, which the
   // sheet lists for them (nodeDetailsData.ts).
   const creditTracks = credit ? (details.tracklist ?? []) : null
@@ -162,10 +166,18 @@ function Header({ details, node, playback, onOpenNode }: NodeSheetProps & { deta
         <span className="ml-auto flex">
           <FavouriteButton node={detail} sheet />
           {(detail.type === 'release' || detail.type === 'recording') && (
-            <MoreMenu details={details} playback={playback} onEditTags={() => node.setTab('metadata')} />
+            <MoreMenu
+              details={details}
+              playback={playback}
+              onEditTags={() => node.setTab('metadata')}
+              onChangeCover={() => setChangingCover(true)}
+            />
           )}
         </span>
       </div>
+      {(detail.type === 'release' || detail.type === 'recording') && (
+        <CoverPicker open={changingCover} onClose={() => setChangingCover(false)} nodeId={coverTarget} sheet />
+      )}
 
       <Tabs
         label="details"
@@ -203,10 +215,20 @@ function HeaderSkeleton() {
 
 /* "more": what the desktop's panel has beside the heart, for a record or a
  * track. Add to queue, add to playlist (the menu turns into the playlist
- * picker; a record's goes in whole, in its order, #448), and edit tags,
+ * picker; a record's goes in whole, in its order, #448), edit tags,
  * which opens the metadata tab where Edit is, as the desktop's pencil
- * does. */
-function MoreMenu({ details, playback, onEditTags }: { details: NodeDetailsData; playback: Playback; onEditTags: () => void }) {
+ * does, and change cover (#461), the desktop's click on the cover. */
+function MoreMenu({
+  details,
+  playback,
+  onEditTags,
+  onChangeCover,
+}: {
+  details: NodeDetailsData
+  playback: Playback
+  onEditTags: () => void
+  onChangeCover: () => void
+}) {
   const [open, setOpen] = useState(false)
   const [picking, setPicking] = useState(false)
   const { node } = details
@@ -256,6 +278,14 @@ function MoreMenu({ details, playback, onEditTags }: { details: NodeDetailsData;
               }}
             >
               edit tags
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                close()
+                onChangeCover()
+              }}
+            >
+              change cover
             </MenuItem>
           </ul>
         )
