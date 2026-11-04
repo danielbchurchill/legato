@@ -8,7 +8,8 @@ import type { Ref } from 'react'
  * `lg` is the phone's (#389): 44px, a tap target, with its text at 16px,
  * prose or mono. On a touch screen `md`'s text is 16px too (#411): under
  * that, iOS Safari zooms the page into a field it focuses and leaves it
- * zoomed. The desktop keeps 13 and 12. */
+ * zoomed. The desktop keeps 13 and 12. The input fills the well, so a tap
+ * anywhere on it lands in the field. */
 
 type TextFieldProps = {
   value: string
@@ -20,6 +21,8 @@ type TextFieldProps = {
   autoFocus?: boolean
   onEnter?: () => void
   onEscape?: () => void
+  onBlur?: () => void
+  maxLength?: number
   className?: string
   inputMode?: 'text' | 'numeric' | 'decimal'
   ref?: Ref<HTMLInputElement>
@@ -35,6 +38,8 @@ export function TextField({
   autoFocus,
   onEnter,
   onEscape,
+  onBlur,
+  maxLength,
   className = '',
   inputMode,
   ref,
@@ -52,6 +57,8 @@ export function TextField({
         placeholder={placeholder}
         autoFocus={autoFocus}
         inputMode={inputMode}
+        maxLength={maxLength}
+        onBlur={onBlur}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && onEnter) {
@@ -63,7 +70,7 @@ export function TextField({
             onEscape()
           }
         }}
-        className={`w-full min-w-0 bg-transparent text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-3)] ${
+        className={`h-full w-full min-w-0 bg-transparent text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-3)] ${
           size === 'lg'
             ? `text-[16px] ${prose ? '' : 'mono'}`
             : prose

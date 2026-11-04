@@ -1,6 +1,6 @@
 import { useState } from 'react'
+import { AccountAvatar } from '../auth/AccountAvatar'
 import { useAccount } from '../auth/accountContext'
-import { signOut } from '../auth/useAuth'
 import { RELAY_SERVER_ID, SERVER_ORIGIN } from '../config/serverHost'
 import { neverUseRelay, setNeverUseRelay } from '../connect/connectionPath'
 import { readLastSeen } from '../connect/lastSeen'
@@ -8,11 +8,11 @@ import { openConnectScreen } from '../connect/openConnect'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
 import { useLibraryChanges, useLibraryStats } from '../library/useLibraryChanges'
-import { LegatoAccountRow } from '../panels/LegatoAccountRow'
 import { useRebuildMap } from '../panels/useRebuildMap'
 import { QUALITY_OPTIONS, readQualityPreference, storeQualityPreference } from '../playback/quality'
 import { UpdateWording } from '../shell/ServerUpdateNotice'
 import { dismissUpdate, useUpdateOffer } from '../shell/serverUpdate'
+import { Icon } from '../ui/Icon'
 import { IconButton } from '../ui/IconButton'
 import { SectionLabel } from '../ui/SectionLabel'
 import { Shimmer } from '../ui/Skeleton'
@@ -25,9 +25,9 @@ import { pushPhonePage } from './navigation'
 import { PageGroup, PageRow, RowValue } from './PageGroup'
 
 /* Settings on the phone (#389, Legato Mobile v2's screen 9): a pushed page
- * of grouped cards. Appearance, library and playback are the handoff's;
- * the rest are the desktop Settings panel's groups that mean something on
- * a phone. Left out: the output device, launch at login, keep awake and the
+ * of grouped cards, under a row for the account (#470) that pushes the
+ * Account page. Appearance, library and playback are the handoff's; the rest
+ * are the desktop Settings panel's groups that mean something on a phone. Left out: the output device, launch at login, keep awake and the
  * tray (the desktop app's own), shortcuts (no keyboard), focus on hover (no
  * hover), volume levelling (only the native player applies ReplayGain), and
  * folder management, which wants a pointer and the server's file system;
@@ -58,9 +58,10 @@ export function SettingsPage({ settings, updateSettings, themePreference, onSetT
 
   return (
     <div className="flex flex-col">
+      <AccountRow />
+
       <section className="flex flex-col">
-        {/* The first group sits closer under the title. */}
-        <SectionLabel className="px-[4px] pt-[8px] pb-[8px]">appearance</SectionLabel>
+        <SectionLabel className="px-[4px] pt-[20px] pb-[8px]">appearance</SectionLabel>
         <div className="flex flex-col gap-[14px] rounded-[16px] border border-[var(--color-line)] bg-[var(--color-solid)] p-[16px]">
           <Tabs label="Theme" size="xl" options={THEME_OPTIONS} value={themePreference} onChange={onSetThemePreference} />
           <p className="text-[13px] leading-[18px] text-[var(--color-ink-2)]">
@@ -114,10 +115,36 @@ export function SettingsPage({ settings, updateSettings, themePreference, onSetT
         />
         {rebuildMap.dialog}
       </PageGroup>
-
-      <AccountGroup />
-      <LegatoAccountRow />
     </div>
+  )
+}
+
+/* Who this device is signed in as, first on the page as a phone's own
+ * account row is (#470): the picture or initials, the name, and the Account
+ * page behind it, which holds the account and legato.fm cards the desktop's
+ * Account panel does. */
+function AccountRow() {
+  const user = useAccount()
+  const name = user?.displayName ?? user?.email ?? (user?.role === 'owner' ? 'owner' : 'signed in')
+  const detail = user?.role === 'owner' ? "this server's owner" : `signed in with ${user?.provider ?? 'unknown'}`
+  return (
+    <section className="flex flex-col pt-[8px]">
+      <button
+        type="button"
+        onClick={() => pushPhonePage('account')}
+        aria-label={`Account: ${name}`}
+        className="flex min-h-[72px] w-full items-center gap-[12px] rounded-[16px] border border-[var(--color-line)] bg-[var(--color-solid)] px-[16px] py-[12px] text-left"
+      >
+        <AccountAvatar user={user} size="row" />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[17px] leading-[22px] font-medium text-[var(--color-ink)]">{name}</span>
+          <span className="truncate text-[13px] leading-[18px] text-[var(--color-ink-2)]">{detail}</span>
+        </span>
+        <span className="inline-flex shrink-0 -rotate-90 text-[var(--color-ink-3)]">
+          <Icon name="chevron-down" size={18} />
+        </span>
+      </button>
+    </section>
   )
 }
 
@@ -246,17 +273,5 @@ function NeverRelayRow() {
         />
       }
     />
-  )
-}
-
-/* Who this device is signed in to the server as, and the way out. */
-function AccountGroup() {
-  const user = useAccount()
-  const name = user?.displayName ?? user?.email ?? (user?.role === 'owner' ? 'owner' : 'signed in')
-  return (
-    <PageGroup label="account">
-      <PageRow label={name} detail={user?.role === 'owner' ? "this server's owner" : `signed in with ${user?.provider ?? 'unknown'}`} />
-      <PageRow label={<span className="text-[var(--color-accent)]">Sign out</span>} onClick={() => void signOut()} />
-    </PageGroup>
   )
 }

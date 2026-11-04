@@ -15,15 +15,22 @@ import type { WorklistKind } from '../shell/panels'
  * and what's on screen never disagree. The URL never changes; the entries
  * only carry state. */
 
-/* Library health's lists each push as a page of their own. */
-export type PhonePage = 'settings' | 'health' | `worklist:${WorklistKind}` | 'now-playing'
+/* Library health's lists each push as a page of their own. Account pushes
+ * from the row at the top of Settings (#470). */
+export type PhonePage = 'settings' | 'account' | 'health' | `worklist:${WorklistKind}` | 'now-playing'
 
 /** What the sheet shows over its tabs: search, a node's detail, or the
  * map options (#467). */
 export type SheetOverlay = { kind: 'search' } | { kind: 'node'; id: number } | { kind: 'map-options' }
 
 const WORKLISTS: readonly WorklistKind[] = ['duplicates', 'missing', 'enrichment', 'tag-writes', 'gaps']
-const PAGES: readonly PhonePage[] = ['settings', 'health', ...WORKLISTS.map((list) => `worklist:${list}` as const), 'now-playing']
+const PAGES: readonly PhonePage[] = [
+  'settings',
+  'account',
+  'health',
+  ...WORKLISTS.map((list) => `worklist:${list}` as const),
+  'now-playing',
+]
 
 /** The list a worklist page shows; null for any other page. */
 export function worklistOf(page: PhonePage): WorklistKind | null {

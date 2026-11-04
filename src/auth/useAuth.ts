@@ -3,15 +3,29 @@ import { API_BASE, RELAY_SERVER_ID, SERVER_ORIGIN } from '../config/serverHost'
 import { rememberServer } from '../connect/knownServers'
 import { renewLegatoSession, renewRelayTicket } from '../connect/legatoSignIn'
 import { provideSessionCheck } from '../connect/reconnect'
+import { ACCOUNT_CHANGED_EVENT } from './accountContext'
 import { AUTH_REQUIRED_EVENT, clearSession, readSession, storeSession } from './session'
 
 // server/src/tunnel/relayTunnel.ts's RelayTunnelStatus.
 export type TunnelStatus = 'connecting' | 'connected' | 'waiting' | 'refused' | 'stopped' | 'expired'
 
+/** The picture a user shows, by hash (#470): an upload of their own, or the
+ * server's copy of their legato.fm one. */
+export type AccountPicture = { hash: string; source: 'upload' | 'legato' }
+
 export type AuthStatus = {
   ownerExists: boolean
   setupCodeRequired: boolean
-  user: { role: 'owner' | 'legacy'; provider: string; displayName: string | null; email: string | null } | null
+  // picture is undefined from a server older than #470, which can't change
+  // the name or picture either; null when there's no picture.
+  user: {
+    id?: number
+    role: 'owner' | 'legacy'
+    provider: string
+    displayName: string | null
+    email: string | null
+    picture?: AccountPicture | null
+  } | null
   oauth: { google: boolean; github: boolean }
   // issuer is null when legato.fm is off on the server; linked is about the
   // signed-in user's own row (server/src/routes/auth.ts), and only the owner
@@ -100,6 +114,8 @@ export function useAuth() {
     const onAuthRequired = () => void refresh()
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired)
     window.addEventListener('focus', onAuthRequired)
+    // #470: a new name or picture, so the rail's avatar follows it.
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, onAuthRequired)
     // #119: once an outage ends, the session is checked (and a legato.fm one
     // renewed, if it ran out meanwhile) before anything reads from the
     // server again (connect/reconnect.ts).
@@ -107,6 +123,7 @@ export function useAuth() {
     return () => {
       window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired)
       window.removeEventListener('focus', onAuthRequired)
+      window.removeEventListener(ACCOUNT_CHANGED_EVENT, onAuthRequired)
       withdraw()
     }
   }, [refresh])

@@ -15,10 +15,8 @@ import { useWsEvent } from '../hooks/useWs'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
 import type { ReplayGainMode } from '../playback/usePlayback'
-import { signOut } from '../auth/useAuth'
-import { API_BASE as API, RELAY_SERVER_ID, SERVER_ORIGIN } from '../config/serverHost'
+import { API_BASE as API } from '../config/serverHost'
 import { useReconnectEpoch } from '../connect/reconnect'
-import { openConnectScreen } from '../connect/openConnect'
 import { IS_TAURI } from '../config/runtime'
 import { FOLDER_PICKER } from '../library/folderPicker'
 import { ServerFolderPicker } from '../library/ServerFolderPicker'
@@ -26,14 +24,15 @@ import { formatLongDuration } from '../ui/format'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 import { StreamQualityRow } from './StreamQualityRow'
 import { NeverRelayRow } from './NeverRelayRow'
-import { LegatoAccountRow } from './LegatoAccountRow'
 import { ServingGroup } from './ServingGroup'
 import { useRebuildMap } from './useRebuildMap'
 import { deviceForSaved, type AudioDevice } from '../playback/audioDevices'
 
-/* Settings, as v2's stack of cards: appearance, library, playback, map &
- * motion, shortcuts, then the server and account cards. Mounted by
- * SettingsPanel.tsx in the left panel behind the rail's Settings item. */
+/* Settings, as v2's stack of cards: appearance, library, the server,
+ * playback, map & motion and shortcuts. Mounted by SettingsPanel.tsx in the
+ * left panel behind the rail's Settings item. The account and legato.fm
+ * cards moved to the Account panel behind the avatar (#470,
+ * AccountSettings.tsx). */
 
 // watch_status/watch_fallback_reason are issue #122's fields — the watcher
 // (server/src/scan/watcher.ts) writes them straight onto the row it
@@ -179,75 +178,6 @@ function ShortcutRow({ action, keys }: { action: string; keys: string }) {
       <span className="text-[length:var(--text-body)] leading-[20px] text-[var(--color-ink)]">{action}</span>
       <Kbd>{keys}</Kbd>
     </div>
-  )
-}
-
-type AccountUser = {
-  id: number
-  provider: 'local' | 'google' | 'github'
-  role: 'owner' | 'legacy'
-  email: string | null
-  displayName: string | null
-  avatarUrl: string | null
-}
-type MeResponse = { user: AccountUser | null }
-
-// Who this client is signed in as (issue #112). Everything in the app is
-// behind the owner gate now (App.tsx's OwnerGated), so this panel is only
-// ever seen signed in; the sign-in forms, including the Google/GitHub
-// buttons for accounts from before the owner existed, live on the gate
-// screen itself (src/auth/OwnerGate.tsx).
-function AccountGroup() {
-  const [me, setMe] = useState<MeResponse | null>(null)
-  const reconnects = useReconnectEpoch()
-
-  useEffect(() => {
-    fetch(`${API}/auth/me`)
-      .then((r) => r.json())
-      .then(setMe)
-      .catch(() => setMe({ user: null }))
-  }, [reconnects])
-
-  if (me === null) {
-    return (
-      <SettingsGroup title="account">
-        <Skeleton className="h-[12px] w-[140px] rounded-full" />
-      </SettingsGroup>
-    )
-  }
-
-  const { user } = me
-  const name = user?.displayName ?? user?.email ?? (user?.role === 'owner' ? 'owner' : 'signed in')
-  return (
-    <SettingsGroup title="account">
-      <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
-        <div className="flex min-w-0 items-center gap-[var(--spacing-sm)]">
-          {user?.avatarUrl && <img src={user.avatarUrl} alt="" className="h-[24px] w-[24px] shrink-0 rounded-full" />}
-          <div className="min-w-0">
-            <p className="truncate text-[length:var(--text-sm)] text-[var(--color-ink)]" title={name}>
-              {name}
-            </p>
-            <p className="text-small text-[var(--color-ink-2)]">
-              {user?.role === 'owner' ? "this server's owner" : `signed in with ${user?.provider ?? 'unknown'}`}
-            </p>
-          </div>
-        </div>
-        <Button onClick={() => void signOut()}>sign out</Button>
-      </div>
-      {/* #117: which server this is, and the way to another. */}
-      <div className="flex items-center justify-between gap-[var(--spacing-sm)]">
-        <p className="min-w-0 truncate text-small text-[var(--color-ink-2)]" title={SERVER_ORIGIN}>
-          {RELAY_SERVER_ID ? (
-            'through legato.fm'
-          ) : (
-            <>
-              on <span className="mono">{new URL(SERVER_ORIGIN).host}</span>
-            </>
-          )}
-        </p>
-        <Button onClick={() => openConnectScreen()}>change server</Button>
-      </div>
-    </SettingsGroup>
   )
 }
 
@@ -733,8 +663,6 @@ export function LegatoSettings({
         <ShortcutRow action="Close" keys="esc" />
       </SettingsGroup>
 
-      <AccountGroup />
-      <LegatoAccountRow />
     </div>
   )
 }
