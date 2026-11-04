@@ -52,6 +52,7 @@ import m0047_insights from "./0047_insights.sql" with { type: "text" };
 import m0048_artist_name_fold from "./0048_artist_name_fold.sql" with { type: "text" };
 import m0049_tag_edits from "./0049_tag_edits.sql" with { type: "text" };
 import m0052_mosaic_cells from "./0052_mosaic_cells.sql" with { type: "text" };
+import m0053_release_rule_by_folder from "./0053_release_rule_by_folder.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -109,4 +110,5 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 48, file: "0048_artist_name_fold.sql", sql: m0048_artist_name_fold },
   { version: 49, file: "0049_tag_edits.sql", sql: m0049_tag_edits },
   { version: 52, file: "0052_mosaic_cells.sql", sql: m0052_mosaic_cells },
+  { version: 53, file: "0053_release_rule_by_folder.sql", sql: m0053_release_rule_by_folder },
 ];

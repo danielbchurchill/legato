@@ -1,0 +1,13 @@
+-- Issue #465, second pass: which album a file is on is now decided with
+-- every file of its album folder and title (match/albumIdentity.ts), not
+-- each file alone. Under 0045's rule each ALBUMARTIST made its own album,
+-- so a live compilation tagged with its performers as ALBUMARTIST, like
+-- "Amchitka-The 1970 Concert That Launched Greenpeace", became an album per
+-- performer, and one artist's album tagged with ALBUMARTIST in one folder
+-- and without it in another stayed two albums.
+--
+-- The albums already in a library are re-filed once at the next start, by
+-- the same step 0045 added (match/releaseUpgrade.ts, called from index.ts).
+-- This marks it owed again. A database with no albums has nothing to
+-- re-file, and one that hasn't run 0045's yet runs it once for both.
+INSERT OR IGNORE INTO release_identity_upgrade (id) SELECT 1 WHERE EXISTS (SELECT 1 FROM nodes WHERE type = 'release');

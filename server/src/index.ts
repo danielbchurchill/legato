@@ -184,20 +184,21 @@ try {
   app.log.error(`artists: couldn't place bridge members: ${err instanceof Error ? err.message : String(err)}`);
 }
 
-// Issue #465: an album is its title without a disc suffix, by its album
-// artist or in its folder, no longer the ALBUM tag string alone. A library
-// from before that is brought forward once, here, on the first start after
-// migration 0045 (match/releaseUpgrade.ts): a set's discs merge into one
-// album and a node two artists' albums shared splits. The albums table and
-// the map catch up in the recompute after listen, shared with the artist
-// fold's, and art for split albums is read in the background.
+// Issue #465: an album is its title without a disc suffix, by the artist
+// its folder's files agree on or a compilation in its folder, no longer the
+// ALBUM tag string alone. A library is re-filed under that rule once, here,
+// on the first start after migration 0045 or 0053 changed it
+// (match/releaseUpgrade.ts): an album's parts merge into one node and a node
+// two artists' albums shared splits. The albums table and the map catch up
+// in the recompute after listen, shared with the artist fold's, and art for
+// split albums is read in the background.
 const releaseUpgrade = (() => {
   const started = performance.now();
   const upgraded = upgradeReleaseIdentities(db);
   if (!upgraded) return null;
   app.log.info(
     `albums: filed ${upgraded.albums} album(s) by title, album artist and folder in ` +
-      `${Math.round(performance.now() - started)} ms: merged ${upgraded.merged} disc part(s), ` +
+      `${Math.round(performance.now() - started)} ms: merged ${upgraded.merged} node(s) into their album, ` +
       `split ${upgraded.split} album(s) off a shared node, retitled ${upgraded.retitled}, ` +
       `took ${upgraded.discNumbers} file(s)' disc number from a suffix`,
   );
