@@ -1,20 +1,33 @@
 import {
   Id3v2FrameClassType,
   Id3v2FrameIdentifiers,
+  Id3v2TextInformationFrame,
   Id3v2UserTextInformationFrame,
   TagTypes,
 } from "node-taglib-sharp";
 import type { CombinedTag, FlacTag, Id3v2Tag, Mpeg4AppleTag, Tag } from "node-taglib-sharp";
+import path from "node:path";
 
 // The write-back API's field vocabulary, mapped onto TagLib#'s tag-agnostic
 // model. "artist" is a single string here (matching music-metadata's
 // parsing and Legato's own tags_raw shape) even though TagLib# models it as
-// performers: string[]; a single-artist write is the only case the
-// write-back UI needs for v1. "genre" is an array to match tags_raw's own
-// convention (scan/tags.ts) rather than the single-string fields around it.
+// performers: string[]. It's the first value, the one music-metadata reads
+// as the artist; writing it keeps any further ARTIST values the file has.
+// "genre" is an array to match tags_raw's own convention (scan/tags.ts)
+// rather than the single-string fields around it.
+//
+// Issue #464 added the rest of what an artist's name can be written in, so
+// a rename reaches every credit: every ARTIST value (`performers`, for the
+// rare file with several), the ARTISTS list Picard writes one artist per
+// value, ALBUMARTIST, and the producer and engineer credits.
 export type TagFields = {
   title?: string;
   artist?: string;
+  performers?: string[];
+  artists?: string[];
+  albumArtist?: string;
+  producer?: string[];
+  engineer?: string[];
   album?: string;
   year?: number;
   trackNo?: number;
@@ -43,6 +56,23 @@ export function detectFormat(filePath: string): AudioFormat {
   if (lower.endsWith(".mp3")) return "mp3";
   if (lower.endsWith(".m4a") || lower.endsWith(".mp4")) return "mp4";
   throw new Error(`tag write-back only supports FLAC, MP3, and MP4/M4A files, got: ${filePath}`);
+}
+
+// The containers scan/walk.ts picks up that detectFormat refuses, by the
+// name a person knows them by. Ogg covers Vorbis and Opus alike.
+const UNWRITABLE_NAMES: Record<string, string> = { ".ogg": "Ogg", ".oga": "Ogg", ".opus": "Opus", ".wav": "WAV", ".ape": "APE" };
+
+/** Why a file can't take a tag write, in words the review shows beside its
+ *  name, or null when it can (issue #464). */
+export function unwritableReason(filePath: string): string | null {
+  try {
+    detectFormat(filePath);
+    return null;
+  } catch {
+    const ext = path.extname(filePath).toLowerCase();
+    const name = UNWRITABLE_NAMES[ext] ?? (ext ? ext.slice(1).toUpperCase() : "these");
+    return `Legato can't write tags to ${name} files yet, only FLAC, MP3 and M4A`;
+  }
 }
 
 const WRITE_MARKER_FIELD = "LEGATO_WRITE_ID";
@@ -78,6 +108,78 @@ function findUserTextFrame(id3: Id3v2Tag, description: string): Id3v2UserTextInf
   return Id3v2UserTextInformationFrame.findUserTextInformationFrame(frames, description, true);
 }
 
+function setUserText(id3: Id3v2Tag, description: string, values: string[]): void {
+  const existing = findUserTextFrame(id3, description);
+  if (values.length === 0) {
+    if (existing) id3.removeFrame(existing);
+    return;
+  }
+  const frame = existing ?? Id3v2UserTextInformationFrame.fromDescription(description);
+  if (!existing) id3.addFrame(frame);
+  frame.text = values;
+}
+
+// ID3v2's involved-people list: role, name, role, name. TagLib# writes it as
+// TIPL in a v2.4 tag and as IPLS in a v2.3 one, and music-metadata reads
+// both back as producer and engineer. Read back out of a v2.3 tag, TagLib#
+// hands the whole list over as one "/"-joined string, so that's split here.
+type CreditRole = "producer" | "engineer";
+
+function involvedPeople(id3: Id3v2Tag | undefined): [string, string][] {
+  if (!id3) return [];
+  let values = id3
+    .getFramesByIdentifier<Id3v2TextInformationFrame>(Id3v2FrameClassType.TextInformationFrame, Id3v2FrameIdentifiers.TIPL)
+    .flatMap((frame) => frame.text);
+  if (values.length === 1 && values[0]!.includes("/")) values = values[0]!.split("/");
+  const pairs: [string, string][] = [];
+  for (let i = 0; i + 1 < values.length; i += 2) pairs.push([values[i]!, values[i + 1]!]);
+  return pairs;
+}
+
+function creditsIn(id3: Id3v2Tag | undefined, role: CreditRole): string[] {
+  return involvedPeople(id3)
+    .filter(([r]) => r.toLowerCase() === role)
+    .map(([, name]) => name);
+}
+
+// Only this role's names change; every other role in the list stays put.
+function setCredits(id3: Id3v2Tag, role: CreditRole, names: string[]): void {
+  const pairs = [...involvedPeople(id3).filter(([r]) => r.toLowerCase() !== role), ...names.map((name) => [role, name])];
+  id3.removeFrames(Id3v2FrameIdentifiers.TIPL);
+  if (pairs.length > 0) id3.setTextFrame(Id3v2FrameIdentifiers.TIPL, ...pairs.flat());
+}
+
+const VORBIS_CREDIT: Record<CreditRole, string> = { producer: "PRODUCER", engineer: "ENGINEER" };
+const ITUNES_CREDIT: Record<CreditRole, string> = { producer: "PRODUCER", engineer: "ENGINEER" };
+
+// The artist lines as music-metadata reads them. An MP4 keeps its artist in
+// one text atom, which TagLib# splits on ";" and joins again with "; ", so
+// there the atom is one line, read and written whole ("JPEGMAFIA; Danny
+// Brown", not "JPEGMAFIA"). Elsewhere each value is a line of its own,
+// and so is each part of a v2.3 ID3 TPE1 split on "/", which music-metadata
+// splits the same way.
+function performerLines(tag: Tag, format: AudioFormat): string[] {
+  const values = tag.performers ?? [];
+  if (format === "mp4") return values.length > 0 ? [values.join("; ")] : [];
+  return values;
+}
+
+// Writing "artist" replaces the first line and keeps the rest, so a file
+// that lists two artists as two values doesn't lose the second.
+function withFirstPerformer(tag: Tag, format: AudioFormat, artist: string): string[] {
+  return [artist, ...performerLines(tag, format).slice(1)];
+}
+
+// The album artist as music-metadata reads it: the MP4 atom whole, as above,
+// and a v2.3 ID3 TPE2 whole too, which TagLib# splits on "/" but
+// music-metadata doesn't ("AC/DC", not "AC").
+function albumArtistOf(tag: Tag, format: AudioFormat): string {
+  const values = tag.albumArtists ?? [];
+  if (format === "mp4") return values.join("; ");
+  if (format === "mp3" && (existingId3v2Tag(tag)?.version ?? 4) < 4) return values.join("/");
+  return values[0] ?? "";
+}
+
 // bpm/label/releaseType are handled per format below rather than through a
 // single shared code path — verified against what music-metadata (this
 // app's own tag reader) actually reads back for each container, not
@@ -110,10 +212,20 @@ function findUserTextFrame(id3: Id3v2Tag, description: string): Id3v2UserTextInf
 // what music-metadata's VorbisTagMapper/ID3v24TagMapper/MP4TagMapper each
 // map to 'originaldate' — the field scan/tags.ts checks first when it
 // derives release_date.
+//
+// Issue #464's fields, checked the same way (fields.artists.spec.ts):
+// ALBUMARTIST goes through TagLib#'s albumArtists, which is ALBUMARTIST,
+// TPE2 and aART, each what music-metadata reads as albumartist. The ARTISTS
+// list and the producer and engineer credits have no named property, so
+// they're the raw fields music-metadata maps: Vorbis ARTISTS, PRODUCER and
+// ENGINEER; ID3v2's TXXX:ARTISTS and its involved-people list (above); and
+// MP4's ----:com.apple.iTunes:ARTISTS, PRODUCER and ENGINEER atoms.
 export function readFields(tag: Tag, format: AudioFormat): Required<TagFields> {
   const base = {
     title: tag.title ?? "",
-    artist: tag.performers?.[0] ?? "",
+    artist: performerLines(tag, format)[0] ?? "",
+    performers: performerLines(tag, format),
+    albumArtist: albumArtistOf(tag, format),
     album: tag.album ?? "",
     year: tag.year ?? 0,
     trackNo: tag.track ?? 0,
@@ -122,14 +234,18 @@ export function readFields(tag: Tag, format: AudioFormat): Required<TagFields> {
   };
 
   if (format === "flac") {
-    const bpmText = xiphComment(tag).getFieldFirstValue("BPM");
+    const xiph = xiphComment(tag);
+    const bpmText = xiph.getFieldFirstValue("BPM");
     const bpm = bpmText ? Number.parseInt(bpmText, 10) : 0;
     return {
       ...base,
+      artists: xiph.getField("ARTISTS"),
+      producer: xiph.getField(VORBIS_CREDIT.producer),
+      engineer: xiph.getField(VORBIS_CREDIT.engineer),
       bpm: Number.isNaN(bpm) ? 0 : bpm,
-      label: xiphComment(tag).getFieldFirstValue("LABEL") || "",
-      releaseType: xiphComment(tag).getFieldFirstValue("RELEASETYPE") || "",
-      releaseDate: xiphComment(tag).getFieldFirstValue("ORIGINALDATE") || "",
+      label: xiph.getFieldFirstValue("LABEL") || "",
+      releaseType: xiph.getFieldFirstValue("RELEASETYPE") || "",
+      releaseDate: xiph.getFieldFirstValue("ORIGINALDATE") || "",
     };
   }
 
@@ -137,6 +253,9 @@ export function readFields(tag: Tag, format: AudioFormat): Required<TagFields> {
     const id3 = existingId3v2Tag(tag);
     return {
       ...base,
+      artists: (id3 && findUserTextFrame(id3, "ARTISTS")?.text) || [],
+      producer: creditsIn(id3, "producer"),
+      engineer: creditsIn(id3, "engineer"),
       bpm: id3?.beatsPerMinute || 0,
       label: id3?.publisher || "",
       releaseType: id3?.musicBrainzReleaseType || "",
@@ -147,6 +266,9 @@ export function readFields(tag: Tag, format: AudioFormat): Required<TagFields> {
   const apple = appleTag(tag);
   return {
     ...base,
+    artists: apple.getItunesStrings(ITUNES_MEAN, "ARTISTS"),
+    producer: apple.getItunesStrings(ITUNES_MEAN, ITUNES_CREDIT.producer),
+    engineer: apple.getItunesStrings(ITUNES_MEAN, ITUNES_CREDIT.engineer),
     bpm: apple.beatsPerMinute || 0,
     label: apple.getFirstItunesString(ITUNES_MEAN, "LABEL") || "",
     releaseType: apple.musicBrainzReleaseType || "",
@@ -156,7 +278,9 @@ export function readFields(tag: Tag, format: AudioFormat): Required<TagFields> {
 
 export function writeFields(tag: Tag, changes: TagFields, format: AudioFormat): void {
   if (changes.title !== undefined) tag.title = changes.title;
-  if (changes.artist !== undefined) tag.performers = [changes.artist];
+  if (changes.performers !== undefined) tag.performers = changes.performers;
+  if (changes.artist !== undefined) tag.performers = withFirstPerformer(tag, format, changes.artist);
+  if (changes.albumArtist !== undefined) tag.albumArtists = changes.albumArtist ? [changes.albumArtist] : [];
   if (changes.album !== undefined) tag.album = changes.album;
   if (changes.year !== undefined) tag.year = changes.year;
   if (changes.trackNo !== undefined) tag.track = changes.trackNo;
@@ -164,15 +288,22 @@ export function writeFields(tag: Tag, changes: TagFields, format: AudioFormat): 
   if (changes.genre !== undefined) tag.genres = changes.genre;
 
   if (format === "flac") {
-    if (changes.bpm !== undefined) xiphComment(tag).setFieldAsUint("BPM", changes.bpm);
-    if (changes.label !== undefined) xiphComment(tag).setFieldAsStrings("LABEL", changes.label);
-    if (changes.releaseType !== undefined) xiphComment(tag).setFieldAsStrings("RELEASETYPE", changes.releaseType);
-    if (changes.releaseDate !== undefined) xiphComment(tag).setFieldAsStrings("ORIGINALDATE", changes.releaseDate);
+    const xiph = xiphComment(tag);
+    if (changes.artists !== undefined) xiph.setFieldAsStrings("ARTISTS", ...changes.artists);
+    if (changes.producer !== undefined) xiph.setFieldAsStrings(VORBIS_CREDIT.producer, ...changes.producer);
+    if (changes.engineer !== undefined) xiph.setFieldAsStrings(VORBIS_CREDIT.engineer, ...changes.engineer);
+    if (changes.bpm !== undefined) xiph.setFieldAsUint("BPM", changes.bpm);
+    if (changes.label !== undefined) xiph.setFieldAsStrings("LABEL", changes.label);
+    if (changes.releaseType !== undefined) xiph.setFieldAsStrings("RELEASETYPE", changes.releaseType);
+    if (changes.releaseDate !== undefined) xiph.setFieldAsStrings("ORIGINALDATE", changes.releaseDate);
     return;
   }
 
   if (format === "mp3") {
     const id3 = getOrCreateId3v2Tag(tag);
+    if (changes.artists !== undefined) setUserText(id3, "ARTISTS", changes.artists);
+    if (changes.producer !== undefined) setCredits(id3, "producer", changes.producer);
+    if (changes.engineer !== undefined) setCredits(id3, "engineer", changes.engineer);
     if (changes.bpm !== undefined) id3.beatsPerMinute = changes.bpm;
     if (changes.label !== undefined) id3.publisher = changes.label;
     if (changes.releaseType !== undefined) id3.musicBrainzReleaseType = changes.releaseType;
@@ -181,6 +312,9 @@ export function writeFields(tag: Tag, changes: TagFields, format: AudioFormat): 
   }
 
   const apple = appleTag(tag);
+  if (changes.artists !== undefined) apple.setItunesStrings(ITUNES_MEAN, "ARTISTS", ...changes.artists);
+  if (changes.producer !== undefined) apple.setItunesStrings(ITUNES_MEAN, ITUNES_CREDIT.producer, ...changes.producer);
+  if (changes.engineer !== undefined) apple.setItunesStrings(ITUNES_MEAN, ITUNES_CREDIT.engineer, ...changes.engineer);
   if (changes.bpm !== undefined) apple.beatsPerMinute = changes.bpm;
   if (changes.label !== undefined) apple.setItunesStrings(ITUNES_MEAN, "LABEL", changes.label);
   if (changes.releaseType !== undefined) apple.musicBrainzReleaseType = changes.releaseType;

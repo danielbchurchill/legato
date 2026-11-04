@@ -22,7 +22,10 @@ export type Summary =
 export const TYPE_WORD: Record<string, string> = { artist: 'artist', release: 'album', recording: 'track', credit: 'producer' }
 
 // `version` refetches the same path when it changes: the Metadata tab passes
-// the node, which is a new object after every reload.
+// the node, which is a new object after every reload, and the rest of the
+// details a count of reloads. What the path showed stays until the new
+// answer comes, so a reload, such as the one a tag write ends with (#464),
+// doesn't blank it.
 // Each loads again after an outage (#119), keeping what it showed until then.
 export function useJson<T>(path: string | null, version?: unknown): T | null {
   const [state, setState] = useState<{ path: string; version: unknown; value: T | null } | null>(null)
@@ -38,7 +41,7 @@ export function useJson<T>(path: string | null, version?: unknown): T | null {
       cancelled = true
     }
   }, [path, version, reconnects])
-  return state && state.path === path && state.version === version ? state.value : null
+  return state && state.path === path ? state.value : null
 }
 
 export function shuffle<T>(items: T[]): T[] {
@@ -89,9 +92,13 @@ export type NodeDetailsData = {
 export function useNodeDetails(nodeId: number | null, playback: Playback): NodeDetailsData | null {
   const { node, reload } = useNodeDetail(nodeId)
   const graph = useGraph()
-  const summary = useJson<Summary>(nodeId != null ? `/nodes/${nodeId}/summary` : null)
-  const releaseTracks = useJson<TracklistEntry[]>(nodeId != null && node?.type === 'release' ? `/nodes/${nodeId}/tracklist` : null)
-  const credits = useJson<NodeCredits>(nodeId != null ? `/nodes/${nodeId}/credits` : null) ?? NO_CREDITS
+  // A reload, such as the one a tag write ends with (#464), fetches these
+  // again too: a renamed track's title, an album's count once a file it
+  // couldn't write has left it.
+  const [reloads, setReloads] = useState(0)
+  const summary = useJson<Summary>(nodeId != null ? `/nodes/${nodeId}/summary` : null, reloads)
+  const releaseTracks = useJson<TracklistEntry[]>(nodeId != null && node?.type === 'release' ? `/nodes/${nodeId}/tracklist` : null, reloads)
+  const credits = useJson<NodeCredits>(nodeId != null ? `/nodes/${nodeId}/credits` : null, reloads) ?? NO_CREDITS
 
   if (!node || node.id !== nodeId) return null
 
@@ -133,7 +140,10 @@ export function useNodeDetails(nodeId: number | null, playback: Playback): NodeD
 
   return {
     node,
-    reload,
+    reload: () => {
+      reload()
+      setReloads((n) => n + 1)
+    },
     summary,
     tracklist,
     credits,
