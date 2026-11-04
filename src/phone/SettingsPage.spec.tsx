@@ -61,8 +61,8 @@ beforeEach(() => {
           ? { artists: 3, albums: 4, tracks: 20, totalBytes: 0, totalDurationMs: 0 }
           : path === '/hygiene/worklist'
             ? [{ type: 'missing_file', fileId: 1, filePath: '/a.flac', nodeId: 2, nodeTitle: 'A', missingSince: '' }]
-            : path === '/tag-manager?field=unmatched'
-              ? [{ id: 1, title: 'T', artist: null }]
+            : path === '/tag-manager/counts'
+              ? { unmatched: 1, label: 0, release_date: 0, release_type: 0, bpm: 0 }
               : []
       return { ok: true, status: 200, json: async () => body } as Response
     }),

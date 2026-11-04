@@ -65,13 +65,14 @@ export const TRACK_SORT_OPTIONS: { id: TrackSort; label: string }[] = [
 ]
 
 /* Words for each direction, by what the field is: names run A–Z, numbers
- * low to high, dates oldest or newest first. The sort pill and the phone's
+ * low to high, dates oldest or newest first, counts most or fewest first. The sort pill and the phone's
  * sort line both say them. */
-export type SortKind = 'text' | 'number' | 'date'
+export type SortKind = 'text' | 'number' | 'date' | 'count'
 
 export function directionLabel(kind: SortKind, dir: SortDir): string {
   if (kind === 'text') return dir === 'asc' ? 'A–Z' : 'Z–A'
   if (kind === 'date') return dir === 'asc' ? 'oldest first' : 'newest first'
+  if (kind === 'count') return dir === 'asc' ? 'fewest first' : 'most first'
   return dir === 'asc' ? 'low to high' : 'high to low'
 }
 

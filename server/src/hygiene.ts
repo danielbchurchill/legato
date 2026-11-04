@@ -1,4 +1,6 @@
 import type { Database } from "./sqlite.js";
+import { parseFile } from "music-metadata";
+import { PLAYBACK_FILE_ORDER } from "./playbackFile.js";
 
 export type WorklistItem =
   | {
@@ -150,4 +152,112 @@ export function getWorklist(db: Database, typeFilter?: string): WorklistItem[] {
   }
 
   return items;
+}
+
+/* ---- A possible duplicate, side by side (#469) ------------------------------ */
+
+export type DuplicateFile = {
+  id: number;
+  path: string;
+  format: string | null;
+  bitrate: number | null;
+  sampleRate: number | null;
+  /** Read from the file's header when asked: the scan doesn't keep it. Null
+   *  for a lossy file, which has none, or a file that can't be read. */
+  bitDepth: number | null;
+  size: number;
+  missing: boolean;
+};
+
+export type DuplicatePair = {
+  /** The file a merge would move onto the other track. */
+  file: DuplicateFile;
+  /** The files already on the track it would join. */
+  candidate: DuplicateFile[];
+  /** The file the merged track would play, by playbackFile.ts's rule; null
+   *  when none of them is on disk. */
+  playsAfterMerge: number | null;
+  /** Why that one: its bitrate is the highest, the bitrates tie (or aren't
+   *  known) and it's the one Legato found first, or it's the only one on
+   *  disk. */
+  reason: "bitrate" | "first" | "only" | null;
+};
+
+export type ReadBitDepth = (path: string) => Promise<number | null>;
+
+/* music-metadata reads only the header for this: no duration scan, no
+ * cover. */
+export async function readBitDepth(path: string): Promise<number | null> {
+  try {
+    const { format } = await parseFile(path, { duration: false, skipCovers: true });
+    return format.bitsPerSample ?? null;
+  } catch {
+    return null;
+  }
+}
+
+type FileRow = {
+  id: number;
+  file_path: string;
+  format: string | null;
+  bitrate: number | null;
+  sample_rate: number | null;
+  file_size: number;
+  missing_since: string | null;
+};
+
+/** The two sides of a possible duplicate, for the card that asks whether to
+ * merge them. Null when the file isn't a pending fuzzy match any more. */
+export async function getDuplicatePair(
+  db: Database,
+  fileId: number,
+  bitDepthOf: ReadBitDepth = readBitDepth,
+): Promise<DuplicatePair | null> {
+  const pending = db
+    .prepare("SELECT fuzzy_candidate_node_id AS candidate FROM files WHERE id = ? AND match_source = 'fuzzy_pending'")
+    .get(fileId) as { candidate: number | null } | undefined;
+  if (!pending || pending.candidate == null) return null;
+
+  const columns = "id, file_path, format, bitrate, sample_rate, file_size, missing_since";
+  const file = db.prepare(`SELECT ${columns} FROM files WHERE id = ?`).get(fileId) as FileRow;
+  const candidate = db
+    .prepare(`SELECT ${columns} FROM files WHERE recording_node_id = ? AND id != ? ORDER BY ${PLAYBACK_FILE_ORDER}`)
+    .all(pending.candidate, fileId) as FileRow[];
+
+  // The same ORDER BY POST /queue/resolve plays by, over the files the
+  // merged track would have.
+  const all = [file, ...candidate];
+  const ranked = db
+    .prepare(
+      `SELECT id, bitrate FROM files WHERE id IN (${all.map(() => "?").join(", ")}) AND missing_since IS NULL
+       ORDER BY ${PLAYBACK_FILE_ORDER}`,
+    )
+    .all(...all.map((f) => f.id)) as { id: number; bitrate: number | null }[];
+  const winner = ranked[0] ?? null;
+  const runnerUp = ranked[1] ?? null;
+  const reason =
+    winner == null
+      ? null
+      : runnerUp == null
+        ? "only"
+        : winner.bitrate != null && (runnerUp.bitrate == null || winner.bitrate > runnerUp.bitrate)
+          ? "bitrate"
+          : "first";
+
+  const describe = async (row: FileRow): Promise<DuplicateFile> => ({
+    id: row.id,
+    path: row.file_path,
+    format: row.format,
+    bitrate: row.bitrate,
+    sampleRate: row.sample_rate,
+    bitDepth: row.missing_since == null ? await bitDepthOf(row.file_path) : null,
+    size: row.file_size,
+    missing: row.missing_since != null,
+  });
+  return {
+    file: await describe(file),
+    candidate: await Promise.all(candidate.map(describe)),
+    playsAfterMerge: winner?.id ?? null,
+    reason,
+  };
 }

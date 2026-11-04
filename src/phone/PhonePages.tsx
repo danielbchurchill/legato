@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
-import type { GapField } from '../panels/healthData'
+import { DEFAULT_GAP_VIEW, type GapView } from '../panels/healthData'
 import { Worklist } from '../panels/Worklists'
 import { Icon } from '../ui/Icon'
 import { TouchLayoutContext } from '../ui/touchLayout'
@@ -47,9 +47,9 @@ type PhonePagesProps = {
 
 export function PhonePages({ platform, settings, updateSettings, themePreference, onSetThemePreference, onShowOnMap }: PhonePagesProps) {
   const pages = usePhonePages()
-  // Which field the gaps list shows. Kept here, under the pages, so it
-  // survives the list being popped and pushed again, as the desktop's does.
-  const [gapField, setGapField] = useState<GapField>('unmatched')
+  // The gaps list's filter and order. Kept here, under the pages, so they
+  // survive the list being popped and pushed again, as the desktop's do.
+  const [gapView, setGapView] = useState<GapView>(DEFAULT_GAP_VIEW)
   const page = pages[pages.length - 1]
   if (page == null || page === 'now-playing') return null
   const below = pages[pages.length - 2]
@@ -66,7 +66,7 @@ export function PhonePages({ platform, settings, updateSettings, themePreference
   if (worklist) {
     content = (
       <div className="pt-[8px]">
-        <Worklist kind={worklist} gapField={gapField} onGapFieldChange={setGapField} onFocusNode={showOnMap} />
+        <Worklist kind={worklist} gapView={gapView} onGapViewChange={setGapView} onFocusNode={showOnMap} />
       </div>
     )
   } else if (page === 'settings') {
@@ -82,7 +82,7 @@ export function PhonePages({ platform, settings, updateSettings, themePreference
     content = (
       <HealthPage
         onOpen={(list, field) => {
-          if (field) setGapField(field)
+          if (list === 'gaps') setGapView((prev) => ({ ...prev, kinds: field ? [field] : DEFAULT_GAP_VIEW.kinds }))
           pushPhonePage(`worklist:${list}`)
         }}
       />

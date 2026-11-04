@@ -1,6 +1,14 @@
 import type { WorklistKind } from '../shell/panels'
 import type { DbInspectorSnapshot } from '../panels/DatabaseInspector'
-import { useGapRows, useTagWrites, useWorklist, type GapField, type TagWrite, type WorklistItem } from '../panels/healthData'
+import {
+  useGapCounts,
+  useGapRevision,
+  useTagWrites,
+  useWorklist,
+  type GapField,
+  type TagWrite,
+  type WorklistItem,
+} from '../panels/healthData'
 
 /* What the phone's Library health page and Settings' Library health row say
  * (#389, Legato Mobile v2's screens 8 and 9), worked out from the data the
@@ -78,9 +86,10 @@ export function attentionRows({ worklist, tagWrites, unmatched }: HealthData): A
 export function useAttention(): { rows: AttentionRow[] | null; fixes: number | null } {
   const { data: worklist } = useWorklist()
   const { data: tagWrites } = useTagWrites()
-  const { data: unmatched } = useGapRows('unmatched')
+  // A count, from the gaps' one counting query, not the list itself (#469).
+  const counts = useGapCounts('', useGapRevision())
   return {
-    rows: attentionRows({ worklist, tagWrites, unmatched: unmatched?.length ?? null }),
+    rows: attentionRows({ worklist, tagWrites, unmatched: counts?.unmatched ?? null }),
     fixes: tagWrites ? pendingFixes(tagWrites) : null,
   }
 }

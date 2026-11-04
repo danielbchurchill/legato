@@ -12,6 +12,16 @@
     "core:window:allow-is-maximized",
     "core:window:allow-close",
     "core:window:allow-start-dragging",
-    "core:window:allow-start-resize-dragging"
+    "core:window:allow-start-resize-dragging",
+
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://musicbrainz.org/*" },
+        { "url": "https://www.discogs.com/search/*" },
+        { "url": "https://picard.musicbrainz.org/*" },
+        { "url": "http://127.0.0.1:8000/openalbum?id=*" }
+      ]
+    }
   ]
 }

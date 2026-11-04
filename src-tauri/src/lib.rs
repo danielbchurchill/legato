@@ -54,8 +54,12 @@ pub fn run() {
 
   tauri::Builder::default()
     .plugin(tauri_plugin_dialog::init())
-    // Rust-only: relay_sign_in.rs opens the system browser through it.
-    // capabilities/default.json grants it nothing, so the webview can't.
+    // relay_sign_in.rs opens the system browser through it. Its script also
+    // sends a webview link with target="_blank" to the browser, and
+    // capabilities/default.json lets that open only Library health's
+    // look-up links (#469): MusicBrainz, a Discogs search, Picard's site and
+    // a running Picard's /openalbum on this computer. Anything else stays
+    // shut.
     .plugin(tauri_plugin_opener::init())
     // Only Rust calls it, through serving.rs's commands; capabilities/
     // default.json grants the webview none of its own.

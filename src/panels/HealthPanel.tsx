@@ -13,15 +13,18 @@ import { API_BASE as API } from '../config/serverHost'
 import { formatBytes } from './format'
 import { PipelineSection, SchemaSection, StorageSection } from './DatabaseInspector'
 import {
+  DEFAULT_GAP_VIEW,
   GAP_FIELDS,
   formatLibraryLength,
   formatWhen,
   useDbSnapshot,
   useGapCounts,
+  useGapRevision,
   useStats,
   useTagWrites,
   useWorklist,
   type GapField,
+  type GapView,
 } from './healthData'
 import { Worklist } from './Worklists'
 
@@ -49,14 +52,16 @@ type HealthPanelProps = {
 }
 
 export function HealthPanel({ view, onNavigate, onFocusNode }: HealthPanelProps) {
-  // The gap worklist opens on whichever field was clicked.
-  const [gapField, setGapField] = useState<GapField>('bpm')
+  // The gaps list's filter and order, kept here so they survive the list
+  // being closed. A gap row opens it on that one kind, "see all" on every
+  // kind but BPM.
+  const [gapView, setGapView] = useState<GapView>(DEFAULT_GAP_VIEW)
   if (view.kind === 'worklist') {
     return (
       <Worklist
         kind={view.list}
-        gapField={gapField}
-        onGapFieldChange={setGapField}
+        gapView={gapView}
+        onGapViewChange={setGapView}
         onBack={() => onNavigate({ kind: 'health' })}
         onFocusNode={onFocusNode}
       />
@@ -65,7 +70,7 @@ export function HealthPanel({ view, onNavigate, onFocusNode }: HealthPanelProps)
   return (
     <HealthHome
       onOpen={(list, field) => {
-        if (field) setGapField(field)
+        if (list === 'gaps') setGapView((prev) => ({ ...prev, kinds: field ? [field] : DEFAULT_GAP_VIEW.kinds }))
         onNavigate({ kind: 'worklist', list })
       }}
     />
@@ -77,7 +82,7 @@ function HealthHome({ onOpen }: { onOpen: (list: WorklistKind, field?: GapField)
   const snapshot = useDbSnapshot()
   const { data: worklist } = useWorklist()
   const { data: tagWrites } = useTagWrites()
-  const gaps = useGapCounts()
+  const gaps = useGapCounts('', useGapRevision())
   const scan = useScanStatus()
 
   const count = (type: string) => (worklist ?? []).filter((item) => item.type === type).length
@@ -160,9 +165,19 @@ function HealthHome({ onOpen }: { onOpen: (list: WorklistKind, field?: GapField)
 
       {gaps && (
         <section className="mt-[20px]">
-          <SectionLabel className="h-[24px]">metadata gaps</SectionLabel>
+          <SectionLabel
+            className="h-[24px]"
+            action={
+              <Button className="text-small" onClick={() => onOpen('gaps')}>
+                see all
+              </Button>
+            }
+          >
+            metadata gaps
+          </SectionLabel>
           <ul className="-mx-[8px] mt-[4px]">
-            {GAP_FIELDS.filter((g) => g.field === 'bpm' || g.field === 'unmatched' || g.field === 'release_date').map((gap) => (
+            {/* BPM is left out (#469): the list still has it as a chip. */}
+            {GAP_FIELDS.filter((g) => g.field !== 'bpm').map((gap) => (
               <HealthRow key={gap.field} label={gap.row} count={gaps[gap.field]} onClick={() => onOpen('gaps', gap.field)} />
             ))}
           </ul>

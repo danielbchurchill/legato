@@ -12,7 +12,9 @@ import { directionLabel, type SortDir, type SortKind } from './types'
  * The phone's library opens the same list from its sort line instead of
  * the pill (#389), through `trigger`. */
 
-type SortOption<T extends string> = { id: T; label: string }
+/* `firstDir` is the order an option starts in when it's picked, where that
+ * isn't A–Z or oldest first: a count opens most first (#469). */
+type SortOption<T extends string> = { id: T; label: string; firstDir?: SortDir }
 
 type SortPillProps<T extends string> = {
   options: readonly SortOption<T>[]
@@ -65,9 +67,7 @@ export function SortPill<T extends string>({ options, value, dir, kindOf, onChan
                         ? dir === 'asc'
                           ? 'desc'
                           : 'asc'
-                        : option.id === 'dateAdded' || option.id === 'recentlyPlayed'
-                          ? 'desc'
-                          : 'asc',
+                        : (option.firstDir ?? (option.id === 'dateAdded' || option.id === 'recentlyPlayed' ? 'desc' : 'asc')),
                     )
                     close()
                   }}

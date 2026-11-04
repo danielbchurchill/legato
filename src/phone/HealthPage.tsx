@@ -10,7 +10,7 @@ import { Shimmer, Skeleton } from '../ui/Skeleton'
 import { StatusDot } from '../ui/StatusDot'
 import { formatCount, plural } from '../ui/format'
 import { matchSummary, useAttention, type AttentionRow } from './libraryHealth'
-import { PageNote } from './PageGroup'
+import { PageGroup, PageNote, PageRow } from './PageGroup'
 
 /* Library health on the phone (#389, Legato Mobile v2's screen 8): how much
  * of the library is matched, what needs attention, each opening its list,
@@ -21,7 +21,8 @@ import { PageNote } from './PageGroup'
  * order?". */
 
 type HealthPageProps = {
-  /** Opens a worklist, the gaps list on `field`. */
+  /** Opens a worklist: the gaps list on `field` alone, or on every kind
+   * but BPM without one. */
   onOpen: (list: WorklistKind, field?: GapField) => void
 }
 
@@ -84,6 +85,11 @@ export function HealthPage({ onOpen }: HealthPageProps) {
           rows.map((row) => <Attention key={row.list} row={row} onOpen={() => onOpen(row.list, row.field)} />)
         )}
       </ul>
+
+      {/* #469: the gaps list on every kind but BPM, by album. */}
+      <PageGroup label="metadata gaps">
+        <PageRow label="Metadata gaps" detail="Missing tags by album, and where to find them" chevron onClick={() => onOpen('gaps')} />
+      </PageGroup>
 
       <PageNote>Fixes are proposed, never applied. You review every change before anything is written to your files.</PageNote>
 
