@@ -41,7 +41,7 @@ export type FeatureSpace = {
 // once this has been used against a library large and varied enough to
 // judge it by ear, the same "provisional" flag DESIGN.md already carries
 // for the edge-color assignment.
-const WEIGHTS = {
+export const WEIGHTS = {
   genre: 1.0,
   artist: 1.5,
   artistCluster: 0.75,

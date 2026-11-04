@@ -29,6 +29,7 @@ import { GIT_SHA, VERSION } from "./version.js";
 import { startUpdateChecks } from "./update/check.js";
 import { trimStreamCacheOnStart } from "./stream/budget.js";
 import { CACHE_DIR } from "./stream/cache.js";
+import { insightsComputed } from "./insights/recompute.js";
 import { loadServerKey } from "./auth/serverKey.js";
 import { installPictures, Pictures } from "./account/pictures.js";
 
@@ -290,6 +291,25 @@ startUpdateChecks(db, (message) => app.log.info(message));
 // that.
 if (STREAM_CACHE_BUDGET.warning) app.log.warn(STREAM_CACHE_BUDGET.warning);
 void trimStreamCacheOnStart(CACHE_DIR, (message) => app.log.info(message)).catch((err) => app.log.warn(err));
+
+// #468: Insights reads who your artists are tied to from tables a recompute
+// fills (insights/recompute.ts). A server upgraded to it has a library and
+// empty tables until its next scan, so the first start after the upgrade
+// runs one recompute, on its Worker as a scan's runs, and the panel says
+// it's working until then. Never awaited. A start that finds them filled
+// reads one row. A start whose artist fold (#466, below) recomputes anyway
+// leaves it to that one: a second call would queue a whole second run.
+if (!insightsComputed(db) && db.prepare("SELECT 1 FROM files LIMIT 1").get() != null) {
+  if (artistFold?.recomputeAfter) {
+    app.log.info("insights: the recompute after the artist fold works out how the library connects");
+  } else {
+    app.log.info("insights: working out how the library connects, once, since this is the first start with Insights");
+    void recomputeOffThread(db).then(
+      () => app.log.info("insights: ready"),
+      (err) => app.log.warn(`insights: the recompute failed, and the next scan tries again: ${err instanceof Error ? err.message : String(err)}`),
+    );
+  }
+}
 
 app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
   if (err) {

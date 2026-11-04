@@ -7,6 +7,7 @@ import { recomputeCollaborationEdges } from "./entities/collaboration.js";
 import { recomputeAllLayouts } from "./layout/seed.js";
 import { recomputeSimilarityFeatures } from "./similarity/similarity.js";
 import { recomputeArticles } from "./articles/recompute.js";
+import { recomputeInsights } from "./insights/recompute.js";
 import { writeInChunks } from "./writeInChunks.js";
 import { libraryChanged } from "./libraryRevision.js";
 import { refreshPlannerStatistics, reloadPlannerStatistics } from "./db.js";
@@ -67,6 +68,10 @@ export function recompute(db: Database): void {
   recomputeCollaborationEdges(db);
   recomputeAllLayouts(db);
   recomputeSimilarityFeatures(db);
+  // #468: who your artists are tied to, and which sound alike. After the
+  // entities (it reads the albums table) and with everything it joins
+  // already derived above.
+  recomputeInsights(db);
   recomputeArticles(db);
 
   // Artist photos, members and encyclopedia descriptions — queued after

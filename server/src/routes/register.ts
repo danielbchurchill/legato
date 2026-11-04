@@ -22,6 +22,7 @@ import { tagWritesRoutes } from "./tag-writes.js";
 import { coverRoutes } from "./cover.js";
 import { playsRoutes } from "./plays.js";
 import { statsRoutes } from "./stats.js";
+import { insightsRoutes } from "./insights.js";
 import { dbInspectorRoutes } from "./db-inspector.js";
 import { similarityRoutes } from "./similarity.js";
 import { waveformRoutes } from "./waveform.js";
@@ -58,6 +59,7 @@ export async function registerRoutes(app: FastifyInstance, db: Database): Promis
   await app.register(coverRoutes(db), { prefix: "/api/v1" });
   await app.register(playsRoutes(db), { prefix: "/api/v1" });
   await app.register(statsRoutes(db), { prefix: "/api/v1" });
+  await app.register(insightsRoutes(db), { prefix: "/api/v1" });
   await app.register(dbInspectorRoutes(db), { prefix: "/api/v1" });
   await app.register(similarityRoutes(db), { prefix: "/api/v1" });
   await app.register(waveformRoutes(db), { prefix: "/api/v1" });
