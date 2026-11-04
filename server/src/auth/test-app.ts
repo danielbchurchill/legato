@@ -1,6 +1,9 @@
 // Test-only: the real server's plugin stack and route table, minus the
 // listen() and background work index.ts also starts. Not a *.spec.ts, so
 // `bun test` never runs it as a suite of its own.
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -9,6 +12,7 @@ import { registerRoutes } from "../routes/register.js";
 import { installClientAddress } from "./clientAddress.js";
 import { installAuthGate } from "./gate.js";
 import { hasLegatoIdentity, installLegatoIdentity, LegatoIdentity } from "./legatoIdentity.js";
+import { hasPictures, installPictures, Pictures } from "../account/pictures.js";
 
 export type RegisteredRoute = { method: string; url: string };
 
@@ -22,6 +26,11 @@ const offline = (async () => {
 
 export async function buildTestApp(db: Database): Promise<{ app: FastifyInstance; routes: RegisteredRoute[] }> {
   if (!hasLegatoIdentity(db)) installLegatoIdentity(db, new LegatoIdentity(db, { fetch: offline }));
+  // Nor Google or GitHub, for a picture (issue #470), and nothing lands in
+  // the real data dir. The directory is only made if a spec stores one.
+  if (!hasPictures(db)) {
+    installPictures(db, new Pictures(db, { fetch: offline, dir: path.join(tmpdir(), `legato-spec-pictures-${randomUUID()}`) }));
+  }
   const app = Fastify();
   const routes: RegisteredRoute[] = [];
   app.addHook("onRoute", (route) => {

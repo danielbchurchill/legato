@@ -28,6 +28,7 @@ import { waveformRoutes } from "./waveform.js";
 import { lyricsRoutes } from "./lyrics.js";
 import { tagManagerRoutes } from "./tag-manager.js";
 import { authRoutes } from "./auth.js";
+import { accountRoutes } from "./account.js";
 import { fsBrowseRoutes } from "./fs-browse.js";
 
 // Every API route plugin, in one list (issue #112). Lives outside index.ts
@@ -63,5 +64,6 @@ export async function registerRoutes(app: FastifyInstance, db: Database): Promis
   await app.register(lyricsRoutes(db), { prefix: "/api/v1" });
   await app.register(tagManagerRoutes(db), { prefix: "/api/v1" });
   await app.register(authRoutes(db), { prefix: "/api/v1" });
+  await app.register(accountRoutes(db), { prefix: "/api/v1" });
   await app.register(fsBrowseRoutes(), { prefix: "/api/v1" });
 }

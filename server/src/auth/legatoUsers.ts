@@ -1,14 +1,12 @@
 import type { Database } from "../sqlite.js";
 import type { LegatoClaims } from "./legatoToken.js";
-import { deleteLegatoSessions, type SessionUser } from "./sessions.js";
+import { deleteLegatoSessions, SESSION_USER_COLUMNS, type SessionUser } from "./sessions.js";
 
 // Mapping a verified legato.fm token onto this server's users (issue #114,
 // migration 0032). Nothing here creates a row. A legato.fm account this
 // server doesn't know is refused, because "anyone with a legato.fm account
 // gets a row" would mean anyone with one gets the library. Inviting
 // another account in is #143.
-
-const USER_COLUMNS = "id, provider, role, email, display_name, avatar_url";
 
 export function anyLinkedAccount(db: Database): boolean {
   return db.prepare("SELECT 1 FROM users WHERE legato_account_id IS NOT NULL LIMIT 1").get() !== undefined;
@@ -50,13 +48,13 @@ function linkByVerifiedEmail(db: Database, claims: LegatoClaims): number | null 
 }
 
 export function userForLegatoClaims(db: Database, claims: LegatoClaims): SessionUser | null {
-  const linked = db.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE legato_account_id = ?`).get(claims.sub) as
+  const linked = db.prepare(`SELECT ${SESSION_USER_COLUMNS} FROM users WHERE legato_account_id = ?`).get(claims.sub) as
     | SessionUser
     | undefined;
   if (linked) return linked;
   const matched = linkByVerifiedEmail(db, claims);
   if (matched === null) return null;
-  return db.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`).get(matched) as SessionUser;
+  return db.prepare(`SELECT ${SESSION_USER_COLUMNS} FROM users WHERE id = ?`).get(matched) as SessionUser;
 }
 
 // Whether linking would clash with another row, asked before the link

@@ -1,4 +1,5 @@
 import type { Database } from "../sqlite.js";
+import { pictures } from "../account/pictures.js";
 import { legatoIdentity } from "./legatoIdentity.js";
 import { VERIFY_FAILURE_MESSAGES } from "./legatoToken.js";
 import { accountLinkedToOtherUser, linkAccount, linkedAccountId } from "./legatoUsers.js";
@@ -100,9 +101,17 @@ export async function linkLegatoAccount(db: Database, userId: number, token: str
     return { previous };
   })();
   if (!linked) return ACCOUNT_TAKEN;
+  // The account's Google or GitHub picture (issue #470), fetched in the
+  // background: legato.fm's answer has it as it is now, the link token as
+  // it was when it was signed. A legato.fm from before the claim says
+  // neither, and then a picture that came with a different account goes.
+  const picture = reported.picture !== undefined ? reported.picture : result.claims.picture;
+  const replaced = linked.previous !== null && linked.previous !== accountId;
+  if (picture !== undefined) pictures(db).note(userId, picture);
+  else if (replaced) await pictures(db).forgetRemote(userId);
   // Linking a different account replaces the old one here, so legato.fm
   // stops vouching for the old one too. Best effort, like an unlink.
-  if (linked.previous && linked.previous !== accountId) await identity.recordUnlink(linked.previous);
+  if (replaced) await identity.recordUnlink(linked.previous!);
   identity.syncSchedule();
   return { ok: true, linked: { accountId, email: result.claims.email, name: result.claims.name } };
 }

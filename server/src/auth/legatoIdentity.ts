@@ -2,7 +2,7 @@ import type { KeyObject } from "node:crypto";
 import { LEGATO_ID_ORIGIN } from "../config.js";
 import type { Database } from "../sqlite.js";
 import { anyLinkedAccount } from "./legatoUsers.js";
-import { importEd25519Jwk, verifyLegatoToken, type VerifyResult } from "./legatoToken.js";
+import { importEd25519Jwk, readPictureClaim, verifyLegatoToken, type VerifyResult } from "./legatoToken.js";
 import { claimProof, ensureServerKey, linkProof, loadServerKey, unlinkProof } from "./serverKey.js";
 
 // This server's side of trusting legato.fm (issue #114): its own id (the
@@ -67,11 +67,20 @@ export type ReportResult = { ok: true; answer: Record<string, unknown> | null } 
 // will connect with.
 export type TunnelCredential = { credential: string; expiresAt: string };
 
-export type LinkReportResult = { ok: true; tunnel: TunnelCredential | null } | Exclude<ReportResult, { ok: true }>;
+// picture (issue #470) is the linked account's Google or GitHub picture as
+// legato.fm's answer gave it: undefined from a legato.fm older than that.
+export type LinkReportResult =
+  | { ok: true; tunnel: TunnelCredential | null; picture?: string | null }
+  | Exclude<ReportResult, { ok: true }>;
 
 // Asking legato.fm whether anyone has claimed a setup code: a link token
 // for the claiming account if so; not_found until then.
 export type ExchangeResult = { ok: true; linkToken: string } | { ok: false; reason: "unreachable" } | Refusal;
+
+function linkedPicture(answer: Record<string, unknown> | null): string | null | undefined {
+  const linked = answer?.linked as Record<string, unknown> | undefined;
+  return linked && "picture" in linked ? readPictureClaim(linked.picture) : undefined;
+}
 
 function tunnelCredential(answer: Record<string, unknown> | null): TunnelCredential | null {
   const tunnel = answer?.tunnel as Record<string, unknown> | undefined;
@@ -195,7 +204,9 @@ export class LegatoIdentity {
   // else's (serverKey.ts).
   async recordLink(linkToken: string): Promise<LinkReportResult> {
     const result = await this.report("/linked-servers", linkProof(loadServerKey(this.db), linkToken));
-    return result.ok ? { ok: true, tunnel: tunnelCredential(result.answer) } : result;
+    if (!result.ok) return result;
+    const picture = linkedPicture(result.answer);
+    return { ok: true, tunnel: tunnelCredential(result.answer), ...(picture !== undefined ? { picture } : {}) };
   }
 
   // Asks whether anyone has claimed this setup code (issue #237), signed

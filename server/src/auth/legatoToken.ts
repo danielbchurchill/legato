@@ -41,6 +41,11 @@ export type LegatoClaims = {
   email: string | null;
   emailVerified: boolean;
   name: string | null;
+  // The account's Google or GitHub picture (issue #470): an https address,
+  // or null when the account has none. Undefined when the token doesn't say,
+  // which is every token from a legato.fm older than the claim, so a server
+  // never forgets a picture because an old token left it out.
+  picture?: string | null;
 };
 
 export type VerifyFailure =
@@ -100,6 +105,22 @@ export function importEd25519Jwk(jwk: unknown): { kid: string; key: KeyObject } 
   }
 }
 
+// A picture claim this server will fetch: https, and short enough to be an
+// address rather than a payload. Anything else reads as no claim at all,
+// since a picture is never worth refusing a sign-in over. legatoIdentity.ts
+// reads the link report's picture the same way.
+const MAX_PICTURE_URL_LENGTH = 2048;
+
+export function readPictureClaim(value: unknown): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "string" || !value || value.length > MAX_PICTURE_URL_LENGTH) return undefined;
+  try {
+    return new URL(value).protocol === "https:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function isInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value);
 }
@@ -129,7 +150,7 @@ export function verifyLegatoToken(token: string, options: VerifyOptions): Verify
   // Nothing in the payload is read until the signature holds.
   const payload = decodeJson(payloadPart);
   if (!payload) return { ok: false, reason: "malformed" };
-  const { iss, sub, aud, iat, exp, scope, jti, email, email_verified, name } = payload;
+  const { iss, sub, aud, iat, exp, scope, jti, email, email_verified, name, picture } = payload;
 
   if (iss !== options.issuer) return { ok: false, reason: "wrong_issuer" };
   if (typeof aud !== "string" || aud !== options.audience) return { ok: false, reason: "wrong_audience" };
@@ -142,6 +163,7 @@ export function verifyLegatoToken(token: string, options: VerifyOptions): Verify
 
   if (typeof sub !== "string" || !sub) return { ok: false, reason: "bad_claims" };
   if (scope !== "access" && scope !== "link") return { ok: false, reason: "bad_claims" };
+  const pictureClaim = readPictureClaim(picture);
 
   return {
     ok: true,
@@ -156,6 +178,7 @@ export function verifyLegatoToken(token: string, options: VerifyOptions): Verify
       email: typeof email === "string" && email ? email : null,
       emailVerified: email_verified === true,
       name: typeof name === "string" && name ? name : null,
+      ...(pictureClaim !== undefined ? { picture: pictureClaim } : {}),
     },
   };
 }

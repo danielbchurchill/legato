@@ -16,8 +16,16 @@ export type SessionUser = {
   role: Role;
   email: string | null;
   display_name: string | null;
+  // legato.fm's picture address for a linked user, and this server's two
+  // pictures (issue #470, account/pictures.ts): the uploaded one, and its
+  // copy of the one at avatar_url.
   avatar_url: string | null;
+  avatar_upload_hash: string | null;
+  avatar_remote_hash: string | null;
 };
+
+// The users columns a SessionUser is made of, for every query that makes one.
+export const SESSION_USER_COLUMNS = "id, provider, role, email, display_name, avatar_url, avatar_upload_hash, avatar_remote_hash";
 
 export type IssuedSession = {
   token: string;
@@ -75,12 +83,16 @@ function sqliteTimeToDate(value: string): Date {
 
 type Column = "token_hash" | "media_ticket_hash";
 
+const JOINED_USER_COLUMNS = SESSION_USER_COLUMNS.split(", ")
+  .map((column) => `u.${column}`)
+  .join(", ");
+
 function lookup(db: Database, column: Column, credential: string): { user: SessionUser; tokenHash: string } | null {
   if (!credential) return null;
   const row = db
     .prepare(
       `SELECT s.token_hash, s.refreshed_at < datetime('now', ?) AND s.legato_account_id IS NULL AS due,
-              u.id, u.provider, u.role, u.email, u.display_name, u.avatar_url
+              ${JOINED_USER_COLUMNS}
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.${column} = ? AND s.expires_at > datetime('now')`,

@@ -30,6 +30,7 @@ import { startUpdateChecks } from "./update/check.js";
 import { trimStreamCacheOnStart } from "./stream/budget.js";
 import { CACHE_DIR } from "./stream/cache.js";
 import { loadServerKey } from "./auth/serverKey.js";
+import { installPictures, Pictures } from "./account/pictures.js";
 
 // Checked before anything else touches disk (openDb below creates the data
 // dir and runs migrations) — `legato-server --version` should work without
@@ -237,6 +238,17 @@ await registerRoutes(app, db);
       ? `legato.fm: server id ${identity.serverId()}, trusting ${identity.origin}${identity.scheduled ? " (linked, refreshing keys daily)" : " (not linked, no contact)"}`
       : "legato.fm: sign-in turned off (LEGATO_ID_ORIGIN=off)",
   );
+}
+
+// Issue #470: users' pictures. A linked user's legato.fm picture that
+// didn't land before the last stop is fetched now, never awaited, so a
+// picture host that's slow can't hold up startup.
+{
+  const store = new Pictures(db, {
+    log: (level, message) => (level === "warn" ? app.log.warn(message) : app.log.info(message)),
+  });
+  installPictures(db, store);
+  void store.syncPending();
 }
 
 // #116's web client and its SPA fallback. Registered after the gate like
