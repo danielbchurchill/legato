@@ -17,14 +17,17 @@ export type LeftView =
   | { kind: 'import' }
   | { kind: 'health' }
   | { kind: 'worklist'; list: WorklistKind }
+  | { kind: 'insights' }
   | { kind: 'settings' }
   | { kind: 'account' }
 
-export type RailItem = 'collections' | 'health' | 'settings' | 'account'
+export type RailItem = 'collections' | 'health' | 'insights' | 'settings' | 'account'
 
 export const RAIL_ITEMS: { id: RailItem; icon: IconName; label: string }[] = [
   { id: 'collections', icon: 'list', label: 'Collections' },
   { id: 'health', icon: 'database', label: 'Library health' },
+  // #468: how the library connects, under Library health.
+  { id: 'insights', icon: 'lightbulb', label: 'Insights' },
 ]
 
 export const SETTINGS_ITEM = { id: 'settings', icon: 'settings', label: 'Settings' } as const satisfies {
@@ -47,6 +50,8 @@ export function railOwner(view: LeftView | null): RailItem | null {
     case 'health':
     case 'worklist':
       return 'health'
+    case 'insights':
+      return 'insights'
     case 'settings':
       return 'settings'
     case 'account':

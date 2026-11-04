@@ -16,8 +16,9 @@ import type { WorklistKind } from '../shell/panels'
  * only carry state. */
 
 /* Library health's lists each push as a page of their own. Account pushes
- * from the row at the top of Settings (#470). */
-export type PhonePage = 'settings' | 'account' | 'health' | `worklist:${WorklistKind}` | 'now-playing'
+ * from the row at the top of Settings (#470), and Insights from its row
+ * beside Library health (#468). */
+export type PhonePage = 'settings' | 'account' | 'health' | 'insights' | `worklist:${WorklistKind}` | 'now-playing'
 
 /** What the sheet shows over its tabs: search, a node's detail, or the
  * map options (#467). */
@@ -28,6 +29,7 @@ const PAGES: readonly PhonePage[] = [
   'settings',
   'account',
   'health',
+  'insights',
   ...WORKLISTS.map((list) => `worklist:${list}` as const),
   'now-playing',
 ]
@@ -144,6 +146,15 @@ export function popPhonePageThen(then: () => void) {
  * opened on the map from a page shows the map. */
 export function closePhonePages() {
   if (place.pages.length === 0) return
+  history.go(-place.pages.length)
+}
+
+/** Closes every page, then runs `then` once the history is back where it
+ * was, as popPhonePageThen does for one: a node opened from Insights (#468)
+ * opens its detail over the map, which has to wait for the backs. */
+export function closePhonePagesThen(then: () => void) {
+  if (place.pages.length === 0) return then()
+  window.addEventListener('popstate', () => then(), { once: true })
   history.go(-place.pages.length)
 }
 

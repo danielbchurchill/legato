@@ -42,6 +42,14 @@ class Statement<ReturnType = unknown> {
   run(...params: SQLQueryBindings[]) {
     return this.#inner.run(...params);
   }
+
+  // Each row as an array of its columns, in the order selected, for a scan
+  // big enough that building an object per row shows: insights/links.ts
+  // reads 1.2M edges this way at 30,000 albums in half the time. (In
+  // better-sqlite3 this is .raw().all().)
+  values(...params: SQLQueryBindings[]): unknown[][] {
+    return this.#inner.values(...params) as unknown[][];
+  }
 }
 
 export class Database {

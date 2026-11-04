@@ -16,6 +16,7 @@ import heart from '../assets/icons/heart.svg?raw'
 import home from '../assets/icons/home.svg?raw'
 import info from '../assets/icons/info.svg?raw'
 import library from '../assets/icons/library.svg?raw'
+import lightbulb from '../assets/icons/lightbulb.svg?raw'
 import list from '../assets/icons/list.svg?raw'
 import map from '../assets/icons/map.svg?raw'
 import more from '../assets/icons/more.svg?raw'
@@ -102,7 +103,10 @@ import volumeMute from '../assets/icons/volume-mute.svg?raw'
  * `more` (proicons "More", three dots) and `target` (proicons "Target")
  * arrived with the phone's node detail (#389): its "more" menu, and the
  * "centre on map" pill over the map. Both are drawn with filled dots, so
- * they're whole as they are, and not FILLABLE. */
+ * they're whole as they are, and not FILLABLE.
+ *
+ * `lightbulb` (proicons "Lightbulb") is Insights (#468): its rail item, under
+ * Library health, and its row in the phone's Settings. */
 const GLYPHS = {
   add,
   'arrow-left': arrowLeft,
@@ -122,6 +126,7 @@ const GLYPHS = {
   home,
   info,
   library,
+  lightbulb,
   list,
   map,
   more,

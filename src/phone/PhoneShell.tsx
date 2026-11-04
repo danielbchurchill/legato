@@ -96,6 +96,9 @@ type PhoneShellProps = {
   onShuffleLibrary: () => void
   /** Select a node and fly the map to it. */
   onFocusNode: (id: number) => void
+  /** Light several nodes on the map and frame them, selecting nothing
+   * (#468's Insights). */
+  onFocusNodes: (ids: number[]) => void
   /** Select a node, or nothing, without moving the map. */
   onSelectNode: (id: number | null) => void
   /** Centre the map on a node above a sheet so tall (CanvasHandle). */
@@ -122,6 +125,7 @@ export function PhoneShell({
   canShuffle,
   onShuffleLibrary,
   onFocusNode,
+  onFocusNodes,
   onSelectNode,
   onCentreNode,
   settings,
@@ -435,6 +439,12 @@ export function PhoneShell({
           themePreference={themePreference}
           onSetThemePreference={onSetThemePreference}
           onShowOnMap={showOnMap}
+          onShowAllOnMap={(ids) => {
+            // As showOnMap: the sheet goes down to peek, then the map moves.
+            setDetent('peek')
+            if (ids.length === 1) onFocusNode(ids[0]!)
+            else onFocusNodes(ids)
+          }}
         />
 
         {/* Each way out closes it first, a back in the history, and only
