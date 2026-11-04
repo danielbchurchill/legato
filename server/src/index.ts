@@ -21,7 +21,9 @@ import { backfillFuzzyIndex } from "./match/backfill-fuzzy-index.js";
 import { mergeDuplicatePeople } from "./match/people.js";
 import { enqueueArtistCreditLookups } from "./enrich/artistCredit.js";
 import { pruneBeyondMemberBoundIfDue } from "./enrich/members.js";
+import { foldArtistNameVariantsIfDue } from "./match/artistFold.js";
 import { refreshBridgeMembers } from "./entities/bridges.js";
+import { recomputeOffThread } from "./recompute.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 import { startUpdateChecks } from "./update/check.js";
@@ -142,6 +144,14 @@ if (!ownerExists(db)) {
   const queued = enqueueArtistCreditLookups(db);
   if (queued > 0) app.log.info(`people: queued ${queued} recording(s) to split credit lines joined by "," or "&"`);
 }
+
+// Issue #466: artists whose names differ only by case, spaces or a leading
+// "The" are one artist now, and the duplicates the old lookups made are
+// folded together here, once, on the first start after migration 0048
+// (match/artistFold.ts). After the people merge, so a credit node has
+// already joined its artist. If a node it folded away had tracks, the
+// survivor's counts and the layout are recomputed once the server listens.
+const artistFold = foldArtistNameVariantsIfDue(db, (level, message) => app.log[level](message));
 
 // Issue #269: the band-membership lookup used to crawl without limit, and a
 // database from then holds what it found, 180,000 artists on the Pi. This
@@ -275,6 +285,13 @@ app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
     process.exit(1);
   }
   app.log.info(`legato-server listening at ${address}`);
+
+  // Issue #466: see the fold above. Off the request loop, like any recompute.
+  if (artistFold?.recomputeAfter) {
+    void recomputeOffThread(db).catch((error) =>
+      app.log.error(`artists: recompute after the fold failed: ${error instanceof Error ? error.message : String(error)}`),
+    );
+  }
 
   // Issue #310: the tunnel through legato.fm, only on a server linked to a
   // legato.fm account (tunnel/relayTunnel.ts). After listen, because it
