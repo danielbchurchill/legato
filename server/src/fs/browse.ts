@@ -81,7 +81,7 @@ const SYSTEM_MOUNT_PREFIXES = [
   "/var/lib/containers",
 ];
 
-class BrowseTimeout extends Error {}
+export class BrowseTimeout extends Error {}
 
 function isAtOrAbove(candidate: string, target: string): boolean {
   const rel = path.relative(candidate, target);
@@ -92,7 +92,7 @@ function isAtOrAbove(candidate: string, target: string): boolean {
 // NFS share whose server has gone doesn't fail a readdir, it blocks it, so
 // the request gives up rather than waiting with it. The blocked read itself
 // can't be cancelled; see shared() below for what keeps that bounded.
-async function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
+export async function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new BrowseTimeout()), Math.max(0, deadline - Date.now()));
@@ -110,9 +110,9 @@ async function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
 // dead folder (the picker's "try again", a second tab) would block one
 // more. Requests for a path that's still being read share the read already
 // waiting instead of starting another.
-const sharedInFlight = new Map<string, Promise<unknown>>();
+export const sharedInFlight = new Map<string, Promise<unknown>>();
 
-function shared<T>(inFlight: Map<string, Promise<unknown>>, key: string, start: () => Promise<T>): Promise<T> {
+export function shared<T>(inFlight: Map<string, Promise<unknown>>, key: string, start: () => Promise<T>): Promise<T> {
   const existing = inFlight.get(key) as Promise<T> | undefined;
   if (existing) return existing;
   const work = start().finally(() => inFlight.delete(key));

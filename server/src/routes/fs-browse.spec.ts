@@ -10,6 +10,7 @@ import { installAuthGate } from "../auth/gate.js";
 import { createOwnerForTest } from "../auth/test-app.js";
 import { createSession } from "../auth/sessions.js";
 import type { BrowseDeps } from "../fs/browse.js";
+import type { SuggestDeps } from "../fs/suggest.js";
 import { authRoutes } from "./auth.js";
 import { fsBrowseRoutes } from "./fs-browse.js";
 
@@ -61,12 +62,28 @@ function linuxDeps(extra: Partial<BrowseDeps> = {}): BrowseDeps {
   };
 }
 
+// The same home on Linux, for /fs/suggestions. /mnt and /media are empty
+// temp folders, so only the home's Music folder can be offered.
+function suggestDeps(): SuggestDeps {
+  return {
+    home,
+    platform: "linux",
+    docker: false,
+    env: {},
+    dataDir: path.join(base, "data"),
+    mnt: path.join(base, "no-mnt"),
+    media: path.join(base, "no-media"),
+    readFile: async () => "",
+    inFlight: new Map(),
+  };
+}
+
 async function buildApp(deps: BrowseDeps): Promise<FastifyInstance> {
   const instance = Fastify();
   await instance.register(cookie);
   installAuthGate(instance, db);
   await instance.register(authRoutes(db), { prefix: "/api/v1" });
-  await instance.register(fsBrowseRoutes(deps), { prefix: "/api/v1" });
+  await instance.register(fsBrowseRoutes(deps, suggestDeps()), { prefix: "/api/v1" });
   await instance.ready();
   return instance;
 }
@@ -351,5 +368,33 @@ describe("GET /fs/browse — a mount that stopped answering", () => {
       expect((await get(`/api/v1/fs/browse?path=${encodeURIComponent(drive)}`)).statusCode).toBe(504);
     }
     expect(reads).toBe(1);
+  });
+});
+
+describe("GET /fs/suggestions", () => {
+  it("is behind the sign-in gate, and for the owner alone", async () => {
+    expect((await get("/api/v1/fs/suggestions", {})).statusCode).toBe(401);
+    const legacy = db
+      .prepare(
+        `INSERT INTO users (provider, provider_user_id, role) VALUES ('github', '42', 'legacy') RETURNING id`,
+      )
+      .get() as { id: number };
+    const session = createSession(db, legacy.id);
+    const refused = await get("/api/v1/fs/suggestions", { authorization: `Bearer ${session.token}` });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().reason).toBe("owner_only");
+    const owner = createSession(db, 1);
+    expect((await get(`/api/v1/fs/suggestions?t=${owner.mediaTicket}`, {})).statusCode).toBe(403);
+  });
+
+  it("offers the server's own music folder with its count", async () => {
+    const res = await get("/api/v1/fs/suggestions");
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      home,
+      docker: false,
+      // 01.flac, 02.FLAC, 03.mp3, Live/01.flac, Live/Encore/01.flac.
+      suggestions: [{ path: path.join(home, "Music"), kind: "music", audioFiles: 5, complete: true }],
+    });
   });
 });

@@ -474,6 +474,7 @@ function Workspace({
 
   const addMusic = (
     <AddMusic
+      phone={phone}
       onAdded={() => {
         onLibraryAdded()
         // The first scan is drawn on the map as it runs.
