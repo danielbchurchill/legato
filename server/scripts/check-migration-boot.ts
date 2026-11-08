@@ -91,7 +91,26 @@ async function main() {
       console.log("\n--- server stderr ---");
       console.log(stderrOutput.trim());
     }
-    await rm(dataDir, { recursive: true, force: true });
+    await removeDataDir(dataDir);
+  }
+}
+
+// Windows lets go of a killed process's files a moment after it exits, so
+// an immediate rm fails with EBUSY (the desktop build's Windows run, #129).
+// A temp dir that outlives a few tries is left for the OS: the check has
+// already passed or failed by then.
+async function removeDataDir(dir: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rm(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      if (attempt === 10) {
+        console.warn(`couldn't remove ${dir}: ${err instanceof Error ? err.message : err}`);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
   }
 }
 
