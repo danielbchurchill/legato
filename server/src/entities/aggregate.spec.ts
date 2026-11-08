@@ -351,10 +351,12 @@ describe("recomputeEntities", () => {
   });
 });
 
-// #359: each track's artist, by the album artist's rule.
-type Keys = { id: number; artist: number | null };
+// #383, #359: what the Tracks table names and sorts each track by.
+type Keys = { id: number; artist: number | null; album: number | null; format: string | null };
 const keysOf = (db: Database) =>
-  db.prepare("SELECT node_id AS id, artist_node_id AS artist FROM recordings ORDER BY node_id").all() as Keys[];
+  db
+    .prepare("SELECT node_id AS id, artist_node_id AS artist, album_node_id AS album, format FROM recordings ORDER BY node_id")
+    .all() as Keys[];
 
 // Every case the rules decide, built as a scan leaves it, edges first.
 function library(db: Database) {
@@ -404,16 +406,16 @@ function library(db: Database) {
   return { artist, featured, record, plain, creditFirst, twoOf, bare };
 }
 
-describe("recomputeEntities' track artists", () => {
-  it("names each track's first credit that is an artist", () => {
+describe("recomputeEntities' track keys", () => {
+  it("names each track's artist, album and format by the rules", () => {
     const db = openDb(":memory:");
-    const { artist, featured, plain, creditFirst, twoOf, bare } = library(db);
+    const { artist, featured, record, plain, creditFirst, twoOf, bare } = library(db);
     recomputeEntities(db);
     expect(keysOf(db)).toEqual([
-      { id: plain, artist },
-      { id: creditFirst, artist: featured },
-      { id: twoOf, artist: null },
-      { id: bare, artist: null },
+      { id: plain, artist, album: record, format: "FLAC" },
+      { id: creditFirst, artist: featured, album: null, format: "MPEG" },
+      { id: twoOf, artist: null, album: record, format: "MP4" },
+      { id: bare, artist: null, album: null, format: null },
     ]);
   });
 
@@ -437,21 +439,20 @@ describe("recomputeEntities' track artists", () => {
   // names a node over to the survivor, and a deleted node leaves none.
   it("moves to the survivor when the node it names is merged away, and clears when it's deleted", () => {
     const db = openDb(":memory:");
-    const { artist, featured, plain } = library(db);
+    const { artist, featured, record, plain, twoOf } = library(db);
     recomputeEntities(db);
 
     mergeNodeInto(db, artist, featured);
     expect(keysOf(db).find((row) => row.id === plain)?.artist).toBe(featured);
 
-    db.prepare("DELETE FROM edges WHERE to_node = ?").run(featured);
-    db.prepare("DELETE FROM artists WHERE node_id = ?").run(featured);
-    db.prepare("DELETE FROM albums WHERE primary_artist_node_id = ?").run(featured);
-    db.prepare("DELETE FROM nodes WHERE id = ?").run(featured);
-    expect(keysOf(db).find((row) => row.id === plain)?.artist).toBeNull();
+    db.prepare("DELETE FROM edges WHERE to_node = ?").run(record);
+    db.prepare("DELETE FROM albums WHERE node_id = ?").run(record);
+    db.prepare("DELETE FROM nodes WHERE id = ?").run(record);
+    expect(keysOf(db).find((row) => row.id === twoOf)?.album).toBeNull();
   });
 });
 
-describe("migration 0054 (#359)", () => {
+describe("migration 0054 (#383, #359)", () => {
   let dataDir: string | null = null;
 
   afterEach(() => {
@@ -459,7 +460,7 @@ describe("migration 0054 (#359)", () => {
     dataDir = null;
   });
 
-  it("fills in each track's artist as a recompute would", () => {
+  it("fills in each track's artist, album and format as a recompute would", () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "legato-0054-"));
     const dbPath = path.join(dataDir, "legato.db");
     const old = openSqlite(dbPath);
@@ -476,7 +477,12 @@ describe("migration 0054 (#359)", () => {
 
     const upgraded = openDb(dbPath, { log: () => {} });
     const migrated = keysOf(upgraded);
-    expect(migrated.find((row) => row.id === ids.creditFirst)).toEqual({ id: ids.creditFirst, artist: ids.featured });
+    expect(migrated.find((row) => row.id === ids.creditFirst)).toEqual({
+      id: ids.creditFirst,
+      artist: ids.featured,
+      album: null,
+      format: "MPEG",
+    });
     // The SQL agrees with aggregate.ts: a recompute changes nothing.
     recomputeEntities(upgraded);
     expect(keysOf(upgraded)).toEqual(migrated);

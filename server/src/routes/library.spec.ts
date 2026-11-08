@@ -575,7 +575,8 @@ describe("a sort key every object inherits", () => {
 // they read. This is the query as it was before, every join on every row,
 // kept as the reference the new one has to agree with exactly. Since #359 a
 // track's artist is its first performed_by credit that is an artist node,
-// which the route reads from what the recompute stored.
+// and since #383 its album is its first appears_on edge to a release node,
+// both of which the route reads from what the recompute stored.
 function referenceTrackIds(sortColumn: string, dir: "asc" | "desc", q: string | null, limit: number, offset: number) {
   const like = (s: string) => `%${s.replace(/[\\%_]/g, "\\$&")}%`;
   const where = q
@@ -589,8 +590,9 @@ function referenceTrackIds(sortColumn: string, dir: "asc" | "desc", q: string | 
        LEFT JOIN nodes artist ON artist.id = (
          SELECT e.to_node FROM edges e JOIN nodes a ON a.id = e.to_node AND a.type = 'artist'
           WHERE e.from_node = n.id AND e.type = 'performed_by' ORDER BY e.id LIMIT 1)
-       LEFT JOIN edges ae ON ae.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'appears_on')
-       LEFT JOIN nodes album ON album.id = ae.to_node
+       LEFT JOIN nodes album ON album.id = (
+         SELECT e.to_node FROM edges e JOIN nodes t ON t.id = e.to_node AND t.type = 'release'
+          WHERE e.from_node = n.id AND e.type = 'appears_on' ORDER BY e.id LIMIT 1)
        WHERE n.type = 'recording'
        ${where}`;
   const direction = dir === "desc" ? "DESC" : "ASC";
@@ -665,12 +667,21 @@ describe("GET /library/tracks orders exactly as the single-query version did (#2
     const creditOnly = makeRecording("Solo", { durationMs: 220_000, format: "MPEG" });
     edge(creditOnly, producer, "performed_by");
     edge(creditOnly, two, "appears_on");
+    // An appears_on edge to something that isn't a release, ahead of the
+    // record: the record is the track's album (#383).
+    const label = makeNode("label", "Aardvark Records");
+    const labelled = makeRecording("Labelled", { durationMs: 230_000, format: "FLAC" });
+    edge(labelled, label, "appears_on");
+    edge(labelled, two, "appears_on");
+    edge(labelled, a, "performed_by");
     recomputeEntities(db);
   });
 
   for (const sort of Object.keys(SORT_COLUMNS) as (keyof typeof SORT_COLUMNS)[]) {
     for (const dir of ["asc", "desc"] as const) {
-      for (const q of [null, "o"]) {
+      // "o" matches most tracks by title, "alp" only by artist, and a page
+      // past the last hit still has the whole count.
+      for (const q of [null, "o", "alp"]) {
         it(`${sort} ${dir}${q ? ` matching "${q}"` : ""}`, async () => {
           for (const [limit, offset] of [
             [500, 0],
@@ -678,6 +689,7 @@ describe("GET /library/tracks orders exactly as the single-query version did (#2
             [3, 3],
             [3, 7],
             [4, 9],
+            [3, 40],
           ]) {
             const expected = referenceTrackIds(SORT_COLUMNS[sort], dir, q, limit, offset);
             const query = new URLSearchParams({ sort, dir, limit: String(limit), offset: String(offset), ...(q ? { q } : {}) });

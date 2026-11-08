@@ -55,12 +55,14 @@ const ALBUM_SORTS = {
 } as const;
 export type AlbumSort = keyof typeof ALBUM_SORTS;
 
+// The column each sort orders a search's hits by (searchTracks); a page
+// with no search walks an index instead (TRACK_PAGES).
 const TRACK_SORTS = {
   title: "n.title",
   artist: "artist.title",
   album: "album.title",
   duration: "r.canonical_duration_ms",
-  format: "f.format",
+  format: "r.format",
   dateAdded: "n.created_at",
 } as const;
 export type TrackSort = keyof typeof TRACK_SORTS;
@@ -326,96 +328,187 @@ function listAlbums(
   return { items: rows.map((row) => ({ ...row, coverHash: resolveCoverForNode(db, row.id)?.hash ?? null })), total };
 }
 
-// The joins a track row reads. The album join resolves "the first edge of
-// this type", lowest id wins. The artist is the track's own (#359): the
-// album artist's rule, which the map clusters by, stored by the recompute
-// (entities/aggregate.ts's trackArtists). A recording can carry more than
-// one performed_by edge (featured artists), but the table shows one artist
-// column, same as the canvas shows one subtitle line.
-const TRACK_JOINS = {
-  file: "LEFT JOIN files f ON f.id = (SELECT MIN(id) FROM files WHERE recording_node_id = n.id)",
-  artist: "LEFT JOIN nodes artist ON artist.id = r.artist_node_id",
-  album: `LEFT JOIN edges ae ON ae.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'appears_on')
-       LEFT JOIN nodes album ON album.id = ae.to_node`,
-} as const;
-type TrackJoin = keyof typeof TRACK_JOINS;
+// The Tracks table (#126). At 30,000 albums it's 300,000 tracks, and a page
+// took 0.2 to 3.4 s and a search 4 to 6 s (#383), because each row's artist,
+// album and format were found from its edges and files, a few lookups a row,
+// before anything could be sorted, counted or filtered. Those are stored on
+// the track now (migration 0054, written by entities/aggregate.ts at each
+// recompute), and each sort walks an index in its own order and stops at
+// the page it was asked for, so a page reads about as far as its offset
+// (TRACK_PAGES below).
+//
+// A track is a recordings row. Every recording node has one, made with it
+// (scan/scanner.ts, match/collapse.ts), and only recording nodes do, so the
+// sorts that walk recording nodes and those that walk recordings rows list
+// the same tracks, and the total counts either.
+//
+// Every order is the one orderClause gives: the key, tracks without one
+// last either way, then id. The artist is the track's own, by the album
+// artist's rule (#359, entities/aggregate.ts's trackArtists).
 
-// What each sort has to join to order the whole table by.
-const TRACK_SORT_JOINS: Record<TrackSort, TrackJoin[]> = {
-  title: [],
-  artist: ["artist"],
-  album: ["album"],
-  duration: [],
-  format: ["file"],
-  dateAdded: [],
+type Page = { limit: number; offset: number };
+type SqlDirection = "ASC" | "DESC";
+
+function pageIds(db: Database, sql: string, limit: number, offset: number): number[] {
+  return (db.prepare(sql).all(limit, offset) as { id: number }[]).map((row) => row.id);
+}
+
+// A sort by a key some tracks lack: those with it, in its order (`present`),
+// then those without, by id (`absent`). How many have it (`presentCount`) is
+// only asked when the page starts past them.
+function nullsLast(db: Database, { limit, offset }: Page, present: string, presentCount: string, absent: string): number[] {
+  const ids = pageIds(db, present, limit, offset);
+  if (ids.length === limit) return ids;
+  const count = ids.length > 0 ? offset + ids.length : (db.prepare(presentCount).get() as { count: number }).count;
+  return [...ids, ...pageIds(db, absent, limit - ids.length, Math.max(0, offset - count))];
+}
+
+// By the title of the artist or album each track names: those in title
+// order, and each one's tracks by id, so a page reads only as far as its
+// offset. Reading every track and looking up its artist to sort them all
+// took about 0.4 s. CROSS JOIN pins that order of the loops, as
+// release_last_played's does, whatever the statistics say. Two with the
+// same title still interleave their tracks by id, as one key: SQLite sorts
+// each run of equal titles by id as it goes. The stored ids only ever name
+// an artist or a release node (aggregate.ts), so the type is the index's,
+// not a filter.
+function byNamedNode(type: "artist" | "release", column: "artist_node_id" | "album_node_id") {
+  return (db: Database, dir: SqlDirection, page: Page) =>
+    nullsLast(
+      db,
+      page,
+      `SELECT r.node_id AS id FROM nodes named CROSS JOIN recordings r ON r.${column} = named.id
+       WHERE named.type = '${type}'
+       ORDER BY named.title ${dir}, r.node_id ASC LIMIT ? OFFSET ?`,
+      `SELECT COUNT(*) AS count FROM recordings WHERE ${column} IS NOT NULL`,
+      `SELECT node_id AS id FROM recordings WHERE ${column} IS NULL ORDER BY node_id LIMIT ? OFFSET ?`,
+    );
+}
+
+// A library has a handful of formats, so walking the format index backwards
+// for a descending sort finds most of the library under one value with its
+// ids the wrong way round, and sorted them all again (0.4 s). So the page is
+// put together a format at a time instead: how many tracks have each, from
+// the index alone, then the ones the page reaches from each, by id.
+function byFormat(db: Database, dir: SqlDirection, { limit, offset }: Page): number[] {
+  const formats = db
+    .prepare(`SELECT format, COUNT(*) AS count FROM recordings GROUP BY format ORDER BY format IS NULL, format ${dir}`)
+    .all() as { format: string | null; count: number }[];
+  const ofFormat = db.prepare("SELECT node_id AS id FROM recordings WHERE format IS ? ORDER BY node_id LIMIT ? OFFSET ?");
+  const ids: number[] = [];
+  let skip = offset;
+  for (const { format, count } of formats) {
+    if (ids.length === limit) break;
+    if (skip >= count) {
+      skip -= count;
+      continue;
+    }
+    ids.push(...(ofFormat.all(format, limit - ids.length, skip) as { id: number }[]).map((row) => row.id));
+    skip = 0;
+  }
+  return ids;
+}
+
+// Title and date added are never missing, so their walk is the whole order.
+const TRACK_PAGES: Record<TrackSort, (db: Database, dir: SqlDirection, page: Page) => number[]> = {
+  title: (db, dir, { limit, offset }) =>
+    pageIds(db, `SELECT id FROM nodes WHERE type = 'recording' ORDER BY title ${dir}, id ASC LIMIT ? OFFSET ?`, limit, offset),
+  dateAdded: (db, dir, { limit, offset }) =>
+    pageIds(db, `SELECT id FROM nodes WHERE type = 'recording' ORDER BY created_at ${dir}, id ASC LIMIT ? OFFSET ?`, limit, offset),
+  duration: (db, dir, page) =>
+    nullsLast(
+      db,
+      page,
+      `SELECT node_id AS id FROM recordings WHERE canonical_duration_ms IS NOT NULL
+       ORDER BY canonical_duration_ms ${dir}, node_id ASC LIMIT ? OFFSET ?`,
+      "SELECT COUNT(*) AS count FROM recordings WHERE canonical_duration_ms IS NOT NULL",
+      "SELECT node_id AS id FROM recordings WHERE canonical_duration_ms IS NULL ORDER BY node_id LIMIT ? OFFSET ?",
+    ),
+  artist: byNamedNode("artist", "artist_node_id"),
+  album: byNamedNode("release", "album_node_id"),
+  format: byFormat,
 };
 
-function trackJoins(names: TrackJoin[]): string {
-  return [...new Set(names)].map((name) => TRACK_JOINS[name]).join("\n       ");
+// A search finds the few artists and albums whose names match before their
+// tracks, rather than every track's artist and album to test each one: the
+// tracks whose own title matches, those by a matching artist, and those on a
+// matching album. Then only those are sorted, joined to what their sort
+// reads.
+const SEARCH_HITS = `
+  WITH hits(id) AS (
+    SELECT id FROM nodes WHERE type = 'recording' AND title LIKE ?1 ESCAPE '\\'
+    UNION
+    SELECT r.node_id FROM nodes a CROSS JOIN recordings r ON r.artist_node_id = a.id
+     WHERE a.type = 'artist' AND a.title LIKE ?1 ESCAPE '\\'
+    UNION
+    SELECT r.node_id FROM nodes al CROSS JOIN recordings r ON r.album_node_id = al.id
+     WHERE al.type = 'release' AND al.title LIKE ?1 ESCAPE '\\'
+  )`;
+
+const TRACK_SORT_JOINS: Record<TrackSort, string> = {
+  title: "JOIN nodes n ON n.id = h.id",
+  dateAdded: "JOIN nodes n ON n.id = h.id",
+  duration: "JOIN recordings r ON r.node_id = h.id",
+  format: "JOIN recordings r ON r.node_id = h.id",
+  artist: "JOIN recordings r ON r.node_id = h.id LEFT JOIN nodes artist ON artist.id = r.artist_node_id",
+  album: "JOIN recordings r ON r.node_id = h.id LEFT JOIN nodes album ON album.id = r.album_node_id",
+};
+
+// The page and the count come from one pass over the hits: counted on their
+// own as well, a search that matches most of the library (a single letter)
+// found its 300,000 hits twice. A page past the last hit has no row to carry
+// the count, so that one is counted on its own.
+function searchTracks(db: Database, q: string, sort: TrackSort, dir: "asc" | "desc", { limit, offset }: Page) {
+  const pattern = likePattern(q);
+  const rows = db
+    .prepare(
+      `${SEARCH_HITS}
+       SELECT h.id AS id, COUNT(*) OVER () AS total FROM hits h
+       ${TRACK_SORT_JOINS[sort]}
+       ORDER BY ${orderClause(TRACK_SORTS[sort], dir, "h.id")}
+       LIMIT ?2 OFFSET ?3`,
+    )
+    .all(pattern, limit, offset) as { id: number; total: number }[];
+  const total =
+    rows[0]?.total ??
+    (offset === 0 ? 0 : (db.prepare(`${SEARCH_HITS} SELECT COUNT(*) AS count FROM hits`).get(pattern) as { count: number }).count);
+  return { ids: rows.map((row) => row.id), total };
 }
 
 function listTracks(
   db: Database,
   { q, sort, dir, limit, offset }: { q: string | null; sort: TrackSort; dir: "asc" | "desc"; limit: number; offset: number },
 ): { items: TrackRow[]; total: number } {
-  const where = q
-    ? "AND (n.title LIKE ? ESCAPE '\\' OR artist.title LIKE ? ESCAPE '\\' OR album.title LIKE ? ESCAPE '\\')"
-    : "";
-  const whereParams = q ? [likePattern(q), likePattern(q), likePattern(q)] : [];
-  // A search matches artist and album titles, so it needs both on every row.
-  const filterJoins: TrackJoin[] = q ? ["artist", "album"] : [];
+  const { ids, total } = q
+    ? searchTracks(db, q, sort, dir, { limit, offset })
+    : {
+        ids: TRACK_PAGES[sort](db, dir === "desc" ? "DESC" : "ASC", { limit, offset }),
+        total: (db.prepare("SELECT COUNT(*) AS count FROM recordings").get() as { count: number }).count,
+      };
 
-  // At 30k albums this table is ~300k tracks, and every join is a few index
-  // lookups per row. Joining all three for the count and for the sort took
-  // ~5.5 s a page on that size (#263), so the count and the ordering join
-  // only what they read, and the full row is joined for the page's ids
-  // alone. Each join matches at most one row (an id equality), so leaving
-  // one out changes neither the count nor the order.
-  const total = (
-    db
-      .prepare(
-        `SELECT COUNT(*) AS count
-         FROM nodes n
-         JOIN recordings r ON r.node_id = n.id
-         ${trackJoins(filterJoins)}
-         WHERE n.type = 'recording'
-         ${where}`,
-      )
-      .get(...whereParams) as { count: number }
-  ).count;
-
-  const order = orderClause(TRACK_SORTS[sort], dir, "n.id");
-  const rows = db
+  // The page's rows, in the page's order.
+  const items = db
     .prepare(
-      `WITH page AS (
-         SELECT n.id
-         FROM nodes n
-         JOIN recordings r ON r.node_id = n.id
-         ${trackJoins([...filterJoins, ...TRACK_SORT_JOINS[sort]])}
-         WHERE n.type = 'recording'
-         ${where}
-         ORDER BY ${order}
-         LIMIT ? OFFSET ?
-       )
-       SELECT
+      `SELECT
          n.id AS id,
          n.title AS title,
          r.artist_node_id AS artistId,
          artist.title AS artistName,
-         ae.to_node AS albumId,
+         r.album_node_id AS albumId,
          album.title AS albumTitle,
          r.canonical_duration_ms AS durationMs,
-         f.format AS format,
+         r.format AS format,
          n.created_at AS dateAdded
-       FROM page
-       JOIN nodes n ON n.id = page.id
-       JOIN recordings r ON r.node_id = n.id
-       ${trackJoins(["file", "artist", "album"])}
-       ORDER BY ${order}`,
+       FROM json_each(?) page
+       JOIN nodes n ON n.id = page.value
+       LEFT JOIN recordings r ON r.node_id = n.id
+       LEFT JOIN nodes artist ON artist.id = r.artist_node_id
+       LEFT JOIN nodes album ON album.id = r.album_node_id
+       ORDER BY page.key`,
     )
-    .all(...whereParams, limit, offset) as TrackRow[];
+    .all(JSON.stringify(ids)) as TrackRow[];
 
-  return { items: rows, total };
+  return { items, total };
 }
 
 export function libraryRoutes(db: Database) {
