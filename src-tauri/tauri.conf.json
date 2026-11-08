@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "legato",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "identifier": "fm.legato.app",
   "build": {
     "frontendDist": "../dist",
@@ -48,6 +48,12 @@
     },
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE WITH THE UPDATER PUBLIC KEY BEFORE MERGING (#129)",
+      "endpoints": ["https://github.com/danielbchurchill/legato/releases/latest/download/latest.json"]
     }
   }
 }
