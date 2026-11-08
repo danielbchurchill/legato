@@ -326,15 +326,15 @@ function listAlbums(
   return { items: rows.map((row) => ({ ...row, coverHash: resolveCoverForNode(db, row.id)?.hash ?? null })), total };
 }
 
-// The joins a track row reads. The artist and album joins resolve "the first
-// edge of this type", same lowest-id-wins convention GET /nodes already uses
-// for its hover-plate subtitle — a recording can carry more than one
-// performed_by edge (featured artists), but the table shows one artist
+// The joins a track row reads. The album join resolves "the first edge of
+// this type", lowest id wins. The artist is the track's own (#359): the
+// album artist's rule, which the map clusters by, stored by the recompute
+// (entities/aggregate.ts's trackArtists). A recording can carry more than
+// one performed_by edge (featured artists), but the table shows one artist
 // column, same as the canvas shows one subtitle line.
 const TRACK_JOINS = {
   file: "LEFT JOIN files f ON f.id = (SELECT MIN(id) FROM files WHERE recording_node_id = n.id)",
-  artist: `LEFT JOIN edges pe ON pe.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'performed_by')
-       LEFT JOIN nodes artist ON artist.id = pe.to_node`,
+  artist: "LEFT JOIN nodes artist ON artist.id = r.artist_node_id",
   album: `LEFT JOIN edges ae ON ae.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'appears_on')
        LEFT JOIN nodes album ON album.id = ae.to_node`,
 } as const;
@@ -400,7 +400,7 @@ function listTracks(
        SELECT
          n.id AS id,
          n.title AS title,
-         pe.to_node AS artistId,
+         r.artist_node_id AS artistId,
          artist.title AS artistName,
          ae.to_node AS albumId,
          album.title AS albumTitle,

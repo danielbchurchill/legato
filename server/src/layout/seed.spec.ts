@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { rebuildLayout, recomputeAllLayouts, recomputeTracksLayout } from "./seed.js";
+import { recomputeEntities } from "../entities/aggregate.js";
 
 // computeClusteredSeeds' own properties (determinism, spread, decade/group
 // separation, unknown-region handling) are covered by layout/cluster.spec.ts
@@ -128,6 +129,9 @@ describe("recomputeTracksLayout", () => {
     insertEdge(db, r3, artistB, "performed_by");
     insertEdge(db, r3, year, "released_in");
 
+    // As recompute() does: the entities first, which decide each track's
+    // artist (#359).
+    recomputeEntities(db);
     recomputeTracksLayout(db);
 
     const [p1, p2, p3] = [pos(db, r1)!, pos(db, r2)!, pos(db, r3)!];
@@ -135,6 +139,46 @@ describe("recomputeTracksLayout", () => {
     const distSameArtist = Math.hypot(p1.seed_x - p2.seed_x, p1.seed_y - p2.seed_y);
     const distDifferentArtist = Math.hypot(p1.seed_x - p3.seed_x, p1.seed_y - p3.seed_y);
     expect(distSameArtist).toBeLessThan(distDifferentArtist);
+  });
+
+  // #359: the map clusters a track under its first credit that is an artist,
+  // so its seed starts it there, not in the cell of a 'credit' node
+  // credited ahead of the artist.
+  it("seeds a track crediting a credit node first in its artist's cell", () => {
+    const db = openDb(":memory:");
+    db.prepare("INSERT INTO library_roots (path) VALUES ('/fake')").run();
+    const artist = makeNode(db, "artist", "Artist A");
+    const credit = makeNode(db, "credit", "Producer P");
+    const year = makeNode(db, "year", "1970");
+    const libraryRootId = db.prepare("SELECT id FROM library_roots LIMIT 1").get() as { id: number };
+    const tracks = [1, 2, 3, 4].map((i) => {
+      const r = makeNode(db, "recording", `Track ${i}`);
+      db.prepare("INSERT INTO recordings (node_id) VALUES (?)").run(r);
+      db.prepare(
+        "INSERT INTO files (recording_node_id, library_root_id, file_path, file_mtime, file_size) VALUES (?, ?, ?, datetime('now'), 0)",
+      ).run(r, libraryRootId.id, `/fake/${r}.flac`);
+      insertEdge(db, r, year, "released_in");
+      return r;
+    });
+    const [own, alsoOwn, creditFirst, creditOnly] = tracks as [number, number, number, number];
+    insertEdge(db, own, artist, "performed_by");
+    insertEdge(db, alsoOwn, artist, "performed_by");
+    insertEdge(db, creditFirst, credit, "performed_by");
+    insertEdge(db, creditFirst, artist, "performed_by");
+    insertEdge(db, creditOnly, credit, "performed_by");
+
+    recomputeEntities(db);
+    recomputeTracksLayout(db);
+
+    // Seeded within the artist's cell, so no farther from the artist's own
+    // tracks than they are from each other plus the cell's spread, and
+    // apart from the track only the credit node performs, which has no
+    // artist and starts unclustered.
+    const distance = (a: number, b: number) => Math.hypot(pos(db, a)!.seed_x - pos(db, b)!.seed_x, pos(db, a)!.seed_y - pos(db, b)!.seed_y);
+    expect(distance(creditFirst, own)).toBeLessThan(distance(creditFirst, creditOnly));
+    expect(distance(creditFirst, alsoOwn)).toBeLessThan(distance(creditFirst, creditOnly));
+    expect(db.prepare("SELECT artist_node_id AS artist FROM recordings WHERE node_id = ?").get(creditFirst)).toEqual({ artist });
+    expect(db.prepare("SELECT artist_node_id AS artist FROM recordings WHERE node_id = ?").get(creditOnly)).toEqual({ artist: null });
   });
 });
 

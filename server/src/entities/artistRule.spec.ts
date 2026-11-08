@@ -3,7 +3,7 @@ import Fastify from "fastify";
 import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { recomputeEntities } from "./aggregate.js";
-import { recomputeTracksLayout } from "../layout/seed.js";
+import { recomputeTracksLayout, trackCellInputs } from "../layout/seed.js";
 import { libraryRoutes } from "../routes/library.js";
 import { nodesRoutes } from "../routes/nodes.js";
 import { computeClusters, type ClusterEdge, type ClusterNode } from "../../../src/canvas/clusters.js";
@@ -118,5 +118,49 @@ describe("the Artists tab and the map's clusters (#302)", () => {
     // runners, where it failed CI for unrelated PRs (#363). The 150 libraries
     // are what made the rule's disagreements show up (886 of 1,000 before
     // #351), so the timeout grows rather than the coverage shrinking.
+  }, 20_000);
+
+  // #359: a track's artist is named in three more places, and each must be
+  // the artist the map clusters the track under: the Tracks table's artist
+  // column, the track's subtitle in GET /nodes (the hover plate), and the
+  // cell the layout seeds it in.
+  it(`name each track's artist as the map clusters it, in ${LIBRARIES} random libraries`, async () => {
+    const disagreements: string[] = [];
+    for (let seed = 1; seed <= LIBRARIES; seed++) {
+      const db = randomLibrary(seed);
+      const app = Fastify();
+      await app.register(nodesRoutes(db), { prefix: "/api/v1" });
+      await app.register(libraryRoutes(db), { prefix: "/api/v1" });
+      const get = async (url: string) => (await app.inject({ method: "GET", url: `/api/v1${url}` })).json();
+
+      const nodes = (await get("/nodes?limit=20000")) as (ClusterNode & { title: string; subtitle: string | null })[];
+      const edges = (await get("/edges")) as ClusterEdge[];
+      const { clusterOf } = computeClusters(nodes, edges);
+      const titleOf = new Map(nodes.map((n) => [n.id, n.title]));
+      const artistOf = (track: number) => clusterOf.get(track) ?? null;
+
+      const tracks = nodes.filter((n) => n.type === "recording");
+      const { items } = (await get("/library/tracks?limit=500")) as { items: { id: number; artistId: number | null }[] };
+      const table = new Map(items.map((row) => [row.id, row.artistId]));
+      const cells = new Map(trackCellInputs(db).map((input) => [input.nodeId, input.groupKey]));
+      const artists = new Set(nodes.filter((n) => n.type === "artist").map((n) => n.id));
+
+      for (const track of tracks) {
+        const artist = artistOf(track.id);
+        const named = artist == null ? null : titleOf.get(artist);
+        if (table.get(track.id) !== artist) disagreements.push(`seed ${seed}: track ${track.id} is ${artist} on the map, ${table.get(track.id)} in the Tracks table`);
+        if (track.subtitle !== named) disagreements.push(`seed ${seed}: track ${track.id} is ${named} on the map, subtitled ${track.subtitle}`);
+        // With no artist, a track starts in its label's cell or none, never
+        // in another artist's.
+        const cell = cells.get(track.id);
+        if (artist != null ? cell !== artist : cell != null && artists.has(cell)) {
+          disagreements.push(`seed ${seed}: track ${track.id} is ${artist} on the map, seeded in ${cell}'s cell`);
+        }
+      }
+      await app.close();
+      db.close();
+    }
+    expect(disagreements).toEqual([]);
+    // The same timeout as above, for the same reason.
   }, 20_000);
 });

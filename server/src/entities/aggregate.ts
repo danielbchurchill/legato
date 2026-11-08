@@ -20,6 +20,26 @@ export type ArtistAggregate = {
   albumCount: number;
 };
 
+// Issue #359: a track's artist, the one rule everything that names it reads.
+// A recording can carry several performed_by edges — deriveLocalEdges
+// creates one per artist named in the credit, so "JPEGMAFIA; Danny Brown"
+// produces two. First-seen wins, and since match/edges.ts inserts in credit
+// order that is the primary performer. recomputeEntities passes only credits
+// to artist nodes, in edge id order (see there), so a 'credit' node credited
+// ahead of the artist is passed over. The map clusters a track by the same
+// rule (src/canvas/clusters.ts), each album is filed under the artist most
+// of its tracks have (computeAlbumAggregates below), and recomputeEntities
+// stores each track's answer as recordings.artist_node_id, which the Tracks
+// table, the track's subtitle on the map (routes/nodes.ts) and the layout's
+// seed (layout/seed.ts) read.
+export function trackArtists(performedBy: EdgeRef[]): Map<number, number> {
+  const artistByRecording = new Map<number, number>();
+  for (const e of performedBy) {
+    if (!artistByRecording.has(e.fromNode)) artistByRecording.set(e.fromNode, e.toNode);
+  }
+  return artistByRecording;
+}
+
 // Pure aggregation over the same 'appears_on'/'performed_by' hard edges
 // match/edges.ts derives per file — split out from the DB-reading orchestrator
 // below so the aggregation logic (mode, sums, min/max) is unit-testable
@@ -38,17 +58,11 @@ export function computeAlbumAggregates(
     else recordingsByRelease.set(e.toNode, [e.fromNode]);
   }
 
-  // A recording can carry several performed_by edges — deriveLocalEdges
-  // creates one per artist named in the credit, so "JPEGMAFIA; Danny
-  // Brown" produces two. First-seen wins, and since match/edges.ts inserts
-  // in credit order that is the primary performer: an album stays filed
-  // under JPEGMAFIA rather than under whoever the mode happened to favour.
-  // recomputeEntities passes only the credits the map counts, in edge id
-  // order (see there), so a recording missing from them has no vote.
-  const artistByRecording = new Map<number, number>();
-  for (const e of performedBy) {
-    if (!artistByRecording.has(e.fromNode)) artistByRecording.set(e.fromNode, e.toNode);
-  }
+  // Each track votes for its artist (trackArtists above), so an album stays
+  // filed under JPEGMAFIA rather than under whoever the mode happened to
+  // favour. recomputeEntities passes only the credits of tracks the map
+  // draws (see there), so a recording missing from them has no vote.
+  const artistByRecording = trackArtists(performedBy);
 
   const result: AlbumAggregate[] = [];
   for (const [releaseNodeId, recordingIds] of recordingsByRelease) {
@@ -179,28 +193,46 @@ function pruneEntities(db: Database, table: "albums" | "artists", keep: number[]
   db.prepare(`DELETE FROM ${table} WHERE node_id NOT IN (SELECT node_id FROM entity_keep)`).run();
 }
 
+// Issue #359: each track's artist, stored so a read names it with one
+// lookup rather than working the rule out again from the edges. Only the
+// rows whose answer changed are written, in pieces, so a recompute that
+// changes nothing writes nothing.
+function writeTrackArtists(db: Database, artistByRecording: Map<number, number>): void {
+  const current = db.prepare("SELECT node_id AS nodeId, artist_node_id AS artistNodeId FROM recordings").all() as {
+    nodeId: number;
+    artistNodeId: number | null;
+  }[];
+  const changed = current.filter(({ nodeId, artistNodeId }) => (artistByRecording.get(nodeId) ?? null) !== artistNodeId);
+  const update = db.prepare("UPDATE recordings SET artist_node_id = ? WHERE node_id = ?");
+  writeInChunks(db, changed, ({ nodeId }) => update.run(artistByRecording.get(nodeId) ?? null, nodeId));
+}
+
 export function recomputeEntities(db: Database): void {
   const appearsOn = db
     .prepare("SELECT from_node AS fromNode, to_node AS toNode FROM edges WHERE type = 'appears_on'")
     .all() as EdgeRef[];
   // An album's artist is the one the map clusters it under
   // (src/canvas/clusters.ts), which is also how the Library's Artists tab
-  // decides who has records of their own (#302). So a track counts its
+  // decides who has records of their own (#302). So a track's artist is its
   // first performed_by credit by edge id that is an artist node, past a
-  // 'credit' node credited ahead of it, and only a track the map draws,
-  // one with a file, has a vote: the recordings a collapse leaves behind
-  // keep their edges and could otherwise outvote the tracks that are there.
-  const performedBy = db
+  // 'credit' node credited ahead of it (trackArtists), and only a track the
+  // map draws, one with a file, has a vote: the recordings a collapse leaves
+  // behind keep their edges and could otherwise outvote the tracks that are
+  // there. Every track still has an artist, file or not, as the Tracks
+  // table lists them all.
+  const credits = db
     .prepare(
-      `SELECT e.from_node AS fromNode, e.to_node AS toNode
+      `SELECT e.from_node AS fromNode, e.to_node AS toNode,
+              EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = e.from_node) AS hasFile
        FROM edges e
        JOIN nodes r ON r.id = e.from_node AND r.type = 'recording'
        JOIN nodes a ON a.id = e.to_node AND a.type = 'artist'
        WHERE e.type = 'performed_by'
-         AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = e.from_node)
        ORDER BY e.id`,
     )
-    .all() as EdgeRef[];
+    .all() as (EdgeRef & { hasFile: number })[];
+  writeTrackArtists(db, trackArtists(credits));
+  const performedBy = credits.filter((credit) => credit.hasFile);
   // Album primary-artist selection (computeAlbumAggregates) deliberately
   // stays performed_by-only — a featured guest on a couple of tracks
   // shouldn't contend for "primary artist of this album" against the
