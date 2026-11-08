@@ -75,6 +75,12 @@ npx tauri build                # a packaged desktop app, sidecar included
 npm --prefix server run compile -- linux-arm64   # a standalone server binary for one target
 ```
 
+## When a release run fails
+
+A version tag starts `.github/workflows/release.yml`, and its `release` job downloads ffmpeg and fpcalc for every server target from outside hosts. Those hosts sometimes refuse a GitHub runner's address: an HTTP 429, a 5xx, or an HTTP 200 carrying a web page in place of the file. johnvansickle.com, the Linux ffmpeg source, has sent the page (#443). `scripts/fetch-release-media-binaries.mjs` asks again four times over about two minutes, then fails, saying which host sent what.
+
+When it fails anyway, open the run in GitHub Actions and choose **Re-run failed jobs**. That's safe: nothing is published before the job's publish step, so a failed download leaves no release, image or tap bump behind. For v0.2.0, a rerun two minutes later passed. If one host keeps refusing across reruns, that source needs replacing in the script, as evermeet.cx was after v0.1.0.
+
 ## Platforms
 
 Development happens on Linux and macOS. `.github/workflows/build.yml` builds the desktop app on macOS, Windows and Linux; its artifacts are unsigned installers, so Gatekeeper and SmartScreen will warn. Linux (x64 and arm64) is a main platform for both the app and the server.
