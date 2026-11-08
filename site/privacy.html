@@ -88,8 +88,11 @@
         library. Once a day it asks GitHub whether a newer version of Legato has been released,
         so it can tell you how to update. That request sends only its IP address and the Legato
         version it's running, and you can turn it off in settings. The desktop app skips it,
-        because it updates itself. And if you link your server to a legato.fm account, it
-        fetches legato.fm's public signing keys once a day, so it can check sign-ins from your
+        because it updates itself: when it starts, and then once a day, it asks GitHub whether
+        there's a newer version of the app, and downloads it from GitHub if there is. That
+        sends only its IP address, and there's no setting to turn it off yet. And if you link
+        your server to a legato.fm account, it fetches legato.fm's public signing keys once a
+        day, so it can check sign-ins from your
         other devices. That sends its IP address and nothing else. When you link or unlink an
         account, your server also tells legato.fm, so legato.fm knows which servers your
         account can open. That message carries the server's ID, its public key and a
