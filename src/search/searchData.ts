@@ -196,14 +196,15 @@ export function useSearchRelations(): SearchRelations {
 type Playback = ReturnType<typeof usePlayback>
 
 /** Plays a result: a track, a record, a playlist, or an artist's tracks
- * (those the map files under them). A producer has no one thing to play. */
+ * (those the map files under them), as a queue named for the artist (#357).
+ * A producer has no one thing to play. */
 export function playItem(item: Item, playback: Playback, graph: GraphData, relations: SearchRelations) {
   if (item.kind === 'recording') void playback.playNode(item.id, item.title)
   else if (item.kind === 'release') void playback.playAlbum(item.id)
   else if (item.kind === 'playlist') void playback.playPlaylist(item.id)
   else if (item.kind === 'artist') {
     const tracks = graph.nodes.filter((n) => n.type === 'recording' && relations.clusterOf.get(n.id) === item.id)
-    if (tracks.length) void playback.playTracks(tracks, 0)
+    if (tracks.length) void playback.playTracks(tracks, 0, { kind: 'artist', nodeId: item.id, name: item.title })
   }
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useGraph } from '../canvas/graphContext'
 import { useReconnectEpoch } from '../connect/reconnect'
 import type { DetailsTab } from '../shell/panels'
-import type { usePlayback } from '../playback/usePlayback'
+import type { QueueSource, usePlayback } from '../playback/usePlayback'
 import { API, release, useNodeDetail, type NodeDetail } from './useNodeDetail'
 
 /* What both node-detail surfaces read about a node: the desktop's details
@@ -128,6 +128,15 @@ export function useNodeDetails(nodeId: number | null, playback: Playback): NodeD
         ]
       : releaseTracks
 
+  // What play and shuffle name the queue: the record, or the artist whose
+  // tracks they are (#357).
+  const source: QueueSource | null =
+    node.type === 'release'
+      ? { kind: 'release', nodeId: node.id }
+      : node.type === 'artist'
+        ? { kind: 'artist', nodeId: node.id, name: node.title }
+        : null
+
   const artistEdge = node.edges.find((e) => e.direction === 'out' && e.type === 'performed_by')
   const artistName = node.type === 'artist' ? null : (artistEdge?.other_title ?? graph.byId.get(node.id)?.subtitle ?? null)
   const artistId = artistEdge?.other_id ?? null
@@ -157,11 +166,11 @@ export function useNodeDetails(nodeId: number | null, playback: Playback): NodeD
     play: () => {
       if (node.type === 'release') void playback.playAlbum(node.id)
       else if (node.type === 'recording') void playback.playNode(node.id, node.title)
-      else if (creditTracks.length) void playback.playTracks(creditTracks, 0)
+      else if (creditTracks.length) void playback.playTracks(creditTracks, 0, source)
     },
     shuffle: () => {
       const tracks = node.type === 'release' && tracklist ? tracklist : creditTracks
-      if (tracks.length) void playback.playTracks(shuffle(tracks), 0, node.type === 'release' ? { kind: 'release', nodeId: node.id } : null)
+      if (tracks.length) void playback.playTracks(shuffle(tracks), 0, source)
     },
     tabs: [
       { value: 'overview', label: 'overview' },
