@@ -1,4 +1,5 @@
 import type { Database } from "./sqlite.js";
+import { playTotal } from "./playCounts.js";
 
 /* The three metadata rows on the canvas's selected-node card
  * (src/canvas/NodeCard.tsx), and nothing else.
@@ -54,7 +55,7 @@ export type NodeSummary =
 function topAlbumForArtist(db: Database, artistNodeId: number): { id: number; title: string } | null {
   const row = db
     .prepare(
-      `SELECT n.id AS id, n.title AS title, COUNT(*) AS playCount
+      `SELECT n.id AS id, n.title AS title, ${playTotal("pl")} AS playCount
        FROM plays pl
        JOIN edges ao ON ao.from_node = pl.recording_node_id AND ao.type = 'appears_on'
        JOIN nodes n ON n.id = ao.to_node

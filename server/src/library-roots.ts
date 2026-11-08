@@ -1,4 +1,5 @@
 import type { Database } from "./sqlite.js";
+import { playTotal } from "./playCounts.js";
 
 export type LibraryRootContents = { files: number; plays: number; tagWrites: number };
 
@@ -14,7 +15,7 @@ export function countLibraryRootContents(db: Database, id: number): LibraryRootC
     .prepare(
       `SELECT
          (SELECT COUNT(*) FROM files WHERE library_root_id = ?) AS files,
-         (SELECT COUNT(*) FROM plays WHERE file_id IN (SELECT id FROM files WHERE library_root_id = ?)) AS plays,
+         (SELECT COALESCE(${playTotal()}, 0) FROM plays WHERE file_id IN (SELECT id FROM files WHERE library_root_id = ?)) AS plays,
          (SELECT COUNT(*) FROM tag_writes WHERE file_id IN (SELECT id FROM files WHERE library_root_id = ?)) AS tagWrites`,
     )
     .get(id, id, id) as LibraryRootContents;

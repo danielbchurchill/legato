@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { libraryRevision } from "../libraryRevision.js";
+import { playTotal } from "../playCounts.js";
 
 /* What the search palette and the phone's search ask while someone types
  * (#463). FTS5 finds the titles; the order is decided here, so every client
@@ -102,7 +103,7 @@ const TRACKS_SQL: Record<Exclude<SearchKind, "recording">, string> = {
 // albums a one-letter query matches on the 30,000-album fixture took 52 ms
 // by itself.
 const PLAYS_SQL = `
-  WITH played AS (SELECT recording_node_id AS r, COUNT(*) AS n FROM plays GROUP BY recording_node_id)
+  WITH played AS (SELECT recording_node_id AS r, ${playTotal()} AS n FROM plays GROUP BY recording_node_id)
   SELECT r AS id, n FROM played
   UNION ALL
   SELECT to_node AS id, SUM(n) AS n FROM (
@@ -125,7 +126,7 @@ function listening(db: Database): Listening {
   const now = db
     .prepare(
       `SELECT (SELECT COALESCE(MAX(id), 0) FROM edges) AS edge, (SELECT COALESCE(MAX(id), 0) FROM plays) AS play,
-              (SELECT COUNT(*) FROM plays) AS plays`,
+              (SELECT COALESCE(${playTotal()}, 0) FROM plays) AS plays`,
     )
     .get() as { edge: number; play: number; plays: number };
   const key = `${libraryRevision()} ${now.edge} ${now.play} ${now.plays}`;

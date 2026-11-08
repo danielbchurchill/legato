@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { DATA_DIR } from "../config.js";
+import { playTotal } from "../playCounts.js";
 
 // The operational counterpart to stats.ts's OverviewBlock — that route
 // answers "what's in my collection" (curatorial), this one answers "is the
@@ -109,7 +110,8 @@ function schemaSnapshot(db: Database): DbInspectorSnapshot["schema"] {
     nodesByType,
     edgesByType,
     files: count("files"),
-    plays: count("plays"),
+    // Plays, not rows: an imported Apple Music total is one row (#133).
+    plays: (db.prepare(`SELECT COALESCE(${playTotal()}, 0) AS n FROM plays`).get() as { n: number }).n,
     articles: count("articles"),
     fieldProvenance: count("field_provenance"),
     coverArt: count("cover_art"),
