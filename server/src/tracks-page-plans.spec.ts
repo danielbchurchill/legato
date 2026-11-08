@@ -12,6 +12,7 @@ import { libraryRoutes } from "./routes/library.js";
 // SQLite then plans exactly as it would the real one (as
 // plays-join-plans.spec.ts does for #354).
 const THIRTY_THOUSAND_ALBUMS = [
+  ["edges", "edges_appears_on_from_node_idx", "300000 1 1"],
   ["edges", "edges_from_node_idx", "1548267 5"],
   ["edges", "edges_from_node_source_idx", "1548267 5 5"],
   ["edges", "edges_to_node_idx", "1548267 318"],

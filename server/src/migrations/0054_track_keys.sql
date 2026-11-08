@@ -59,3 +59,15 @@ CREATE INDEX recordings_canonical_duration_ms_idx ON recordings (canonical_durat
 -- type comes first because every one of them is one type's nodes.
 CREATE INDEX nodes_type_title_idx ON nodes (type, title);
 CREATE INDEX nodes_type_created_at_idx ON nodes (type, created_at);
+
+-- The albums page's recently played sort (routes/library.ts) takes each
+-- track's last play from this alone, without reading the plays themselves.
+-- It begins with the column the index it replaces held, so every query that
+-- used that one can use this.
+CREATE INDEX plays_recording_node_id_started_at_idx ON plays (recording_node_id, started_at);
+DROP INDEX plays_recording_node_id_idx;
+
+-- Then each played track's albums, from the index alone. Through
+-- edges_from_node_idx it read every edge the track has to find them, which
+-- was half the sort's time.
+CREATE INDEX edges_appears_on_from_node_idx ON edges (from_node, to_node) WHERE type = 'appears_on';

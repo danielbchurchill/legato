@@ -289,20 +289,32 @@ function listAlbums(
       .get(...whereParams) as { count: number }
   ).count;
 
-  // CROSS JOIN starts release_last_played from plays, each play then finding
-  // its recording's few edges by edges_from_node_idx, as routes/stats.ts's
-  // topByEdge does and for the same reason (issue #354). With nothing played,
-  // plays has no statistics, and SQLite went through every appears_on edge
-  // instead: half a second a page at 30,000 albums, statistics or not.
+  // When each album was last played, read only by the recently played sort
+  // (#383). Joined for every sort, it aggregated every play on every page:
+  // about 320 ms at 200,000 plays. It takes each track's last play first,
+  // from plays_recording_node_id_started_at_idx without reading a play, so
+  // each track played looks up its albums once rather than once a play, in
+  // edges_appears_on_from_node_idx (migration 0054): about 60 ms at 200,000
+  // plays of 88,000 tracks.
+  //
+  // CROSS JOIN starts release_last_played from plays, each track then finding
+  // its albums by index, as routes/stats.ts's topByEdge does and for the
+  // same reason (issue #354). With nothing played, plays has no statistics,
+  // and SQLite went through every appears_on edge instead: half a second a
+  // page at 30,000 albums, statistics or not.
+  const lastPlayed =
+    sort === "recentlyPlayed"
+      ? `WITH release_last_played AS (
+           SELECT e.to_node AS release_node_id, MAX(track.last_played_at) AS last_played_at
+           FROM (SELECT recording_node_id, MAX(started_at) AS last_played_at FROM plays GROUP BY recording_node_id) track
+           CROSS JOIN edges e ON e.from_node = track.recording_node_id
+           WHERE e.type = 'appears_on'
+           GROUP BY e.to_node
+         )`
+      : "";
   const rows = db
     .prepare(
-      `WITH release_last_played AS (
-         SELECT e.to_node AS release_node_id, MAX(p.started_at) AS last_played_at
-         FROM plays p
-         CROSS JOIN edges e ON e.from_node = p.recording_node_id
-         WHERE e.type = 'appears_on'
-         GROUP BY e.to_node
-       )
+      `${lastPlayed}
        SELECT
          al.node_id AS id,
          n.title AS title,
@@ -315,7 +327,7 @@ function listAlbums(
        FROM albums al
        JOIN nodes n ON n.id = al.node_id
        LEFT JOIN nodes artist ON artist.id = al.primary_artist_node_id
-       LEFT JOIN release_last_played rlp ON rlp.release_node_id = al.node_id
+       ${lastPlayed ? "LEFT JOIN release_last_played rlp ON rlp.release_node_id = al.node_id" : ""}
        ${where}
        ORDER BY ${orderClause(ALBUM_SORTS[sort], dir, "n.id")}
        LIMIT ? OFFSET ?`,

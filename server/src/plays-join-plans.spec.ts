@@ -96,10 +96,16 @@ describe("joins of plays and edges with a large library's statistics and nothing
     for (const sql of queries) expect(edgeScans(sql)).toEqual([]);
   });
 
-  it.each(["title", "artist", "year", "dateAdded", "recentlyPlayed"])("start an albums page sorted by %s from plays", async (sort) => {
-    const queries = await playsQueries(() => app.inject({ method: "GET", url: `/library/albums?sort=${sort}` }));
+  it("start an albums page sorted by recently played from plays", async () => {
+    const queries = await playsQueries(() => app.inject({ method: "GET", url: "/library/albums?sort=recentlyPlayed" }));
     expect(queries).toHaveLength(1);
     for (const sql of queries) expect(edgeScans(sql)).toEqual([]);
+  });
+
+  // #383: only that sort reads when each album was last played.
+  it.each(["title", "artist", "year", "dateAdded"])("leave plays alone for an albums page sorted by %s", async (sort) => {
+    const queries = await playsQueries(() => app.inject({ method: "GET", url: `/library/albums?sort=${sort}` }));
+    expect(queries).toEqual([]);
   });
 
   it("start /stats' top artist and top album from plays", async () => {
