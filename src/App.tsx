@@ -24,6 +24,7 @@ import { isSharedMapSetting } from './panels/mapOptionSettings'
 import { CollectionsPanel } from './panels/CollectionsPanel'
 import { HealthPanel } from './panels/HealthPanel'
 import { InsightsPanel } from './panels/InsightsPanel'
+import { mapDraws } from './panels/mapShow'
 import { SettingsPanel } from './panels/SettingsPanel'
 import { AccountPanel } from './panels/AccountPanel'
 import { NowPlaying } from './panels/NowPlaying'
@@ -453,7 +454,7 @@ function Workspace({
       case 'worklist':
         return <HealthPanel view={leftView} onNavigate={setLeftView} onFocusNode={focusNode} />
       case 'insights':
-        return <InsightsPanel onOpenNode={openDetails} onShowOnMap={showOnMap} />
+        return <InsightsPanel onOpenNode={openDetails} onShowOnMap={showOnMap} drawsKind={(type) => mapDraws(settings, type)} />
       case 'settings':
         return (
           <SettingsPanel

@@ -3,10 +3,11 @@ import { act, createElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GraphDataContext, type GraphData } from '../canvas/graphContext'
-import type { GraphNode } from '../canvas/useGraphData'
+import type { GraphEdge, GraphNode } from '../canvas/useGraphData'
 import { TouchLayoutContext } from '../ui/touchLayout'
 import { InsightsPanel } from './InsightsPanel'
 import type { Insights, ReadyInsights } from './insightsData'
+import { mapDraws } from './mapShow'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -81,28 +82,39 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-/** The panel, with the nodes in `onMap` on the map. */
-async function render(options: { onMap?: number[]; phone?: boolean } = {}) {
+/** The panel, with the nodes in `onMap` on the map, or `nodes` and
+ * `edges` as the map's graph, and the map options in `settings`. */
+async function render(
+  options: {
+    onMap?: number[]
+    nodes?: { id: number; type: string }[]
+    edges?: [from: number, to: number][]
+    settings?: Record<string, string>
+    phone?: boolean
+  } = {},
+) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   roots.push(root)
   const onOpenNode = vi.fn()
   const onShowOnMap = vi.fn()
+  const nodes = options.nodes ?? (options.onMap ?? [1, 2, 3, 10]).map((id) => ({ id, type: 'artist' }))
   const graph: GraphData = {
     nodes: [],
-    edges: [],
+    edges: (options.edges ?? []).map(([from, to], i) => ({ id: i + 1, from_node: from, to_node: to }) as GraphEdge),
     loading: false,
     refetch: async () => {},
-    byId: new Map((options.onMap ?? [1, 2, 3, 10]).map((id) => [id, { id } as unknown as GraphNode])),
+    byId: new Map(nodes.map((node) => [node.id, node as unknown as GraphNode])),
   }
+  const drawsKind = (type: string) => mapDraws(options.settings ?? {}, type)
   const wrap = (child: ReactNode) =>
     createElement(
       GraphDataContext.Provider,
       { value: graph },
       createElement(TouchLayoutContext.Provider, { value: options.phone ?? false }, child),
     )
-  await act(async () => root.render(wrap(createElement(InsightsPanel, { onOpenNode, onShowOnMap, phone: options.phone }))))
+  await act(async () => root.render(wrap(createElement(InsightsPanel, { onOpenNode, onShowOnMap, drawsKind, phone: options.phone }))))
   // The fetches and what they set.
   await act(async () => {
     await new Promise((r) => setTimeout(r, 0))
@@ -201,6 +213,103 @@ describe('InsightsPanel', () => {
     )
     act(() => card.querySelector<HTMLButtonElement>('button[aria-label="Show the way on the map"]')!.click())
     expect(onShowOnMap).toHaveBeenCalledWith([2, 3, 1])
+  })
+
+  describe('a path through a node the map leaves out (#482)', () => {
+    // Harbour Lights was produced by Mara Quinn, who produced Velvet
+    // Signals, on the label Iron Coast Records with Paper Towers. Tracks 11
+    // and 12 tie each artist to the producer; albums 21 and 22 put each
+    // record on the label.
+    const harbour = ref(71, 'Harbour Lights')
+    const quinn = ref(75, 'Mara Quinn', 'credit')
+    const velvet = ref(78, 'Velvet Signals')
+    const ironCoast = ref(81, 'Iron Coast Records', 'label')
+    const towers = ref(84, 'Paper Towers')
+    const throughBoth = {
+      nodes: [harbour, quinn, velvet, ironCoast, towers],
+      links: [
+        { kind: 'producer', artistFirst: true, weight: 7 },
+        { kind: 'producer', artistFirst: false, weight: 7 },
+        { kind: 'label', artistFirst: true, weight: 2 },
+        { kind: 'label', artistFirst: false, weight: 2 },
+      ],
+      focus: [71, 75, 78, 81, 84, 11, 12, 21, 22],
+    }
+    // The map's graph: no label has a place on it, and Mara Quinn has one,
+    // drawn while producers are shown.
+    const map = {
+      nodes: [
+        { id: 71, type: 'artist' },
+        { id: 75, type: 'credit' },
+        { id: 78, type: 'artist' },
+        { id: 84, type: 'artist' },
+        { id: 11, type: 'recording' },
+        { id: 12, type: 'recording' },
+        { id: 13, type: 'recording' },
+        { id: 21, type: 'release' },
+        { id: 22, type: 'release' },
+      ],
+      edges: [
+        [11, 71],
+        [11, 75],
+        [12, 78],
+        [12, 75],
+        [12, 21],
+        [13, 84],
+        [13, 22],
+      ] as [number, number][],
+    }
+    const card = (container: HTMLElement) => section(container, 'How are these connected?')!
+    const show = (container: HTMLElement) =>
+      act(() => card(container).querySelector<HTMLButtonElement>('button[aria-label="Show the way on the map"]')!.click())
+
+    it('leaves the steps through a hidden producer and a label unlit, and says which', async () => {
+      answer = ready({ pathSuggestion: { from: harbour, to: towers } })
+      path = throughBoth
+      const { container, onShowOnMap } = await render(map)
+      expect(card(container).textContent).toContain(
+        "The map doesn't draw Mara Quinn, producer, or Iron Coast Records, label, so those parts of the way aren't lit.",
+      )
+      show(container)
+      // The three artists, with neither producer track nor either album:
+      // each would end at a step the map doesn't draw.
+      expect(onShowOnMap).toHaveBeenCalledWith([71, 78, 84])
+    })
+
+    it('leaves a step through a label unlit, and names it', async () => {
+      answer = ready({ pathSuggestion: { from: velvet, to: towers } })
+      path = {
+        nodes: [velvet, ironCoast, towers],
+        links: throughBoth.links.slice(2),
+        focus: [78, 81, 84, 21, 22],
+      }
+      const { container, onShowOnMap } = await render({ ...map, settings: { showCreditNodes: 'true' } })
+      expect(card(container).textContent).toContain("The map doesn't draw Iron Coast Records, label, so that part of the way isn't lit.")
+      // The label opens its details like any other name.
+      act(() => button(card(container), 'Iron Coast Records').click())
+      show(container)
+      expect(onShowOnMap).toHaveBeenCalledWith([78, 84])
+    })
+
+    it('lights the producer step like any other once producers are shown', async () => {
+      answer = ready({ pathSuggestion: { from: harbour, to: velvet } })
+      path = { nodes: [harbour, quinn, velvet], links: throughBoth.links.slice(0, 2), focus: [71, 75, 78, 11, 12] }
+      const { container, onShowOnMap } = await render({ ...map, settings: { showCreditNodes: 'true' } })
+      expect(card(container).textContent).not.toContain("The map doesn't draw")
+      show(container)
+      // Each step's track: the one joined to both of its ends.
+      expect(onShowOnMap).toHaveBeenCalledWith([71, 75, 78, 11, 12])
+    })
+
+    it('names a hidden producer on the phone too, as a pill', async () => {
+      answer = ready({ pathSuggestion: { from: harbour, to: velvet } })
+      path = { nodes: [harbour, quinn, velvet], links: throughBoth.links.slice(0, 2), focus: [71, 75, 78, 11, 12] }
+      const { container } = await render({ ...map, phone: true })
+      expect(card(container).textContent).toContain("The map doesn't draw Mara Quinn, producer, so that part of the way isn't lit.")
+      const names = [...card(container).querySelectorAll('p button')].filter((b) => b.textContent === 'Mara Quinn')
+      expect(names).toHaveLength(1)
+      expect(names[0]!.className).toContain('touch-target')
+    })
   })
 
   it('says so when nothing joins the two', async () => {

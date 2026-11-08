@@ -1,10 +1,9 @@
 import { useContext, type ReactNode } from 'react'
-import { useGraph } from '../canvas/graphContext'
 import { CoverArt } from '../ui/CoverArt'
 import { IconButton } from '../ui/IconButton'
 import { plural } from '../ui/format'
 import { useTouchLayout } from '../ui/touchLayout'
-import { InsightsActionsContext, type Ref } from './insightsData'
+import { InsightsActionsContext, useDrawn, type Ref } from './insightsData'
 
 /* #468: what every Insights card is made of (InsightsPanel.tsx). On the
  * desktop a card is a wash card in the panel; on the phone's page it's one
@@ -33,11 +32,14 @@ export function Card({ title, about, children }: { title: string; about?: ReactN
 
 /** The nodes of `ids` the map draws: "show on map" lights only those. */
 function useOnMap(ids: number[]): number[] {
-  const { byId } = useGraph()
-  return ids.filter((id) => byId.has(id))
+  const drawn = useDrawn()
+  return ids.filter(drawn)
 }
 
-export function MapButton({ focus, label = 'Show on map' }: { focus: number[]; label?: string }) {
+/** `lights`, when given, says what a click lights in place of `focus`'s
+ * nodes on the map, worked out as it's clicked: a path's takes a pass over
+ * every edge. */
+export function MapButton({ focus, label = 'Show on map', lights }: { focus: number[]; label?: string; lights?: () => number[] }) {
   const { onShowOnMap } = useContext(InsightsActionsContext)
   const touch = useTouchLayout()
   const onMap = useOnMap(focus)
@@ -50,7 +52,7 @@ export function MapButton({ focus, label = 'Show on map' }: { focus: number[]; l
       iconSize={touch ? 20 : 16}
       tone="ink-3"
       className={touch ? '-my-[8px] -mr-[10px]' : '-my-[2px]'}
-      onClick={() => onShowOnMap(onMap)}
+      onClick={() => onShowOnMap(lights ? lights() : onMap)}
     />
   )
 }

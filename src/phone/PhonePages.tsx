@@ -8,6 +8,7 @@ import { Icon } from '../ui/Icon'
 import { TouchLayoutContext } from '../ui/touchLayout'
 import { HealthPage } from './HealthPage'
 import { InsightsPanel } from '../panels/InsightsPanel'
+import { mapDraws } from '../panels/mapShow'
 import { openPhoneNode } from './nodeDetail'
 import { SettingsPage } from './SettingsPage'
 import { closePhonePages, closePhonePagesThen, popPhonePage, pushPhonePage, usePhonePages, worklistOf, type PhonePage } from './navigation'
@@ -106,6 +107,7 @@ export function PhonePages({
           closePhonePages()
           onShowAllOnMap(ids)
         }}
+        drawsKind={(type) => mapDraws(settings, type)}
       />
     )
   } else {
