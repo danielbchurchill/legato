@@ -8,7 +8,7 @@ import type { PlaybackStatus } from './usePlayback'
  * queue. This is Rowan's Android client until there are mobile apps.
  *
  * Browser path only. The Tauri webview's playback is native Rust, and
- * native media keys there are #131's (souvlaki against playback.rs), so
+ * native media keys there are nativeMediaControls.ts's (#131), so
  * usePlayback passes enabled: false inside Tauri.
  *
  * Everything that touches the session takes it as an argument, so
@@ -32,15 +32,19 @@ export type MediaSessionControls = {
 
 export type TrackMetadata = { title: string; artist: string; album: string; artwork: MediaImage[] }
 
+/** A recording's cover through /nodes/:id/cover, with the media ticket,
+ * the same URL CoverArt.tsx uses: an artwork fetch can't send a bearer
+ * header. `thumb` is the server's 256 px copy and `full` its 512 px one. */
+export function coverUrl(recordingNodeId: number, size: 'thumb' | 'full'): string {
+  return withMediaTicket(`${API}/nodes/${recordingNodeId}/cover?size=${size}`)
+}
+
 /** The cover at both of the server's cached sizes (DESIGN.md "Cover art
- * cache"), so the OS picks whichever suits its widget. Through
- * /nodes/:id/cover, with the media ticket, the same URL CoverArt.tsx uses:
- * an artwork fetch can't send a bearer header. */
+ * cache"), so the OS picks whichever suits its widget. */
 export function artworkFor(recordingNodeId: number): MediaImage[] {
-  const cover = (size: 'thumb' | 'full') => withMediaTicket(`${API}/nodes/${recordingNodeId}/cover?size=${size}`)
   return [
-    { src: cover('thumb'), sizes: '256x256', type: 'image/jpeg' },
-    { src: cover('full'), sizes: '512x512', type: 'image/jpeg' },
+    { src: coverUrl(recordingNodeId, 'thumb'), sizes: '256x256', type: 'image/jpeg' },
+    { src: coverUrl(recordingNodeId, 'full'), sizes: '512x512', type: 'image/jpeg' },
   ]
 }
 

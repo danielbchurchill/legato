@@ -89,6 +89,16 @@ impl Instance {
     }
   }
 
+  /// Where the shell keeps files it can lose, such as the cover it hands
+  /// the OS's now-playing widget (media_controls.rs). An instance with its
+  /// own data dir keeps them there, as it does its settings.
+  pub fn cache_dir(&self, app: &AppHandle) -> Result<PathBuf, String> {
+    match &self.data_dir {
+      Some(dir) => Ok(dir.clone()),
+      None => app.path().app_cache_dir().map_err(|e| format!("failed to resolve app cache dir: {e}")),
+    }
+  }
+
   /// WebKitGTK and WebView2 keep localStorage, cookies and cache in a
   /// directory, which Tauri defaults to the app local data dir. On Linux
   /// that's the same directory as the database, so an instance's own data
@@ -111,7 +121,7 @@ impl Instance {
 
 /// 128-bit FNV-1a: stable across Rust releases, unlike std's DefaultHasher,
 /// so a toolchain update doesn't hand an instance a fresh webview store.
-fn fnv1a_128(bytes: &[u8]) -> u128 {
+pub(crate) fn fnv1a_128(bytes: &[u8]) -> u128 {
   const OFFSET_BASIS: u128 = 0x6c62272e07bb014262b821756295c58d;
   const PRIME: u128 = 0x0000000001000000000000000000013b;
   bytes.iter().fold(OFFSET_BASIS, |hash, byte| (hash ^ u128::from(*byte)).wrapping_mul(PRIME))

@@ -253,6 +253,10 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   // session and currentIndex points at the entry that couldn't open.
   const [problem, setProblem] = useState<PlaybackProblem | null>(null)
   const failedStart = useRef<PlaybackProblem | null>(null)
+  // Issue #426: the problem when the audio output stopped mid-queue and
+  // playback.rs couldn't open another. Unlike a failed start, Rust still
+  // holds the session, paused where it was, so the retry is plain play.
+  const outputLost = useRef<PlaybackProblem | null>(null)
 
   // Mirrors `status` for code that needs the latest position/playing state
   // synchronously (the Tauri rebuild helpers below) without taking a
@@ -589,6 +593,18 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     }
   }, [advanceWebTrack])
 
+  // #426: what the transport says while there's no output to play
+  // through, either from playback://output-lost or from a play that still
+  // found none. Rust kept the session, so this isn't a failed start: play
+  // retries it, and nothing else about the queue changes.
+  const noteOutputLost = useCallback((error: unknown) => {
+    const title = playSequence.current[currentIndex.current]?.title ?? ''
+    const described = describePlaybackError(error, title, [])
+    outputLost.current = described
+    setProblem(described)
+    setStatus((s) => ({ ...s, playing: false }))
+  }, [])
+
   useEffect(() => {
     if (!IS_TAURI) return
     invoke<{ volume: number }>('queue_status')
@@ -609,6 +625,11 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         }
       },
     ).catch(() => undefined)
+
+    // #426: the output stopped and no other would open. The player is
+    // paused with its queue and position kept, and the transport says why,
+    // as it does for a start that found no output.
+    const unlistenOutputLost = listen<unknown>('playback://output-lost', (e) => noteOutputLost(e.payload)).catch(() => undefined)
 
     const unlistenTrackChanged = listen<{ recording_node_id: number | null; streaming: boolean }>('playback://track-changed', (e) => {
       const nodeId = e.payload.recording_node_id
@@ -665,9 +686,10 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
     return () => {
       unlistenPosition.then((f) => f?.())
+      unlistenOutputLost.then((f) => f?.())
       unlistenTrackChanged.then((f) => f?.())
     }
-  }, [finalizeCurrentPlay])
+  }, [finalizeCurrentPlay, noteOutputLost])
 
   // Hands playSequence[startIndex..] (or the slice of it a caller chose) to
   // Rust in order. The first entry is the track about to play: if it can't
@@ -746,6 +768,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
   const clearStartFailure = useCallback(() => {
     failedStart.current = null
+    outputLost.current = null
     setProblem(null)
   }, [])
 
@@ -956,7 +979,9 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
       return
     }
     await invoke('queue_play')
-    await invoke('queue_seek', { positionMs: resumeAtMs })
+    // A seek that doesn't land (#426) leaves the track at its start, which
+    // beats leaving the rest of the rebuild undone.
+    await invoke('queue_seek', { positionMs: resumeAtMs }).catch((error) => console.warn('[legato] the seek did not land', error))
     // A reorder/shuffle/remove/insert shouldn't itself resume a paused
     // track — the rebuild above needs queue_play to load the source before
     // queue_seek can land, so re-pause immediately after.
@@ -1184,7 +1209,14 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
             await jumpToIndexTauri(currentIndex.current)
             return
           }
-          await invoke('queue_play')
+          try {
+            await invoke('queue_play')
+          } catch (error) {
+            // #426: there's still no output to play through.
+            noteOutputLost(error)
+            return
+          }
+          clearStartFailure()
           setStatus((s) => ({ ...s, playing: true }))
           return
         }
@@ -1201,7 +1233,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
           setStatus((s) => ({ ...s, playing: false }))
         }
       }),
-    [jumpToIndexTauri, serialized, startWebTrack],
+    [clearStartFailure, jumpToIndexTauri, noteOutputLost, serialized, startWebTrack],
   )
 
   // The transport's one action for a failed start (PlaybackProblem.action):
@@ -1356,7 +1388,14 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
 
   const seek = useCallback(async (positionMs: number) => {
     if (IS_TAURI) {
-      await invoke('queue_seek', { positionMs })
+      try {
+        await invoke('queue_seek', { positionMs })
+      } catch (error) {
+        // #426: the output didn't carry the seek out in time, so the track
+        // is still where it was, and playback://position keeps saying where.
+        console.warn('[legato] the seek did not land', error)
+        return
+      }
     } else if (USE_TAPE) {
       // Straight there inside what's buffered, through the fragment index
       // past it (tape.ts).
@@ -1454,7 +1493,8 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   }, [])
 
   // #128: lock-screen and headphone controls for the browser player. Off
-  // in Tauri, where native media keys are #131's.
+  // in Tauri, where the OS's media controls are nativeMediaControls.ts's
+  // (#131), which App runs.
   useMediaSession({
     enabled: !IS_TAURI,
     status,

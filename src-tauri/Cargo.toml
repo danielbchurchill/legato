@@ -38,6 +38,15 @@ rustls-platform-verifier = "0.7"
 # server instead (playback.rs). Blocking, so it fits the prefetch thread that
 # already reads files; rustls with ring and the OS verifier, as above.
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+# Issue #131: media keys and the OS's now-playing widget (media_controls.rs):
+# MPNowPlayingInfoCenter on macOS, SMTC on Windows, MPRIS on Linux. MPRIS
+# through zbus, which is pure Rust, rather than libdbus and its headers.
+souvlaki = { version = "0.9", default-features = false, features = ["use_zbus"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# media_controls.rs looks for a D-Bus session bus before it starts MPRIS.
+# souvlaki builds zbus already.
+zbus = "5"
 
 [dev-dependencies]
 # probe.rs's test serves a self-signed certificate to check it's reported

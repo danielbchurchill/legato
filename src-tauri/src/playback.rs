@@ -3,11 +3,13 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::Duration;
 
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
+use rodio::cpal::StreamError;
+use rodio::queue::SourcesQueueOutput;
+use rodio::{ChannelCount, Decoder, DeviceSinkBuilder, DeviceSinkError, MixerDeviceSink, Player, Sample, SampleRate, Source};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
@@ -411,7 +413,7 @@ fn with_stream_failure(local: PlaybackError, stream_failure: &str) -> PlaybackEr
   }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct PositionEvent {
   pub position_ms: u64,
   pub recording_node_id: Option<i64>,
@@ -419,7 +421,7 @@ pub struct PositionEvent {
   pub streaming: bool,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TrackChangedEvent {
   pub recording_node_id: Option<i64>,
   pub streaming: bool,
@@ -435,6 +437,271 @@ pub struct QueueStatus {
   pub volume: f32,
 }
 
+/// What the monitor thread tells the frontend. Apart from Tauri so tests
+/// can run the real monitor and read what it said.
+#[derive(Clone, Debug)]
+enum PlaybackEvent {
+  Position(PositionEvent),
+  TrackChanged(TrackChangedEvent),
+  /// Issue #426: the output stopped and no other would open in its place,
+  /// so the player is paused. The transport shows it as it shows a start
+  /// that found no output, and its retry is queue_play.
+  OutputLost(PlaybackError),
+}
+
+type Emit = Arc<dyn Fn(PlaybackEvent) + Send + Sync>;
+
+fn emit_to(app: AppHandle) -> Emit {
+  Arc::new(move |event| {
+    let _ = match event {
+      PlaybackEvent::Position(e) => app.emit("playback://position", e),
+      PlaybackEvent::TrackChanged(e) => app.emit("playback://track-changed", e),
+      PlaybackEvent::OutputLost(e) => app.emit("playback://output-lost", e),
+    };
+  })
+}
+
+// Issue #426: the player's mix, apart from the output that plays it. rodio
+// adds a Player's mix to one device's mixer for good, so an output that
+// stopped took the whole queue with it: the open tracks, where each one had
+// got to, and any seek waiting on the output. Here an output only taps the
+// mix, and a new one, on the same device or another, carries on from the
+// same sample.
+struct Feed {
+  mix: Mutex<SourcesQueueOutput>,
+  // Samples pulled from the mix by any output. Paused or with nothing
+  // queued, an output still pulls silence, so a count that stops moving
+  // means the output stopped asking. That's how the monitor notices an
+  // output that stopped without a word: cpal pauses a macOS output itself
+  // when its device's IsAlive property changes.
+  pulled: AtomicU64,
+}
+
+// More than 5 ms of any track up to 384 kHz stereo. rodio runs a player's
+// controls (pause, skip, seek, volume) once per 5 ms of its mix.
+const SETTLE_SAMPLES: usize = 4096;
+
+impl Feed {
+  fn new(mix: SourcesQueueOutput) -> Self {
+    Feed { mix: Mutex::new(mix), pulled: AtomicU64::new(0) }
+  }
+
+  fn mix(&self) -> MutexGuard<'_, SourcesQueueOutput> {
+    self.mix.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+  }
+
+  // An output's callback is inside the mix: decoding, or waiting on a read.
+  // One held up by a stalled stream or mount pulls nothing either, but its
+  // output hasn't stopped, and a new output would wait on the same read.
+  fn busy(&self) -> bool {
+    matches!(self.mix.try_lock(), Err(TryLockError::WouldBlock))
+  }
+
+  // Runs the player's controls with no output pulling the mix. rodio
+  // carries out a skip or a seek only from inside the mix, so with nothing
+  // pulling it, a seek waits for good and holds its player. Only called
+  // with the player paused or its session ending, so what's pulled is
+  // silence nobody hears, and a paused track doesn't move.
+  fn settle(&self) {
+    if let Ok(mut mix) = self.mix.try_lock() {
+      for _ in 0..SETTLE_SAMPLES {
+        mix.next();
+      }
+    }
+  }
+}
+
+// One output's hold on the feed. Once that output is replaced its tap ends,
+// so if the old output ever starts again it plays nothing, rather than
+// taking every other sample from the new one.
+struct Tap {
+  feed: Arc<Feed>,
+  live: Arc<AtomicBool>,
+}
+
+impl Iterator for Tap {
+  type Item = Sample;
+
+  fn next(&mut self) -> Option<Sample> {
+    if !self.live.load(Ordering::Relaxed) {
+      return None;
+    }
+    let sample = self.feed.mix().next();
+    self.feed.pulled.fetch_add(1, Ordering::Relaxed);
+    sample
+  }
+}
+
+impl Source for Tap {
+  fn current_span_len(&self) -> Option<usize> {
+    self.feed.mix().current_span_len()
+  }
+
+  fn channels(&self) -> ChannelCount {
+    self.feed.mix().channels()
+  }
+
+  fn sample_rate(&self) -> SampleRate {
+    self.feed.mix().sample_rate()
+  }
+
+  fn total_duration(&self) -> Option<Duration> {
+    None
+  }
+}
+
+// Where the mix is playing. Dropping it stops that output.
+struct Output {
+  // The device's stream, or a test's stand-in for one.
+  _device: Box<dyn Send>,
+  // This output's tap, cleared once the output is replaced.
+  live: Arc<AtomicBool>,
+  // Set by the device's error callback when the device has gone away.
+  gone: Arc<AtomicBool>,
+  // The feed's count when this output opened. One that has never moved it
+  // hasn't started yet, which isn't the same as having stopped.
+  pulled_at_open: u64,
+}
+
+impl Drop for Output {
+  fn drop(&mut self) {
+    self.live.store(false, Ordering::Relaxed);
+  }
+}
+
+// Opens an output that plays `tap` on the saved device, or the default one,
+// and sets `gone` if that device goes away. The app's opens a real device
+// (open_device_output); a test's stands in for one.
+type OpenOutput = dyn Fn(&Option<String>, Tap, Arc<AtomicBool>) -> Result<Box<dyn Send>, String> + Send + Sync;
+
+fn open_output(open: &OpenOutput, saved_device: &Option<String>, feed: &Arc<Feed>) -> Result<Output, String> {
+  let live = Arc::new(AtomicBool::new(true));
+  let gone = Arc::new(AtomicBool::new(false));
+  let pulled_at_open = feed.pulled.load(Ordering::Relaxed);
+  let device = open(saved_device, Tap { feed: feed.clone(), live: live.clone() }, gone.clone())?;
+  Ok(Output { _device: device, live, gone, pulled_at_open })
+}
+
+fn open_device_output(saved_device: &Option<String>, tap: Tap, gone: Arc<AtomicBool>) -> Result<Box<dyn Send>, String> {
+  // Only these two mean the output can't go on. The rest, an underrun or a
+  // backend's own complaint, are logged as rodio's own callback did, and if
+  // one of them did stop the output, its silence gives it away.
+  let on_error = move |err: StreamError| match err {
+    StreamError::DeviceNotAvailable | StreamError::StreamInvalidated => {
+      log::warn!("[playback] the audio output failed: {err}");
+      gone.store(true, Ordering::Relaxed);
+    }
+    other => log::warn!("[playback] the audio output reported: {other}"),
+  };
+  let mut stream = open_stream(saved_device, on_error)?;
+  // Otherwise every output dropped, replaced ones included, says so on stderr.
+  stream.log_on_drop(false);
+  stream.mixer().add(tap);
+  Ok(Box::new(stream))
+}
+
+// An output that's been replaced is dropped on a thread of its own. Its
+// device may be the one that went away, and dropping a stream waits on the
+// device (cpal joins the output's thread on ALSA and WASAPI), which mustn't
+// hold the monitor or the session lock.
+fn retire(output: Output) {
+  output.live.store(false, Ordering::Relaxed);
+  std::thread::spawn(move || drop(output));
+}
+
+// How often the monitor thread looks at the session.
+const MONITOR_TICK: Duration = Duration::from_millis(250);
+
+// Issue #426: an output that has been playing and pulls nothing for this
+// many ticks (2 s), with no read holding it up, has stopped.
+const QUIET_TICKS: u32 = 8;
+
+// A new output gets 10 s to start pulling: a Bluetooth device can take
+// seconds to wake.
+const STARTING_TICKS: u32 = 40;
+
+// Outputs replaced in a row without ever starting. After this many, no
+// output is going to, and the transport is told.
+const UNSTARTED_LIMIT: u32 = 3;
+
+// How the monitor tells a stopped output from one that's playing.
+#[derive(Default)]
+struct OutputWatch {
+  // The feed's count at the last tick, and the ticks since it last moved.
+  pulled: u64,
+  quiet_ticks: u32,
+  unstarted_in_a_row: u32,
+}
+
+#[derive(Debug, PartialEq)]
+enum OutputCheck {
+  Playing,
+  Replaced,
+  // No output would open. The player is paused.
+  Lost(String),
+  // Lost earlier, and play hasn't opened another yet.
+  None,
+}
+
+// Run by the monitor once a tick (#426). An output whose device went away
+// says so through its error callback; one that stopped without a word is
+// one that has pulled nothing for QUIET_TICKS while no read held it up.
+// Either way the mix moves to a new output, on the saved device or the
+// default one, and carries on from the same sample: the queue, the track's
+// position and any seek waiting on the output all carry over. Where no
+// output opens, the player pauses and the transport is told.
+fn check_output(session: &mut Session, open: &OpenOutput, saved_device: impl FnOnce() -> Option<String>) -> OutputCheck {
+  let Some(output) = &session.output else {
+    session.feed.settle();
+    return OutputCheck::None;
+  };
+  let pulled = session.feed.pulled.load(Ordering::Relaxed);
+  let started = pulled > output.pulled_at_open;
+  let gone = output.gone.load(Ordering::Relaxed);
+  let watch = &mut session.watch;
+  if pulled == watch.pulled {
+    watch.quiet_ticks += 1;
+  } else {
+    watch.pulled = pulled;
+    watch.quiet_ticks = 0;
+    if started {
+      watch.unstarted_in_a_row = 0;
+    }
+  }
+  let limit = if started { QUIET_TICKS } else { STARTING_TICKS };
+  if !gone && (watch.quiet_ticks < limit || session.feed.busy()) {
+    return OutputCheck::Playing;
+  }
+
+  if !started {
+    watch.unstarted_in_a_row += 1;
+  }
+  watch.quiet_ticks = 0;
+  let unstarted = watch.unstarted_in_a_row;
+  if let Some(old) = session.output.take() {
+    retire(old);
+  }
+  let reopened = if unstarted >= UNSTARTED_LIMIT {
+    Err(format!("{unstarted} outputs in a row opened but never started playing"))
+  } else {
+    open_output(open, &saved_device(), &session.feed)
+  };
+  match reopened {
+    Ok(output) => {
+      let why = if gone { "its device went away" } else { "it stopped asking for audio" };
+      log::warn!("[playback] the audio output stopped ({why}), so playback carried on through a new one");
+      session.output = Some(output);
+      OutputCheck::Replaced
+    }
+    Err(detail) => {
+      log::warn!("[playback] the audio output stopped, and no other would open: {detail}");
+      session.sink.pause();
+      session.feed.settle();
+      OutputCheck::Lost(detail)
+    }
+  }
+}
+
 // How many tracks are open in the sink at once: the one playing and the
 // one after it, which is all gapless needs. Everything behind them waits
 // in Session::pending as a path and is opened by the monitor thread as
@@ -446,9 +713,13 @@ pub struct QueueStatus {
 const OPEN_AHEAD: usize = 2;
 
 struct Session {
-  // Held for the lifetime of playback — dropping it stops output. None only
-  // in tests, where a thread stands in for the output device.
-  _stream: Option<MixerDeviceSink>,
+  // Where the mix is playing; dropping it stops output. None once an output
+  // stopped and no other would open (#426): the player is paused then,
+  // until queue_play opens one.
+  output: Option<Output>,
+  // The player's mix, which outlives any one output.
+  feed: Arc<Feed>,
+  watch: OutputWatch,
   sink: Arc<Player>,
   // Which session this is. queue_stop followed straight away by a new
   // enqueue (every play and every queue edit does that) replaces the
@@ -485,28 +756,17 @@ struct Session {
   full_order: Vec<QueueTrack>,
 }
 
-// cpal's CoreAudio backend (macOS only) stores its device property-change
-// listener as a bare `Box<dyn FnMut()>` with no `+ Send` bound, so
-// `cpal::Stream` — and therefore `_stream` above — fails Rust's automatic
-// Send inference on macOS specifically (ALSA and WASAPI have no such
-// field, which is why this only surfaces there). The callback itself
-// captures nothing thread-affine — it's cpal's own hot-plug/config-change
-// bookkeeping, not the realtime audio render path, which CoreAudio always
-// runs on its own OS-managed thread regardless of which thread opened the
-// stream — and every access to a Session already goes through
-// PlaybackState's Mutex, so it's never touched from two threads at once.
-// This is a known gap in cpal's own type (RustAudio/cpal upstream), not a
-// Legato bug; asserting Send here is the standard workaround.
-unsafe impl Send for Session {}
-
 // A session that ends abandons its open tracks' readers before its output is
 // dropped, so a callback waiting inside one comes back and the drop doesn't
-// wait on it (see ReaderHandle).
+// wait on it (see ReaderHandle). Then it runs the player's controls once,
+// so a seek still waiting on the output lands (or fails) and lets go of the
+// player rather than holding it, and the tracks queued in it, for good.
 impl Drop for Session {
   fn drop(&mut self) {
     for reader in self.queue.iter().filter_map(|track| track.reader.as_ref()) {
       reader.abandon();
     }
+    self.feed.settle();
   }
 }
 
@@ -526,16 +786,23 @@ pub struct PlaybackState {
   // survives-a-stop reason as volume/device_name above.
   repeat_mode: Arc<Mutex<RepeatMode>>,
   next_generation: AtomicU64,
+  // Opens a session's output, and the one that replaces it (#426).
+  open_output: Arc<OpenOutput>,
 }
 
 impl PlaybackState {
   pub fn new() -> Self {
+    Self::with_outputs(Arc::new(open_device_output))
+  }
+
+  fn with_outputs(open_output: Arc<OpenOutput>) -> Self {
     PlaybackState {
       session: Arc::new(Mutex::new(None)),
       volume: Arc::new(Mutex::new(1.0)),
       device_name: Arc::new(Mutex::new(None)),
       repeat_mode: Arc::new(Mutex::new(RepeatMode::Off)),
       next_generation: AtomicU64::new(0),
+      open_output,
     }
   }
 }
@@ -598,8 +865,9 @@ fn open_source(track: &QueueTrack) -> Result<Opened, PlaybackError> {
 }
 
 // One agent for every stream, so the track playing and the one opened
-// behind it share connections to the server.
-fn stream_agent() -> &'static ureq::Agent {
+// behind it share connections to the server. media_controls.rs fetches the
+// now-playing cover through it too.
+pub(crate) fn stream_agent() -> &'static ureq::Agent {
   static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
   AGENT.get_or_init(|| {
     // The OS decides which certificates to trust, as it does for the
@@ -641,7 +909,7 @@ fn stream_from(url: &str, at: u64) -> io::Result<Body> {
   Ok(Box::new(response.into_body().into_reader()))
 }
 
-fn describe_stream_error(e: &ureq::Error) -> String {
+pub(crate) fn describe_stream_error(e: &ureq::Error) -> String {
   match e {
     ureq::Error::StatusCode(code) => format!("it answered {code}"),
     other => other.to_string(),
@@ -707,25 +975,29 @@ fn reconcile_repeat(
 // Polls the sink's queue length to detect track boundaries — rodio has no
 // completion callback, so this is the mechanism behind playback://
 // track-changed — and keeps the next pending track opened behind the one
-// playing. Exits once its session is stopped or replaced; see
+// playing. It also watches the output, and replaces one that stopped
+// (check_output). Exits once its session is stopped or replaced; see
 // Session::generation.
-fn spawn_monitor(
-  app: AppHandle,
-  state: Arc<Mutex<Option<Session>>>,
-  repeat_mode: Arc<Mutex<RepeatMode>>,
-  generation: u64,
-) {
+fn spawn_monitor(playback: &PlaybackState, emit: Emit, generation: u64) {
+  let state = playback.session.clone();
+  let repeat_mode = playback.repeat_mode.clone();
+  let device_name = playback.device_name.clone();
+  let open_output = playback.open_output.clone();
   std::thread::spawn(move || loop {
-    std::thread::sleep(Duration::from_millis(250));
+    std::thread::sleep(MONITOR_TICK);
 
     // Under the lock: account for finished tracks and pick the next one to
     // open. The open itself happens with the lock released, because over
     // NFS it can take seconds, and play, pause and queue_status all wait
     // on this lock.
-    let to_open = {
+    let (to_open, lost) = {
       let mut guard = state.lock().unwrap();
       let Some(session) = guard.as_mut().filter(|s| s.generation == generation) else {
         break;
+      };
+      let lost = match check_output(session, &*open_output, || device_name.lock().unwrap().clone()) {
+        OutputCheck::Lost(detail) => Some(PlaybackError::NoOutputDevice { detail }),
+        _ => None,
       };
       let finished_count = session.queue.len().saturating_sub(session.sink.len());
       if finished_count > 0 {
@@ -733,14 +1005,18 @@ fn spawn_monitor(
         reconcile_repeat(&mut session.queue, &mut session.pending, &session.full_order, finished_count, repeat);
         session.announce_owed = true;
       }
-      if session.opening {
+      let to_open = if session.opening {
         None
       } else {
         let next = take_next_to_open(&session.queue, &mut session.pending);
         session.opening = next.is_some();
         next
-      }
+      };
+      (to_open, lost)
     };
+    if let Some(err) = lost {
+      emit(PlaybackEvent::OutputLost(err));
+    }
     let opened = to_open.map(|track| {
       let source = open_source(&track);
       (track, source)
@@ -772,9 +1048,9 @@ fn spawn_monitor(
     let announce = std::mem::take(&mut session.announce_owed);
     drop(guard);
 
-    let _ = app.emit("playback://position", PositionEvent { position_ms, recording_node_id: current_node, streaming });
+    emit(PlaybackEvent::Position(PositionEvent { position_ms, recording_node_id: current_node, streaming }));
     if announce {
-      let _ = app.emit("playback://track-changed", TrackChangedEvent { recording_node_id: current_node, streaming });
+      emit(PlaybackEvent::TrackChanged(TrackChangedEvent { recording_node_id: current_node, streaming }));
     }
   });
 }
@@ -801,9 +1077,13 @@ fn matches_saved_device(saved: &str, id: &str, id_device_part: &str, label: &str
 }
 
 // Falls back to the system default if the configured device is gone
-// (unplugged, renamed) rather than erroring — a stale device preference
-// should degrade to "plays somewhere," not "doesn't play."
-fn open_stream(saved_device: &Option<String>) -> Result<MixerDeviceSink, String> {
+// (unplugged, renamed), or won't open, rather than erroring — a stale
+// device preference should degrade to "plays somewhere," not "doesn't
+// play." `on_error` hears what goes wrong with the output once it's open.
+fn open_stream<E>(saved_device: &Option<String>, on_error: E) -> Result<MixerDeviceSink, String>
+where
+  E: FnMut(StreamError) + Clone + Send + 'static,
+{
   if let Some(saved) = saved_device {
     let host = rodio::cpal::default_host();
     if let Ok(mut devices) = host.output_devices() {
@@ -813,13 +1093,34 @@ fn open_stream(saved_device: &Option<String>) -> Result<MixerDeviceSink, String>
         matches_saved_device(saved, &id.to_string(), &id.1, &label)
       });
       if let Some(device) = found {
-        return DeviceSinkBuilder::from_device(device)
-          .and_then(|builder| builder.open_stream())
-          .map_err(|e| e.to_string());
+        match DeviceSinkBuilder::from_device(device).and_then(|builder| builder.with_error_callback(on_error.clone()).open_stream()) {
+          Ok(stream) => return Ok(stream),
+          Err(e) => log::warn!("[playback] the chosen output wouldn't open, so the default instead: {e}"),
+        }
       }
     }
   }
-  DeviceSinkBuilder::open_default_sink().map_err(|e| e.to_string())
+  open_default_stream(on_error).map_err(|e| e.to_string())
+}
+
+// rodio's DeviceSinkBuilder::open_default_sink with an error callback of our
+// own: the default device, or failing that, the first other real one that
+// opens.
+fn open_default_stream<E>(on_error: E) -> Result<MixerDeviceSink, DeviceSinkError>
+where
+  E: FnMut(StreamError) + Clone + Send + 'static,
+{
+  DeviceSinkBuilder::from_default_device()
+    .and_then(|builder| builder.with_error_callback(on_error.clone()).open_stream())
+    .or_else(|original| {
+      let Ok(devices) = rodio::cpal::default_host().output_devices() else {
+        return Err(original);
+      };
+      devices
+        .filter(|d| d.description().map(|desc| desc.driver().is_some_and(|driver| driver != "null")).unwrap_or(false))
+        .find_map(|d| DeviceSinkBuilder::from_device(d).ok()?.with_error_callback(on_error.clone()).open_sink_or_fallback().ok())
+        .ok_or(original)
+    })
 }
 
 fn ensure_session<'a>(
@@ -829,14 +1130,18 @@ fn ensure_session<'a>(
   let mut guard = state.session.lock().unwrap();
   if guard.is_none() {
     let device_name = state.device_name.lock().unwrap().clone();
+    let (sink, mix) = Player::new();
+    let feed = Arc::new(Feed::new(mix));
     // open_stream already fell back to the system default, so a failure
     // here means there is nowhere at all to send audio.
-    let stream = open_stream(&device_name).map_err(|detail| PlaybackError::NoOutputDevice { detail })?;
-    let sink = Player::connect_new(stream.mixer());
+    let output =
+      open_output(&*state.open_output, &device_name, &feed).map_err(|detail| PlaybackError::NoOutputDevice { detail })?;
     sink.set_volume(*state.volume.lock().unwrap());
     let generation = state.next_generation.fetch_add(1, Ordering::Relaxed);
     *guard = Some(Session {
-      _stream: Some(stream),
+      output: Some(output),
+      feed,
+      watch: OutputWatch::default(),
       sink: Arc::new(sink),
       generation,
       queue: VecDeque::new(),
@@ -847,7 +1152,7 @@ fn ensure_session<'a>(
       announce_owed: true,
       full_order: Vec::new(),
     });
-    spawn_monitor(app.clone(), state.session.clone(), state.repeat_mode.clone(), generation);
+    spawn_monitor(state, emit_to(app.clone()), generation);
   }
   Ok(guard)
 }
@@ -870,9 +1175,7 @@ pub fn list_audio_devices() -> Result<Vec<AudioDevice>, String> {
 }
 
 /// Selecting a device tears down any live session (same effect as
-/// queue_stop) so the next enqueue reopens on the new device — rodio has
-/// no way to swap a Player's output device mid-session, and this mirrors how
-/// an actual device unplug already behaves.
+/// queue_stop) so the next enqueue reopens on the new device.
 #[tauri::command]
 pub fn queue_set_device(state: State<PlaybackState>, name: Option<String>) -> Result<(), String> {
   *state.device_name.lock().unwrap() = name;
@@ -942,12 +1245,11 @@ pub fn queue_set_repeat(state: State<PlaybackState>, mode: RepeatMode) -> Result
   Ok(())
 }
 
+/// After an output that stopped couldn't be replaced (#426), play opens one
+/// first, and says NoOutputDevice if there's still none.
 #[tauri::command]
-pub fn queue_play(state: State<PlaybackState>) -> Result<(), String> {
-  if let Some(session) = state.session.lock().unwrap().as_ref() {
-    session.sink.play();
-  }
-  Ok(())
+pub fn queue_play(state: State<PlaybackState>) -> Result<(), PlaybackError> {
+  state.play()
 }
 
 #[tauri::command]
@@ -967,7 +1269,8 @@ pub fn queue_stop(state: State<PlaybackState>) -> Result<(), String> {
 
 /// `async` for the same reason as queue_enqueue: rodio's try_seek waits for
 /// the decoder to land, and on a streamed track (#185) that can wait on the
-/// network, which on the main thread would freeze the window.
+/// network, which on the main thread would freeze the window. Fails if the
+/// output doesn't carry the seek out within SEEK_LIMIT.
 #[tauri::command(async)]
 pub fn queue_seek(state: State<PlaybackState>, position_ms: u64) -> Result<(), String> {
   state.seek(position_ms)
@@ -992,8 +1295,27 @@ pub fn queue_skip(state: State<PlaybackState>) -> Result<(), String> {
   Ok(())
 }
 
+// How long a seek waits for the output to carry it out (#426). Longer than
+// the monitor takes to notice an output that stopped and replace it, so a
+// seek made as the output stopped still lands on the new one.
+const SEEK_LIMIT: Duration = Duration::from_secs(5);
+
 // The transport commands' bodies, apart from Tauri so tests can drive them.
 impl PlaybackState {
+  fn play(&self) -> Result<(), PlaybackError> {
+    let mut guard = self.session.lock().unwrap();
+    let Some(session) = guard.as_mut() else { return Ok(()) };
+    if session.output.is_none() {
+      let device_name = self.device_name.lock().unwrap().clone();
+      let output = open_output(&*self.open_output, &device_name, &session.feed)
+        .map_err(|detail| PlaybackError::NoOutputDevice { detail })?;
+      session.output = Some(output);
+      session.watch = OutputWatch::default();
+    }
+    session.sink.play();
+    Ok(())
+  }
+
   fn pause(&self) {
     if let Some(session) = self.session.lock().unwrap().as_ref() {
       session.sink.pause();
@@ -1014,11 +1336,24 @@ impl PlaybackState {
   // waiting on the network, and if the output has stopped it waits for
   // good. queue_seek used to hold the lock through that, so pause, next,
   // stop and the monitor's position updates all waited behind it.
+  //
+  // And never for longer than SEEK_LIMIT (#426). rodio's wait has no limit,
+  // so it runs on a thread of its own, which this stops waiting for. That
+  // thread comes back once the output carries the seek out (a replacement
+  // output does), a later seek replaces it, or its session ends
+  // (Session's drop).
   fn seek(&self, position_ms: u64) -> Result<(), String> {
     let Some(sink) = self.session.lock().unwrap().as_ref().map(|session| session.sink.clone()) else {
       return Ok(());
     };
-    sink.try_seek(Duration::from_millis(position_ms)).map_err(|e| e.to_string())
+    let (done, landed) = mpsc::channel();
+    std::thread::spawn(move || {
+      let _ = done.send(sink.try_seek(Duration::from_millis(position_ms)));
+    });
+    match landed.recv_timeout(SEEK_LIMIT) {
+      Ok(result) => result.map_err(|e| e.to_string()),
+      Err(_) => Err(format!("the audio output didn't carry out the seek within {} s", SEEK_LIMIT.as_secs())),
+    }
   }
 
   fn skip(&self) {
@@ -1668,23 +2003,57 @@ mod tests {
   }
 
   // Stands in for the output device: pulls the player's mix at the pace
-  // cpal's callback would (44.1 kHz stereo) until dropped. `pulled` counts
+  // cpal's callback would (44.1 kHz stereo) until stopped. `pulled` counts
   // the samples it got, so a test can tell a callback that's running from
-  // one stuck inside a track.
+  // one stuck inside a track. `gone` is what the device's error callback
+  // would set.
+  #[derive(Clone)]
   struct FakeOutput {
     pulled: Arc<AtomicU64>,
     done: Arc<AtomicBool>,
+    gone: Arc<AtomicBool>,
+    // Set once its thread has come back out of the mix for good.
+    exited: Arc<AtomicBool>,
   }
 
-  impl Drop for FakeOutput {
-    fn drop(&mut self) {
+  impl FakeOutput {
+    // The device stops asking for audio, as a macOS output that cpal paused
+    // does, with nothing said.
+    fn stop(&self) {
       self.done.store(true, Ordering::Relaxed);
+    }
+
+    fn stuck(&self) -> bool {
+      let before = self.pulled.load(Ordering::Relaxed);
+      std::thread::sleep(Duration::from_millis(100));
+      self.pulled.load(Ordering::Relaxed) == before
+    }
+
+    // Still inside the mix: not pulling, and not come back out of it.
+    fn waiting(&self) -> bool {
+      self.stuck() && !self.exited.load(Ordering::Relaxed)
     }
   }
 
-  fn fake_output(mut mix: rodio::queue::SourcesQueueOutput) -> FakeOutput {
-    let (pulled, done) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)));
-    let output = FakeOutput { pulled: pulled.clone(), done: done.clone() };
+  // What a session holds for a FakeOutput. Dropping it stops the output, as
+  // dropping a device's stream does.
+  struct FakeDevice(FakeOutput);
+
+  impl Drop for FakeDevice {
+    fn drop(&mut self) {
+      self.0.stop();
+    }
+  }
+
+  // An output that never starts pulls nothing at all.
+  fn fake_output(mut mix: impl Iterator<Item = Sample> + Send + 'static, gone: Arc<AtomicBool>, starts: bool) -> FakeOutput {
+    let output = FakeOutput {
+      pulled: Arc::new(AtomicU64::new(0)),
+      done: Arc::new(AtomicBool::new(!starts)),
+      gone,
+      exited: Arc::new(AtomicBool::new(false)),
+    };
+    let (pulled, done, exited) = (output.pulled.clone(), output.done.clone(), output.exited.clone());
     std::thread::spawn(move || {
       while !done.load(Ordering::Relaxed) {
         // 10 ms of it.
@@ -1694,44 +2063,108 @@ mod tests {
         pulled.fetch_add(882, Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(10));
       }
+      exited.store(true, Ordering::Relaxed);
     });
     output
   }
 
-  impl FakeOutput {
-    fn stuck(&self) -> bool {
-      let before = self.pulled.load(Ordering::Relaxed);
-      std::thread::sleep(Duration::from_millis(100));
-      self.pulled.load(Ordering::Relaxed) == before
+  // Stand-in devices for a PlaybackState: every output opened is a
+  // FakeOutput, kept here for the test to stop. While `refuse` is set none
+  // opens, as on a machine with no output at all; while `silent` is set
+  // they open but never start.
+  #[derive(Default)]
+  struct FakeDevices {
+    opened: Mutex<Vec<FakeOutput>>,
+    refuse: AtomicBool,
+    silent: AtomicBool,
+  }
+
+  impl FakeDevices {
+    fn opener(self: &Arc<Self>) -> Arc<OpenOutput> {
+      let devices = self.clone();
+      Arc::new(move |_saved: &Option<String>, tap: Tap, gone: Arc<AtomicBool>| {
+        if devices.refuse.load(Ordering::Relaxed) {
+          return Err("no output device".to_string());
+        }
+        let output = fake_output(tap, gone, !devices.silent.load(Ordering::Relaxed));
+        devices.opened.lock().unwrap().push(output.clone());
+        Ok(Box::new(FakeDevice(output)) as Box<dyn Send>)
+      })
+    }
+
+    fn count(&self) -> usize {
+      self.opened.lock().unwrap().len()
+    }
+
+    fn output(&self, index: usize) -> FakeOutput {
+      self.opened.lock().unwrap()[index].clone()
     }
   }
 
-  // A session playing one track through a FakeOutput, as queue_enqueue
-  // leaves it, and the track's player.
-  struct Playing {
-    state: Arc<PlaybackState>,
-    sink: Arc<Player>,
-    output: FakeOutput,
-  }
-
-  fn playing(reader: NetworkAheadReader) -> Playing {
+  // A session with nothing queued yet, on its first output, as
+  // ensure_session leaves it.
+  fn new_session(state: &PlaybackState) -> Session {
     let (sink, mix) = Player::new();
-    let output = fake_output(mix);
-    let sink = Arc::new(sink);
-    let mut session = Session {
-      _stream: None,
-      sink: sink.clone(),
+    let feed = Arc::new(Feed::new(mix));
+    let output = open_output(&*state.open_output, &None, &feed).unwrap();
+    Session {
+      output: Some(output),
+      feed,
+      watch: OutputWatch::default(),
+      sink: Arc::new(sink),
       generation: 0,
       queue: VecDeque::new(),
       pending: VecDeque::new(),
       opening: false,
       announce_owed: false,
       full_order: Vec::new(),
-    };
+    }
+  }
+
+  // A session playing one track through a FakeOutput, as queue_enqueue
+  // leaves it, and the track's player. Dropping it stops the session.
+  struct Playing {
+    state: Arc<PlaybackState>,
+    sink: Arc<Player>,
+    output: FakeOutput,
+    devices: Arc<FakeDevices>,
+  }
+
+  impl Drop for Playing {
+    fn drop(&mut self) {
+      self.state.stop();
+    }
+  }
+
+  fn playing(reader: NetworkAheadReader) -> Playing {
+    let devices = Arc::new(FakeDevices::default());
+    let state = Arc::new(PlaybackState::with_outputs(devices.opener()));
+    let mut session = new_session(&state);
+    let sink = session.sink.clone();
     append_opened(&mut session, track(1), decode(reader, "01.wav", true).unwrap());
-    let state = Arc::new(PlaybackState::new());
     *state.session.lock().unwrap() = Some(session);
-    Playing { state, sink, output }
+    Playing { state, sink, output: devices.output(0), devices }
+  }
+
+  // Runs the real monitor thread on a Playing session, and records what it
+  // tells the frontend.
+  fn monitored(playing: &Playing) -> Arc<Mutex<Vec<PlaybackEvent>>> {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let recorded = events.clone();
+    spawn_monitor(&playing.state, Arc::new(move |event| recorded.lock().unwrap().push(event)), 0);
+    events
+  }
+
+  fn outputs_lost(events: &Mutex<Vec<PlaybackEvent>>) -> usize {
+    events.lock().unwrap().iter().filter(|event| matches!(event, PlaybackEvent::OutputLost(_))).count()
+  }
+
+  fn local_wav(name: &str, seconds: u32) -> (std::path::PathBuf, NetworkAheadReader) {
+    let dir = scratch_dir(name);
+    let path = dir.join("01.wav");
+    std::fs::write(&path, wav_bytes(seconds)).unwrap();
+    let reader = NetworkAheadReader::new(File::open(&path).unwrap()).unwrap();
+    (dir, reader)
   }
 
   // `seconds` of WAV as a stream whose first `head` bytes arrive and then
@@ -1830,7 +2263,7 @@ mod tests {
     std::fs::write(&path, wav_bytes(10)).unwrap();
     let playing = playing(NetworkAheadReader::new(File::open(&path).unwrap()).unwrap());
     std::thread::sleep(Duration::from_millis(100));
-    drop(playing.output);
+    playing.output.stop();
 
     let state = playing.state.clone();
     let seeking = std::thread::spawn(move || state.seek(5_000));
@@ -1844,9 +2277,170 @@ mod tests {
     std::fs::remove_dir_all(&dir).unwrap();
   }
 
+  // Issue #426: with nothing to replace the output that stopped, the seek
+  // waiting on it gives up within the limit, and says why.
+  #[test]
+  fn a_seek_on_an_output_that_stopped_gives_up_within_the_limit_and_says_so() {
+    let (dir, reader) = local_wav("seek-limit", 10);
+    let playing = playing(reader);
+    std::thread::sleep(Duration::from_millis(100));
+    playing.output.stop();
+
+    let state = playing.state.clone();
+    let start = std::time::Instant::now();
+    let seeked = within(SEEK_LIMIT + Duration::from_secs(2), move || state.seek(5_000));
+
+    let err = seeked.expect("the seek was still waiting past the limit").unwrap_err();
+    assert!(err.contains("didn't carry out the seek"), "{err}");
+    assert!(start.elapsed() >= SEEK_LIMIT - Duration::from_millis(100), "gave up after {:?}", start.elapsed());
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  // The rest of #426, and what was most likely #387's 2026-10-12 freeze: the
+  // output stops without a word. Within a few seconds the monitor opens
+  // another, and the track carries on from where it was, not from its start.
+  #[test]
+  fn an_output_that_stops_is_replaced_and_the_track_carries_on_from_where_it_was() {
+    let (dir, reader) = local_wav("output-stops", 30);
+    let playing = playing(reader);
+    let events = monitored(&playing);
+    std::thread::sleep(Duration::from_millis(600));
+
+    playing.output.stop();
+    let start = std::time::Instant::now();
+    std::thread::sleep(Duration::from_millis(50));
+    let stopped_at = playing.sink.get_pos();
+    assert!(stopped_at >= Duration::from_millis(300), "it never played: {stopped_at:?}");
+
+    assert!(wait_until(Duration::from_secs(4), || playing.devices.count() == 2), "the stopped output was never replaced");
+    assert!(start.elapsed() < Duration::from_millis(3500), "noticed only after {:?}", start.elapsed());
+    assert!(!playing.devices.output(1).stuck(), "the new output isn't playing");
+    let carried_on = playing.sink.get_pos();
+    assert!(carried_on > stopped_at, "{carried_on:?} isn't past {stopped_at:?}");
+    assert!(carried_on < stopped_at + Duration::from_secs(1), "{carried_on:?} skipped ahead of {stopped_at:?}");
+    assert!(!playing.sink.is_paused());
+    assert_eq!(outputs_lost(&events), 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  // An output whose device's error callback says it has gone (cpal's
+  // DeviceNotAvailable) is replaced on the next tick, without waiting for
+  // its silence to add up.
+  #[test]
+  fn an_output_whose_device_went_away_is_replaced_at_once() {
+    let (dir, reader) = local_wav("device-gone", 10);
+    let playing = playing(reader);
+    let _events = monitored(&playing);
+    std::thread::sleep(Duration::from_millis(300));
+
+    playing.output.gone.store(true, Ordering::Relaxed);
+    playing.output.stop();
+
+    assert!(wait_until(Duration::from_millis(700), || playing.devices.count() == 2), "the output wasn't replaced at once");
+    assert!(!playing.devices.output(1).stuck(), "the new output isn't playing");
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  // #387's exact report: a seek made just as the output stopped. It lands on
+  // the replacement output, inside the seek limit.
+  #[test]
+  fn a_seek_waiting_on_an_output_that_stopped_lands_on_its_replacement() {
+    let (dir, reader) = local_wav("seek-replaced", 10);
+    let playing = playing(reader);
+    let _events = monitored(&playing);
+    std::thread::sleep(Duration::from_millis(300));
+    playing.output.stop();
+
+    let state = playing.state.clone();
+    let seeked = within(SEEK_LIMIT + Duration::from_secs(1), move || state.seek(5_000));
+
+    assert_eq!(seeked, Some(Ok(())));
+    assert!(wait_until(Duration::from_secs(1), || playing.sink.get_pos() >= Duration::from_secs(5)), "at {:?}", playing.sink.get_pos());
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  // Where no output opens in place of the one that stopped, the player
+  // pauses and the transport is told, once. Controls still land without an
+  // output, and play opens one as soon as there is one, carrying on from
+  // where the track was.
+  #[test]
+  fn when_no_output_opens_in_place_of_one_that_stopped_the_transport_is_told() {
+    let (dir, reader) = local_wav("no-output", 30);
+    let playing = playing(reader);
+    let events = monitored(&playing);
+    std::thread::sleep(Duration::from_millis(300));
+
+    playing.devices.refuse.store(true, Ordering::Relaxed);
+    playing.output.stop();
+
+    assert!(wait_until(Duration::from_secs(4), || outputs_lost(&events) == 1), "the transport was never told");
+    let lost = events.lock().unwrap().iter().find(|event| matches!(event, PlaybackEvent::OutputLost(_))).cloned();
+    assert!(matches!(lost, Some(PlaybackEvent::OutputLost(PlaybackError::NoOutputDevice { .. }))), "{lost:?}");
+    assert!(playing.sink.is_paused());
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(outputs_lost(&events), 1, "told more than once");
+
+    let state = playing.state.clone();
+    assert_eq!(within(Duration::from_secs(2), move || state.seek(5_000)), Some(Ok(())), "a seek with no output didn't land");
+    assert!(matches!(playing.state.play(), Err(PlaybackError::NoOutputDevice { .. })));
+
+    playing.devices.refuse.store(false, Ordering::Relaxed);
+    playing.state.play().expect("play opened no output");
+
+    assert!(!playing.sink.is_paused());
+    assert!(!playing.devices.output(playing.devices.count() - 1).stuck(), "the new output isn't playing");
+    let position = playing.sink.get_pos();
+    assert!(position > Duration::from_secs(5) && position < Duration::from_secs(6), "at {position:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  // A callback waiting inside a stalled read pulls nothing either, but its
+  // output hasn't stopped, and a new one would wait on the same read. The
+  // stall limit (or a skip) deals with that one.
+  #[test]
+  fn an_output_held_up_by_a_stalled_read_is_left_alone() {
+    let (reader, _asked, _connection) = stalled_wav(30, 1 << 20, Duration::from_secs(30));
+    let playing = playing(reader);
+    let events = monitored(&playing);
+    std::thread::sleep(Duration::from_millis(300));
+    let state = playing.state.clone();
+    std::thread::spawn(move || state.seek(6_500));
+    assert!(wait_until(Duration::from_secs(2), || playing.output.stuck()), "the seek never reached the stalled edge");
+
+    std::thread::sleep(Duration::from_secs(3));
+
+    assert_eq!(playing.devices.count(), 1, "replaced an output that was waiting on a read");
+    assert_eq!(outputs_lost(&events), 0);
+  }
+
+  // Outputs that open but never start get STARTING_TICKS each, a few in a
+  // row, and then the transport is told rather than the monitor trying
+  // forever. Run tick by tick, without the monitor's sleeps.
+  #[test]
+  fn outputs_that_never_start_are_given_up_on() {
+    let devices = Arc::new(FakeDevices::default());
+    devices.silent.store(true, Ordering::Relaxed);
+    let state = PlaybackState::with_outputs(devices.opener());
+    let mut session = new_session(&state);
+
+    let mut checks = Vec::new();
+    for _ in 0..(STARTING_TICKS * UNSTARTED_LIMIT) {
+      checks.push(check_output(&mut session, &*state.open_output, || None));
+    }
+
+    let replaced = checks.iter().filter(|check| **check == OutputCheck::Replaced).count();
+    assert_eq!(replaced as u32, UNSTARTED_LIMIT - 1);
+    assert!(matches!(checks.last(), Some(OutputCheck::Lost(_))), "{:?}", checks.last());
+    assert_eq!(devices.count() as u32, UNSTARTED_LIMIT);
+    assert!(session.output.is_none());
+    assert_eq!(check_output(&mut session, &*state.open_output, || None), OutputCheck::None);
+  }
+
   // Answering isn't enough: until the output's callback comes back from the
   // stalled stream, a skip doesn't happen, and a stop's drop of the output
-  // waits for it. Abandoning the track's reader brings it straight back.
+  // waits for it. Abandoning the track's reader brings it straight back:
+  // after a skip it carries on pulling, and after a stop, whose dropped
+  // output stops asking, its thread ends.
   #[test]
   fn skip_and_stop_let_go_of_a_seek_waiting_on_a_stalled_stream() {
     let controls: [Control; 2] = [("skip", PlaybackState::skip), ("stop", PlaybackState::stop)];
@@ -1861,7 +2455,7 @@ mod tests {
       run(&playing.state);
 
       assert!(wait_until(Duration::from_secs(1), || seeking.is_finished()), "the seek still waited after {control}");
-      assert!(wait_until(Duration::from_secs(1), || !playing.output.stuck()), "the output's callback still waited after {control}");
+      assert!(wait_until(Duration::from_secs(1), || !playing.output.waiting()), "the output's callback still waited after {control}");
     }
   }
 
@@ -1980,6 +2574,54 @@ mod tests {
     assert!(pos_after.as_secs() >= 30, "seek should have jumped forward: {pos_after:?}");
 
     sink.stop();
+  }
+
+  // The same, for #426: a track playing silently through the real output
+  // device, whose output is replaced as if the device had gone away. The
+  // track carries on through a new real output from where it was, and a
+  // seek still lands. Not run by default either: it needs an output device.
+  #[test]
+  #[ignore]
+  fn real_output_replacement_smoke_test() {
+    let (dir, reader) = local_wav("real-replace", 30);
+    let state = Arc::new(PlaybackState::new());
+    let mut session = new_session(&state);
+    session.sink.set_volume(0.0);
+    let sink = session.sink.clone();
+    append_opened(&mut session, track(1), decode(reader, "01.wav", false).unwrap());
+    let first = session.output.as_ref().unwrap().live.clone();
+    let gone = session.output.as_ref().unwrap().gone.clone();
+    *state.session.lock().unwrap() = Some(session);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let recorded = events.clone();
+    spawn_monitor(&state, Arc::new(move |event| recorded.lock().unwrap().push(event)), 0);
+    std::thread::sleep(Duration::from_secs(1));
+    let before = sink.get_pos();
+    eprintln!("on the first output after 1 s: {before:?}");
+    assert!(before >= Duration::from_millis(500), "it never played: {before:?}");
+
+    // What the device's error callback does on DeviceNotAvailable.
+    gone.store(true, Ordering::Relaxed);
+    let replaced = |state: &PlaybackState| {
+      state.session.lock().unwrap().as_ref().and_then(|s| s.output.as_ref()).is_some_and(|o| !Arc::ptr_eq(&o.live, &first))
+    };
+    let start = std::time::Instant::now();
+    assert!(wait_until(Duration::from_secs(1), || replaced(&state)), "the output was never replaced");
+    eprintln!("replaced after {:?}", start.elapsed());
+    assert!(!first.load(Ordering::Relaxed), "the old output's tap still runs");
+
+    std::thread::sleep(Duration::from_secs(1));
+    let after = sink.get_pos();
+    eprintln!("on the new output 1 s later: {after:?}");
+    assert!(after > before + Duration::from_millis(500) && after < before + Duration::from_secs(3), "{before:?} -> {after:?}");
+
+    let started = std::time::Instant::now();
+    assert_eq!(state.seek(20_000), Ok(()));
+    eprintln!("seek to 20 s landed in {:?}, at {:?}", started.elapsed(), sink.get_pos());
+    assert!(sink.get_pos() >= Duration::from_secs(20));
+    assert!(events.lock().unwrap().iter().all(|event| !matches!(event, PlaybackEvent::OutputLost(_))));
+    state.stop();
+    std::fs::remove_dir_all(&dir).unwrap();
   }
 
   // The same, for #185: a track whose file isn't on this machine, played
