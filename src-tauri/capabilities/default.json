@@ -20,7 +20,8 @@
         { "url": "https://musicbrainz.org/*" },
         { "url": "https://www.discogs.com/search/*" },
         { "url": "https://picard.musicbrainz.org/*" },
-        { "url": "http://127.0.0.1:8000/openalbum?id=*" }
+        { "url": "http://127.0.0.1:8000/openalbum?id=*" },
+        { "url": "https://support.apple.com/guide/music/*" }
       ]
     }
   ]

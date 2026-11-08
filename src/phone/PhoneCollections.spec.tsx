@@ -200,11 +200,11 @@ describe('the phone collections tab', () => {
     const { container } = await render()
     expect(container.textContent).toContain('No playlists yet')
     expect(container.querySelector('[aria-label="Collections"]')).toBeNull()
-    for (const name of ['New playlist', 'Import .m3u']) {
+    for (const name of ['New playlist', 'Import']) {
       expect(button(container, name).className).toContain('h-[36px]')
       expect(button(container, name).className).toContain('touch-target')
     }
-    await act(async () => button(container, 'Import .m3u').click())
+    await act(async () => button(container, 'Import').click())
     await settle()
     expect(history.state).toMatchObject({ legatoSheetView: { kind: 'import' } })
   })

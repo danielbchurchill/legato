@@ -111,7 +111,7 @@ function CollectionsHome({ onNavigate, onFocusNode, playback }: Omit<Collections
               onNavigate({ kind: 'import' })
             }}
           >
-            Import .m3u
+            Import
           </MenuItem>
         </div>
       )}
@@ -303,7 +303,7 @@ export function EmptyCollections({ onNew, onImport, large = false }: { onNew: ()
           New playlist
         </Button>
         <Button variant="secondary" size={size} onClick={onImport}>
-          Import .m3u
+          Import
         </Button>
       </div>
     </div>

@@ -8,9 +8,12 @@ import { formatCount, plural } from '../ui/format'
 import { BackRow, PanelHeader } from '../shell/SidePanel'
 import { API_BASE as API } from '../config/serverHost'
 import { usePlaylists } from './collectionsData'
+import { AppleMusicImport } from './AppleMusicImport'
 
 /* Playlist import, in three steps on one page: pick an .m3u, preview how
- * much of it Legato can find, then a report of what was added.
+ * much of it Legato can find, then a report of what was added. Apple
+ * Music's Library.xml comes in through the same page and goes to its own
+ * three steps (AppleMusicImport.tsx, #133).
  *
  * Matching is the server's (routes/playlist-import.ts): by file path first,
  * then by artist and title from the #EXTINF line. The preview only checks
@@ -50,7 +53,7 @@ async function fetchPreview(content: string, remap: PathRemap | null): Promise<P
 
 /* An 8px bar of segments with 2px gaps between them, each segment's width
  * its share of the whole. */
-function MatchBar({ segments }: { segments: { value: number; color: string; label: string }[] }) {
+export function MatchBar({ segments }: { segments: { value: number; color: string; label: string }[] }) {
   const total = segments.reduce((n, s) => n + s.value, 0) || 1
   return (
     <div
@@ -75,10 +78,15 @@ export function ImportPlaylist({ onBack, onOpenPlaylist }: { onBack: () => void;
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [library, setLibrary] = useState<File | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const pick = async (picked: File) => {
     setError(null)
+    if (/\.xml$/i.test(picked.name)) {
+      setLibrary(picked)
+      return
+    }
     setBusy(true)
     try {
       const content = await picked.text()
@@ -86,7 +94,7 @@ export function ImportPlaylist({ onBack, onOpenPlaylist }: { onBack: () => void;
       setFile({ name: picked.name, content })
       setRemap(null)
     } catch {
-      setError("That file couldn't be read as a playlist. It needs to be an .m3u or .m3u8.")
+      setError("That file couldn't be read as a playlist. It needs to be an .m3u, an .m3u8 or Music's Library.xml.")
     } finally {
       setBusy(false)
     }
@@ -138,6 +146,8 @@ export function ImportPlaylist({ onBack, onOpenPlaylist }: { onBack: () => void;
       {error}
     </p>
   )
+
+  if (library) return <AppleMusicImport file={library} onBack={onBack} onOpenPlaylist={onOpenPlaylist} />
 
   if (result) {
     const byPath = result.entries.filter((e) => e.matchType === 'path').length
@@ -282,7 +292,7 @@ export function ImportPlaylist({ onBack, onOpenPlaylist }: { onBack: () => void;
         }`}
       >
         <Icon name="add" size={22} className="text-[var(--color-ink-2)]" />
-        <span className="text-heading text-[var(--color-ink)]">Drop an .m3u or .m3u8 file</span>
+        <span className="text-heading text-[var(--color-ink)]">Drop a playlist or Music's Library.xml</span>
         <span className="text-[length:var(--text-secondary)] leading-[18px] text-[var(--color-ink-2)]">
           or <span className="font-medium text-[var(--color-ink)]">choose a file</span>
         </span>
@@ -290,7 +300,7 @@ export function ImportPlaylist({ onBack, onOpenPlaylist }: { onBack: () => void;
       <input
         ref={inputRef}
         type="file"
-        accept=".m3u,.m3u8,audio/x-mpegurl,audio/mpegurl"
+        accept=".m3u,.m3u8,audio/x-mpegurl,audio/mpegurl,.xml,text/xml,application/xml"
         className="hidden"
         onChange={(e) => {
           const picked = e.target.files?.[0]
@@ -300,7 +310,8 @@ export function ImportPlaylist({ onBack, onOpenPlaylist }: { onBack: () => void;
       />
       {errorLine}
       <p className="mt-[12px] text-small [text-wrap:pretty] text-[var(--color-ink-3)]">
-        Tracks are matched by file path first, then by artist and title. Nothing is added until you confirm.
+        A playlist is an .m3u or .m3u8. Music's Library.xml (in Music, File › Library › Export Library…) brings its playlists, play counts
+        and ratings. Tracks are matched by file path first, then by artist and title. Nothing is added until you confirm.
       </p>
     </div>
   )
