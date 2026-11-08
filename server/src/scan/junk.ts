@@ -34,6 +34,16 @@ export const FAST_GLOB_IGNORE: string[] = JUNK_PATTERNS.flatMap((pattern) => [
   `**/${pattern}`,
 ]);
 
+// One path segment (a file or folder name) tested against the list, for
+// code that reads directories itself rather than through either matcher:
+// the folder suggestions' count (fs/suggest.ts), which has to skip what
+// the scan would.
+export function isJunkName(name: string): boolean {
+  return JUNK_PATTERNS.some((pattern) =>
+    pattern.endsWith("*") ? name.startsWith(pattern.slice(0, -1)) : name === pattern,
+  );
+}
+
 // chokidar `ignored` patterns for watcher.ts. One regex per entry,
 // matching the literal (or prefix-wildcarded) name as a whole path
 // segment anywhere under the watched root.
