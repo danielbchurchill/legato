@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
@@ -38,30 +38,45 @@ fn server_source_dir() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../server")
 }
 
-// Locates the compiled server binary Tauri's bundler places next to the
-// app's own executable at package time (tauri.conf.json's
-// bundle.externalBin, resolved from src-tauri/binaries/legato-server-
-// <target-triple> — see scripts/build-server-sidecar.mjs, which compiles
-// it via #102's `bun build --compile` and wires into
-// build.beforeBuildCommand). The bundler strips the target-triple suffix
-// back off on copy (confirmed against tauri-bundler's copy_binaries), so
-// at runtime this just looks for a plain "legato-server" beside whatever
-// binary is currently running — true on every platform Tauri bundles a
-// sidecar for, not just macOS/Windows, so this has no target_os cfg gate.
+// Locates the compiled server binary (scripts/build-server-sidecar.mjs, #103)
+// in a packaged app. Two places, by how the bundle was made:
+//
+//   beside the app's own executable: where tauri.conf.json's
+//   bundle.externalBin puts it (Tauri strips the target-triple suffix on
+//   copy), and where a macOS release puts its signed copy through
+//   bundle.macOS.files (#129, scripts/desktop-release.mjs).
+//
+//   <exe dir>/../libexec/<product>/ on Linux: where a Linux release puts it
+//   (#129), in the .deb and the AppImage alike. linuxdeploy rewrites the
+//   rpath of every dynamically linked ELF under the AppImage's usr/bin and
+//   usr/lib, and that rewrite drops the segment a Bun-compiled binary keeps
+//   its program in, so the server must sit where linuxdeploy doesn't look.
+//   It also keeps a second legato-server off PATH beside a headless install.
+//
+// The real executable, not tauri::process::current_binary: inside an
+// AppImage that answers with the .AppImage file itself, so the sidecar
+// would be looked for beside the AppImage rather than in it.
 fn resolve_sidecar_binary(app: &AppHandle) -> Result<PathBuf, String> {
-  let binary_name = format!("legato-server{}", std::env::consts::EXE_SUFFIX);
-  let current_exe = tauri::process::current_binary(&app.env())
+  let current_exe = tauri::utils::platform::current_exe()
     .map_err(|e| format!("failed to resolve the running app's own binary path: {e}"))?;
   let dir = current_exe
     .parent()
     .ok_or_else(|| format!("running binary {current_exe:?} has no parent directory"))?;
-  let sidecar = dir.join(&binary_name);
-  if !sidecar.exists() {
-    return Err(format!(
-      "expected the {binary_name} sidecar next to the app binary at {sidecar:?}, but it isn't there — was this app packaged with `tauri build` (not a bare `cargo build`)?"
-    ));
+  let candidates = sidecar_candidates(dir, &app.package_info().name);
+  candidates.iter().find(|path| path.exists()).cloned().ok_or_else(|| {
+    format!(
+      "no legato-server sidecar at {candidates:?}. Was this app packaged with `tauri build` (not a bare `cargo build`)?"
+    )
+  })
+}
+
+fn sidecar_candidates(exe_dir: &Path, product_name: &str) -> Vec<PathBuf> {
+  let binary_name = format!("legato-server{}", std::env::consts::EXE_SUFFIX);
+  let mut candidates = vec![exe_dir.join(&binary_name)];
+  if cfg!(target_os = "linux") {
+    candidates.push(exe_dir.join("../libexec").join(product_name).join(&binary_name));
   }
-  Ok(sidecar)
+  candidates
 }
 
 // Resolves a bundled ffmpeg/fpcalc binary from Tauri's packaged resources
@@ -196,6 +211,29 @@ pub fn kill(state: &ServerProcess) {
       }
 
       let _ = child.wait();
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn the_sidecar_is_looked_for_beside_the_app_first() {
+    let candidates = sidecar_candidates(Path::new("/opt/legato/usr/bin"), "legato");
+    let beside = format!("/opt/legato/usr/bin/legato-server{}", std::env::consts::EXE_SUFFIX);
+    assert_eq!(candidates[0], PathBuf::from(beside));
+  }
+
+  #[test]
+  fn a_linux_release_keeps_it_in_libexec() {
+    let candidates = sidecar_candidates(Path::new("/tmp/.mount_legato/usr/bin"), "legato");
+    if cfg!(target_os = "linux") {
+      assert_eq!(candidates.len(), 2);
+      assert_eq!(candidates[1], PathBuf::from("/tmp/.mount_legato/usr/bin/../libexec/legato/legato-server"));
+    } else {
+      assert_eq!(candidates.len(), 1);
     }
   }
 }

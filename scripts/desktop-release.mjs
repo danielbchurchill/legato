@@ -39,6 +39,7 @@
 // `node scripts/build-server-sidecar.mjs --target <triple>`.
 
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -113,7 +114,7 @@ async function stage(args) {
   const version = option(args, "version");
   const pubkey = option(args, "pubkey");
 
-  const sidecar = path.join(BINARIES_DIR, `legato-server-${target.triple}${target.exe}`);
+  const sidecar = stagedSidecar(target);
   if (!existsSync(sidecar)) {
     throw new Error(`no sidecar at ${path.relative(REPO_ROOT, sidecar)}; run node scripts/build-server-sidecar.mjs --target ${target.triple} first`);
   }
@@ -163,6 +164,17 @@ async function stage(args) {
   };
   if (version) patch.version = version;
   if (pubkey) patch.plugins = { updater: { pubkey } };
+  if (target.os === "linux") {
+    // Into usr/libexec/<product>/ in the .deb and the AppImage alike, not
+    // externalBin's usr/bin: linuxdeploy rewrites the rpath of every
+    // dynamically linked ELF under the AppImage's usr/bin and usr/lib, and
+    // that drops the segment a Bun-compiled binary keeps its program in.
+    // server_process.rs looks there on Linux.
+    const { productName } = JSON.parse(await readFile(path.join(TAURI_DIR, "tauri.conf.json"), "utf8"));
+    const files = { [`/usr/libexec/${productName}/legato-server`]: path.relative(TAURI_DIR, sidecar) };
+    patch.bundle.externalBin = [];
+    patch.bundle.linux = { deb: { files }, appimage: { files } };
+  }
   if (target.os === "macos") {
     patch.bundle.externalBin = [];
     patch.bundle.macOS = { files: { "MacOS/legato-server": path.relative(TAURI_DIR, sidecar) } };
@@ -214,6 +226,12 @@ async function verify(args) {
       const archs = output("lipo", ["-archs", file]).trim().split(/\s+/);
       expect(archs.includes(arch), `${name} runs on ${arch} (${archs.join(", ")})`);
     }
+    if (existsSync(code["legato-server"])) {
+      expect(
+        sha256(code["legato-server"]) === sha256(stagedSidecar(target)),
+        "the bundle's server is byte for byte the one staged (and signed) for it",
+      );
+    }
     const stray = (await readdir(path.join(contents, "Resources", "binaries"))).filter((name) => name.startsWith("legato-server"));
     expect(stray.length === 0, `no second server in Resources/binaries${stray.length ? ` (found ${stray.join(", ")})` : ""}`);
 
@@ -238,8 +256,9 @@ async function verify(args) {
   } else if (target.os === "linux") {
     const deb = await only(path.join(bundleDir, "deb"), ".deb");
     const listing = output("dpkg-deb", ["--contents", deb]);
-    console.log(listing.split("\n").filter((line) => /usr\/(bin|lib)\//.test(line) && !line.endsWith("/")).join("\n"));
-    expect(/\s(\.\/)?usr\/bin\/legato-server$/m.test(listing), ".deb has usr/bin/legato-server");
+    console.log(listing.split("\n").filter((line) => /usr\/(bin|lib|libexec)\//.test(line) && !line.endsWith("/")).join("\n"));
+    expect(/\s(\.\/)?usr\/libexec\/[^/]+\/legato-server$/m.test(listing), ".deb has usr/libexec/<product>/legato-server");
+    expect(!/\s(\.\/)?usr\/bin\/legato-server$/m.test(listing), ".deb puts no legato-server on PATH");
     for (const name of MEDIA_BINARIES) {
       expect(new RegExp(`/binaries/${target.triple}/${name}$`, "m").test(listing), `.deb has ${name} for ${target.triple}`);
     }
@@ -256,7 +275,7 @@ async function verify(args) {
       const files = output("find", [root, "-type", "f"]).split("\n");
       const find = (pattern) => files.find((file) => pattern.test(file));
       const code = {
-        "legato-server": find(/\/usr\/bin\/legato-server$/),
+        "legato-server": find(/\/usr\/libexec\/[^/]+\/legato-server$/),
         ffmpeg: find(new RegExp(`/usr/lib/[^/]+/binaries/${target.triple}/ffmpeg$`)),
         fpcalc: find(new RegExp(`/usr/lib/[^/]+/binaries/${target.triple}/fpcalc$`)),
       };
@@ -265,6 +284,10 @@ async function verify(args) {
         if (file) expect(output("file", ["-b", file]).includes(ELF_ARCH[target.triple]), `${name} in the AppImage runs on ${ELF_ARCH[target.triple]}`);
       }
       expect(!files.some((file) => /\/binaries\/legato-server/.test(file)), "AppImage has no second server in its resources");
+      if (code["legato-server"]) {
+        // linuxdeploy didn't get to it: an rpath rewrite would change it.
+        expect(sha256(code["legato-server"]) === sha256(stagedSidecar(target)), "the AppImage's server is byte for byte the one built for it");
+      }
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }
@@ -373,6 +396,14 @@ async function launch(args) {
     expect(stopped, "the server stopped when the app did");
   }
   if (failures.length) throw new Error(`${failures.length} check${failures.length === 1 ? "" : "s"} failed: ${failures.join("; ")}`);
+}
+
+function sha256(file) {
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
+function stagedSidecar(target) {
+  return path.join(BINARIES_DIR, `legato-server-${target.triple}${target.exe}`);
 }
 
 async function filesIn(dir, suffix) {

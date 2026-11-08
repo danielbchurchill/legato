@@ -17,7 +17,9 @@ name: desktop
 #                        until #483.
 #   Linux x64 and arm64  .deb and AppImage. The AppImage updates itself; a
 #                        .deb belongs to its package manager, so the app
-#                        links to the release instead. Built on Ubuntu 24.04
+#                        links to the release instead. Both keep the server
+#                        in usr/libexec/legato/, out of linuxdeploy's reach
+#                        (scripts/desktop-release.mjs, stage). Built on Ubuntu 24.04
 #                        (glibc 2.39) rather than ubuntu-latest, which moves
 #                        to 26.04, so a new runner image doesn't quietly
 #                        raise the oldest Linux that can run the app.
