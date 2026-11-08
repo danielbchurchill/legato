@@ -8,17 +8,26 @@ use crate::instance::Instance;
 
 pub struct ServerProcess(pub Mutex<Option<Child>>);
 
-// Matches the directory layout scripts/fetch-media-binaries.mjs writes
-// (src-tauri/binaries/<target-triple>/) and the Rust target triples Tauri
-// itself already uses for `externalBin`-style resources, so this needs no
-// runtime platform detection — the triple is fixed at compile time for
-// whichever binary is actually being built.
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const TARGET_TRIPLE: &str = "aarch64-apple-darwin";
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-const TARGET_TRIPLE: &str = "x86_64-apple-darwin";
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-const TARGET_TRIPLE: &str = "x86_64-pc-windows-msvc";
+// Matches the directory layout the media binaries are staged in
+// (src-tauri/binaries/<target-triple>/, by scripts/fetch-media-binaries.mjs
+// for a local package and scripts/desktop-release.mjs for a release) and the
+// Rust target triples Tauri itself uses for `externalBin`, so this needs no
+// runtime platform detection: the triple is fixed at compile time for
+// whichever binary is being built. None on a target no release is built
+// for, which then finds ffmpeg and fpcalc on PATH.
+const TARGET_TRIPLE: Option<&str> = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+  Some("aarch64-apple-darwin")
+} else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+  Some("x86_64-apple-darwin")
+} else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+  Some("x86_64-pc-windows-msvc")
+} else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+  Some("x86_64-unknown-linux-gnu")
+} else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+  Some("aarch64-unknown-linux-gnu")
+} else {
+  None
+};
 
 // Dev-time only (`tauri::is_dev()` gates every call site): resolved
 // relative to this crate's manifest dir, which is stable regardless of the
@@ -56,26 +65,17 @@ fn resolve_sidecar_binary(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 // Resolves a bundled ffmpeg/fpcalc binary from Tauri's packaged resources
-// dir (populated by scripts/fetch-media-binaries.mjs into
-// src-tauri/binaries/<target-triple>/, wired in via tauri.conf.json's
-// bundle.resources). Returns None whenever that binary isn't actually
-// there — a plain `npx tauri dev` run against a checkout where nobody has
-// run the fetch script, or a platform it hasn't been fetched for yet — so
-// server/src/mediaBinaries.ts's own LEGATO_FFMPEG_PATH/LEGATO_FPCALC_PATH
-// fallback to bare PATH resolution keeps working exactly as it does today.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+// dir (staged into src-tauri/binaries/<target-triple>/ and wired in via
+// tauri.conf.json's bundle.resources): Contents/Resources in a .app, the
+// install dir on Windows, /usr/lib/legato in a .deb and the AppImage's own
+// usr/lib/legato (#129 ships them on Linux too). Returns None whenever that
+// binary isn't there, as in a `npx tauri dev` run on a checkout where nobody
+// fetched them, so server/src/mediaBinaries.ts's fallback to PATH applies.
 fn resolve_media_binary(app: &AppHandle, name: &str) -> Option<PathBuf> {
   let resource_dir = app.path().resource_dir().ok()?;
   let binary_name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
-  let path = resource_dir.join("binaries").join(TARGET_TRIPLE).join(binary_name);
+  let path = resource_dir.join("binaries").join(TARGET_TRIPLE?).join(binary_name);
   path.exists().then_some(path)
-}
-
-// Linux keeps relying on system ffmpeg/fpcalc on PATH — deliberately out of
-// scope for the desktop bundle.
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn resolve_media_binary(_app: &AppHandle, _name: &str) -> Option<PathBuf> {
-  None
 }
 
 /// Where the server records the last time it streamed audio (issue #130,
