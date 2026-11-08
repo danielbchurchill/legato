@@ -22,6 +22,14 @@
 //     codesign --verify --deep --strict with the hardened runtime on
 //     throughout, and that only the server has entitlements.
 //
+//   launch --target <triple>
+//     Starts the packaged app on this machine (macOS, or Linux's AppImage
+//     under xvfb-run) and checks that it starts its own server on 8899 and
+//     hands it the bundle's own ffmpeg and fpcalc, then quits it and checks
+//     the server went too. Only on a machine with nothing on 8899: a CI
+//     runner, not a computer with Legato installed. --app and --port point
+//     it at a test build instead.
+//
 //   manifest --dir <dir> --version <v>
 //     Writes <dir>/latest.json, the file the app's updater reads from the
 //     latest release (src-tauri/src/updater.rs), from every target's note
@@ -30,8 +38,8 @@
 // The server sidecar itself comes first, from
 // `node scripts/build-server-sidecar.mjs --target <triple>`.
 
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -272,6 +280,101 @@ async function verify(args) {
   if (failures.length) throw new Error(`${failures.length} check${failures.length === 1 ? "" : "s"} failed: ${failures.join("; ")}`);
 }
 
+// A packaged build's server always takes this port (src-tauri/src/instance.rs).
+const PACKAGED_PORT = 8899;
+
+async function health(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: AbortSignal.timeout(2000) });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+// The LEGATO_* variables a running process was started with.
+function legatoEnv(pid, os) {
+  if (os === "linux") {
+    return Object.fromEntries(
+      readFileSync(`/proc/${pid}/environ`, "utf8")
+        .split("\0")
+        .filter((kv) => kv.startsWith("LEGATO_"))
+        .map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]),
+    );
+  }
+  // macOS's ps prints the environment after the command line, space-separated.
+  const line = output("ps", ["eww", "-o", "command=", "-p", String(pid)]);
+  return Object.fromEntries([...line.matchAll(/(LEGATO_[A-Z_]+)=(.*?)(?= [A-Za-z_][A-Za-z0-9_]*=|\n|$)/g)].map((m) => [m[1], m[2]]));
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function launch(args) {
+  const target = targetOf(args);
+  if (target.os === "windows") throw new Error("launch covers the macOS and Linux bundles");
+  const port = Number(option(args, "port") ?? PACKAGED_PORT);
+  if (await health(port)) throw new Error(`something already answers on ${port}`);
+  const bundleDir = path.join(TAURI_DIR, "target", target.triple, "release", "bundle");
+  const failures = [];
+  const expect = (ok, what) => {
+    console.log(`${ok ? "ok  " : "FAIL"}  ${what}`);
+    if (!ok) failures.push(what);
+  };
+
+  let command;
+  let commandArgs = [];
+  const env = { ...process.env };
+  if (target.os === "macos") {
+    const app = option(args, "app") ?? (await filesIn(path.join(bundleDir, "macos"), ".app"))[0];
+    const mainBinary = output("plutil", ["-extract", "CFBundleExecutable", "raw", path.join(app, "Contents", "Info.plist")]).trim();
+    command = path.join(app, "Contents", "MacOS", mainBinary);
+  } else {
+    const appImage = await only(path.join(bundleDir, "appimage"), ".AppImage");
+    await chmod(appImage, 0o755);
+    // No FUSE needed, and no display on a runner: xvfb-run gives the
+    // webview one.
+    env.APPIMAGE_EXTRACT_AND_RUN = "1";
+    command = "xvfb-run";
+    commandArgs = ["--auto-servernum", appImage];
+  }
+
+  console.log(`starting ${path.relative(REPO_ROOT, command) || command} ${commandArgs.map((a) => path.relative(REPO_ROOT, a)).join(" ")}`);
+  const app = spawn(command, commandArgs, { env, stdio: ["ignore", "inherit", "inherit"], detached: true });
+  let exited = null;
+  app.on("exit", (code, signal) => {
+    exited = signal ?? code;
+  });
+  try {
+    let body = null;
+    for (const deadline = Date.now() + 120_000; Date.now() < deadline && exited === null; await sleep(1000)) {
+      if ((body = await health(port))) break;
+    }
+    expect(Boolean(body), `the app's own server answered on ${port}${exited !== null ? ` (the app exited: ${exited})` : ""}`);
+    if (body) {
+      expect(body.installChannel === "desktop", `it runs as the desktop app's server (install channel ${body.installChannel})`);
+      // The process listening on the port, not one found by name: a computer
+      // can be running another Legato.
+      const pid = output("lsof", ["-t", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN"]).trim().split("\n")[0];
+      const serverEnv = legatoEnv(pid, target.os);
+      for (const [name, variable] of [
+        ["ffmpeg", "LEGATO_FFMPEG_PATH"],
+        ["fpcalc", "LEGATO_FPCALC_PATH"],
+      ]) {
+        const given = serverEnv[variable] ?? "";
+        expect(given.endsWith(`/binaries/${target.triple}/${name}`) && existsSync(given), `it was given the bundle's own ${name}: ${given || "nothing"}`);
+      }
+    }
+  } finally {
+    // SIGTERM is what the app's own signal handler tears the server down on
+    // (server_process.rs), so the server should go with it.
+    if (exited === null) process.kill(-app.pid, "SIGTERM");
+    let stopped = false;
+    for (let i = 0; i < 20 && !(stopped = !(await health(port))); i++) await sleep(500);
+    expect(stopped, "the server stopped when the app did");
+  }
+  if (failures.length) throw new Error(`${failures.length} check${failures.length === 1 ? "" : "s"} failed: ${failures.join("; ")}`);
+}
+
 async function filesIn(dir, suffix) {
   if (!existsSync(dir)) return [];
   return (await readdir(dir)).filter((name) => name.endsWith(suffix)).map((name) => path.join(dir, name));
@@ -347,9 +450,9 @@ async function manifest(args) {
 }
 
 const [command, ...args] = process.argv.slice(2);
-const commands = { stage, collect, verify, manifest };
+const commands = { stage, collect, verify, launch, manifest };
 if (!commands[command]) {
-  console.error("usage: node scripts/desktop-release.mjs stage|collect|verify|manifest [options] (see the header comment)");
+  console.error("usage: node scripts/desktop-release.mjs stage|collect|verify|launch|manifest [options] (see the header comment)");
   process.exit(1);
 }
 commands[command](args).catch((err) => {

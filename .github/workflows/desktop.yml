@@ -139,7 +139,8 @@ jobs:
           key: ${{ matrix.target }}
 
       # Tauri's Linux prerequisites, plus libasound2-dev for cpal/rodio
-      # (src-tauri/src/playback.rs), as build.yml had them.
+      # (src-tauri/src/playback.rs), as build.yml had them, and xvfb for
+      # starting the packaged app below.
       - name: install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -155,7 +156,8 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libasound2-dev
+            libasound2-dev \
+            xvfb
 
       - name: install root dependencies
         run: npm ci
@@ -307,6 +309,15 @@ jobs:
           # Relative to server/, where npm --prefix runs it. Windows' bash
           # would hand Bun a /d/a/... path it can't spawn.
           npm --prefix server run check:migration-boot -- "../$sidecar"
+
+      # The packaged app itself: it starts its own server on 8899 and hands
+      # it the bundle's own ffmpeg and fpcalc, and the server goes when the
+      # app quits. On macOS, signed, that's the hardened runtime at work.
+      # Not on Windows, where nothing reads another process's environment
+      # without a tool of its own; the installer's contents are checked above.
+      - name: the app starts its own server
+        if: runner.os != 'Windows'
+        run: node scripts/desktop-release.mjs launch --target ${{ matrix.target }}
 
       - name: collect the bundles
         run: node scripts/desktop-release.mjs collect --target ${{ matrix.target }} --out dist-desktop
