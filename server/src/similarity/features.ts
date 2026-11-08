@@ -4,6 +4,8 @@
 // produces; this module's only job is turning that into one comparable
 // numeric vector per recording.
 
+import { sparseVector, type SparseVector } from "./vectors.js";
+
 export type RecordingFeatureInput = {
   nodeId: number;
   genres: string[];
@@ -16,11 +18,6 @@ export type RecordingFeatureInput = {
 };
 
 export type FeatureSpace = {
-  genres: string[];
-  artists: number[];
-  artistClusters: number[];
-  labels: number[];
-  releaseTypes: string[];
   decadeRange: [number, number];
   durationRange: [number, number];
   bpmRange: [number, number];
@@ -58,10 +55,6 @@ export const WEIGHTS = {
   // duration's.
   bpm: 0.5,
 };
-
-function buildVocabulary<T>(values: Iterable<T>): T[] {
-  return [...new Set(values)].sort();
-}
 
 // Connected components over the collaborated_with graph (entities/
 // collaboration.ts), via union-find — two artists who never worked together
@@ -105,97 +98,85 @@ export function computeArtistClusters(collaboratedWith: { fromNode: number; toNo
   return result;
 }
 
-export function buildFeatureSpace(
-  inputs: RecordingFeatureInput[],
-  artistClusters: Map<number, number>,
-): FeatureSpace {
-  const genres = buildVocabulary(inputs.flatMap((i) => i.genres));
-  const artists = buildVocabulary(
-    inputs.map((i) => i.primaryArtistNodeId).filter((v): v is number => v != null),
-  );
-  const artistClusterIds = buildVocabulary(
-    inputs
-      .map((i) => (i.primaryArtistNodeId != null ? (artistClusters.get(i.primaryArtistNodeId) ?? null) : null))
-      .filter((v): v is number => v != null),
-  );
-  const labels = buildVocabulary(inputs.map((i) => i.labelNodeId).filter((v): v is number => v != null));
-  const releaseTypes = buildVocabulary(
-    inputs.map((i) => i.releaseType).filter((v): v is string => v != null),
-  );
-
-  const decades = inputs.map((i) => i.decade).filter((v): v is number => v != null);
-  const durations = inputs.map((i) => i.durationMs).filter((v): v is number => v != null);
-  const bpms = inputs.map((i) => i.bpm).filter((v): v is number => v != null);
-
-  return {
-    genres,
-    artists,
-    artistClusters: artistClusterIds,
-    labels,
-    releaseTypes,
-    decadeRange: decades.length > 0 ? [Math.min(...decades), Math.max(...decades)] : [0, 0],
-    durationRange: durations.length > 0 ? [Math.min(...durations), Math.max(...durations)] : [0, 0],
-    bpmRange: bpms.length > 0 ? [Math.min(...bpms), Math.max(...bpms)] : [0, 0],
+// The scalar groups' ranges across the library, which place each value in
+// [-1, 1]. The one-hot groups need nothing library-wide: issue #322 keys
+// each of their dimensions by the feature itself rather than by its
+// position in a vocabulary.
+export function buildFeatureSpace(inputs: RecordingFeatureInput[]): FeatureSpace {
+  const range = (values: (number | null)[]): [number, number] => {
+    const present = values.filter((v): v is number => v != null);
+    return present.length > 0 ? [Math.min(...present), Math.max(...present)] : [0, 0];
   };
-}
-
-function unitOneHot(vocab: readonly (string | number)[], present: (string | number)[]): number[] {
-  const vector = new Array(vocab.length).fill(0);
-  for (const value of present) {
-    const index = vocab.indexOf(value);
-    if (index >= 0) vector[index] = 1;
-  }
-  const norm = Math.hypot(...vector);
-  return norm > 0 ? vector.map((v) => v / norm) : vector;
+  return {
+    decadeRange: range(inputs.map((i) => i.decade)),
+    durationRange: range(inputs.map((i) => i.durationMs)),
+    bpmRange: range(inputs.map((i) => i.bpm)),
+  };
 }
 
 // A single scalar in [-1, 1] rather than a one-hot bucket — decade and
 // duration are ordinal, and bucketing them would treat "one decade apart"
 // and "five decades apart" as equally different.
-function scaledScalar(value: number | null, range: [number, number]): number[] {
+function scaledScalar(value: number | null, range: [number, number]): number {
   const [min, max] = range;
-  if (value == null || max === min) return [0];
-  return [((value - min) / (max - min)) * 2 - 1];
+  if (value == null || max === min) return 0;
+  return ((value - min) / (max - min)) * 2 - 1;
 }
 
-// artistClusters is passed in (rather than looked up from FeatureSpace)
-// because cluster *membership* for a given artist isn't something the
-// space itself records — only the vocabulary of cluster ids it needs to
-// one-hot against.
+/** Issue #322: a dimension's id for each feature key, handed out once and
+ *  kept (similarity_dimensions). `added` is what this pass gave out, for the
+ *  caller to store. */
+export class Dimensions {
+  readonly #ids: Map<string, number>;
+  #next: number;
+  readonly added: [key: string, id: number][] = [];
+
+  constructor(known: Iterable<[key: string, id: number]> = []) {
+    this.#ids = new Map(known);
+    this.#next = 1;
+    for (const id of this.#ids.values()) this.#next = Math.max(this.#next, id + 1);
+  }
+
+  id(key: string): number {
+    let id = this.#ids.get(key);
+    if (id === undefined) {
+      id = this.#next++;
+      this.#ids.set(key, id);
+      this.added.push([key, id]);
+    }
+    return id;
+  }
+}
+
+// One group of the dense vector this replaced, kept as its non-zero entries
+// with the same values: a one-hot group scaled to unit length, then
+// weighted. Repeats count once, as they did in a one-hot.
+function oneHot(group: string, present: (string | number)[], weight: number): [string, number][] {
+  const unique = [...new Set(present)];
+  const value = (1 / Math.sqrt(unique.length)) * weight;
+  return unique.map((key) => [`${group}:${key}`, value]);
+}
+
+// artistClusters is passed in because cluster *membership* for a given
+// artist isn't something the space records.
 export function buildFeatureVector(
   input: RecordingFeatureInput,
   space: FeatureSpace,
   artistClusters: Map<number, number>,
-): number[] {
-  const clusterId =
-    input.primaryArtistNodeId != null ? (artistClusters.get(input.primaryArtistNodeId) ?? null) : null;
-
-  return [
-    ...unitOneHot(space.genres, input.genres).map((v) => v * WEIGHTS.genre),
-    ...unitOneHot(space.artists, input.primaryArtistNodeId != null ? [input.primaryArtistNodeId] : []).map(
-      (v) => v * WEIGHTS.artist,
-    ),
-    ...unitOneHot(space.artistClusters, clusterId != null ? [clusterId] : []).map((v) => v * WEIGHTS.artistCluster),
-    ...unitOneHot(space.labels, input.labelNodeId != null ? [input.labelNodeId] : []).map((v) => v * WEIGHTS.label),
-    ...unitOneHot(space.releaseTypes, input.releaseType != null ? [input.releaseType] : []).map(
-      (v) => v * WEIGHTS.releaseType,
-    ),
-    ...scaledScalar(input.decade, space.decadeRange).map((v) => v * WEIGHTS.decade),
-    ...scaledScalar(input.durationMs, space.durationRange).map((v) => v * WEIGHTS.duration),
-    ...scaledScalar(input.bpm, space.bpmRange).map((v) => v * WEIGHTS.bpm),
+  dimensions: Dimensions,
+): SparseVector {
+  const artist = input.primaryArtistNodeId;
+  const clusterId = artist != null ? (artistClusters.get(artist) ?? null) : null;
+  const entries: [string, number][] = [
+    ...oneHot("genre", input.genres, WEIGHTS.genre),
+    ...oneHot("artist", artist != null ? [artist] : [], WEIGHTS.artist),
+    ...oneHot("cluster", clusterId != null ? [clusterId] : [], WEIGHTS.artistCluster),
+    ...oneHot("label", input.labelNodeId != null ? [input.labelNodeId] : [], WEIGHTS.label),
+    ...oneHot("type", input.releaseType != null ? [input.releaseType] : [], WEIGHTS.releaseType),
+    ["decade", scaledScalar(input.decade, space.decadeRange) * WEIGHTS.decade],
+    ["duration", scaledScalar(input.durationMs, space.durationRange) * WEIGHTS.duration],
+    ["bpm", scaledScalar(input.bpm, space.bpmRange) * WEIGHTS.bpm],
   ];
-}
-
-export function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length) throw new Error("cosineSimilarity: vectors must be the same length");
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+  // A zero gets no dimension, so a library with no tempo tags has no "bpm".
+  return sparseVector(entries.filter(([, value]) => value !== 0).map(([key, value]) => [dimensions.id(key), value]));
 }

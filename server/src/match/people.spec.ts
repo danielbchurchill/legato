@@ -140,7 +140,7 @@ describe("mergeDuplicatePeople", () => {
       "INSERT INTO field_provenance (node_id, field, value, source) VALUES (?, 'artist_mbid', 'mb-dylan', 'musicbrainz')",
     ).run(credit);
     db.prepare("INSERT INTO articles (node_id, body_md) VALUES (?, 'Produced 1 track.')").run(credit);
-    db.prepare("INSERT INTO node_similarity_features (node_id, vector_json) VALUES (?, '[]')").run(credit);
+    db.prepare("INSERT INTO node_similarity_features (node_id, vector) VALUES (?, X'')").run(credit);
 
     mergeDuplicatePeople(db);
 

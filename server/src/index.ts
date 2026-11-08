@@ -31,6 +31,7 @@ import { startUpdateChecks } from "./update/check.js";
 import { trimStreamCacheOnStart } from "./stream/budget.js";
 import { CACHE_DIR } from "./stream/cache.js";
 import { insightsComputed } from "./insights/recompute.js";
+import { similarityComputed } from "./similarity/similarity.js";
 import { loadServerKey } from "./auth/serverKey.js";
 import { installPictures, Pictures } from "./account/pictures.js";
 
@@ -330,6 +331,26 @@ void trimStreamCacheOnStart(CACHE_DIR, (message) => app.log.info(message)).catch
 // it's working until then. Never awaited. A start that finds them filled
 // reads one row. A start whose artist fold (#466, below) recomputes anyway
 // leaves it to that one: a second call would queue a whole second run.
+// Issue #322: migration 0055 dropped the dense similarity vectors, and a
+// recompute writes them again, sparse. The first start after it runs one,
+// as Insights' does, unless a recompute is starting anyway: Insights' just
+// below, or the artist fold's and album upgrade's after listen. A second
+// call would queue a whole second run. A start that finds vectors reads one
+// row.
+if (
+  !similarityComputed(db) &&
+  insightsComputed(db) &&
+  !artistFold?.recomputeAfter &&
+  !releaseUpgrade?.recomputeAfter &&
+  db.prepare("SELECT 1 FROM files LIMIT 1").get() != null
+) {
+  app.log.info("similarity: storing the similarity vectors sparsely, once, since this is the first start with them");
+  void recomputeOffThread(db).then(
+    () => app.log.info("similarity: ready"),
+    (err) => app.log.warn(`similarity: the recompute failed, and the next scan tries again: ${err instanceof Error ? err.message : String(err)}`),
+  );
+}
+
 if (!insightsComputed(db) && db.prepare("SELECT 1 FROM files LIMIT 1").get() != null) {
   if (artistFold?.recomputeAfter) {
     app.log.info("insights: the recompute after the artist fold works out how the library connects");

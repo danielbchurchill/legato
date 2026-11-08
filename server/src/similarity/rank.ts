@@ -1,9 +1,9 @@
-import { cosineSimilarity } from "./features.js";
+import { cosineSimilarity, type SparseVector } from "./vectors.js";
 
-export type Candidate = { nodeId: number; vector: number[] };
+export type Candidate = { nodeId: number; vector: SparseVector };
 export type RankedResult = { nodeId: number; score: number };
 
-export function rankMostSimilar(anchor: number[], candidates: Candidate[], count: number): RankedResult[] {
+export function rankMostSimilar(anchor: SparseVector, candidates: Candidate[], count: number): RankedResult[] {
   return candidates
     .map((c) => ({ nodeId: c.nodeId, score: cosineSimilarity(anchor, c.vector) }))
     .sort((a, b) => b.score - a.score)
@@ -21,7 +21,7 @@ export function rankMostSimilar(anchor: number[], candidates: Candidate[], count
 const COVERAGE_SIMILARITY_THRESHOLD = 0.5;
 const POOL_MULTIPLIER = 4;
 
-export function rankMostDissimilar(anchor: number[], candidates: Candidate[], count: number): RankedResult[] {
+export function rankMostDissimilar(anchor: SparseVector, candidates: Candidate[], count: number): RankedResult[] {
   if (candidates.length === 0) return [];
 
   const distances = candidates
@@ -31,7 +31,7 @@ export function rankMostDissimilar(anchor: number[], candidates: Candidate[], co
   const poolSize = Math.min(distances.length, Math.max(count * POOL_MULTIPLIER, count));
   const pool = distances.slice(0, poolSize);
 
-  const coverage = (vector: number[]): number =>
+  const coverage = (vector: SparseVector): number =>
     candidates.reduce((n, c) => (cosineSimilarity(vector, c.vector) >= COVERAGE_SIMILARITY_THRESHOLD ? n + 1 : n), 0);
 
   return pool

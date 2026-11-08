@@ -5,13 +5,11 @@ import type { LibraryEdges } from "./links.js";
 /* #468's "Sounds alike": artists the similarity features put close together.
  *
  * The similarity vectors (similarity/features.ts) are per recording and per
- * album, dense, and as long as the library's vocabulary: thousands of
- * numbers each at 30,000 albums, which is why GET /nodes/:id/similar takes
- * 24-33 s there (#382). Comparing every pair of artists that way is out of
- * reach. So each artist gets a profile built from the same feature groups
- * with the same weights, kept sparse: its tracks' genres, labels and release
- * types as shares, and the mean of their decade, length and tempo, each
- * group scaled to unit length and weighted as features.ts weights it.
+ * album, not per artist. So each artist gets a profile built from the same
+ * feature groups with the same weights, kept sparse: its tracks' genres,
+ * labels and release types as shares, and the mean of their decade, length
+ * and tempo, each group scaled to unit length and weighted as features.ts
+ * weights it.
  *
  * Two groups are left out. The artist group is the artist's own identity,
  * the same for none of a pair. The artist-cluster group is made from
