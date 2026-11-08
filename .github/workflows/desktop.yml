@@ -274,11 +274,14 @@ jobs:
 
       - name: build the app
         env:
-          APPLE_SIGNING_IDENTITY: ${{ steps.keys.outputs.macos == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          SIGNING_IDENTITY: ${{ steps.keys.outputs.macos == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || env.THROWAWAY_UPDATER_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || env.THROWAWAY_UPDATER_PASSWORD }}
         run: |
-          npx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} \
+          # Set only when signing: Tauri treats an empty APPLE_SIGNING_IDENTITY
+          # as an identity named "" and fails to sign with it.
+          if [ -n "$SIGNING_IDENTITY" ]; then export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"; fi
+          npx tauri build --ci --verbose --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} \
             --config "$RUNNER_TEMP/tauri.release.json"
 
       # What's inside each bundle, its architecture, and on macOS its

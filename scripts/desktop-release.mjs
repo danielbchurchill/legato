@@ -230,7 +230,8 @@ async function verify(args) {
   } else if (target.os === "linux") {
     const deb = await only(path.join(bundleDir, "deb"), ".deb");
     const listing = output("dpkg-deb", ["--contents", deb]);
-    expect(/ \.\/usr\/bin\/legato-server$/m.test(listing), ".deb has usr/bin/legato-server");
+    console.log(listing.split("\n").filter((line) => /usr\/(bin|lib)\//.test(line) && !line.endsWith("/")).join("\n"));
+    expect(/\s(\.\/)?usr\/bin\/legato-server$/m.test(listing), ".deb has usr/bin/legato-server");
     for (const name of MEDIA_BINARIES) {
       expect(new RegExp(`/binaries/${target.triple}/${name}$`, "m").test(listing), `.deb has ${name} for ${target.triple}`);
     }
