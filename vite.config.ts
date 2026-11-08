@@ -19,7 +19,8 @@ export default defineConfig({
     // npm --prefix relay test), so a repo-wide glob either runs them twice or
     // fails to resolve their dependencies from here. An allowlist keeps the
     // next top-level package from breaking this the same way relay/ did.
-    include: ['src/**/*.spec.{ts,tsx}'],
+    // scripts/ specs are plain .mjs on Node built-ins, so they run from here.
+    include: ['src/**/*.spec.{ts,tsx}', 'scripts/**/*.spec.mjs'],
     // Vitest blanks every .css import, ?raw included. canvasCopies.spec.ts
     // reads tokens.css as text to check the hand copies of its canvas
     // colour (#291); a plain import of a stylesheet stays blank.

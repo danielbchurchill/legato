@@ -5,6 +5,7 @@ import path from "node:path";
 import { DATA_DIR } from "../config.js";
 import { USER_AGENT } from "../enrich/mbClient.js";
 import { FFMPEG_PATH } from "../mediaBinaries.js";
+import { pipedImageInput } from "../media/pipedImage.js";
 import { runMediaTask } from "../media/queue.js";
 import type { Database } from "../sqlite.js";
 import { broadcast } from "../ws.js";
@@ -59,14 +60,15 @@ export function isPictureAddress(address: string): boolean {
 // the middle cropped out. A portrait photo keeps the face, which is usually
 // in the middle; a transparent PNG's background comes out black, as a
 // cover's does.
-function squareJpeg(input: Buffer, edge: number): Promise<Buffer> {
+// `inputArgs` come from pipedImageInput (media/pipedImage.ts), which has
+// already checked the bytes are a picture ffmpeg may read (#477).
+function squareJpeg(input: Buffer, inputArgs: string[], edge: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn(FFMPEG_PATH, [
       "-hide_banner",
       "-loglevel",
       "error",
-      "-i",
-      "pipe:0",
+      ...inputArgs,
       "-vf",
       `scale=${edge}:${edge}:force_original_aspect_ratio=increase,crop=${edge}:${edge}`,
       "-frames:v",
@@ -171,14 +173,16 @@ export class Pictures {
     return path.join(this.dir, String(PICTURE_EDGE), hash.slice(0, 2), `${hash}.jpg`);
   }
 
-  // Stores a picture and returns its hash. Throws when ffmpeg can't read
-  // it, which for an upload means it wasn't a picture. Lands through a temp
-  // file and a rename, as covers do, so a reader never sees half a file.
+  // Stores a picture and returns its hash. Throws when it isn't a picture:
+  // before ffmpeg starts, for bytes that aren't a format it may read, or
+  // when ffmpeg can't read them. Lands through a temp file and a rename, as
+  // covers do, so a reader never sees half a file.
   async store(bytes: Buffer): Promise<string> {
+    const inputArgs = pipedImageInput(bytes);
     const hash = createHash("sha1").update(bytes).digest("hex");
     const target = this.path(hash);
     if (await exists(target)) return hash;
-    const resized = await runMediaTask("background", () => squareJpeg(bytes, PICTURE_EDGE));
+    const resized = await runMediaTask("background", () => squareJpeg(bytes, inputArgs, PICTURE_EDGE));
     await mkdir(path.dirname(target), { recursive: true });
     const temp = `${target}.${randomUUID()}.tmp`;
     try {

@@ -63,9 +63,11 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+// Retries a refusal (a 429, a 5xx, or a web page in place of the file)
+// before failing; see that file for why.
+import { download, fetchText } from "./release-fetch.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -84,39 +86,6 @@ const OSXEXPERTS_FFMPEG_X64_SHA256 = "df3f1e3facdc1ae0ad0bd898cdfb072fbc9641bf47
 const RELEASE_TARGETS = ["linux-x64-baseline", "linux-arm64", "darwin-arm64", "darwin-x64-baseline", "windows-x64-baseline"];
 const WINDOWS_TARGETS = new Set(["windows-x64-baseline"]);
 const exeSuffix = (target) => (WINDOWS_TARGETS.has(target) ? ".exe" : "");
-
-// The release's first run (v0.1.0) died on one HTTP 429 from evermeet.cx:
-// these hosts rate-limit GitHub's shared runner addresses, and a single
-// refusal used to fail the whole release. A 429 or a 5xx is retried up to
-// four more times, waiting as long as Retry-After asks (capped at a minute)
-// or 5, 15, 30 and 60 seconds; anything else fails at once, as before.
-const RETRY_DELAYS_MS = [5_000, 15_000, 30_000, 60_000];
-
-async function fetchWithRetry(url) {
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetch(url);
-    const retryable = res.status === 429 || res.status >= 500;
-    if (!retryable || attempt >= RETRY_DELAYS_MS.length) return res;
-    const asked = Number(res.headers.get("retry-after"));
-    const waitMs = Number.isFinite(asked) && asked > 0 ? Math.min(asked * 1000, 60_000) : RETRY_DELAYS_MS[attempt];
-    console.log(`  [retry] GET ${url} -> HTTP ${res.status}; trying again in ${Math.round(waitMs / 1000)} s`);
-    await res.body?.cancel();
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
-  }
-}
-
-async function download(url, destPath) {
-  const res = await fetchWithRetry(url);
-  if (!res.ok || !res.body) throw new Error(`GET ${url} -> HTTP ${res.status}`);
-  await mkdir(path.dirname(destPath), { recursive: true });
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(destPath));
-}
-
-async function fetchText(url) {
-  const res = await fetchWithRetry(url);
-  if (!res.ok) throw new Error(`GET ${url} -> HTTP ${res.status}`);
-  return res.text();
-}
 
 async function hashFile(algo, filePath) {
   const hash = createHash(algo);
