@@ -34,10 +34,10 @@ type InsightsPanelProps = InsightsActions & {
   phone?: boolean
 }
 
-export function InsightsPanel({ onOpenNode, onShowOnMap, phone = false }: InsightsPanelProps) {
+export function InsightsPanel({ onOpenNode, onShowOnMap, drawsKind, phone = false }: InsightsPanelProps) {
   const insights = useInsights()
   return (
-    <InsightsActionsContext.Provider value={{ onOpenNode, onShowOnMap }}>
+    <InsightsActionsContext.Provider value={{ onOpenNode, onShowOnMap, drawsKind }}>
       <div className="flex flex-col">
         {!phone && <PanelHeader title="Insights" />}
         {insights == null ? (

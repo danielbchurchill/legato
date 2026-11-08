@@ -101,8 +101,10 @@ beforeEach(() => {
               { id: 3, title: "Dylan's Dream", track_no: 1, canonical_duration_ms: 27_000 },
               { id: 4, title: 'Highway Blues', track_no: 2, canonical_duration_ms: 48_000 },
             ]
-          : path.endsWith('/credits')
-            ? { tracks: [], people: [] }
+          : path.endsWith('/1/credits')
+            ? { tracks: [3, 4], people: [] }
+            : path.endsWith('/credits')
+              ? { tracks: [], people: [] }
             : path.endsWith('/summary')
               ? { kind: 'other' }
               : null
@@ -265,6 +267,17 @@ describe("a node's detail on the phone", () => {
     expect(container.querySelector('.rounded-full img, .rounded-full')).not.toBeNull()
     expect(button(container, 'More')).toBeUndefined()
     expect(button(container, 'Add to favourites')).toBeDefined()
+  })
+
+  it("plays an artist's tracks, and shuffles them, as a queue named for the artist (#357)", async () => {
+    const playback = fakePlayback()
+    const container = await render(1, playback)
+    act(() => button(container, 'play')!.click())
+    act(() => button(container, 'shuffle')!.click())
+    const named = { kind: 'artist', nodeId: 1, name: 'Dylan Moss' }
+    const tracks = [expect.objectContaining({ id: 3 }), expect.objectContaining({ id: 4 })]
+    expect(playback.playTracks).toHaveBeenNthCalledWith(1, tracks, 0, named)
+    expect(playback.playTracks).toHaveBeenNthCalledWith(2, expect.arrayContaining([expect.objectContaining({ id: 3 })]), 0, named)
   })
 
   it("lists a producer's tracks and plays them, from the node's own credits", async () => {

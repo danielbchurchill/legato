@@ -37,8 +37,8 @@ export function usePlayingTrack(playback: Playback, graphArtist: string | null):
   }
 }
 
-/** "Playing from …"'s source: an album, a playlist or the shuffled
- * library, as the desktop's up next names it, or null when the queue came
+/** "Playing from …"'s source: an album, a playlist, an artist or the
+ * shuffled library, as the desktop's up next names it, or null when the queue came
  * from nowhere in particular. */
 export function usePlayingFrom(playback: Playback, album: string | null): string | null {
   const playlistNames = usePlaylistName(playback.queueSource)

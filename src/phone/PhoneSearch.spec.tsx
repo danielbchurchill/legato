@@ -258,11 +258,13 @@ describe('the phone search results', () => {
     act(() => button(container, 'Dylan mix').click())
     expect(opened).toEqual([2, 5])
     expect(playlists).toEqual([7])
-    // The artist's tracks, as the palette plays them.
+    // The artist's tracks, as the palette plays them, as a queue named for
+    // the artist (#357).
     act(() => button(container, 'Play Dylan Moss').click())
     expect(playback.playTracks).toHaveBeenCalledWith(
       [expect.objectContaining({ id: 3, title: "Dylan's Dream" }), expect.objectContaining({ id: 4, title: 'Highway Blues' })],
       0,
+      { kind: 'artist', nodeId: 1, name: 'Dylan Moss' },
     )
     expect(onPlayed).toHaveBeenCalled()
   })

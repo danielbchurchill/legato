@@ -6,11 +6,12 @@ import { API } from './useNodeDetail'
 /* "Playing from …": where the queue came from, in words. The desktop's up
  * next says it, and so do the phone's up next and Now playing. */
 
-/** An album's title, a playlist's name or the shuffled library, or null
- * when the queue came from nowhere in particular. */
+/** An album's title, a playlist's name, an artist's name or the shuffled
+ * library, or null when the queue came from nowhere in particular. */
 export function sourceLabel(source: QueueSource | null, albumTitle: string | null, playlistNames: Map<number, string>): string | null {
   if (source == null) return null
   if (source.kind === 'library') return 'your library, shuffled'
+  if (source.kind === 'artist') return source.name
   if (source.kind === 'playlist') return playlistNames.get(source.playlistId) ?? 'a playlist'
   return albumTitle
 }

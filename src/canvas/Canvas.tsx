@@ -9,6 +9,7 @@ import { useGraph } from './graphContext'
 import { EDGE_COLOR } from './edgeTypes'
 import { edgeWidthPx } from './edgeWidth'
 import { computeClusters } from './clusters'
+import { boxOf, drawnKeys, hiddenByShow } from './drawnNodes'
 import { createForceSimulation, type ForceSimulationHandle, type SimNodeInput } from './forceSimulation'
 import { useScanStatus } from '../hooks/useScanStatus'
 import { NodeCard } from './NodeCard'
@@ -434,21 +435,9 @@ function flyLandingPoint(area: Area): { x: number; y: number } {
  * sigma to convert two points at ratio 1, so it stays right through sigma's
  * own padding and aspect handling. */
 function ratioToFit(renderer: Sigma, graph: Graph, keys: Iterable<string>, area: Area): number {
-  const bbox = renderer.getCustomBBox() ?? renderer.getBBox()
-  const normalize = createNormalizationFunction(bbox)
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  for (const key of keys) {
-    if (!graph.hasNode(key)) continue
-    const p = normalize({ x: graph.getNodeAttribute(key, 'x') as number, y: graph.getNodeAttribute(key, 'y') as number })
-    minX = Math.min(minX, p.x)
-    maxX = Math.max(maxX, p.x)
-    minY = Math.min(minY, p.y)
-    maxY = Math.max(maxY, p.y)
-  }
-  if (!Number.isFinite(minX)) return MAX_FOCUS_RATIO
+  const box = boxOf(graph, keys, createNormalizationFunction(renderer.getCustomBBox() ?? renderer.getBBox()))
+  if (!box) return MAX_FOCUS_RATIO
+  const { minX, minY, maxX, maxY } = box
   const unit = { cameraState: { x: 0.5, y: 0.5, ratio: 1, angle: 0 } }
   const a = renderer.viewportToFramedGraph({ x: 0, y: 0 }, unit)
   const b = renderer.viewportToFramedGraph({ x: 100, y: 100 }, unit)
@@ -713,9 +702,11 @@ export type CanvasHandle = {
   centreNodeAbove: (nodeId: number, options: { bottomInset: number; topInset?: number }) => void
   /** #468: lights a set of nodes and only the edges between them, and
    * frames them in the map the shell leaves showing, selecting nothing: an
-   * Insights card's bridge, family or path, shown whole. Nodes not on the
-   * map are left out. Selecting a node, clicking the empty map or another
-   * call ends it. False, changing nothing, when none of them is on the map. */
+   * Insights card's bridge, family or path, shown whole. Nodes the map
+   * doesn't draw (#482: a hidden producer, a label, a kind the show chips
+   * hide) are left out of both. Selecting a node, clicking the empty map or
+   * another call ends it. False, changing nothing, when the map draws none
+   * of them. */
   focusNodes: (nodeIds: number[]) => boolean
 }
 
@@ -905,31 +896,22 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
 
   // #468: frames a set as frameNode frames a cluster, its middle at the
   // middle of the map left showing, and lights it in place of any hover.
+  // #482: only what the map draws. A hidden producer or a label is lit by
+  // nobody, so its place mustn't widen the frame or move its middle.
   const focusNodes = useCallback(
     (nodeIds: number[]): boolean => {
       const graph = graphRef.current
       const renderer = rendererRef.current
       if (!graph || !renderer) return false
-      const keys = new Set(nodeIds.map(nodeKey).filter((key) => graph.hasNode(key)))
-      if (keys.size === 0) return false
+      const keys = drawnKeys(graph, nodeIds.map(nodeKey), liveRef.current)
+      const box = boxOf(graph, keys, createNormalizationFunction(renderer.getCustomBBox() ?? renderer.getBBox()))
+      if (!box) return false
       groupFocusRef.current = { keys, cluster: null, among: true }
       applyFocusRef.current()
 
       const area = visibleArea(renderer)
-      const normalize = createNormalizationFunction(renderer.getCustomBBox() ?? renderer.getBBox())
-      let minX = Infinity
-      let minY = Infinity
-      let maxX = -Infinity
-      let maxY = -Infinity
-      for (const key of keys) {
-        const p = normalize({ x: graph.getNodeAttribute(key, 'x') as number, y: graph.getNodeAttribute(key, 'y') as number })
-        minX = Math.min(minX, p.x)
-        maxX = Math.max(maxX, p.x)
-        minY = Math.min(minY, p.y)
-        maxY = Math.max(maxY, p.y)
-      }
-      const x = (minX + maxX) / 2
-      const y = (minY + maxY) / 2
+      const x = (box.minX + box.maxX) / 2
+      const y = (box.minY + box.maxY) / 2
       const ratio = ratioToFit(renderer, graph, keys, area)
       const camera = renderer.getCamera()
       const landing = centreOf(area)
@@ -1509,10 +1491,7 @@ export default forwardRef<CanvasHandle, Props>(function Canvas(
     }
     applyFocusRef.current = applyFocus
 
-    const typeHidden = (type: string | undefined) => {
-      const live = liveRef.current
-      return (type === 'artist' && !live.showArtists) || (type === 'release' && !live.showReleases) || (type === 'recording' && !live.showTracks)
-    }
+    const typeHidden = (type: string | undefined) => hiddenByShow(type, liveRef.current)
 
     renderer.setSetting('nodeReducer', (node, data) => {
       const live = liveRef.current

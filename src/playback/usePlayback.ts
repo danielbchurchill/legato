@@ -37,9 +37,14 @@ export type TrackToPlay = { id: number; title: string }
 
 /* Where the current queue came from, for the now-playing panel's "Playing
  * from …" line. Set by the entry points that know (an album, a playlist,
- * the shuffled library); a bare playTracks with no source says nothing
- * rather than guessing. */
-export type QueueSource = { kind: 'release'; nodeId: number } | { kind: 'playlist'; playlistId: number } | { kind: 'library' }
+ * an artist, the shuffled library); a bare playTracks with no source says
+ * nothing rather than guessing. An artist's carries the name to say
+ * (#357), as the search result or details that played it had it. */
+export type QueueSource =
+  | { kind: 'release'; nodeId: number }
+  | { kind: 'playlist'; playlistId: number }
+  | { kind: 'artist'; nodeId: number; name: string }
+  | { kind: 'library' }
 export type ReplayGainMode = 'track' | 'album' | 'off'
 // Issue #125: off -> all -> one, a persisted
 // player setting (App.tsx reads/writes it via useSettings, same as

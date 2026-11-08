@@ -1,4 +1,5 @@
-import { createContext } from 'react'
+import { createContext, useContext } from 'react'
+import { useGraph } from '../canvas/graphContext'
 import { useLibraryChanges } from '../library/useLibraryChanges'
 import { useFetched } from './healthData'
 
@@ -9,13 +10,31 @@ import { useFetched } from './healthData'
 export type Ref = { id: number; title: string; type: string }
 
 /** What a name and a map button do: open a node's details, and light nodes
- * on the map. The panel's caller says how, for the desktop or the phone. */
+ * on the map. The panel's caller says how, for the desktop or the phone,
+ * and which kinds of node the map options draw (#482). */
 export type InsightsActions = {
   onOpenNode: (id: number) => void
   onShowOnMap: (ids: number[]) => void
+  drawsKind: (type: string) => boolean
 }
 
-export const InsightsActionsContext = createContext<InsightsActions>({ onOpenNode: () => {}, onShowOnMap: () => {} })
+export const InsightsActionsContext = createContext<InsightsActions>({
+  onOpenNode: () => {},
+  onShowOnMap: () => {},
+  drawsKind: () => true,
+})
+
+/** Whether the map draws a node: it has a place on the map, and the map
+ * options show its kind (#482). A label has no place; a producer has one,
+ * drawn only while producers are shown. */
+export function useDrawn(): (id: number) => boolean {
+  const { byId } = useGraph()
+  const { drawsKind } = useContext(InsightsActionsContext)
+  return (id) => {
+    const node = byId.get(id)
+    return node != null && drawsKind(node.type)
+  }
+}
 
 export type LinkKind =
   'with' | 'producer' | 'engineer' | 'mixer' | 'performer' | 'arranger' | 'conductor' | 'remixer' | 'label' | 'member' | 'group'
@@ -164,6 +183,65 @@ export function stepWords({ kind, artistFirst, weight }: PathLink): string {
     case 'remixer':
       return artistFirst ? 'was remixed by' : 'remixed'
   }
+}
+
+/* What someone or something is on a path, as a noun: "Mara Quinn,
+ * producer". */
+const ROLE_NOUN: Record<LinkKind, string> = { ...ROLE_WORD, mixer: 'mixer', with: 'artist' }
+
+/** A node on a path the map doesn't draw, and what it is on the way. */
+export type HiddenStep = { node: Ref; role: string }
+
+/** #482: the nodes of a path the map leaves out (a producer while the map
+ * options hide producers, a label, which the map never draws), each with
+ * what it is to the artists either side of it. */
+export function hiddenSteps(path: Path, drawn: (id: number) => boolean): HiddenStep[] {
+  const hidden: HiddenStep[] = []
+  path.nodes.forEach((node, i) => {
+    if (drawn(node.id)) return
+    // The node is the tie's other side when the artist side is its
+    // neighbour: the node before it on the link in, the node after on the
+    // link out.
+    const kinds = new Set<LinkKind>()
+    const into = path.links[i - 1]
+    const out = path.links[i]
+    if (into?.artistFirst) kinds.add(into.kind)
+    if (out && !out.artistFirst) kinds.add(out.kind)
+    const role = kinds.size > 0 ? [...kinds].map((kind) => ROLE_NOUN[kind]).join(', ') : node.type
+    hidden.push({ node, role })
+  })
+  return hidden
+}
+
+/** #482: what "show the way on the map" lights. Each node of the path the
+ * map draws, and for each step whose two ends it draws, the track that ties
+ * them: the one node of the path's focus that an edge joins to both. A step
+ * with an end the map leaves out is left unlit, its track too, so nothing
+ * lit stops at a node the map doesn't draw. */
+export function pathFocus(path: Path, drawn: (id: number) => boolean, edges: Iterable<{ from_node: number; to_node: number }>): number[] {
+  const lit = path.nodes.filter((node) => drawn(node.id)).map((node) => node.id)
+  const onPath = new Set(path.nodes.map((node) => node.id))
+  const witnesses = new Set(path.focus.filter((id) => !onPath.has(id) && drawn(id)))
+  if (witnesses.size > 0) {
+    // Which path nodes each track is joined to.
+    const joined = new Map<number, Set<number>>()
+    const join = (witness: number, node: number) => {
+      const set = joined.get(witness) ?? new Set<number>()
+      set.add(node)
+      joined.set(witness, set)
+    }
+    for (const edge of edges) {
+      if (witnesses.has(edge.from_node) && onPath.has(edge.to_node)) join(edge.from_node, edge.to_node)
+      else if (witnesses.has(edge.to_node) && onPath.has(edge.from_node)) join(edge.to_node, edge.from_node)
+    }
+    for (let i = 0; i + 1 < path.nodes.length; i++) {
+      const a = path.nodes[i]!.id
+      const b = path.nodes[i + 1]!.id
+      if (!drawn(a) || !drawn(b)) continue
+      for (const witness of witnesses) if (joined.get(witness)?.has(a) && joined.get(witness)?.has(b)) lit.push(witness)
+    }
+  }
+  return [...new Set(lit)]
 }
 
 /** "Mar 2026", for when something was last played. */
