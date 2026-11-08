@@ -70,7 +70,7 @@ function appearsOn(db: Database, recording: number, release: number): void {
 }
 
 describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () => {
-  it("ranks a same-artist track above an unrelated one for 'more like this'", () => {
+  it("ranks a same-artist track above an unrelated one for 'more like this'", async () => {
     const db = openDb(":memory:");
     const beatles = makeNode(db, "artist", "The Beatles");
     const dylan = makeNode(db, "artist", "Bob Dylan");
@@ -81,22 +81,22 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
 
     recomputeSimilarityFeatures(db);
 
-    const similar = findMostSimilar(db, anchor, 2);
+    const similar = await findMostSimilar(db, anchor, 2);
     expect(similar[0].nodeId).toBe(sameArtist);
     expect(similar.map((r) => r.nodeId)).toContain(otherArtist);
   });
 
-  it("returns an empty result for a node with no cached vector (not a recording)", () => {
+  it("returns an empty result for a node with no cached vector (not a recording)", async () => {
     const db = openDb(":memory:");
     const artist = makeNode(db, "artist", "The Beatles");
     makeRecording(db, "Come Together", { artist });
     recomputeSimilarityFeatures(db);
 
-    expect(findMostSimilar(db, artist, 3)).toEqual([]);
-    expect(findMostDissimilar(db, artist, 3)).toEqual([]);
+    expect(await findMostSimilar(db, artist, 3)).toEqual([]);
+    expect(await findMostDissimilar(db, artist, 3)).toEqual([]);
   });
 
-  it("is idempotent and reflects fresh data after a second recompute", () => {
+  it("is idempotent and reflects fresh data after a second recompute", async () => {
     const db = openDb(":memory:");
     const beatles = makeNode(db, "artist", "The Beatles");
     const dylan = makeNode(db, "artist", "Bob Dylan");
@@ -104,18 +104,18 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
     makeRecording(db, "Something", { artist: beatles, year: 1969 });
 
     recomputeSimilarityFeatures(db);
-    const before = findMostSimilar(db, anchor, 5);
+    const before = await findMostSimilar(db, anchor, 5);
 
     // A new, unrelated recording appears — recompute should pick it up.
     const newTrack = makeRecording(db, "Like a Rolling Stone", { artist: dylan, year: 1965 });
     recomputeSimilarityFeatures(db);
-    const after = findMostSimilar(db, anchor, 5);
+    const after = await findMostSimilar(db, anchor, 5);
 
     expect(before.map((r) => r.nodeId)).not.toContain(newTrack);
     expect(after.map((r) => r.nodeId)).toContain(newTrack);
   });
 
-  it("finds a real dissimilar track for 'completely different'", () => {
+  it("finds a real dissimilar track for 'completely different'", async () => {
     const db = openDb(":memory:");
     const beatles = makeNode(db, "artist", "The Beatles");
     const anchor = makeRecording(db, "Come Together", { artist: beatles, year: 1969, genre: ["rock"], durationMs: 259000 });
@@ -133,7 +133,7 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
 
     recomputeSimilarityFeatures(db);
 
-    const dissimilar = findMostDissimilar(db, anchor, 2);
+    const dissimilar = await findMostDissimilar(db, anchor, 2);
     expect(dissimilar).toHaveLength(2);
     for (const r of dissimilar) expect(dissimilarTracks).toContain(r.nodeId);
   });
@@ -142,7 +142,7 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
   // to always return []. A release's vector is the centroid of its own
   // recordings' — this exercises that a release anchor ranks *other
   // releases*, never the recordings that fed the average.
-  it("gives releases a similarity vector by averaging their recordings, and ranks other releases", () => {
+  it("gives releases a similarity vector by averaging their recordings, and ranks other releases", async () => {
     const db = openDb(":memory:");
     const beatles = makeNode(db, "artist", "The Beatles");
     const dylan = makeNode(db, "artist", "Bob Dylan");
@@ -163,7 +163,7 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
 
     recomputeSimilarityFeatures(db);
 
-    const similar = findMostSimilar(db, abbeyRoad, 5);
+    const similar = await findMostSimilar(db, abbeyRoad, 5);
     expect(similar.map((r) => r.nodeId)).not.toContain(track1);
     expect(similar.map((r) => r.nodeId)).not.toContain(track2);
     expect(similar[0].nodeId).toBe(letItBe); // same artist, closer decade
@@ -174,7 +174,7 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
   // (genre/artist/label/type/decade identical), so "more like this" on a
   // track could only ever answer "the rest of this album". Same-release
   // candidates are excluded outright now.
-  it("excludes a track's own release from its 'more like this' candidates", () => {
+  it("excludes a track's own release from its 'more like this' candidates", async () => {
     const db = openDb(":memory:");
     const beatles = makeNode(db, "artist", "The Beatles");
 
@@ -190,7 +190,7 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
 
     recomputeSimilarityFeatures(db);
 
-    const similar = findMostSimilar(db, anchor, 5);
+    const similar = await findMostSimilar(db, anchor, 5);
     expect(similar.map((r) => r.nodeId)).not.toContain(sameRelease);
     expect(similar.map((r) => r.nodeId)).toContain(otherRelease);
   });
@@ -206,7 +206,7 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
   // whole app down over one optional similarity strip. Sparse vectors
   // (#322) can't disagree in length, but a vector for a track with no file
   // still has to go.
-  it("prunes a recording's vector once its file is gone, so a later vocabulary change can't leave a stale-length vector behind", () => {
+  it("prunes a recording's vector once its file is gone, so a later vocabulary change can't leave a stale-length vector behind", async () => {
     const db = openDb(":memory:");
     const beatles = makeNode(db, "artist", "The Beatles");
     const orphan = makeRecording(db, "Ghost Track", { artist: beatles, year: 1969, genre: ["rock"] });
@@ -228,16 +228,16 @@ describe("recomputeSimilarityFeatures + findMostSimilar/findMostDissimilar", () 
     const orphanRow = db.prepare("SELECT 1 FROM node_similarity_features WHERE node_id = ?").get(orphan);
     expect(orphanRow).toBeUndefined();
 
-    expect(findMostSimilar(db, anchor, 5).map((r) => r.nodeId)).toContain(other);
-    expect(findMostSimilar(db, anchor, 5).map((r) => r.nodeId)).not.toContain(orphan);
-    expect(findMostDissimilar(db, anchor, 5).map((r) => r.nodeId)).not.toContain(orphan);
+    expect((await findMostSimilar(db, anchor, 5)).map((r) => r.nodeId)).toContain(other);
+    expect((await findMostSimilar(db, anchor, 5)).map((r) => r.nodeId)).not.toContain(orphan);
+    expect((await findMostDissimilar(db, anchor, 5)).map((r) => r.nodeId)).not.toContain(orphan);
   });
 });
 
 // Issue #281: a vector that comes out the same isn't written again, so a
 // rescan that changed nothing holds recompute's write lock for nothing.
 describe("recomputeSimilarityFeatures — writing only what changed", () => {
-  it("leaves an unchanged vector's row alone and rewrites one whose inputs moved", () => {
+  it("leaves an unchanged vector's row alone and rewrites one whose inputs moved", async () => {
     const db = openDb(":memory:");
     const beatles = makeNode(db, "artist", "The Beatles");
     const release = makeNode(db, "release", "Abbey Road");
@@ -283,8 +283,8 @@ describe("recomputeSimilarityFeatures — writing only what changed", () => {
   });
 });
 
-// Issue #322: whether a recompute has written vectors since 0055, and how
-// many have changed them.
+// Issue #382: the request loop keeps every vector in memory, and reads them
+// again only once a recompute has changed them.
 describe("similarity_state", () => {
   it("counts the recomputes that changed a vector, and none that didn't", () => {
     const db = openDb(":memory:");
@@ -302,6 +302,33 @@ describe("similarity_state", () => {
     recomputeSimilarityFeatures(db);
     expect(version()).toBe(2);
   });
+
+  it("answers from the vectors in memory until a recompute changes them", async () => {
+    const db = openDb(":memory:");
+    const beatles = makeNode(db, "artist", "The Beatles");
+    const anchor = makeRecording(db, "Come Together", { artist: beatles, genre: ["rock"] });
+    const other = makeRecording(db, "Something", { artist: beatles, genre: ["rock"] });
+    recomputeSimilarityFeatures(db);
+    expect((await findMostSimilar(db, anchor, 5)).map((r) => r.nodeId)).toEqual([other]);
+
+    // Written behind the recompute's back, so the version doesn't move.
+    db.prepare("DELETE FROM node_similarity_features WHERE node_id = ?").run(other);
+    expect((await findMostSimilar(db, anchor, 5)).map((r) => r.nodeId)).toEqual([other]);
+
+    const third = makeRecording(db, "Get Back", { artist: beatles, genre: ["rock"] });
+    recomputeSimilarityFeatures(db);
+    expect((await findMostSimilar(db, anchor, 5)).map((r) => r.nodeId).sort((x, y) => x - y)).toEqual([other, third]);
+  });
+
+  it("doesn't read the vectors for a node that has none", async () => {
+    const db = openDb(":memory:");
+    const artist = makeNode(db, "artist", "The Beatles");
+    makeRecording(db, "Come Together", { artist });
+    recomputeSimilarityFeatures(db);
+    // A table the read would fail on, if it were made.
+    db.exec("ALTER TABLE node_similarity_features RENAME COLUMN vector TO gone");
+    expect(await findMostSimilar(db, artist, 3)).toEqual([]);
+  });
 });
 
 // Issue #322: an older database's dense rows go, and the next recompute
@@ -313,7 +340,7 @@ describe("migration 0055", () => {
     dataDir = null;
   });
 
-  it("drops the dense vectors and leaves the version at 0 until a recompute", () => {
+  it("drops the dense vectors and leaves the version at 0 until a recompute", async () => {
     dataDir = mkdtempSync(path.join(tmpdir(), "legato-0055-"));
     const dbPath = path.join(dataDir, "legato.db");
     const old = openSqlite(dbPath);
@@ -336,11 +363,11 @@ describe("migration 0055", () => {
     try {
       expect(db.prepare("SELECT COUNT(*) AS n FROM node_similarity_features").get()).toEqual({ n: 0 });
       expect(similarityComputed(db)).toBe(false);
-      expect(findMostSimilar(db, anchor, 3)).toEqual([]);
+      expect(await findMostSimilar(db, anchor, 3)).toEqual([]);
 
       recomputeSimilarityFeatures(db);
       expect(similarityComputed(db)).toBe(true);
-      expect(findMostSimilar(db, anchor, 3).map((r) => r.nodeId)).toEqual([other]);
+      expect((await findMostSimilar(db, anchor, 3)).map((r) => r.nodeId)).toEqual([other]);
     } finally {
       db.close();
     }

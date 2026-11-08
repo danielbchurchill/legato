@@ -8,7 +8,8 @@ import {
   type RecordingFeatureInput,
 } from "./features.js";
 import { rankMostDissimilar, rankMostSimilar, type RankedResult } from "./rank.js";
-import { centroid, decodeVector, encodeVector, sameBytes, type SparseVector } from "./vectors.js";
+import { loadVectorIndex, rowOf, type VectorIndex } from "./vectorIndex.js";
+import { centroid, encodeVector, sameBytes, type SparseVector } from "./vectors.js";
 
 /** What a recompute changed: vectors written and vectors removed. */
 export type SimilarityRecompute = { written: number; removed: number };
@@ -178,7 +179,8 @@ export function recomputeSimilarityFeatures(db: Database): SimilarityRecompute {
   const remove = db.prepare("DELETE FROM node_similarity_features WHERE node_id = ?");
   writeInChunks(db, orphans, ({ nodeId }) => remove.run(nodeId));
 
-  // Last, once every vector it counts is in.
+  // Last, once every vector it counts is in: the request loop reads its
+  // copy again when this moves (vectorsFor below).
   if (changed.length + orphans.length > 0) db.prepare("UPDATE similarity_state SET version = version + 1 WHERE id = 1").run();
   return { written: changed.length, removed: orphans.length };
 }
@@ -193,69 +195,75 @@ export function similarityComputed(db: Database): boolean {
   return similarityVersion(db) > 0;
 }
 
-function loadVectors(db: Database): Map<number, { type: string; vector: SparseVector }> {
-  const rows = db
-    .prepare(
-      `SELECT nsf.node_id AS nodeId, n.type AS type, nsf.vector AS vector
-       FROM node_similarity_features nsf JOIN nodes n ON n.id = nsf.node_id`,
-    )
-    .all() as { nodeId: number; type: string; vector: Uint8Array }[];
-  return new Map(rows.map((r) => [r.nodeId, { type: r.type, vector: decodeVector(r.vector) }]));
+// Issue #382: every vector, in memory, for as long as the stored ones stay
+// as they were. Read again, a slice at a time (vectorIndex.ts), the first
+// time it's asked for after a recompute has changed them. A request that
+// arrives meanwhile waits for the same read.
+const indexes = new WeakMap<Database, { version: number; index: Promise<VectorIndex> }>();
+
+function vectorsFor(db: Database): Promise<VectorIndex> {
+  const version = similarityVersion(db);
+  const cached = indexes.get(db);
+  if (cached?.version === version) return cached.index;
+  const index = loadVectorIndex(db);
+  const entry = { version, index };
+  indexes.set(db, entry);
+  // A read that failed is tried again by the next request, not kept.
+  index.catch(() => {
+    if (indexes.get(db) === entry) indexes.delete(db);
+  });
+  return index;
 }
 
-// P-3: a track's own release used to dominate its "more like this" strip —
-// three tracks off one album, separated by four decimal places, because
-// genre/artist/label/type/decade are identical for every track on a
-// record. Same-release candidates are excluded outright now rather than
-// merely deprioritized, so the strip always spans more than one release.
-function releasesByRecording(db: Database): Map<number, Set<number>> {
-  const map = new Map<number, Set<number>>();
-  for (const row of db
-    .prepare("SELECT from_node AS recordingId, to_node AS releaseId FROM edges WHERE type = 'appears_on'")
-    .all() as { recordingId: number; releaseId: number }[]) {
-    if (!map.has(row.recordingId)) map.set(row.recordingId, new Set());
-    map.get(row.recordingId)!.add(row.releaseId);
-  }
-  return map;
+/** Called once a recompute has finished: if a similarity strip has been
+ *  asked for since the server started, its vectors are read again now, in
+ *  the background, rather than by the next request. */
+export function refreshSimilarityVectors(db: Database): void {
+  if (indexes.has(db)) vectorsFor(db).catch(() => {});
 }
 
-function rankAgainst(
+async function rankAgainst(
   db: Database,
   nodeId: number,
   limit: number,
   rankFn: typeof rankMostSimilar,
-): RankedResult[] {
-  const vectors = loadVectors(db);
-  const anchor = vectors.get(nodeId);
-  if (!anchor) return [];
+): Promise<RankedResult[]> {
+  // An artist, or anything else without a vector, has nothing to rank
+  // against, and needn't wait for the vectors to load to find that out.
+  if (!db.prepare("SELECT 1 FROM node_similarity_features WHERE node_id = ?").get(nodeId)) return [];
+  const index = await vectorsFor(db);
+  const anchor = rowOf(index, nodeId);
+  if (anchor < 0) return [];
+
+  // P-3: a track's own release used to dominate its "more like this" strip —
+  // three tracks off one album, separated by four decimal places, because
+  // genre/artist/label/type/decade are identical for every track on a
+  // record. Same-release candidates are excluded outright now rather than
+  // merely deprioritized, so the strip always spans more than one release.
+  // Read for this anchor alone: the tracks on any of its releases.
+  const sameRelease = new Set(
+    (
+      db
+        .prepare(
+          `SELECT DISTINCT other.from_node FROM edges mine
+           JOIN edges other ON other.to_node = mine.to_node AND other.type = 'appears_on'
+           WHERE mine.from_node = ? AND mine.type = 'appears_on'`,
+        )
+        .values(nodeId) as [number][]
+    ).map(([id]) => id),
+  );
 
   // Releases and recordings share one vector table but are never
   // comparable to each other — an album's "more like this" should be
-  // other albums, a track's other tracks.
-  let candidateIds = [...vectors.entries()].filter(([id, v]) => id !== nodeId && v.type === anchor.type);
-
-  if (anchor.type === "recording") {
-    const byRecording = releasesByRecording(db);
-    const anchorReleases = byRecording.get(nodeId) ?? new Set<number>();
-    if (anchorReleases.size > 0) {
-      candidateIds = candidateIds.filter(([id]) => {
-        const releases = byRecording.get(id);
-        if (!releases) return true;
-        for (const r of releases) if (anchorReleases.has(r)) return false;
-        return true;
-      });
-    }
-  }
-
-  const candidates = candidateIds.map(([id, v]) => ({ nodeId: id, vector: v.vector }));
-
-  return rankFn(anchor.vector, candidates, limit);
+  // other albums, a track's other tracks. rankFn only ranks rows of the
+  // anchor's own type.
+  return rankFn({ index, anchor, include: (row) => !sameRelease.has(index.ids[row]!) }, limit);
 }
 
-export function findMostSimilar(db: Database, nodeId: number, limit = 3): RankedResult[] {
+export function findMostSimilar(db: Database, nodeId: number, limit = 3): Promise<RankedResult[]> {
   return rankAgainst(db, nodeId, limit, rankMostSimilar);
 }
 
-export function findMostDissimilar(db: Database, nodeId: number, limit = 3): RankedResult[] {
+export function findMostDissimilar(db: Database, nodeId: number, limit = 3): Promise<RankedResult[]> {
   return rankAgainst(db, nodeId, limit, rankMostDissimilar);
 }
