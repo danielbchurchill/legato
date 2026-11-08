@@ -184,6 +184,7 @@ describe("GET /library/tracks", () => {
     const track = makeRecording("Tangled Up in Blue", { durationMs: 325_000, format: "FLAC" });
     edge(track, artist, "performed_by");
     edge(track, album, "appears_on");
+    recomputeEntities(db);
 
     const { items, total } = await getTracks();
     expect(total).toBe(1);
@@ -226,6 +227,7 @@ describe("GET /library/tracks", () => {
     edge(track, artist, "performed_by");
     edge(track, album, "appears_on");
     makeRecording("Unrelated Track");
+    recomputeEntities(db);
 
     expect((await getTracks("?q=paranoid")).total).toBe(1);
     expect((await getTracks("?q=radiohead")).total).toBe(1);
@@ -239,9 +241,33 @@ describe("GET /library/tracks", () => {
     const second = makeNode("artist", "Second Credit");
     edge(track, first, "performed_by");
     edge(track, second, "performed_by");
+    recomputeEntities(db);
 
     const { items } = await getTracks();
     expect(items[0].artistName).toBe("First Credit");
+  });
+
+  // #359: the album's rule, which the map clusters by. A 'credit' node
+  // credited ahead of the artist isn't the track's artist, and a track with
+  // no artist credit at all has none, whatever else performs it.
+  it("names a track's first credit that is an artist, past a credit node credited ahead of it", async () => {
+    const artist = makeNode("artist", "The Artist");
+    const credit = makeNode("credit", "A Producer");
+    const track = makeRecording("Credited Track");
+    edge(track, credit, "performed_by");
+    edge(track, artist, "performed_by");
+    const creditOnly = makeRecording("Solo Piece");
+    edge(creditOnly, credit, "performed_by");
+    recomputeEntities(db);
+
+    const { items } = await getTracks();
+    expect(items.map(({ id, artistId, artistName }: { id: number; artistId: number | null; artistName: string | null }) => ({ id, artistId, artistName }))).toEqual([
+      { id: track, artistId: artist, artistName: "The Artist" },
+      { id: creditOnly, artistId: null, artistName: null },
+    ]);
+    // A search matches the artist the row names, not the credit node.
+    expect((await getTracks("?q=producer")).total).toBe(0);
+    expect((await getTracks("?q=the+artist")).items.map((t: { id: number }) => t.id)).toEqual([track]);
   });
 });
 
@@ -547,7 +573,10 @@ describe("a sort key every object inherits", () => {
 
 // #263 split the tracks query so the count and the ordering join only what
 // they read. This is the query as it was before, every join on every row,
-// kept as the reference the new one has to agree with exactly.
+// kept as the reference the new one has to agree with exactly. Since #359 a
+// track's artist is its first performed_by credit that is an artist node,
+// and since #383 its album is its first appears_on edge to a release node,
+// both of which the route reads from what the recompute stored.
 function referenceTrackIds(sortColumn: string, dir: "asc" | "desc", q: string | null, limit: number, offset: number) {
   const like = (s: string) => `%${s.replace(/[\\%_]/g, "\\$&")}%`;
   const where = q
@@ -558,10 +587,12 @@ function referenceTrackIds(sortColumn: string, dir: "asc" | "desc", q: string | 
        FROM nodes n
        JOIN recordings r ON r.node_id = n.id
        LEFT JOIN files f ON f.id = (SELECT MIN(id) FROM files WHERE recording_node_id = n.id)
-       LEFT JOIN edges pe ON pe.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'performed_by')
-       LEFT JOIN nodes artist ON artist.id = pe.to_node
-       LEFT JOIN edges ae ON ae.id = (SELECT MIN(id) FROM edges WHERE from_node = n.id AND type = 'appears_on')
-       LEFT JOIN nodes album ON album.id = ae.to_node
+       LEFT JOIN nodes artist ON artist.id = (
+         SELECT e.to_node FROM edges e JOIN nodes a ON a.id = e.to_node AND a.type = 'artist'
+          WHERE e.from_node = n.id AND e.type = 'performed_by' ORDER BY e.id LIMIT 1)
+       LEFT JOIN nodes album ON album.id = (
+         SELECT e.to_node FROM edges e JOIN nodes t ON t.id = e.to_node AND t.type = 'release'
+          WHERE e.from_node = n.id AND e.type = 'appears_on' ORDER BY e.id LIMIT 1)
        WHERE n.type = 'recording'
        ${where}`;
   const direction = dir === "desc" ? "DESC" : "ASC";
@@ -627,11 +658,30 @@ describe("GET /library/tracks orders exactly as the single-query version did (#2
     const loose = makeNode("recording", "Loose", "2023-01-01 00:00:00");
     db.prepare("INSERT INTO recordings (node_id, canonical_duration_ms) VALUES (?, NULL)").run(loose);
     edge(loose, a, "performed_by");
+    // A producer's 'credit' node credited ahead of the artist, and one
+    // credited alone (#359).
+    const producer = makeNode("credit", "Oscar");
+    const creditFirst = makeRecording("Produced", { durationMs: 210_000, format: "FLAC" });
+    edge(creditFirst, producer, "performed_by");
+    edge(creditFirst, b, "performed_by");
+    const creditOnly = makeRecording("Solo", { durationMs: 220_000, format: "MPEG" });
+    edge(creditOnly, producer, "performed_by");
+    edge(creditOnly, two, "appears_on");
+    // An appears_on edge to something that isn't a release, ahead of the
+    // record: the record is the track's album (#383).
+    const label = makeNode("label", "Aardvark Records");
+    const labelled = makeRecording("Labelled", { durationMs: 230_000, format: "FLAC" });
+    edge(labelled, label, "appears_on");
+    edge(labelled, two, "appears_on");
+    edge(labelled, a, "performed_by");
+    recomputeEntities(db);
   });
 
   for (const sort of Object.keys(SORT_COLUMNS) as (keyof typeof SORT_COLUMNS)[]) {
     for (const dir of ["asc", "desc"] as const) {
-      for (const q of [null, "o"]) {
+      // "o" matches most tracks by title, "alp" only by artist, and a page
+      // past the last hit still has the whole count.
+      for (const q of [null, "o", "alp"]) {
         it(`${sort} ${dir}${q ? ` matching "${q}"` : ""}`, async () => {
           for (const [limit, offset] of [
             [500, 0],
@@ -639,6 +689,7 @@ describe("GET /library/tracks orders exactly as the single-query version did (#2
             [3, 3],
             [3, 7],
             [4, 9],
+            [3, 40],
           ]) {
             const expected = referenceTrackIds(SORT_COLUMNS[sort], dir, q, limit, offset);
             const query = new URLSearchParams({ sort, dir, limit: String(limit), offset: String(offset), ...(q ? { q } : {}) });

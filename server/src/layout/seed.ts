@@ -55,6 +55,37 @@ function upsertSeeds(db: Database, seeds: Map<number, Seed>, locked: boolean): v
   writeInChunks(db, seeds, ([nodeId, seed]) => upsert.run(nodeId, seed.x, seed.y));
 }
 
+// Each track the map draws (one with a file), with the cell it starts in:
+// its artist's, falling back to its label's, crossed with its decade.
+export function trackCellInputs(db: Database): ClusterInput[] {
+  // Issue #359: a track's cell is its artist's, the artist the map clusters
+  // it under, which recomputeEntities (entities/aggregate.ts) stored before
+  // this runs. Before, it was the first performed_by credit whatever it
+  // pointed at, so a track crediting a producer's 'credit' node first was
+  // seeded in that node's cell, away from its artist.
+  const recordingRows = db
+    .prepare(
+      `SELECT n.id AS node_id,
+              (SELECT CAST(y.title AS INTEGER) FROM edges e
+                 JOIN nodes y ON y.id = e.to_node
+                WHERE e.from_node = n.id AND e.type = 'released_in' LIMIT 1) AS year,
+              r.artist_node_id AS artist_id,
+              (SELECT e.to_node FROM edges e
+                WHERE e.from_node = n.id AND e.type = 'released_on' LIMIT 1) AS label_id
+       FROM nodes n
+       LEFT JOIN recordings r ON r.node_id = n.id
+       WHERE n.type = 'recording'
+         AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = n.id)`,
+    )
+    .all() as { node_id: number; year: number | null; artist_id: number | null; label_id: number | null }[];
+
+  return recordingRows.map((r) => ({
+    nodeId: r.node_id,
+    groupKey: r.artist_id ?? r.label_id,
+    decade: decadeOf(r.year),
+  }));
+}
+
 // Recording, release, and artist nodes together — the one combined graph
 // (the 2026-08-29 map rework replaced the three tab-switched granularities
 // with live client-side physics). Recordings are positioned first by
@@ -90,29 +121,7 @@ export function recomputeTracksLayout(
     ignoreLock?: boolean;
   },
 ): void {
-  const recordingRows = db
-    .prepare(
-      `SELECT n.id AS node_id,
-              (SELECT CAST(y.title AS INTEGER) FROM edges e
-                 JOIN nodes y ON y.id = e.to_node
-                WHERE e.from_node = n.id AND e.type = 'released_in' LIMIT 1) AS year,
-              (SELECT e.to_node FROM edges e
-                WHERE e.from_node = n.id AND e.type = 'performed_by'
-                ORDER BY e.id LIMIT 1) AS artist_id,
-              (SELECT e.to_node FROM edges e
-                WHERE e.from_node = n.id AND e.type = 'released_on' LIMIT 1) AS label_id
-       FROM nodes n
-       WHERE n.type = 'recording'
-         AND EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = n.id)`,
-    )
-    .all() as { node_id: number; year: number | null; artist_id: number | null; label_id: number | null }[];
-
-  const clusterInputs: ClusterInput[] = recordingRows.map((r) => ({
-    nodeId: r.node_id,
-    groupKey: r.artist_id ?? r.label_id,
-    decade: decadeOf(r.year),
-  }));
-  const seeds = computeClusteredSeeds(clusterInputs, options?.jitterSeed ?? 0);
+  const seeds = computeClusteredSeeds(trackCellInputs(db), options?.jitterSeed ?? 0);
 
   const releaseSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM albums", ["appears_on"]);
   const artistSeeds = centroidSeeds(db, seeds, "SELECT node_id FROM artists WHERE track_count > 0", ["performed_by"]);

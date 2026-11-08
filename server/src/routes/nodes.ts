@@ -59,23 +59,18 @@ export function nodesRoutes(db: Database) {
       // subtitle is the second line of the canvas hover plate, so it has to
       // arrive with the graph rather than be fetched per hover — a plate
       // that appears 90ms after the pointer lands cannot also wait on a
-      // round trip. Correlated subqueries rather than joins: a recording
-      // holds one performed_by edge per credited artist since 8a3426c, and
-      // a join would multiply the node row by that count. Taking the
-      // lowest-id credit matches what NowPlayingPanel's title block already
-      // shows for the same node (its `artist` lookup takes the first
-      // performed_by edge), so the plate and the panel never disagree.
+      // round trip. A record's is its artist, and a track's is its artist
+      // too (#359): the artist the map clusters it under, which the
+      // recompute stores for each track (entities/aggregate.ts's
+      // trackArtists), so the plate, the Tracks table and the cluster
+      // never disagree.
       const rows = db
         .prepare(
           `SELECT n.id, n.type, n.title, n.mbid, r.canonical_duration_ms,
                   p.seed_x, p.seed_y, p.user_x, p.user_y, p.settled_x, p.settled_y,
                   COALESCE(
                     (SELECT an.title FROM nodes an WHERE an.id = al.primary_artist_node_id),
-                    (SELECT an.title
-                       FROM edges e JOIN nodes an ON an.id = e.to_node
-                      WHERE e.from_node = n.id AND e.type = 'performed_by'
-                      ORDER BY e.id
-                      LIMIT 1)
+                    (SELECT an.title FROM nodes an WHERE an.id = r.artist_node_id)
                   ) AS subtitle
            FROM nodes n
            JOIN positions p ON p.node_id = n.id AND p.granularity = ?
