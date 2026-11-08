@@ -5,6 +5,7 @@ import { retireNodeInto } from "./people.js";
 import { markBoundMayHaveShrunk } from "../enrich/members.js";
 import { findArtistByName } from "./artistLookup.js";
 import { albumIdentityOf, findOrCreateRelease, type AlbumFolders } from "./releases.js";
+import { refreshTrackKeys } from "../entities/aggregate.js";
 
 type LocalTags = {
   artist?: string | null;
@@ -169,8 +170,23 @@ function insertEdge(db: Database, fromNode: number, toNode: number, type: string
 //
 // Issue #465: a pass that derives many files (recompute, a scan's collapse
 // stage) passes one AlbumFolders, so each album folder is read once.
+//
+// Issue #383: a file derived on its own (the watcher, "rescan this file", a
+// tag write, a merge override) has its track's stored artist, album and
+// format follow its edges in the same transaction (entities/aggregate.ts's
+// refreshTrackKeys), so the Tracks table shows what its tags say from the
+// moment they're read. A pass leaves that to the recompute it ends in,
+// whose recomputeEntities decides every track's at once: refreshed one file
+// at a time, they cost a 30,000-album recompute about 24 s more.
 export function deriveLocalEdges(db: Database, fileId: number, albums?: AlbumFolders): void {
-  db.transaction(() => deriveFileEdges(db, fileId, albums))();
+  db.transaction(() => {
+    deriveFileEdges(db, fileId, albums);
+    if (albums) return;
+    const file = db.prepare("SELECT recording_node_id AS recording FROM files WHERE id = ?").get(fileId) as
+      | { recording: number }
+      | undefined;
+    if (file) refreshTrackKeys(db, [file.recording]);
+  })();
 }
 
 type FileRow = {

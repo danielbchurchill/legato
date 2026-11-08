@@ -197,79 +197,115 @@ function pruneEntities(db: Database, table: "albums" | "artists", keep: number[]
 // recordings row so a read finds each with one lookup and a sort can walk an
 // index (#383). Worked out from the edges and files on every read, a
 // 300,000-track table cost each row several lookups, and a sort by artist,
-// album or format, or a search, did that for every row. The recompute is
-// what changes the edges and files these come from, so a value is never
-// older than the albums table's artist, decided in the same pass:
+// album or format, or a search, did that for every row.
 //  - artist: the track's artist (trackArtists, #359);
 //  - album: its first appears_on edge, by id, to a release node, the edge
 //    the map's clusters count (src/canvas/clusters.ts);
 //  - format: its first file's format, by file id.
-// Only the rows whose answer changed are written, in pieces, so a recompute
-// that changes nothing writes nothing.
+// Each recompute decides every track's here, from the same rows it files
+// the albums from. Between recomputes, whatever derives one file's edges
+// again (a file the watcher saw change, "rescan this file", a tag write, a
+// merge override) refreshes its track's along with them (refreshTrackKeys),
+// as these were always read fresh. Only the rows whose answer changed are
+// written, so a recompute that changes nothing writes nothing.
 type TrackKeys = { artist: number | null; album: number | null; format: string | null };
 
-function writeTrackKeys(db: Database, keysOf: (nodeId: number) => TrackKeys): void {
+type TrackKeySources = {
+  credits: (EdgeRef & { hasFile: number })[];
+  appearsOn: (EdgeRef & { toRelease: number })[];
+  files: { recordingNodeId: number; format: string | null }[];
+};
+
+// What the rules read, for every track, or for the given ones only. Each in
+// id order, which is what "first" means in every rule.
+//
+// credits: a track's first performed_by credit by edge id that is an artist
+// node, past a 'credit' node credited ahead of it, is its artist
+// (trackArtists). Only a track the map draws, one with a file, votes for
+// its album's artist: the recordings a collapse leaves behind keep their
+// edges and could otherwise outvote the tracks that are there. Every track
+// still has an artist, file or not, as the Tracks table lists them all.
+function trackKeySources(db: Database, only: number[] | null): TrackKeySources {
+  const of = (column: string) => (only ? `AND ${column} IN (SELECT value FROM json_each(?))` : "");
+  const params = only ? [JSON.stringify(only)] : [];
+  return {
+    credits: db
+      .prepare(
+        `SELECT e.from_node AS fromNode, e.to_node AS toNode,
+                EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = e.from_node) AS hasFile
+         FROM edges e
+         JOIN nodes r ON r.id = e.from_node AND r.type = 'recording'
+         JOIN nodes a ON a.id = e.to_node AND a.type = 'artist'
+         WHERE e.type = 'performed_by' ${of("e.from_node")}
+         ORDER BY e.id`,
+      )
+      .all(...params) as TrackKeySources["credits"],
+    appearsOn: db
+      .prepare(
+        `SELECT e.from_node AS fromNode, e.to_node AS toNode, t.type = 'release' AS toRelease
+         FROM edges e JOIN nodes t ON t.id = e.to_node
+         WHERE e.type = 'appears_on' ${of("e.from_node")}
+         ORDER BY e.id`,
+      )
+      .all(...params) as TrackKeySources["appearsOn"],
+    files: db
+      .prepare(`SELECT recording_node_id AS recordingNodeId, format FROM files WHERE 1 ${of("recording_node_id")} ORDER BY id`)
+      .all(...params) as TrackKeySources["files"],
+  };
+}
+
+function decideTrackKeys({ credits, appearsOn, files }: TrackKeySources): (nodeId: number) => TrackKeys {
+  const artistOf = trackArtists(credits);
+  const albumOf = new Map<number, number>();
+  for (const e of appearsOn) if (e.toRelease && !albumOf.has(e.fromNode)) albumOf.set(e.fromNode, e.toNode);
+  const formatOf = new Map<number, string | null>();
+  for (const f of files) if (!formatOf.has(f.recordingNodeId)) formatOf.set(f.recordingNodeId, f.format);
+  return (nodeId) => ({ artist: artistOf.get(nodeId) ?? null, album: albumOf.get(nodeId) ?? null, format: formatOf.get(nodeId) ?? null });
+}
+
+// The rows whose stored keys differ from what keysOf decides, for every
+// track or for the given ones.
+function changedTrackKeys(db: Database, keysOf: (nodeId: number) => TrackKeys, only: number[] | null) {
   const current = db
-    .prepare("SELECT node_id AS nodeId, artist_node_id AS artist, album_node_id AS album, format FROM recordings")
-    .all() as (TrackKeys & { nodeId: number })[];
-  const changed = current.flatMap(({ nodeId, artist, album, format }) => {
+    .prepare(
+      `SELECT node_id AS nodeId, artist_node_id AS artist, album_node_id AS album, format FROM recordings
+       ${only ? "WHERE node_id IN (SELECT value FROM json_each(?))" : ""}`,
+    )
+    .all(...(only ? [JSON.stringify(only)] : [])) as (TrackKeys & { nodeId: number })[];
+  return current.flatMap(({ nodeId, artist, album, format }) => {
     const keys = keysOf(nodeId);
     return keys.artist === artist && keys.album === album && keys.format === format ? [] : [{ nodeId, keys }];
   });
-  const update = db.prepare("UPDATE recordings SET artist_node_id = ?, album_node_id = ?, format = ? WHERE node_id = ?");
-  writeInChunks(db, changed, ({ nodeId, keys }) => update.run(keys.artist, keys.album, keys.format, nodeId));
 }
 
-function firstByRecording<Value>(rows: { fromNode: number; value: Value }[]): Map<number, Value> {
-  const first = new Map<number, Value>();
-  for (const { fromNode, value } of rows) if (!first.has(fromNode)) first.set(fromNode, value);
-  return first;
+const UPDATE_TRACK_KEYS = "UPDATE recordings SET artist_node_id = ?, album_node_id = ?, format = ? WHERE node_id = ?";
+
+/** Decides the given tracks' keys again and writes the ones that changed.
+ *  For a single file's edges, derived outside a recompute (match/edges.ts):
+ *  a handful of rows, written in the caller's transaction. */
+export function refreshTrackKeys(db: Database, recordingNodeIds: number[]): void {
+  const keysOf = decideTrackKeys(trackKeySources(db, recordingNodeIds));
+  const changed = changedTrackKeys(db, keysOf, recordingNodeIds);
+  if (changed.length === 0) return;
+  const update = db.prepare(UPDATE_TRACK_KEYS);
+  for (const { nodeId, keys } of changed) update.run(keys.artist, keys.album, keys.format, nodeId);
 }
 
 export function recomputeEntities(db: Database): void {
-  const appearsOn = db
-    .prepare(
-      `SELECT e.from_node AS fromNode, e.to_node AS toNode, t.type = 'release' AS toRelease
-       FROM edges e JOIN nodes t ON t.id = e.to_node
-       WHERE e.type = 'appears_on'
-       ORDER BY e.id`,
-    )
-    .all() as (EdgeRef & { toRelease: number })[];
   // An album's artist is the one the map clusters it under
   // (src/canvas/clusters.ts), which is also how the Library's Artists tab
-  // decides who has records of their own (#302). So a track's artist is its
-  // first performed_by credit by edge id that is an artist node, past a
-  // 'credit' node credited ahead of it (trackArtists), and only a track the
-  // map draws, one with a file, has a vote: the recordings a collapse leaves
-  // behind keep their edges and could otherwise outvote the tracks that are
-  // there. Every track still has an artist, file or not, as the Tracks
-  // table lists them all.
-  const credits = db
-    .prepare(
-      `SELECT e.from_node AS fromNode, e.to_node AS toNode,
-              EXISTS (SELECT 1 FROM files f WHERE f.recording_node_id = e.from_node) AS hasFile
-       FROM edges e
-       JOIN nodes r ON r.id = e.from_node AND r.type = 'recording'
-       JOIN nodes a ON a.id = e.to_node AND a.type = 'artist'
-       WHERE e.type = 'performed_by'
-       ORDER BY e.id`,
-    )
-    .all() as (EdgeRef & { hasFile: number })[];
+  // decides who has records of their own (#302): the artist most of its
+  // tracks with a file have (trackKeySources, computeAlbumAggregates).
+  const sources = trackKeySources(db, null);
+  const { credits, appearsOn } = sources;
   const performedBy = credits.filter((credit) => credit.hasFile);
 
-  const artistOf = trackArtists(credits);
-  const albumOf = firstByRecording(appearsOn.filter((e) => e.toRelease).map((e) => ({ fromNode: e.fromNode, value: e.toNode })));
-  const formatOf = firstByRecording(
-    db.prepare("SELECT recording_node_id AS fromNode, format AS value FROM files ORDER BY id").all() as {
-      fromNode: number;
-      value: string | null;
-    }[],
-  );
-  writeTrackKeys(db, (nodeId) => ({
-    artist: artistOf.get(nodeId) ?? null,
-    album: albumOf.get(nodeId) ?? null,
-    format: formatOf.get(nodeId) ?? null,
-  }));
+  const changed = changedTrackKeys(db, decideTrackKeys(sources), null);
+  const update = db.prepare(UPDATE_TRACK_KEYS);
+  // Issue #281: in pieces (writeInChunks.ts), so recompute's worker never
+  // holds the write lock for long.
+  writeInChunks(db, changed, ({ nodeId, keys }) => update.run(keys.artist, keys.album, keys.format, nodeId));
+
   // Album primary-artist selection (computeAlbumAggregates) deliberately
   // stays performed_by-only — a featured guest on a couple of tracks
   // shouldn't contend for "primary artist of this album" against the

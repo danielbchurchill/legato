@@ -3,6 +3,7 @@ import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { deriveLocalEdges, deriveRecordingEdges, findOrCreatePerson } from "./edges.js";
 import { recordArtistCredit } from "./evidence.js";
+import { AlbumFolders } from "./releases.js";
 
 let db: Database;
 
@@ -510,5 +511,38 @@ describe("deriveLocalEdges — artist names that differ only by 'The'", () => {
       )
       .get(fileId) as { id: number };
     expect(producer.id).toBe(band);
+  });
+});
+
+// Issue #383: the Tracks table reads a track's artist, album and format from
+// its recordings row. A file derived on its own (the watcher, a rescan, a tag
+// write) brings them up to date with its edges, as reading them from the
+// edges always did; a pass leaves them to the recompute it ends in.
+describe("deriveLocalEdges — the track's stored keys", () => {
+  const keysOf = (fileId: number) =>
+    db
+      .prepare(
+        `SELECT r.artist_node_id AS artist, album.title AS album, r.format
+         FROM files f JOIN recordings r ON r.node_id = f.recording_node_id
+         LEFT JOIN nodes album ON album.id = r.album_node_id
+         WHERE f.id = ?`,
+      )
+      .get(fileId) as { artist: number | null; album: string | null; format: string | null };
+
+  it("follow a file's tags as soon as it's derived on its own", () => {
+    const fileId = insertFile({ artist: "Foo", album: "First" });
+    db.prepare("UPDATE files SET format = 'FLAC' WHERE id = ?").run(fileId);
+    deriveLocalEdges(db, fileId);
+    expect(keysOf(fileId)).toEqual({ artist: nodeNamed("artist", "Foo")!, album: "First", format: "FLAC" });
+
+    db.prepare("UPDATE files SET tags_raw = ?, format = 'MPEG' WHERE id = ?").run(JSON.stringify({ artist: "Bar", album: "Second" }), fileId);
+    deriveLocalEdges(db, fileId);
+    expect(keysOf(fileId)).toEqual({ artist: nodeNamed("artist", "Bar")!, album: "Second", format: "MPEG" });
+  });
+
+  it("are left to the recompute in a pass", () => {
+    const fileId = insertFile({ artist: "Foo", album: "First" });
+    deriveLocalEdges(db, fileId, new AlbumFolders(db));
+    expect(keysOf(fileId)).toEqual({ artist: null, album: null, format: null });
   });
 });
