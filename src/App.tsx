@@ -11,6 +11,7 @@ import { resolveEdgeColorOverrides } from './canvas/edgeTypes'
 import { resolveNodeSizeMultipliers } from './canvas/nodeTypes'
 import { resolveEdgeWidthScale } from './canvas/edgeWidth'
 import { NEXT_REPEAT_MODE, usePlayback } from './playback/usePlayback'
+import { useNativeMediaControls } from './playback/nativeMediaControls'
 import { AppShell } from './shell/AppShell'
 import { Rail } from './shell/Rail'
 import { ConnectionIndicator } from './shell/ConnectionIndicator'
@@ -197,6 +198,21 @@ function Workspace({
   // lives inside usePlayback.
   const repeatMode = (settings.repeatMode as RepeatMode) || 'off'
   const playback = usePlayback(replaygainMode, repeatMode)
+  // #131: media keys and the OS's now-playing widget for native playback.
+  // The browser's lock screen is usePlayback's own (mediaSession.ts).
+  useNativeMediaControls({
+    enabled: IS_TAURI,
+    status: playback.status,
+    title: playback.currentTitle,
+    controls: {
+      play: playback.resume,
+      pause: playback.pause,
+      next: playback.next,
+      previous: playback.previous,
+      seek: playback.seek,
+      stop: playback.stop,
+    },
+  })
   // #128: the install offer, shown once after the first track plays. Over
   // plain http it says why there's none instead (#316).
   useInstallOffer()

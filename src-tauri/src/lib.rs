@@ -6,6 +6,7 @@ use tauri::Manager;
 mod discovery;
 mod instance;
 mod keep_awake;
+mod media_controls;
 mod playback;
 mod probe;
 mod relay_sign_in;
@@ -15,6 +16,7 @@ mod tray;
 use discovery::Discovery;
 use instance::Instance;
 use keep_awake::KeepAwake;
+use media_controls::MediaControlsState;
 use playback::PlaybackState;
 use relay_sign_in::SignInState;
 use server_process::ServerProcess;
@@ -70,6 +72,7 @@ pub fn run() {
     .manage(instance)
     .manage(ServerProcess(Mutex::new(None)))
     .manage(PlaybackState::new())
+    .manage(MediaControlsState::default())
     .manage(SignInState::default())
     .manage(Discovery::default())
     .setup(|app| {
@@ -82,6 +85,8 @@ pub fn run() {
       }
 
       build_main_window(app)?;
+      // After the window: on Windows, SMTC belongs to one.
+      media_controls::install(app.handle());
 
       // Embed the server by default — it must start invisibly with the app,
       // not require a manually-launched second process. A look at Feishin,
@@ -139,6 +144,9 @@ pub fn run() {
       playback::queue_set_volume,
       playback::list_audio_devices,
       playback::queue_set_device,
+      media_controls::media_controls_set_track,
+      media_controls::media_controls_set_playback,
+      media_controls::media_controls_clear,
       relay_sign_in::relay_sign_in,
       relay_sign_in::relay_sign_in_cancel,
       discovery::discovered_servers,

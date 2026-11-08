@@ -865,8 +865,9 @@ fn open_source(track: &QueueTrack) -> Result<Opened, PlaybackError> {
 }
 
 // One agent for every stream, so the track playing and the one opened
-// behind it share connections to the server.
-fn stream_agent() -> &'static ureq::Agent {
+// behind it share connections to the server. media_controls.rs fetches the
+// now-playing cover through it too.
+pub(crate) fn stream_agent() -> &'static ureq::Agent {
   static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
   AGENT.get_or_init(|| {
     // The OS decides which certificates to trust, as it does for the
@@ -908,7 +909,7 @@ fn stream_from(url: &str, at: u64) -> io::Result<Body> {
   Ok(Box::new(response.into_body().into_reader()))
 }
 
-fn describe_stream_error(e: &ureq::Error) -> String {
+pub(crate) fn describe_stream_error(e: &ureq::Error) -> String {
   match e {
     ureq::Error::StatusCode(code) => format!("it answered {code}"),
     other => other.to_string(),

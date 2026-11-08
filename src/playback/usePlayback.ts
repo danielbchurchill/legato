@@ -1493,7 +1493,8 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
   }, [])
 
   // #128: lock-screen and headphone controls for the browser player. Off
-  // in Tauri, where native media keys are #131's.
+  // in Tauri, where the OS's media controls are nativeMediaControls.ts's
+  // (#131), which App runs.
   useMediaSession({
     enabled: !IS_TAURI,
     status,
