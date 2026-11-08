@@ -10,6 +10,7 @@ import { mergeOverridesRoutes } from "./merge-overrides.js";
 import { favouritesRoutes } from "./favourites.js";
 import { playlistsRoutes } from "./playlists.js";
 import { playlistImportRoutes } from "./playlist-import.js";
+import { appleMusicImportRoutes } from "./apple-music-import.js";
 import { layoutRoutes } from "./layout.js";
 import { edgesRoutes } from "./edges.js";
 import { searchRoutes } from "./search.js";
@@ -47,6 +48,7 @@ export async function registerRoutes(app: FastifyInstance, db: Database): Promis
   await app.register(favouritesRoutes(db), { prefix: "/api/v1" });
   await app.register(playlistsRoutes(db), { prefix: "/api/v1" });
   await app.register(playlistImportRoutes(db), { prefix: "/api/v1" });
+  await app.register(appleMusicImportRoutes(db), { prefix: "/api/v1" });
   await app.register(layoutRoutes(db), { prefix: "/api/v1" });
   await app.register(edgesRoutes(db), { prefix: "/api/v1" });
   await app.register(searchRoutes(db), { prefix: "/api/v1" });
