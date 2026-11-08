@@ -13,6 +13,7 @@ import { coverDependents, recordCover, resolveCover, resolveCoverForNode } from 
 import { readCover, storeCover } from "../cover/store.js";
 import type { CoverSize } from "../cover/store.js";
 import { isEnrichmentEnabled } from "../enrich/queue.js";
+import { unreadablePictureMessage } from "../media/pipedImage.js";
 import { broadcast } from "../ws.js";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -164,11 +165,12 @@ export function coverRoutes(db: Database) {
       let hash: string;
       try {
         hash = await storeCover(body);
-      } catch {
-        // storeCover only fails when ffmpeg cannot decode the bytes, which
-        // for a user-supplied upload means "that was not an image".
+      } catch (err) {
+        // storeCover only fails when the bytes aren't a picture: refused
+        // before ffmpeg starts (#477), or ffmpeg couldn't decode them. For a
+        // user-supplied upload, either means "that was not an image".
         reply.code(400);
-        return { error: "could not decode image" };
+        return { error: unreadablePictureMessage(err) };
       }
 
       recordCover(db, {

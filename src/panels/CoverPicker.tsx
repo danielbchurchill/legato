@@ -200,7 +200,7 @@ function useCoverPicker(nodeId: number, open: boolean, onDone: () => void) {
           }),
         (r) => r.ok,
       )
-      if (res.status === 400) throw new Error(`Legato couldn't read ${file.name} as an image.`)
+      if (res.status === 400) throw new Error(`Legato couldn't read ${file.name} as an image. Try a JPEG or PNG.`)
       if (res.status === 413) throw new Error('That image is over 20 MB.')
       if (!res.ok) throw new Error("The upload didn't go through. Try again.")
       finish(state?.nodeIds ?? [])

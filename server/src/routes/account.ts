@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Database } from "../sqlite.js";
 import { MAX_UPLOAD_BYTES, PICTURE_HASH_PATTERN, pictures } from "../account/pictures.js";
 import { SESSION_USER_COLUMNS, type SessionUser } from "../auth/sessions.js";
+import { unreadablePictureMessage } from "../media/pipedImage.js";
 import { broadcast } from "../ws.js";
 import { publicUser } from "./auth.js";
 
@@ -71,9 +72,9 @@ export function accountRoutes(db: Database) {
       let hash: string;
       try {
         hash = await store.store(body);
-      } catch {
+      } catch (err) {
         reply.code(400);
-        return { error: "That file isn't a picture this server can read. Try a JPEG or PNG.", reason: "not_a_picture" };
+        return { error: unreadablePictureMessage(err), reason: "not_a_picture" };
       }
       await store.setUpload(user.id, hash);
       return { user: publicUser(freshUser(db, user.id)) };

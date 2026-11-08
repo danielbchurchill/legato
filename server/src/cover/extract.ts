@@ -212,7 +212,7 @@ export async function attachCoverForFile(
   const nodeId = coverTargetNode(db, file.recordingNodeId);
 
   if (embedded) {
-    const hash = await storeCover(embedded.data);
+    const hash = await storeCover(embedded.data, { fromLibrary: true });
     recordCover(db, {
       nodeId,
       source: "embedded",
@@ -229,7 +229,7 @@ export async function attachCoverForFile(
   if (!folder) return null;
 
   const bytes = await readFile(folder.path);
-  const hash = await storeCover(bytes);
+  const hash = await storeCover(bytes, { fromLibrary: true });
   recordCover(db, {
     nodeId,
     source: "folder",

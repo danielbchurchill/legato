@@ -4,6 +4,7 @@ import { access, mkdir, readdir, readFile, rename, stat, unlink, writeFile } fro
 import path from "node:path";
 import { DATA_DIR } from "../config.js";
 import { FFMPEG_PATH } from "../mediaBinaries.js";
+import { pipedImageInput } from "../media/pipedImage.js";
 import { runMediaTask } from "../media/queue.js";
 
 export type CoverSize = "thumb" | "full";
@@ -73,14 +74,16 @@ export async function isCached(hash: string, size: CoverSize): Promise<boolean> 
 // force_original_aspect_ratio=decrease bounds the longest edge without
 // distorting or cropping, so non-square art (singles, some vinyl scans)
 // survives intact.
-function resize(input: Buffer, maxEdge: number): Promise<Buffer> {
+//
+// `inputArgs` come from pipedImageInput (media/pipedImage.ts), which has
+// already checked the bytes are a picture ffmpeg may read.
+function resize(input: Buffer, inputArgs: string[], maxEdge: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const ffmpeg = spawn(FFMPEG_PATH, [
       "-hide_banner",
       "-loglevel",
       "error",
-      "-i",
-      "pipe:0",
+      ...inputArgs,
       "-vf",
       `scale=${maxEdge}:${maxEdge}:force_original_aspect_ratio=decrease`,
       "-frames:v",
@@ -128,7 +131,12 @@ function resize(input: Buffer, maxEdge: number): Promise<Buffer> {
 // file and skip re-encoding it, so the truncation stuck until the cache was
 // cleared by hand. rename within the same directory is atomic, so a concurrent
 // reader sees either no file (404, already a handled state) or the whole thing.
-export async function storeCover(bytes: Buffer): Promise<string> {
+//
+// Bytes that aren't a picture ffmpeg may read throw NotAPictureError before
+// anything runs (#477). `fromLibrary` is for art a scan found in a music file
+// or its folder, which may be another image format; see media/pipedImage.ts.
+export async function storeCover(bytes: Buffer, options: { fromLibrary?: boolean } = {}): Promise<string> {
+  const inputArgs = pipedImageInput(bytes, options.fromLibrary ? "library" : "outside");
   const hash = hashBytes(bytes);
 
   for (const size of Object.keys(SIZES) as CoverSize[]) {
@@ -144,7 +152,7 @@ export async function storeCover(bytes: Buffer): Promise<string> {
       // Issue #111: never playback — this runs during a scan, an
       // enrichment job, or a manual upload, so it always takes the media
       // queue's "background" lane.
-      await writeFile(temp, await runMediaTask("background", () => resize(bytes, SIZES[size])));
+      await writeFile(temp, await runMediaTask("background", () => resize(bytes, inputArgs, SIZES[size])));
       await rename(temp, target);
     } catch (err) {
       // Leaving a stray .tmp behind would be a leak nothing sweeps — the
@@ -210,10 +218,12 @@ async function deriveSize(hash: string, size: CoverSize): Promise<Buffer | null>
   let derived: Buffer;
   try {
     const largestBytes = await readFile(largest);
+    // Always a JPEG this server wrote, so held to the same rule as an upload.
+    const inputArgs = pipedImageInput(largestBytes);
     // Same "background" lane as storeCover above — this fires from
     // readCover() serving a size that hasn't been derived yet, never from
     // a playback path.
-    derived = await runMediaTask("background", () => resize(largestBytes, SIZES[size]));
+    derived = await runMediaTask("background", () => resize(largestBytes, inputArgs, SIZES[size]));
   } catch {
     return null;
   }
