@@ -96,7 +96,7 @@ export function NodeHeader({ node, playback, onOpenNode }: NodeSheetProps) {
       {color != null && (
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 h-[260px] rounded-t-[28px]"
+          className="pointer-events-none absolute inset-x-0 top-0 h-[260px] rounded-t-[var(--radius-sheet)]"
           style={{ background: `linear-gradient(180deg, ${withAlpha(color, 0.22)}, ${withAlpha(color, 0)} 260px)` }}
         />
       )}

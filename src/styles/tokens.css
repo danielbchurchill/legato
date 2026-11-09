@@ -34,6 +34,10 @@
   --color-raised: #22282c;
   /* Punched down into a surface: a segmented control's track, input wells. */
   --color-sunken: rgb(0 0 0 / 0.28);
+  /* Under a modal: the canvas at 60%, never black, so the map still shows
+   * through. A Dialog's overlay, the unreachable state over the shell, and
+   * the away-from-home notice (#412). */
+  --color-modal-wash: color-mix(in srgb, var(--color-canvas) 60%, transparent);
 
   /* ---- Lines and washes ----------------------------------------------- */
 
@@ -179,6 +183,7 @@
   --radius-art: 6px; /*     cover art */
   --radius-art-sm: 4px; /*  36px row thumbnails */
   --radius-small: 4px; /*   checkbox, format badge */
+  --radius-sheet: 28px; /*  the phone's sheets, top corners: rounder than any panel, as a native sheet's are */
   --radius-surface: var(--radius-panel);
 
   /* The shell. Everything floats --inset from the window edge; the free

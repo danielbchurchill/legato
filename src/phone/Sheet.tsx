@@ -383,8 +383,9 @@ export function Sheet({
         aria-label={label}
         data-detent={detent}
         // Glass, with its top border only, as the handoff draws the sheet.
-        // 28px corners: rounder than any panel, as a native sheet's are.
-        className="glass pointer-events-auto absolute inset-x-0 bottom-0 flex flex-col rounded-t-[28px]"
+        // --radius-sheet's 28px corners: rounder than any panel, as a native
+        // sheet's are.
+        className="glass pointer-events-auto absolute inset-x-0 bottom-0 flex flex-col rounded-t-[var(--radius-sheet)]"
         style={{
           height: heights.large,
           borderLeftWidth: 0,
@@ -393,7 +394,13 @@ export function Sheet({
           visibility: heights.large > 0 ? undefined : 'hidden',
         }}
       >
-        {wash && <div aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-t-[28px]" style={{ background: wash }} />}
+        {wash && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 rounded-t-[var(--radius-sheet)]"
+            style={{ background: wash }}
+          />
+        )}
         <div
           ref={headerRef}
           className="relative shrink-0 touch-none pt-[23px] select-none"

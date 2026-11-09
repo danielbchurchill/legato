@@ -64,7 +64,7 @@ export function ServerUnreachableWindow({ view, theme }: { view: UnreachableView
  * player, which the shell draws after it. */
 export function ServerUnreachableOverShell({ view }: { view: UnreachableView }) {
   return (
-    <div className="absolute inset-0 z-20 flex items-center justify-center bg-[color-mix(in_srgb,var(--color-canvas)_60%,transparent)] p-[24px]">
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--color-modal-wash)] p-[24px]">
       <section
         aria-label="Server unreachable"
         className="glass flex max-w-[440px] flex-col items-center gap-[14px] rounded-[var(--radius-panel)] p-[var(--spacing-panel)] text-center"
