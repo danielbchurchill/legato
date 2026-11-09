@@ -61,6 +61,9 @@ jobs:
   # pin the Intel Mac's ffmpeg by hash.
   media:
     runs-on: ubuntu-latest
+    # Under a minute; a host that keeps refusing gets about two minutes of
+    # retries per binary before the fetch fails.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -110,6 +113,9 @@ jobs:
             target: aarch64-unknown-linux-gnu
             bundles: appimage,deb
     runs-on: ${{ matrix.runner }}
+    # Issue #491's limit, as build.yml's other jobs have. A leg takes 4 to 11
+    # minutes with a warm Cargo cache, the Intel Mac's cross-compile longest.
+    timeout-minutes: 45
     # Secrets and variables only: no deployment record on every pull request.
     environment:
       name: desktop-signing
@@ -355,6 +361,7 @@ jobs:
   manifest:
     needs: bundle
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
