@@ -1,6 +1,6 @@
 # The desktop app
 
-Every release has the desktop app for macOS, Windows and Linux on its [release page](https://github.com/danielbchurchill/legato/releases/latest). The app carries its own Legato server, with ffmpeg and fpcalc, so there's nothing else to install. It plays from your music folders natively, and serves them to your phone and other devices while it's open, or from the tray once its window is closed.
+Every release has the desktop app for macOS, Windows and Linux on its [release page](https://github.com/danielbchurchill/legato/releases/latest). The app carries its own Legato server, with ffmpeg and fpcalc, so there's nothing else to install. It plays from your music folders natively, and serves them to your phone and other devices while it's open, or from the tray (the menu bar, on a Mac) once its window is closed.
 
 | Computer | Download |
 |---|---|
@@ -9,6 +9,8 @@ Every release has the desktop app for macOS, Windows and Linux on its [release p
 | Windows, 64-bit | `legato_<version>_x64-setup.exe` |
 | Linux, x86-64 | `legato_<version>_amd64.AppImage`, or `legato_<version>_amd64.deb` |
 | Linux, 64-bit ARM | `legato_<version>_aarch64.AppImage`, or `legato_<version>_arm64.deb` |
+
+Not sure which Mac you have? Choose **Apple menu → About This Mac**. A Mac that lists a **Chip** has Apple silicon; one that lists a **Processor** is Intel.
 
 The Linux builds need glibc 2.39 or later: Ubuntu 24.04, Debian 13, Fedora 40, or newer.
 
@@ -19,11 +21,11 @@ Legato isn't signed with an Apple Developer ID or a Windows code-signing certifi
 ### macOS
 
 1. Open the `.dmg` and drag **legato** into **Applications**.
-2. Open it from Applications. macOS says it can't verify that "legato" is free of malware. Click **Done**.
-3. Open **System Settings → Privacy & Security** and scroll down to **Security**. It says "legato" was blocked. Click **Open Anyway**, enter your password or use Touch ID, then click **Open**.
+2. Open it from Applications. macOS says "legato" wasn't opened, because Apple couldn't verify that it's free of malware. Click **Done**, not **Move to Trash**.
+3. Open **System Settings → Privacy & Security** and scroll down to **Security**. It says "legato" was blocked to protect your Mac. Click **Open Anyway**. When macOS asks you to confirm, click **Open Anyway** again, and enter your password or use Touch ID. Legato opens.
 4. When Legato first looks for servers on your network, macOS asks whether it may find devices on your local network. Click **Allow**.
 
-Since macOS 15, Control-clicking the app and choosing **Open** no longer skips the warning. **Open Anyway** is the way.
+The **Open Anyway** button stays for about an hour after step 2. If it's gone, open Legato from Applications again, click **Done**, and go straight back to Privacy & Security. Since macOS 15, Control-clicking the app and choosing **Open** no longer skips the warning, so **Open Anyway** is the way.
 
 Every update is signed with the same certificate, so macOS doesn't ask again, and Legato keeps its Local Network permission. The first update signed with Apple's certificate (#483) changes the app's identity once, so macOS asks for that permission one more time.
 
@@ -57,7 +59,7 @@ It adds Legato to your applications menu, and `legato-desktop` starts it from a 
 
 ## Updates
 
-Legato asks GitHub whether there's a newer release when it starts, and then once a day. A newer one downloads in the background, then a note under the search bar says "Legato 0.3.0 is available — restart to update". Nothing restarts until you click it, because restarting stops the server that your phone or other devices may be playing from. The × hides that version until the next one comes out.
+Legato asks GitHub whether there's a newer release when it starts, and then once a day. A newer one downloads in the background, then a note under the search bar says so, for example "Legato 0.4.1 is available — restart to update". Nothing restarts until you click it, because restarting stops the server that your phone or other devices may be playing from. The × hides that version until the next one comes out.
 
 The Mac app, the Windows installer and the AppImage update themselves. A `.deb` belongs to apt, so the note links to the release instead: download the new `.deb` and install it the same way.
 
