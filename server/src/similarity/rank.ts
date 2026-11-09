@@ -1,13 +1,37 @@
-import { cosineSimilarity } from "./features.js";
+import { Pacer, scoreRows, type VectorIndex } from "./vectorIndex.js";
 
-export type Candidate = { nodeId: number; vector: number[] };
 export type RankedResult = { nodeId: number; score: number };
 
-export function rankMostSimilar(anchor: number[], candidates: Candidate[], count: number): RankedResult[] {
-  return candidates
-    .map((c) => ({ nodeId: c.nodeId, score: cosineSimilarity(anchor, c.vector) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, count);
+/** Who's ranked: the rows of the anchor's type that `include` keeps. The
+ *  anchor's own row is never one of them. */
+export type CandidatePool = { index: VectorIndex; anchor: number; include: (row: number) => boolean };
+
+function poolFilter(pool: CandidatePool): (row: number) => boolean {
+  return (row) => row !== pool.anchor && pool.include(row);
+}
+
+// The best `count` by `better`, kept in order as rows arrive. A row that
+// ties one already kept goes after it, so ties keep row (node id) order, as
+// a stable sort over every candidate did.
+function keepBest(count: number, better: (a: number, b: number) => boolean) {
+  const kept: { row: number; score: number }[] = [];
+  return {
+    kept,
+    offer(row: number, score: number) {
+      if (count <= 0 || (kept.length === count && !better(score, kept[count - 1]!.score))) return;
+      let at = kept.length;
+      while (at > 0 && better(score, kept[at - 1]!.score)) at--;
+      kept.splice(at, 0, { row, score });
+      if (kept.length > count) kept.pop();
+    },
+  };
+}
+
+export async function rankMostSimilar(pool: CandidatePool, count: number): Promise<RankedResult[]> {
+  const { index, anchor } = pool;
+  const best = keepBest(count, (a, b) => a > b);
+  await scoreRows(index, anchor, index.kinds[anchor]!, poolFilter(pool), best.offer);
+  return best.kept.map(({ row, score }) => ({ nodeId: index.ids[row]!, score }));
 }
 
 // "Completely different" isn't just the single furthest node — the purely
@@ -21,21 +45,31 @@ export function rankMostSimilar(anchor: number[], candidates: Candidate[], count
 const COVERAGE_SIMILARITY_THRESHOLD = 0.5;
 const POOL_MULTIPLIER = 4;
 
-export function rankMostDissimilar(anchor: number[], candidates: Candidate[], count: number): RankedResult[] {
-  if (candidates.length === 0) return [];
+export async function rankMostDissimilar(pool: CandidatePool, count: number): Promise<RankedResult[]> {
+  const { index, anchor } = pool;
+  const kind = index.kinds[anchor]!;
+  const include = poolFilter(pool);
+  const pacer = new Pacer();
+  const furthest = keepBest(Math.max(count * POOL_MULTIPLIER, count), (a, b) => a > b);
+  await scoreRows(index, anchor, kind, include, (row, score) => furthest.offer(row, 1 - score), pacer);
 
-  const distances = candidates
-    .map((c) => ({ nodeId: c.nodeId, vector: c.vector, distance: 1 - cosineSimilarity(anchor, c.vector) }))
-    .sort((a, b) => b.distance - a.distance);
-
-  const poolSize = Math.min(distances.length, Math.max(count * POOL_MULTIPLIER, count));
-  const pool = distances.slice(0, poolSize);
-
-  const coverage = (vector: number[]): number =>
-    candidates.reduce((n, c) => (cosineSimilarity(vector, c.vector) >= COVERAGE_SIMILARITY_THRESHOLD ? n + 1 : n), 0);
-
-  return pool
-    .map((p) => ({ nodeId: p.nodeId, score: 1 - cosineSimilarity(anchor, p.vector), coverage: coverage(p.vector) }))
+  // A candidate's company counts every candidate, itself included.
+  const ranked = [];
+  for (const { row, score } of furthest.kept) {
+    let coverage = 0;
+    await scoreRows(
+      index,
+      row,
+      kind,
+      include,
+      (_, similarity) => {
+        if (similarity >= COVERAGE_SIMILARITY_THRESHOLD) coverage++;
+      },
+      pacer,
+    );
+    ranked.push({ nodeId: index.ids[row]!, score, coverage });
+  }
+  return ranked
     .sort((a, b) => b.coverage - a.coverage || b.score - a.score)
     .slice(0, count)
     .map(({ nodeId, score }) => ({ nodeId, score }));

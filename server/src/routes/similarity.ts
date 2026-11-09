@@ -17,10 +17,15 @@ type RankedResult = { nodeId: number; score: number };
 // here so the field means what it says for whatever does start reading it.
 // Now resolved through the same shared chain both the image endpoint and the
 // graph's node list use, rather than a third local rendition of it.
+//
+// Issue #382: the ranking reads vectors the server keeps in memory until a
+// recompute changes them, so a node deleted since (a hygiene merge, say) can
+// still be ranked. It's left out.
 function hydrate(db: Database, ranked: RankedResult[]) {
   const nodeRow = db.prepare(`SELECT title, type FROM nodes WHERE id = ?`);
-  return ranked.map((r) => {
-    const node = nodeRow.get(r.nodeId) as { title: string; type: string };
+  return ranked.flatMap((r) => {
+    const node = nodeRow.get(r.nodeId) as { title: string; type: string } | undefined;
+    if (!node) return [];
     return {
       id: r.nodeId,
       title: node.title,
@@ -42,7 +47,7 @@ export function similarityRoutes(db: Database) {
           return { error: "invalid node id" };
         }
         const limit = Math.min(Number(request.query.limit ?? 3), 20);
-        return hydrate(db, findMostSimilar(db, nodeId, limit));
+        return hydrate(db, await findMostSimilar(db, nodeId, limit));
       },
     );
 
@@ -55,7 +60,7 @@ export function similarityRoutes(db: Database) {
           return { error: "invalid node id" };
         }
         const limit = Math.min(Number(request.query.limit ?? 3), 20);
-        return hydrate(db, findMostDissimilar(db, nodeId, limit));
+        return hydrate(db, await findMostDissimilar(db, nodeId, limit));
       },
     );
   };

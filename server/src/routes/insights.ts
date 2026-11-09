@@ -29,8 +29,8 @@ import { loadModel, memo } from "../insights/model.js";
  * The connection cards come from insights/model.ts, kept per change to the
  * library; the listening cards from one pass over plays, kept until the
  * next play (insights/listening.ts). None of it
- * calls the similarity ranking (/nodes/:id/similar), which takes 24-33 s
- * at 30,000 albums (#382): "Sounds alike" reads pairs recompute stored. */
+ * calls the similarity ranking (/nodes/:id/similar): "Sounds alike" reads
+ * pairs recompute stored. */
 
 export function insightsRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {

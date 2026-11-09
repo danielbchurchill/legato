@@ -54,6 +54,7 @@ import m0049_tag_edits from "./0049_tag_edits.sql" with { type: "text" };
 import m0052_mosaic_cells from "./0052_mosaic_cells.sql" with { type: "text" };
 import m0053_release_rule_by_folder from "./0053_release_rule_by_folder.sql" with { type: "text" };
 import m0054_track_keys from "./0054_track_keys.sql" with { type: "text" };
+import m0055_sparse_similarity from "./0055_sparse_similarity.sql" with { type: "text" };
 import m0056_imported_play_counts from "./0056_imported_play_counts.sql" with { type: "text" };
 
 export interface MigrationFile {
@@ -114,5 +115,6 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 52, file: "0052_mosaic_cells.sql", sql: m0052_mosaic_cells },
   { version: 53, file: "0053_release_rule_by_folder.sql", sql: m0053_release_rule_by_folder },
   { version: 54, file: "0054_track_keys.sql", sql: m0054_track_keys },
+  { version: 55, file: "0055_sparse_similarity.sql", sql: m0055_sparse_similarity },
   { version: 56, file: "0056_imported_play_counts.sql", sql: m0056_imported_play_counts },
 ];

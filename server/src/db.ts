@@ -69,8 +69,9 @@ function formatMegabytes(bytes: number): string {
 // CHECK, as 0014, 0019 and 0029 did, writes about that table and its
 // indexes, and apart from the similarity vectors the biggest table in that
 // database is edges, 11% of it with its indexes. A quarter of the database
-// covers either with room to spare. A migration that rewrites the
-// similarity vectors, most of the file, has to raise this.
+// covers either with room to spare. The similarity vectors were most of the
+// file until 0055 stored them sparsely (#322): 27 MB of 519 MB since, and
+// dropping the dense table wrote 2.9 MB of -wal.
 export const MIGRATION_WAL_SHARE = 0.25;
 
 function backupBeforeMigrating(

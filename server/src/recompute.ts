@@ -6,7 +6,7 @@ import { enqueueEnrichmentIfNeeded, enqueueLookupsInBound } from "./enrich/queue
 import { recomputeEntities } from "./entities/aggregate.js";
 import { recomputeCollaborationEdges } from "./entities/collaboration.js";
 import { recomputeAllLayouts } from "./layout/seed.js";
-import { recomputeSimilarityFeatures } from "./similarity/similarity.js";
+import { recomputeSimilarityFeatures, refreshSimilarityVectors } from "./similarity/similarity.js";
 import { recomputeArticles } from "./articles/recompute.js";
 import { recomputeInsights } from "./insights/recompute.js";
 import { writeInChunks } from "./writeInChunks.js";
@@ -109,6 +109,8 @@ export function recompute(db: Database): void {
 // clients to refetch data that's already there. Each run ends with one
 // library:changed (libraryRevision.ts), sent whether it finished or failed
 // partway, since a failed run may still have committed some of its pieces.
+// Issue #382: then the similarity vectors the request loop keeps in memory
+// are read again, if anything has asked for them and the run changed them.
 //
 // One runs at a time. A call made while one is running gets the run after
 // it, shared with every other call made meanwhile: a recompute derives
@@ -134,6 +136,7 @@ export function recomputeOffThread(db: Database): Promise<void> {
   running = runRecompute(db).finally(() => {
     running = null;
     libraryChanged();
+    refreshSimilarityVectors(db);
   });
   return running;
 }
