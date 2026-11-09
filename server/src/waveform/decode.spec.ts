@@ -1,9 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { computePeaks, pcmToPeaks } from "./decode.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 function makePcm(samples: number[]): Buffer {
   const buf = Buffer.alloc(samples.length * 2);
@@ -55,11 +55,7 @@ describe("computePeaks (real ffmpeg decode)", () => {
 
   it("produces a real peak envelope for a real audio file", async () => {
     const filePath = path.join(dir, "tone.flac");
-    execFileSync(
-      "ffmpeg",
-      ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", filePath],
-      { stdio: "ignore" },
-    );
+    runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=1", filePath]);
 
     const peaks = await computePeaks(filePath, 100);
     expect(peaks).toHaveLength(100);

@@ -1,5 +1,4 @@
 import * as childProcess from "node:child_process";
-import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -25,7 +24,7 @@ const { CACHE_DIR, cachePath, storeCover } = await import("../cover/store.js");
 const { coverRoutes } = await import("./cover.js");
 const { installPictures, Pictures } = await import("../account/pictures.js");
 const { buildTestApp, createOwnerForTest } = await import("../auth/test-app.js");
-const { FFMPEG_PATH } = await import("../mediaBinaries.js");
+const { runFfmpeg, tryFfmpeg } = await import("../test-ffmpeg.js");
 if (previousDataDir === undefined) delete process.env.LEGATO_DATA_DIR;
 else process.env.LEGATO_DATA_DIR = previousDataDir;
 // Without --isolate (which `npm --prefix server test` passes), another spec
@@ -79,8 +78,7 @@ beforeAll(async () => {
     ["a QuickTime movie", ["-f", "lavfi", "-i", "testsrc2=s=64x48:d=0.2", "-c:v", "mpeg4", "-f", "mov"]],
   ] as const) {
     const file = path.join(dataDir, `media-${media.length}`);
-    const made = spawnSync(FFMPEG_PATH, ["-hide_banner", "-loglevel", "error", ...args, file]);
-    if (made.status !== 0) throw new Error(`ffmpeg couldn't make ${name}: ${made.stderr}`);
+    runFfmpeg([...args, file]);
     const bytes = readFileSync(file);
     media.push({ name, brand: bytes.toString("latin1", 8, 12), bytes });
   }
@@ -197,11 +195,7 @@ describe("a HEIC this server's ffmpeg can't read", () => {
 // for byte the same, and one that didn't (a HEIC, to an ffmpeg older than
 // HEIF support) must still be refused.
 function before(bytes: Buffer, filter: string, quality: string): Buffer<ArrayBuffer> | null {
-  const result = spawnSync(
-    FFMPEG_PATH,
-    ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vf", filter, "-frames:v", "1", "-f", "mjpeg", "-q:v", quality, "pipe:1"],
-    { input: bytes, maxBuffer: 64 * 1024 * 1024 },
-  );
+  const result = tryFfmpeg(["-i", "pipe:0", "-vf", filter, "-frames:v", "1", "-f", "mjpeg", "-q:v", quality, "pipe:1"], { input: bytes });
   return result.status === 0 && result.stdout.length > 0 ? Buffer.from(result.stdout) : null;
 }
 const coverBefore = (bytes: Buffer, edge: number) => before(bytes, `scale=${edge}:${edge}:force_original_aspect_ratio=decrease`, "4");
@@ -209,11 +203,7 @@ const pictureBefore = (bytes: Buffer) => before(bytes, "scale=256:256:force_orig
 
 // One frame from ffmpeg's test sources.
 function encode(source: string, output: string[]): Buffer {
-  const result = spawnSync(FFMPEG_PATH, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", source, "-frames:v", "1", ...output, "pipe:1"], {
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (result.status !== 0) throw new Error(`ffmpeg couldn't make a test picture: ${result.stderr}`);
-  return result.stdout;
+  return runFfmpeg(["-f", "lavfi", "-i", source, "-frames:v", "1", ...output, "pipe:1"]);
 }
 
 // A phone camera's JPEG: stored landscape, with an EXIF Orientation of 6

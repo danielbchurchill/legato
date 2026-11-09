@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import { appendFile, writeFile } from "node:fs/promises";
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mediaSlotsInUse, playbackWaiting } from "../media/queue.js";
 import { fillMediaSlots, queuePlayback } from "../media/test-slots.js";
 import { cachePath, ensureVariant, Orphans, readGrowing, stopFfmpeg, TranscodeJob } from "./cache.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 const HASH = "0123456789abcdef0123456789abcdef01234567";
 
@@ -31,9 +32,7 @@ async function collect(stream: AsyncIterable<Buffer>): Promise<Buffer> {
 // test are ffmpeg's, so a hand-built header would prove nothing.
 function sineFlac(seconds: number, name = "source.flac"): string {
   const source = path.join(dir, name);
-  execFileSync("ffmpeg", ["-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`, source], {
-    stdio: "ignore",
-  });
+  runFfmpeg(["-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`, source]);
   return source;
 }
 

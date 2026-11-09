@@ -1,11 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { openDb } from "../db.js";
-import { FFMPEG_PATH } from "../mediaBinaries.js";
 import type { Database } from "../sqlite.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 import { isPictureAddress, PICTURE_EDGE, Pictures, RETRY_AFTER_MS } from "./pictures.js";
 import { jpegSize, makeImage } from "./test-images.js";
 
@@ -17,9 +16,8 @@ const GITHUB = "https://avatars.githubusercontent.com/u/42?v=4";
 
 // The colour at the picture's top-left corner, decoded back through ffmpeg.
 function cornerColour(jpeg: Buffer): [number, number, number] {
-  const args = ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"];
-  const result = spawnSync(FFMPEG_PATH, args, { input: jpeg });
-  return [result.stdout[0]!, result.stdout[1]!, result.stdout[2]!];
+  const pixels = runFfmpeg(["-i", "pipe:0", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"], { input: jpeg });
+  return [pixels[0]!, pixels[1]!, pixels[2]!];
 }
 
 let png: Buffer;

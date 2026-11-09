@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { noteServed, RECENTLY_SERVED_MS, trimStreamCache, trimStreamCacheOnStart } from "./budget.js";
 import { cachePath, ensureVariant } from "./cache.js";
 import { VARIANTS, type TranscodedQuality } from "./quality.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 const NOW = Date.parse("2026-10-30T12:00:00Z");
 const MINUTE = 60_000;
@@ -200,7 +200,7 @@ describe("a new transcode", () => {
   const source = () => {
     const file = path.join(dir, "source.flac");
     if (!existsSync(file)) {
-      execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", file], { stdio: "ignore" });
+      runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=1", file]);
     }
     return file;
   };

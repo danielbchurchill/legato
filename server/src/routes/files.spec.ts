@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,6 +11,7 @@ import { fillMediaSlots, queuePlayback } from "../media/test-slots.js";
 import { cachePath, TranscodeJob } from "../stream/cache.js";
 import { FRAGMENTED_QUALITIES, VARIANTS, type TranscodedQuality } from "../stream/quality.js";
 import { filesRoutes, parseRange } from "./files.js";
+import { runFfmpeg, runFfprobe } from "../test-ffmpeg.js";
 
 const SIZE = 1000;
 
@@ -76,7 +76,7 @@ describe("GET /api/v1/files/:id/stream", () => {
     db = openDb(":memory:");
     dir = mkdtempSync(path.join(tmpdir(), "legato-files-route-test-"));
     sourcePath = path.join(dir, "track.flac");
-    execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", sourcePath], { stdio: "ignore" });
+    runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=1", sourcePath]);
 
     const root = db.prepare("INSERT INTO library_roots (path) VALUES (?) RETURNING id").get(dir) as { id: number };
     const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id").get() as {
@@ -182,7 +182,7 @@ describe("GET /api/v1/files/:id/stream", () => {
     // A paused player's browser drops the idle connection, and on resume
     // asks for the rest. Five minutes of audio, still encoding when it
     // hangs up.
-    execFileSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=300", sourcePath], { stdio: "ignore" });
+    runFfmpeg(["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=300", sourcePath]);
     const cacheDir = path.join(dir, "streams");
     const app = Fastify();
     await app.register(filesRoutes(db, { cacheDir }), { prefix: "/api/v1" });
@@ -206,7 +206,7 @@ describe("GET /api/v1/files/:id/stream", () => {
   });
 
   it("stops an encode nobody listens to once another track is waiting for its slot, and caches nothing", async () => {
-    execFileSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1200", sourcePath], { stdio: "ignore" });
+    runFfmpeg(["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1200", sourcePath]);
     const app = Fastify();
     await app.register(filesRoutes(db, { cacheDir: path.join(dir, "streams") }), { prefix: "/api/v1" });
     const origin = await app.listen({ port: 0, host: "127.0.0.1" });
@@ -237,7 +237,7 @@ describe("GET /api/v1/files/:id/stream", () => {
   it("keeps an encode going for a seek waiting on it after the player that started it hangs up", async () => {
     // Five minutes of audio, so the encode is still going when the first
     // listener leaves, with another track waiting for a slot meanwhile.
-    execFileSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=300", sourcePath], { stdio: "ignore" });
+    runFfmpeg(["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=300", sourcePath]);
     const app = Fastify();
     await app.register(filesRoutes(db, { cacheDir: path.join(dir, "streams") }), { prefix: "/api/v1" });
     const origin = await app.listen({ port: 0, host: "127.0.0.1" });
@@ -267,7 +267,7 @@ describe("GET /api/v1/files/:id/stream", () => {
   });
 
   it("counts a player that hangs up while its encode is being set up as gone", async () => {
-    execFileSync("ffmpeg", ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1200", sourcePath], { stdio: "ignore" });
+    runFfmpeg(["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1200", sourcePath]);
     const cacheDir = path.join(dir, "streams");
     const app = Fastify();
     let hungUp!: () => void;
@@ -361,7 +361,7 @@ describe("GET /api/v1/files/:id/stream", () => {
     // Every packet's own bytes, by hash: a stream copy carries the source's
     // FLAC frames unchanged, where a re-encode would make new ones.
     function packetHashes(file: string): string[] {
-      const csv = execFileSync("ffprobe", [
+      const csv = runFfprobe([
         "-v",
         "error",
         "-select_streams",
@@ -423,7 +423,7 @@ describe("GET /api/v1/files/:id/stream", () => {
 
     it("indexes an ALAC .m4a as alac", async () => {
       const alac = path.join(dir, "track.m4a");
-      execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "alac", alac], { stdio: "ignore" });
+      runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "alac", alac]);
       db.prepare("UPDATE files SET file_path = ? WHERE id = ?").run(alac, fileId);
       const res = await index("?quality=original-fmp4");
       expect(res.statusCode).toBe(200);
@@ -454,29 +454,25 @@ describe("GET /api/v1/files/:id/stream", () => {
         ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=500\ntitle=one\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=500\nEND=1000\ntitle=two\n",
       );
       const withChapters = path.join(dir, "chapters.m4a");
-      execFileSync(
-        "ffmpeg",
-        [
-          "-f",
-          "lavfi",
-          "-i",
-          "sine=frequency=440:duration=1",
-          "-i",
-          chapters,
-          "-map",
-          "0",
-          "-map_chapters",
-          "1",
-          "-c:a",
-          "aac",
-          withChapters,
-        ],
-        { stdio: "ignore" },
-      );
+      runFfmpeg([
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=1",
+        "-i",
+        chapters,
+        "-map",
+        "0",
+        "-map_chapters",
+        "1",
+        "-c:a",
+        "aac",
+        withChapters,
+      ]);
       db.prepare("UPDATE files SET file_path = ? WHERE id = ?").run(withChapters, fileId);
       for (const quality of ["original-fmp4", "aac160"] as const) {
         expect((await get(`?quality=${quality}`)).statusCode).toBe(200);
-        const streams = execFileSync("ffprobe", [
+        const streams = runFfprobe([
           "-v",
           "error",
           "-show_entries",

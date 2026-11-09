@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +5,7 @@ import { parseFile } from "music-metadata";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { computeDiff } from "./diff.js";
 import { applyTagWrite, readWriteMarker, revertTagWrite } from "./writer.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 let dir: string;
 let filePath: string;
@@ -17,27 +17,23 @@ let filePath: string;
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), "legato-tagwrite-mp3-test-"));
   filePath = path.join(dir, "test.mp3");
-  execFileSync(
-    "ffmpeg",
-    [
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=440:duration=0.2",
-      "-metadata",
-      "title=Original Title",
-      "-metadata",
-      "artist=Original Artist",
-      "-metadata",
-      "album=Original Album",
-      "-metadata",
-      "date=2000",
-      "-metadata",
-      "track=1",
-      filePath,
-    ],
-    { stdio: "ignore" },
-  );
+  runFfmpeg([
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:duration=0.2",
+    "-metadata",
+    "title=Original Title",
+    "-metadata",
+    "artist=Original Artist",
+    "-metadata",
+    "album=Original Album",
+    "-metadata",
+    "date=2000",
+    "-metadata",
+    "track=1",
+    filePath,
+  ]);
 });
 
 afterEach(() => {

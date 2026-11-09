@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +6,7 @@ import { parseFile } from "music-metadata";
 import { computeDiff } from "./diff.js";
 import { unwritableReason } from "./fields.js";
 import { applyTagWrite } from "./writer.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 // Issue #464's fields, checked the way the rest of the writer's are: written
 // through TagLib# and read back through music-metadata, the app's own tag
@@ -16,11 +16,7 @@ let dir: string;
 const templates: Record<string, string> = {};
 
 function ffmpeg(out: string, extra: string[]): void {
-  execFileSync(
-    "ffmpeg",
-    ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-metadata", "artist=JPEGMAFIA; Danny Brown", ...extra, out],
-    { stdio: "ignore" },
-  );
+  runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-metadata", "artist=JPEGMAFIA; Danny Brown", ...extra, out]);
 }
 
 beforeAll(() => {
