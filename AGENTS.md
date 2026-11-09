@@ -17,7 +17,7 @@ How to work on Legato: the layout, the conventions, and the non-obvious things t
 ## Toolchain
 
 - **Node**, pinned in `.nvmrc`. Run `nvm use` first.
-- **Bun 1.4.4.** `server/` and `relay/` run on it, and `npx tauri dev`/`build` compile the server sidecar with it. `scripts/build-server-sidecar.mjs` checks for it and prints the install command when it's missing.
+- **Bun 1.4.4.** `server/` runs on it, and `npx tauri dev`/`build` compile the server sidecar with it. The relay's image stays on 1.4.2 for now (`relay/Dockerfile` says why); its tests run on 1.4.4 in CI. `scripts/build-server-sidecar.mjs` checks for it and prints the install command when it's missing.
 - **Rust (stable)** for `src-tauri/`.
 
 ## Checks

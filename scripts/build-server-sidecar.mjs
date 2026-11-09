@@ -67,8 +67,9 @@ const COMPILE_TARGET = {
 };
 
 // The Bun release the server is built and tested against. The workflows'
-// setup-bun steps, both Dockerfiles and the docs pin the same version; bump
-// them together (`grep -rn` for the old version finds every one).
+// setup-bun steps, server/Dockerfile and the docs pin the same version; bump
+// them together (`grep -rn` for the old version finds every one). The
+// relay's image moves on its own (relay/Dockerfile).
 const BUN_VERSION = "1.4.4";
 
 function installCommand() {
