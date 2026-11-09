@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +8,7 @@ import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import type { TagFields } from "../tagwrite/fields.js";
 import { applyTagWrite } from "../tagwrite/writer.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 // Every fixture here is a copy of one sine tone, so with fpcalc installed
 // the scan's AcoustID tier would fold them all into one recording, and
@@ -33,7 +33,7 @@ beforeAll(() => {
   const templateDir = mkdtempSync(path.join(tmpdir(), "legato-tag-edit-templates-"));
   const make = (name: string, extra: string[] = []) => {
     const out = path.join(templateDir, name);
-    execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", ...extra, out], { stdio: "ignore" });
+    runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", ...extra, out]);
     return out;
   };
   templates = { flac: make("t.flac"), wav: make("t.wav"), dir: templateDir };
@@ -77,11 +77,7 @@ async function addTracks(count: number, tags: (n: number) => TagFields): Promise
 // A WAV the writer can't take, tagged through ffmpeg's RIFF INFO chunk.
 async function addWav(name: string, tags: { title: string; artist: string; album: string }): Promise<Track> {
   const file = path.join(dir, `${name}.wav`);
-  execFileSync(
-    "ffmpeg",
-    ["-i", templates.wav, ...Object.entries(tags).flatMap(([k, v]) => ["-metadata", `${k}=${v}`]), "-c", "copy", file],
-    { stdio: "ignore" },
-  );
+  runFfmpeg(["-i", templates.wav, ...Object.entries(tags).flatMap(([k, v]) => ["-metadata", `${k}=${v}`]), "-c", "copy", file]);
   await scanFile(db, rootId, file);
   return trackAt(file);
 }

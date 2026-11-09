@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +8,7 @@ import { openDb } from "./db.js";
 import { getDuplicatePair, readBitDepth } from "./hygiene.js";
 import { resolveQueueTracks } from "./routes/queue.js";
 import { hygieneRoutes } from "./routes/hygiene.js";
+import { runFfmpeg } from "./test-ffmpeg.js";
 
 /* #469: the two sides of a possible duplicate, and which file the track
  * plays after a merge, by the rule POST /queue/resolve plays by. */
@@ -204,9 +204,7 @@ describe("readBitDepth", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "legato-bitdepth-"));
     try {
       const flac = path.join(dir, "tone.flac");
-      execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-sample_fmt", "s16", flac], {
-        stdio: "ignore",
-      });
+      runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-sample_fmt", "s16", flac]);
       expect(await readBitDepth(flac)).toBe(16);
       expect(await readBitDepth(path.join(dir, "gone.flac"))).toBeNull();
     } finally {

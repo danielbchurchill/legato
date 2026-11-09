@@ -1,10 +1,10 @@
-import { execFileSync } from "node:child_process";
 import { createReadStream, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { readCodecs, readFragmentIndex } from "./fragments.js";
 import { VARIANTS, type TranscodedQuality } from "./quality.js";
+import { runFfmpeg, runFfprobe } from "../test-ffmpeg.js";
 
 let dir: string;
 
@@ -21,38 +21,20 @@ afterEach(() => {
 // server really serves.
 function source(name: string, codecArgs: string[], seconds = 5, sampleRate = 44100): string {
   const file = path.join(dir, name);
-  execFileSync(
-    "ffmpeg",
-    ["-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}:sample_rate=${sampleRate}`, ...codecArgs, file],
-    {
-      stdio: "ignore",
-    },
-  );
+  runFfmpeg(["-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}:sample_rate=${sampleRate}`, ...codecArgs, file]);
   return file;
 }
 
 function rung(sourcePath: string, quality: TranscodedQuality): string {
   const out = path.join(dir, `${path.basename(sourcePath)}.${quality}.m4a`);
-  execFileSync("ffmpeg", ["-i", sourcePath, "-map", "0:a:0", "-vn", ...VARIANTS[quality].encoderArgs, out], {
-    stdio: "ignore",
-  });
+  runFfmpeg(["-i", sourcePath, "-map", "0:a:0", "-vn", ...VARIANTS[quality].encoderArgs, out]);
   return out;
 }
 
 // ffprobe's own reading of the file: where each packet's data sits and when
 // it plays. A fragment's first packet is the first one at or after its moof.
 function packets(file: string): { pts: number; pos: number }[] {
-  const csv = execFileSync("ffprobe", [
-    "-v",
-    "error",
-    "-select_streams",
-    "a:0",
-    "-show_entries",
-    "packet=pts_time,pos",
-    "-of",
-    "csv=p=0",
-    file,
-  ]);
+  const csv = runFfprobe(["-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time,pos", "-of", "csv=p=0", file]);
   return csv
     .toString()
     .trim()
@@ -119,25 +101,19 @@ describe("readFragmentIndex", () => {
     const mp3 = path.join(dir, "track.mp4");
     const flac = source("for-mp3.flac", ["-c:a", "flac"]);
     try {
-      execFileSync(
-        "ffmpeg",
-        [
-          "-i",
-          flac,
-          "-c:a",
-          "libmp3lame",
-          "-movflags",
-          "+empty_moov+default_base_moof",
-          "-frag_duration",
-          "1000000",
-          "-f",
-          "mp4",
-          mp3,
-        ],
-        {
-          stdio: "ignore",
-        },
-      );
+      runFfmpeg([
+        "-i",
+        flac,
+        "-c:a",
+        "libmp3lame",
+        "-movflags",
+        "+empty_moov+default_base_moof",
+        "-frag_duration",
+        "1000000",
+        "-f",
+        "mp4",
+        mp3,
+      ]);
     } catch {
       // An ffmpeg built without LAME can't make one; nothing to check then.
       return;
@@ -172,7 +148,7 @@ describe("readFragmentIndex", () => {
     await expect(readFragmentIndex(flac)).rejects.toThrow();
 
     const plain = path.join(dir, "plain.m4a");
-    execFileSync("ffmpeg", ["-i", flac, "-c:a", "aac", plain], { stdio: "ignore" });
+    runFfmpeg(["-i", flac, "-c:a", "aac", plain]);
     await expect(readFragmentIndex(plain)).rejects.toThrow("no fragments");
 
     const truncated = path.join(dir, "truncated.m4a");

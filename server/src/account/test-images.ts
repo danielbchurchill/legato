@@ -1,8 +1,7 @@
 // Test-only: pictures for the picture specs, made by the same ffmpeg the
 // server resizes with. Not a *.spec.ts, so `bun test` never runs it as a
 // suite of its own.
-import { spawnSync } from "node:child_process";
-import { FFMPEG_PATH } from "../mediaBinaries.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 // A PNG ffmpeg makes: a red frame `width` by `height` with a blue square
 // filling its middle, so a centre crop of a wide one is all blue. Always
@@ -11,10 +10,7 @@ import { FFMPEG_PATH } from "../mediaBinaries.js";
 // ffmpeg reads the bytes for what they are.
 export function makeImage(width: number, height: number): Buffer {
   const side = Math.min(width, height);
-  const result = spawnSync(FFMPEG_PATH, [
-    "-hide_banner",
-    "-loglevel",
-    "error",
+  return runFfmpeg([
     "-f",
     "lavfi",
     "-i",
@@ -29,8 +25,6 @@ export function makeImage(width: number, height: number): Buffer {
     "png",
     "pipe:1",
   ]);
-  if (result.status !== 0) throw new Error(`ffmpeg couldn't make a test image: ${result.stderr}`);
-  return result.stdout;
 }
 
 export function jpegSize(bytes: Buffer): { width: number; height: number } {

@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +6,7 @@ import type { Database } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { applyTagWrite } from "./writer.js";
 import { isSelfWrite } from "./guard.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 let db: Database;
 let dir: string;
@@ -17,11 +17,7 @@ beforeEach(() => {
   db = openDb(":memory:");
   dir = mkdtempSync(path.join(tmpdir(), "legato-guard-test-"));
   filePath = path.join(dir, "test.flac");
-  execFileSync(
-    "ffmpeg",
-    ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-metadata", "title=Original", filePath],
-    { stdio: "ignore" },
-  );
+  runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-metadata", "title=Original", filePath]);
 
   const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'Original') RETURNING id").get() as {
     id: number;
@@ -66,11 +62,7 @@ describe("isSelfWrite", () => {
 
     // Someone/something else edits the file after our write — a real
     // external change, e.g. a fresh ffmpeg-authored file at the same path.
-    execFileSync(
-      "ffmpeg",
-      ["-y", "-f", "lavfi", "-i", "sine=frequency=880:duration=0.2", "-metadata", "title=External Edit", filePath],
-      { stdio: "ignore" },
-    );
+    runFfmpeg(["-y", "-f", "lavfi", "-i", "sine=frequency=880:duration=0.2", "-metadata", "title=External Edit", filePath]);
 
     expect(await isSelfWrite(db, filePath)).toBe(false);
   });

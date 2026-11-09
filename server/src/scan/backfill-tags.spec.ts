@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database, SQLQueryBindings } from "../sqlite.js";
 import { openDb } from "../db.js";
 import { backfillTagColumns } from "./backfill-tags.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 let db: Database;
 let dir: string;
@@ -38,27 +38,23 @@ function insertFile(filePath: string, extraColumns: Record<string, unknown> = {}
 describe("backfillTagColumns", () => {
   it("parses release_date/bpm/label/release_type/genre for a file left over from before those columns existed", async () => {
     const filePath = path.join(dir, "track.flac");
-    execFileSync(
-      "ffmpeg",
-      [
-        "-f",
-        "lavfi",
-        "-i",
-        "sine=frequency=440:duration=0.2",
-        "-metadata",
-        "date=1969-09-26",
-        "-metadata",
-        "bpm=82",
-        "-metadata",
-        "label=Apple Records",
-        "-metadata",
-        "releasetype=album",
-        "-metadata",
-        "genre=Rock",
-        filePath,
-      ],
-      { stdio: "ignore" },
-    );
+    runFfmpeg([
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:duration=0.2",
+      "-metadata",
+      "date=1969-09-26",
+      "-metadata",
+      "bpm=82",
+      "-metadata",
+      "label=Apple Records",
+      "-metadata",
+      "releasetype=album",
+      "-metadata",
+      "genre=Rock",
+      filePath,
+    ]);
     const fileId = insertFile(filePath);
 
     const progress = await backfillTagColumns(db);
@@ -88,11 +84,7 @@ describe("backfillTagColumns", () => {
     // /mnt/music library, where real producer tags sat unread because
     // tags_raw was never refreshed a second time.
     const filePath = path.join(dir, "track.flac");
-    execFileSync(
-      "ffmpeg",
-      ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-metadata", "bpm=99", filePath],
-      { stdio: "ignore" },
-    );
+    runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-metadata", "bpm=99", filePath]);
     const fileId = insertFile(filePath, { bpm: 40 }); // stale value from a prior parse
 
     const progress = await backfillTagColumns(db);
@@ -118,11 +110,7 @@ describe("backfillTagColumns", () => {
     // (backfillFuzzyIndex, called from index.ts on every server start)
     // repopulates them from the new tags_raw.
     const filePath = path.join(dir, "track.flac");
-    execFileSync(
-      "ffmpeg",
-      ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-metadata", "title=New Title", filePath],
-      { stdio: "ignore" },
-    );
+    runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", "-metadata", "title=New Title", filePath]);
     const fileId = insertFile(filePath, {
       normalized_title: "stale old title",
       normalized_artist: "stale old artist",

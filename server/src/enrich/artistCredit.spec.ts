@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +8,7 @@ import { openDb } from "../db.js";
 import { mocked } from "../testing.js";
 import { deriveLocalEdges } from "../match/edges.js";
 import * as mbClient from "./mbClient.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 mock.module("./mbClient.js", () => ({ fetchRecordingArtistCredit: mock() }));
 
@@ -32,13 +32,7 @@ afterEach(() => {
 // repeat a tag, so node-taglib-sharp (the tag writer's own library) adds it.
 function flacWithArtists(name: string, artist: string, artists: string[]): string {
   const filePath = path.join(dir, name);
-  execFileSync(
-    "ffmpeg",
-    ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.1", "-metadata", `artist=${artist}`, filePath],
-    {
-      stdio: "ignore",
-    },
-  );
+  runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=0.1", "-metadata", `artist=${artist}`, filePath]);
   const file = TagLibFile.createFromPath(filePath);
   (file.tag as unknown as FlacTag).xiphComment.setFieldAsStrings("ARTISTS", ...artists);
   file.save();
@@ -153,13 +147,7 @@ describe("artist_credit_lookup", () => {
 
   it("asks MusicBrainz for a matched recording's credit, once", async () => {
     const filePath = path.join(dir, "missing-artists.flac");
-    execFileSync(
-      "ffmpeg",
-      ["-f", "lavfi", "-i", "sine=frequency=440:duration=0.1", "-metadata", "artist=x", filePath],
-      {
-        stdio: "ignore",
-      },
-    );
+    runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=0.1", "-metadata", "artist=x", filePath]);
     const recording = scannedBefore(filePath, { artist: "Cage The Elephant, Alison Mosshart" }, "mb-forever");
     mocked(mbClient.fetchRecordingArtistCredit).mockResolvedValue([
       { name: "Cage the Elephant", artist: "Cage the Elephant", joinphrase: " & " },

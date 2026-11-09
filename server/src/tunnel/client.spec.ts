@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
@@ -12,6 +11,7 @@ import { fillMediaSlots, queuePlayback } from "../media/test-slots.js";
 import { filesRoutes } from "../routes/files.js";
 import { backoffDelay, DrainPoll, TunnelClient, type TunnelState } from "./client.js";
 import { startFakeRelay, type FakeRelay } from "./fake-relay.js";
+import { runFfmpeg } from "../test-ffmpeg.js";
 
 // Issue #310: this server's end of legato.fm's tunnel, against a stand-in
 // relay. relay/src/tunnel.spec.ts runs the same client against the real one.
@@ -206,7 +206,7 @@ describe("TunnelClient", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "legato-tunnel-stream-"));
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
     const sourcePath = path.join(dir, "track.flac");
-    execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=3", sourcePath], { stdio: "ignore" });
+    runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=3", sourcePath]);
     const db = openDb(":memory:");
     const root = db.prepare("INSERT INTO library_roots (path) VALUES (?) RETURNING id").get(dir) as { id: number };
     const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id").get() as { id: number };
@@ -247,7 +247,7 @@ describe("TunnelClient", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "legato-tunnel-cancel-"));
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
     const sourcePath = path.join(dir, "long.flac");
-    execFileSync("ffmpeg", ["-f", "lavfi", "-i", "sine=frequency=440:duration=1200", sourcePath], { stdio: "ignore" });
+    runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=1200", sourcePath]);
     const db = openDb(":memory:");
     const root = db.prepare("INSERT INTO library_roots (path) VALUES (?) RETURNING id").get(dir) as { id: number };
     const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id").get() as { id: number };

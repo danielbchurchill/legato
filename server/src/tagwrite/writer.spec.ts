@@ -1,10 +1,10 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { computeDiff } from "./diff.js";
 import { applyTagWrite, readWriteMarker, revertTagWrite } from "./writer.js";
+import { runFfmpeg, runFfprobe } from "../test-ffmpeg.js";
 
 let dir: string;
 let filePath: string;
@@ -16,27 +16,23 @@ let filePath: string;
 beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), "legato-tagwrite-test-"));
   filePath = path.join(dir, "test.flac");
-  execFileSync(
-    "ffmpeg",
-    [
-      "-f",
-      "lavfi",
-      "-i",
-      "sine=frequency=440:duration=0.2",
-      "-metadata",
-      "title=Original Title",
-      "-metadata",
-      "artist=Original Artist",
-      "-metadata",
-      "album=Original Album",
-      "-metadata",
-      "date=2000",
-      "-metadata",
-      "track=1",
-      filePath,
-    ],
-    { stdio: "ignore" },
-  );
+  runFfmpeg([
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:duration=0.2",
+    "-metadata",
+    "title=Original Title",
+    "-metadata",
+    "artist=Original Artist",
+    "-metadata",
+    "album=Original Album",
+    "-metadata",
+    "date=2000",
+    "-metadata",
+    "track=1",
+    filePath,
+  ]);
 });
 
 afterEach(() => {
@@ -123,9 +119,7 @@ describe("widened field vocabulary", () => {
   it("writes bpm/label/releaseType to the exact Vorbis fields music-metadata reads back, not TagLib#'s defaults", async () => {
     await applyTagWrite(filePath, { bpm: 120, label: "Apple Records", releaseType: "album" });
 
-    const raw = execFileSync("ffprobe", ["-v", "quiet", "-show_entries", "format_tags", "-of", "json", filePath], {
-      encoding: "utf8",
-    });
+    const raw = runFfprobe(["-v", "quiet", "-show_entries", "format_tags", "-of", "json", filePath]).toString();
     const tags = (JSON.parse(raw).format.tags ?? {}) as Record<string, string>;
     const lower = Object.fromEntries(Object.entries(tags).map(([k, v]) => [k.toLowerCase(), v]));
 
@@ -144,9 +138,7 @@ describe("widened field vocabulary", () => {
   it("writes releaseDate to the raw ORIGINALDATE Vorbis field music-metadata reads back as originaldate", async () => {
     await applyTagWrite(filePath, { releaseDate: "1969-09-26" });
 
-    const raw = execFileSync("ffprobe", ["-v", "quiet", "-show_entries", "format_tags", "-of", "json", filePath], {
-      encoding: "utf8",
-    });
+    const raw = runFfprobe(["-v", "quiet", "-show_entries", "format_tags", "-of", "json", filePath]).toString();
     const tags = (JSON.parse(raw).format.tags ?? {}) as Record<string, string>;
     const lower = Object.fromEntries(Object.entries(tags).map(([k, v]) => [k.toLowerCase(), v]));
 
