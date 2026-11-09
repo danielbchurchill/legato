@@ -29,7 +29,8 @@ name: desktop
 # to build. #483 swaps that certificate for a Developer ID one and adds
 # notarization, through Tauri's own APPLE_ID/APPLE_TEAM_ID variables;
 # nothing else here changes. The secrets live in the desktop-signing
-# environment:
+# environment, which only main and v* tags may use (its deployment branch
+# policy), so the bundle job asks for it only there:
 #   APPLE_CERTIFICATE           the .p12, base64
 #   APPLE_CERTIFICATE_PASSWORD  its export password
 #   APPLE_SIGNING_IDENTITY      the certificate's common name
@@ -38,7 +39,8 @@ name: desktop
 # A tag build without them fails. Any other build carries on without: the
 # .app is unsigned, and the updater artifacts are signed with a key made for
 # that run, so the manifest step still runs end to end. Each says so in a
-# notice on the run.
+# notice on the run. That's every pull request's build: signing is checked
+# by main's own build after each merge, and by the tag.
 on:
   workflow_call:
     inputs:
@@ -116,9 +118,12 @@ jobs:
     # Issue #491's limit, as build.yml's other jobs have. A leg takes 4 to 11
     # minutes with a warm Cargo cache, the Intel Mac's cross-compile longest.
     timeout-minutes: 45
-    # Secrets and variables only: no deployment record on every pull request.
+    # The signing keys are for main and release tags only, so any other
+    # build asks for no environment, rather than one the policy refuses: an
+    # empty name means none. Secrets and variables only, with no deployment
+    # record.
     environment:
-      name: desktop-signing
+      name: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && 'desktop-signing' || '' }}
       deployment: false
     defaults:
       run:
@@ -193,7 +198,7 @@ jobs:
               echo "::error title=No macOS signing certificate::APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY must all be set in the desktop-signing environment to release. Refusing to ship an unsigned Mac app."
               exit 1
             fi
-            echo "::notice title=macOS signing skipped::APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY aren't all set for this run (they live in the desktop-signing environment, and a fork's or Dependabot's pull request never gets them). This build's .app is unsigned."
+            echo "::notice title=macOS signing skipped::APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY aren't all set for this run (they live in the desktop-signing environment, which only main's builds and v* tags get). This build's .app is unsigned."
             echo "macos=false" >> "$GITHUB_OUTPUT"
           else
             echo "macos=$MACOS" >> "$GITHUB_OUTPUT"

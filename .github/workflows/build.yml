@@ -7,10 +7,12 @@ name: build
 # inside the bundle, with the sidecar booted from it. The bundles and their
 # latest.json are this run's artifacts.
 #
-# A pull request from this repository's own branches gets the
-# desktop-signing environment's secrets, so its Mac build is signed exactly
-# as a release's is. A fork's or Dependabot's isn't, and says so in a notice
-# (desktop.yml's "signing keys" step).
+# Only main and release tags may use the desktop-signing environment's
+# keys, so a pull request's Mac build is unsigned and its updater artifacts
+# are signed with a key made for the run. It says so in two notices
+# (desktop.yml's "signing keys" step). Signing is checked by this
+# workflow's push build on main after each merge, signed exactly as a
+# release is, and again by the tag.
 #
 # This is the expensive one, so it only runs for commits that can change
 # what gets compiled or bundled: Rust source, the frontend src/ the webview
