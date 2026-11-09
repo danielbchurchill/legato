@@ -286,7 +286,14 @@ jobs:
           # as an identity named "" and fails to sign with it.
           if [ -n "$SIGNING_IDENTITY" ]; then export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"; fi
           npx tauri build --ci --verbose --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} \
-            --config "$RUNNER_TEMP/tauri.release.json"
+            --config "$RUNNER_TEMP/tauri.release.json" 2>&1 | tee "$RUNNER_TEMP/tauri-build.log"
+          # Tauri only warns when the private key doesn't belong to the public
+          # key the app is built with, and every update it signs would then be
+          # refused by every installed app.
+          if grep -q "does not match the public key" "$RUNNER_TEMP/tauri-build.log"; then
+            echo "::error title=Updater keys don't match::TAURI_SIGNING_PRIVATE_KEY isn't the private half of tauri.conf.json's plugins.updater.pubkey. No installed app would accept this build's updates."
+            exit 1
+          fi
 
       # What's inside each bundle, its architecture, and on macOS its
       # signature.

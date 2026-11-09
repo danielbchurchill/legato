@@ -163,7 +163,18 @@ async function stage(args) {
     },
   };
   if (version) patch.version = version;
-  if (pubkey) patch.plugins = { updater: { pubkey } };
+  if (pubkey) {
+    patch.plugins = { updater: { pubkey } };
+  } else {
+    // The committed key: every installed app checks updates against it, so
+    // a build mustn't go out with anything else.
+    const conf = JSON.parse(await readFile(path.join(TAURI_DIR, "tauri.conf.json"), "utf8"));
+    if (!isUpdaterPublicKey(conf.plugins?.updater?.pubkey)) {
+      throw new Error(
+        "tauri.conf.json's plugins.updater.pubkey isn't an updater public key. Commit the .pub that `tauri signer generate` wrote beside the key in TAURI_SIGNING_PRIVATE_KEY.",
+      );
+    }
+  }
   if (target.os === "linux") {
     // Into usr/libexec/<product>/ in the .deb and the AppImage alike, not
     // externalBin's usr/bin: linuxdeploy rewrites the rpath of every
@@ -182,6 +193,14 @@ async function stage(args) {
   await mkdir(path.dirname(path.resolve(configOut)), { recursive: true });
   await writeFile(configOut, `${JSON.stringify(patch, null, 2)}\n`);
   console.log(`\ntauri.conf.json patch for ${target.triple}: ${configOut}`);
+}
+
+// What `tauri signer generate` writes to its .pub: base64 of a minisign
+// public key file.
+function isUpdaterPublicKey(value) {
+  if (typeof value !== "string") return false;
+  const text = Buffer.from(value, "base64").toString("utf8");
+  return /^untrusted comment: minisign public key/.test(text) && text.trim().split("\n").length === 2;
 }
 
 function output(cmd, args, options = {}) {
