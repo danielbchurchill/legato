@@ -124,7 +124,7 @@ function pickStage<Parts>(stages: Stage<Parts>[], width: number): Parts {
 }
 
 /* cx, unless a box that wide centred there would cross the window's inset. */
-function clampCentre(cx: number, boxWidth: number, width: number): number {
+export function clampCentre(cx: number, boxWidth: number, width: number): number {
   return Math.min(Math.max(cx, INSET + boxWidth / 2), width - INSET - boxWidth / 2)
 }
 

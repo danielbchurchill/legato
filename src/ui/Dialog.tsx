@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useContext, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
+import { ShellLayoutContext, clampCentre } from '../shell/layout'
 import { Button } from './Button'
 import { usePrefersReducedMotion } from './usePrefersReducedMotion'
 
@@ -23,7 +24,19 @@ import { usePrefersReducedMotion } from './usePrefersReducedMotion'
  *    fade alone.
  *
  * `open` drives it; the component holds itself mounted through its own exit
- * so a caller can use a plain boolean. */
+ * so a caller can use a plain boolean.
+ *
+ * `layer="shell"` (#412's away-from-home notice) mounts it inside the
+ * desktop shell rather than over the window, as the unreachable state is
+ * (ServerUnreachable.tsx): the wash covers the rail, the panels, the capsule
+ * and the map, but the player, drawn after it, stays above the wash, inert
+ * to nothing and inside the focus trap, so whatever is playing can still be
+ * paused. Everything else in the shell is inert while it's open. The
+ * surface centres on the stage (computeShellLayout's cx), not the window,
+ * and vertically in the window. The player marks itself `data-dialog-keep`. */
+
+/** What a shell-layer dialog leaves reachable beside itself. */
+export const DIALOG_KEEP = 'data-dialog-keep'
 
 // --motion-exit, mirrored: a JS timeout can't read a CSS custom property.
 const EXIT_MS = 120
@@ -41,9 +54,18 @@ type DialogProps = {
   footer?: ReactNode
   /** Overlay presses close it. AlertDialog turns this off. */
   dismissible?: boolean
-  initialFocus?: RefObject<HTMLElement | null>
+  /** What takes the focus as it opens: an element, or the surface itself
+   * ('surface'). The first control by default. */
+  initialFocus?: RefObject<HTMLElement | null> | 'surface'
+  /** More of the content that describes it, by id, after the description. */
+  describedBy?: string
+  /** Over the window (the default), or inside the shell, under the player. */
+  layer?: 'window' | 'shell'
   className?: string
 }
+
+// The default width, which a shell-layer dialog centres on cx with.
+const SHELL_DIALOG_WIDTH = 420
 
 export function Dialog({
   open,
@@ -54,15 +76,20 @@ export function Dialog({
   footer,
   dismissible = true,
   initialFocus,
+  describedBy,
+  layer = 'window',
   className = 'w-[420px]',
 }: DialogProps) {
   const [mounted, setMounted] = useState(open)
   const [shown, setShown] = useState(false)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const surfaceRef = useRef<HTMLDivElement>(null)
   const restoreRef = useRef<HTMLElement | null>(null)
   const titleId = useId()
   const descriptionId = useId()
   const reduced = usePrefersReducedMotion()
+  const layout = useContext(ShellLayoutContext)
+  const shell = layer === 'shell'
 
   // What the dialog last showed while open. A caller typically derives its
   // content from the same state that closes it ("remove {folder}?" with the
@@ -90,10 +117,24 @@ export function Dialog({
   useEffect(() => {
     if (!mounted || !open) return
     const surface = surfaceRef.current
-    const target = initialFocus?.current ?? surface?.querySelector<HTMLElement>(FOCUSABLE) ?? surface
+    const target =
+      initialFocus === 'surface' ? surface : (initialFocus?.current ?? surface?.querySelector<HTMLElement>(FOCUSABLE) ?? surface)
     target?.focus({ preventScroll: true })
     return () => restoreRef.current?.focus({ preventScroll: true })
   }, [mounted, open, initialFocus])
+
+  // In the shell, everything beside it but what it keeps is out of reach.
+  useEffect(() => {
+    const overlay = overlayRef.current
+    if (!shell || !mounted || !open || !overlay?.parentElement) return
+    const made = Array.from(overlay.parentElement.children).filter(
+      (el): el is HTMLElement => el !== overlay && el instanceof HTMLElement && !el.hasAttribute(DIALOG_KEEP) && !el.inert,
+    )
+    for (const el of made) el.inert = true
+    return () => {
+      for (const el of made) el.inert = false
+    }
+  }, [shell, mounted, open])
 
   useEffect(() => {
     if (!mounted || !open) return
@@ -104,7 +145,12 @@ export function Dialog({
         return
       }
       if (e.key !== 'Tab') return
-      const focusable = Array.from(surfaceRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])
+      // The surface's controls, then (in the shell) the player's.
+      const kept = shell ? Array.from(overlayRef.current?.parentElement?.querySelectorAll<HTMLElement>(`[${DIALOG_KEEP}]`) ?? []) : []
+      const focusable = [surfaceRef.current, ...kept].flatMap((root) =>
+        // The player hides parts of itself as it narrows.
+        Array.from(root?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []).filter((el) => !shell || (el.checkVisibility?.() ?? true)),
+      )
       if (focusable.length === 0) {
         e.preventDefault()
         return
@@ -123,13 +169,16 @@ export function Dialog({
     // (deselect / close panel) rather than doing both.
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [mounted, open, onClose])
+  }, [mounted, open, onClose, shell])
 
   if (!mounted) return null
 
-  return createPortal(
+  const describedByIds = [content.current.description ? descriptionId : null, describedBy].filter(Boolean).join(' ') || undefined
+
+  const dialog = (
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--color-canvas)_60%,transparent)] transition-opacity ${
+      ref={overlayRef}
+      className={`${shell ? 'absolute z-20 items-center justify-start' : 'fixed z-50 items-center justify-center'} inset-0 flex bg-[var(--color-modal-wash)] transition-opacity ${
         shown ? 'duration-[var(--motion-base)] ease-[var(--ease-enter)]' : 'duration-[var(--motion-exit)] ease-[var(--ease-exit)]'
       }`}
       style={{ opacity: shown ? 1 : 0 }}
@@ -142,12 +191,16 @@ export function Dialog({
         role={dismissible ? 'dialog' : 'alertdialog'}
         aria-modal="true"
         aria-labelledby={titleId}
-        aria-describedby={description ? descriptionId : undefined}
+        aria-describedby={describedByIds}
         tabIndex={-1}
         className={`flex max-h-[calc(100vh-var(--spacing-lg)*4)] flex-col gap-[var(--spacing-lg)] rounded-[var(--radius-panel)] glass p-[var(--spacing-panel)] outline-none transition-transform ${
           shown ? 'duration-[var(--motion-base)] ease-[var(--ease-enter)]' : 'duration-[var(--motion-exit)] ease-[var(--ease-exit)]'
         } ${className}`}
-        style={{ transform: shown || reduced ? 'none' : 'translateY(var(--distance-medium))' }}
+        style={{
+          transform: shown || reduced ? 'none' : 'translateY(var(--distance-medium))',
+          // Centred on the stage between the panels, inside the window.
+          marginLeft: shell ? clampCentre(layout.cx, SHELL_DIALOG_WIDTH, layout.width) - SHELL_DIALOG_WIDTH / 2 : undefined,
+        }}
       >
         <div className="flex flex-col gap-[var(--spacing-sm)]">
           <h2 id={titleId} className="text-heading text-[var(--color-ink)]">
@@ -164,9 +217,10 @@ export function Dialog({
           <div className="flex items-center justify-end gap-[var(--spacing-lg)]">{content.current.footer}</div>
         )}
       </div>
-    </div>,
-    document.body,
+    </div>
   )
+
+  return shell ? dialog : createPortal(dialog, document.body)
 }
 
 type AlertDialogProps = {
