@@ -14,14 +14,18 @@ permissions:
 jobs:
   loop:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
+    # Second run: 1.4.2 didn't hang in the first one's 30 rounds, so more
+    # rounds, 1.4.3 beside it, and the whole suite as well as the spawn-heavy
+    # specs, since that's where the check job hung.
     strategy:
       fail-fast: false
       matrix:
-        bun: ['1.4.2', '1.4.4']
-        shard: [1, 2, 3]
+        bun: ['1.4.2', '1.4.3', '1.4.4']
+        suite: [spawn-a, spawn-b, full]
     env:
-      ROUNDS: 10
+      ROUNDS: ${{ matrix.suite == 'full' && 14 || 45 }}
+      LIMIT: ${{ matrix.suite == 'full' && 300 || 60 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -42,19 +46,23 @@ jobs:
       - name: install server dependencies
         run: npm --prefix server ci
 
-      - name: spawn-heavy specs, ${{ env.ROUNDS }} rounds
+      - name: ${{ matrix.suite }}, ${{ env.ROUNDS }} rounds
         working-directory: server
         run: |
           bun --version
-          specs=$(grep -rln "test-ffmpeg\|spawnSync" src --include=*.spec.ts | sort)
-          echo "$(echo "$specs" | wc -l) spec files:"; echo "$specs"
+          if [ "${{ matrix.suite }}" = full ]; then
+            specs=""; echo "the whole server suite"
+          else
+            specs=$(grep -rln "test-ffmpeg\|spawnSync" src --include=*.spec.ts | sort)
+            echo "$(echo "$specs" | wc -l) spec files:"; echo "$specs"
+          fi
           mkdir -p ../loop-logs
           hung=0; failed=0; passed=0; rows=""
           for round in $(seq 1 "$ROUNDS"); do
             log=../loop-logs/round-$round.log
             start=$(date +%s)
             set +e
-            timeout -k 10 60 bun test --isolate $specs > "$log" 2>&1
+            timeout -k 10 "$LIMIT" bun test --isolate $specs > "$log" 2>&1
             status=$?
             set -e
             took=$(( $(date +%s) - start ))
@@ -73,6 +81,6 @@ jobs:
             echo "round $round: exit $status, ${took}s, $result"
             rows="$rows| $round | $status | $took | $result |"$'\n'
           done
-          summary="Bun $(bun --version), shard ${{ matrix.shard }}: $ROUNDS rounds, $hung hung, $failed failed, $passed passed"
+          summary="Bun $(bun --version), ${{ matrix.suite }}: $ROUNDS rounds, $hung hung, $failed failed, $passed passed"
           echo "$summary"
           { echo "### $summary"; echo; echo "| round | exit | seconds | result |"; echo "|---|---|---|---|"; printf '%s' "$rows"; } >> "$GITHUB_STEP_SUMMARY"
