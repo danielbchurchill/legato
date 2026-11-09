@@ -8,7 +8,7 @@ How to run the pieces of Legato on their own, preview from another machine, and 
 npx tauri dev
 ```
 
-That's all you need. It builds the server sidecar the first time (this needs Bun 1.4.2), starts the server from source, and opens the native window with native playback.
+That's all you need. It builds the server sidecar the first time (this needs Bun 1.4.4), starts the server from source, and opens the native window with native playback.
 
 ## Just the web client, in a browser
 
@@ -89,7 +89,7 @@ Killing the Tauri binary alone doesn't stop its child Vite or server processes. 
 
 **`resource path … doesn't exist` from cargo.** The sidecar binary hasn't been built yet. Run `npm run build:sidecar` once, or start with `npx tauri dev`, which does it for you.
 
-**`bun: not found`.** Install Bun 1.4.2: `curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2"`. If it's already in `~/.bun/bin`, add that directory to your `PATH`.
+**`bun: not found`.** Install Bun 1.4.4: `curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.4"`. If it's already in `~/.bun/bin`, add that directory to your `PATH`.
 
 ## Checks and builds
 

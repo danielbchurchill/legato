@@ -567,7 +567,13 @@ describe("TunnelClient", () => {
     const origin = await listen(app);
     const fake = relay();
     const proxy = await stallingProxy(fake.url);
-    const tunnel = client(proxy.url, origin);
+    // Since Bun 1.4.4 the client waits for the relay to answer its Close,
+    // and this fake relay (Bun.serve) doesn't when the Close comes at the
+    // end of a multi-MB burst: it has read the bytes and can still send,
+    // but never acts on them (#491). So the connection ends with the
+    // client's own drop, past the flow below and well inside the test's
+    // timeout, rather than the 10 s default.
+    const tunnel = client(proxy.url, origin, { closeWaitMs: 1_500 });
     await waitFor(tunnel, "connected");
 
     proxy.stall();

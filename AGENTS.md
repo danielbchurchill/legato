@@ -17,12 +17,12 @@ How to work on Legato: the layout, the conventions, and the non-obvious things t
 ## Toolchain
 
 - **Node**, pinned in `.nvmrc`. Run `nvm use` first.
-- **Bun 1.4.2.** `server/` and `relay/` run on it, and `npx tauri dev`/`build` compile the server sidecar with it. `scripts/build-server-sidecar.mjs` checks for it and prints the install command when it's missing.
+- **Bun 1.4.4.** `server/` runs on it, and `npx tauri dev`/`build` compile the server sidecar with it. The relay's image stays on 1.4.2 for now (`relay/Dockerfile` says why); its tests run on 1.4.4 in CI. `scripts/build-server-sidecar.mjs` checks for it and prints the install command when it's missing.
 - **Rust (stable)** for `src-tauri/`.
 
 ## Checks
 
-`npm run check:all` runs every local check, in order: the server's type check, server tests, vitest, build, lint, the sidecar build (skipped if already built), and `cargo test`. Run it before every PR. Relay changes also need `npm --prefix relay test`.
+`npm run check:all` runs every local check, in order: the server's type check, server tests, vitest, build, lint, the sidecar build (skipped if one is already built, unless a Bun other than the pinned one built it), and `cargo test`. Run it before every PR. Relay changes also need `npm --prefix relay test`.
 
 - **Server tests:** `bun:test`, as `*.spec.ts` files next to the source. Use `openDb(":memory:")` for a database. The `Database` type comes from `server/src/sqlite.ts`, the only file that knows the engine is `bun:sqlite`. Don't import `better-sqlite3` or vitest in `server/`.
 - **Server types:** `bun test` strips types without checking them, so `npm --prefix server run typecheck` (`tsc --noEmit`) checks them, in `check:all` and CI.

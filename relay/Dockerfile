@@ -15,6 +15,11 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 # --- runtime ---
+# Stays on Bun 1.4.2 while the server moves to 1.4.4 (#491). On 1.4.4,
+# Bun.serve didn't act on a WebSocket Close that came at the end of a
+# multi-MB burst, and Bun's `ws`, which @fastify/websocket uses here, runs
+# on the same machinery. The relay moves in a PR of its own, once the
+# tunnel route is checked on 1.4.4.
 FROM oven/bun:1.4.2-slim AS runtime
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
