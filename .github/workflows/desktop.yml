@@ -328,6 +328,18 @@ jobs:
         if: runner.os != 'Windows'
         run: node scripts/desktop-release.mjs launch --target ${{ matrix.target }}
 
+      # The .deb, installed the way docs/install/desktop.md says: apt brings
+      # in its dependencies, and the installed app finds the server in
+      # /usr/libexec/legato and ffmpeg and fpcalc in /usr/lib/legato.
+      - name: the installed .deb starts its own server
+        if: runner.os == 'Linux'
+        run: |
+          deb=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb)
+          sudo apt-get install -y "./$deb"
+          exe="/usr/bin/$(dpkg-deb --contents "$deb" | sed -n 's|.* \./usr/bin/\([^/]*\)$|\1|p; s|.* usr/bin/\([^/]*\)$|\1|p' | head -n1)"
+          node scripts/desktop-release.mjs launch --target ${{ matrix.target }} --exe "$exe"
+          sudo apt-get remove -y "$(dpkg-deb --field "$deb" Package)"
+
       - name: collect the bundles
         run: node scripts/desktop-release.mjs collect --target ${{ matrix.target }} --out dist-desktop
 

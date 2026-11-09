@@ -27,8 +27,9 @@
 //     under xvfb-run) and checks that it starts its own server on 8899 and
 //     hands it the bundle's own ffmpeg and fpcalc, then quits it and checks
 //     the server went too. Only on a machine with nothing on 8899: a CI
-//     runner, not a computer with Legato installed. --app and --port point
-//     it at a test build instead.
+//     runner, not a computer with Legato installed. --app (macOS) and
+//     --port point it at a test build instead, and --exe (Linux) at an
+//     installed app, such as the .deb's.
 //
 //   manifest --dir <dir> --version <v>
 //     Writes <dir>/latest.json, the file the app's updater reads from the
@@ -371,13 +372,17 @@ async function launch(args) {
     const mainBinary = output("plutil", ["-extract", "CFBundleExecutable", "raw", path.join(app, "Contents", "Info.plist")]).trim();
     command = path.join(app, "Contents", "MacOS", mainBinary);
   } else {
-    const appImage = await only(path.join(bundleDir, "appimage"), ".AppImage");
-    await chmod(appImage, 0o755);
-    // No FUSE needed, and no display on a runner: xvfb-run gives the
-    // webview one.
-    env.APPIMAGE_EXTRACT_AND_RUN = "1";
+    // --exe: an installed app, such as the .deb's. Otherwise the AppImage,
+    // which needs no FUSE this way.
+    const installed = option(args, "exe");
+    const exe = installed ?? (await only(path.join(bundleDir, "appimage"), ".AppImage"));
+    if (!installed) {
+      await chmod(exe, 0o755);
+      env.APPIMAGE_EXTRACT_AND_RUN = "1";
+    }
+    // No display on a runner: xvfb-run gives the webview one.
     command = "xvfb-run";
-    commandArgs = ["--auto-servernum", appImage];
+    commandArgs = ["--auto-servernum", exe];
   }
 
   console.log(`starting ${path.relative(REPO_ROOT, command) || command} ${commandArgs.map((a) => path.relative(REPO_ROOT, a)).join(" ")}`);
