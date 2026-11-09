@@ -2,6 +2,7 @@ import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { resolveCoverForNode } from "../cover/extract.js";
 import { libraryRevision } from "../libraryRevision.js";
+import { playedAt } from "../playCounts.js";
 
 // The library view's layouts (issue #126 — see DESIGN.md "The library"): a
 // paginated, sortable, searchable read model over the same albums, artists
@@ -302,11 +303,15 @@ function listAlbums(
   // same reason (issue #354). With nothing played, plays has no statistics,
   // and SQLite went through every appears_on edge instead: half a second a
   // page at 30,000 albums, statistics or not.
+  //
+  // playedAt() reads an imported Apple Music total with no play date as no
+  // date (#133, playCounts.ts), so that album sorts with the never played.
+  // Both columns it reads are the index's, so the index still answers alone.
   const lastPlayed =
     sort === "recentlyPlayed"
       ? `WITH release_last_played AS (
            SELECT e.to_node AS release_node_id, MAX(track.last_played_at) AS last_played_at
-           FROM (SELECT recording_node_id, MAX(started_at) AS last_played_at FROM plays GROUP BY recording_node_id) track
+           FROM (SELECT recording_node_id, MAX(${playedAt()}) AS last_played_at FROM plays GROUP BY recording_node_id) track
            CROSS JOIN edges e ON e.from_node = track.recording_node_id
            WHERE e.type = 'appears_on'
            GROUP BY e.to_node

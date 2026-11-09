@@ -1,5 +1,6 @@
 import type { Database, SQLQueryBindings } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
+import { playTotal } from "../playCounts.js";
 
 /* Library health's metadata gaps: which tracks are missing a tag the map and
  * the library use, grouped by album and paged (#469). Filling a gap isn't
@@ -227,7 +228,7 @@ export function getGapAlbums(
     .prepare(
       `WITH ${cte.sql},
        play_counts AS (
-         SELECT recording_node_id AS rec, COUNT(*) AS n FROM plays GROUP BY recording_node_id
+         SELECT recording_node_id AS rec, ${playTotal()} AS n FROM plays GROUP BY recording_node_id
        ),
        gap_tracks AS (
          SELECT t.rec, ${sum} AS gaps, t.unmatched, t.label, t.release_date, t.release_type, t.bpm,
@@ -357,7 +358,7 @@ export function getGapTracks(
        SELECT t.*, n.title, ${ARTIST_SUBQUERY} AS artist,
               (SELECT disc_no FROM files WHERE recording_node_id = t.rec ORDER BY id LIMIT 1) AS disc_no,
               (SELECT track_no FROM files WHERE recording_node_id = t.rec ORDER BY id LIMIT 1) AS track_no,
-              (SELECT COUNT(*) FROM plays p WHERE p.recording_node_id = t.rec) AS plays,
+              (SELECT COALESCE(${playTotal("p")}, 0) FROM plays p WHERE p.recording_node_id = t.rec) AS plays,
               COUNT(*) OVER () AS total
        FROM track_gaps t JOIN nodes n ON n.id = t.rec
        WHERE ${sum} > 0

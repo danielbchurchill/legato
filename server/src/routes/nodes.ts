@@ -9,6 +9,7 @@ import { nodeSummary } from "../summary.js";
 import { nodeCredits } from "../nodeCredits.js";
 import { nodeMetadata } from "../nodeMetadata.js";
 import { broadcast } from "../ws.js";
+import { playTotal } from "../playCounts.js";
 
 // The one combined graph is always 'tracks' now (since the 2026-08-29 map
 // rework) — 'granularity' persists only because `positions` still keys
@@ -138,10 +139,15 @@ export function nodesRoutes(db: Database) {
       // v2's "track metadata" disclosure wants a play count alongside length
       // and the file tags. Real data already, via migration 0013 — recording
       // nodes only, and indexed on recording_node_id so this is one cheap
-      // COUNT rather than a join against the full plays table.
+      // sum rather than a join against the full plays table. A sum, since an
+      // imported Apple Music total is one row (#133, playCounts.ts).
       const playCount =
         (node as { type: string }).type === "recording"
-          ? (db.prepare("SELECT COUNT(*) AS n FROM plays WHERE recording_node_id = ?").get(id) as { n: number }).n
+          ? (
+              db
+                .prepare(`SELECT COALESCE(${playTotal()}, 0) AS n FROM plays WHERE recording_node_id = ?`)
+                .get(id) as { n: number }
+            ).n
           : null;
 
       // Cheap enough (a PK lookup against a tiny table) not to need folding

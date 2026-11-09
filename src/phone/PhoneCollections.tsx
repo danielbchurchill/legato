@@ -209,7 +209,7 @@ function NewMenu({ onNew, onImport }: { onNew: () => void; onImport: () => void 
               onImport()
             }}
           >
-            Import .m3u
+            Import
           </MenuItem>
         </div>
       )}

@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import { libraryRevision } from "../libraryRevision.js";
 import type { Ref } from "./model.js";
+import { playedAt, playTotal, singlePlay } from "../playCounts.js";
 
 /* #468: the cards read from plays and the albums table.
  *
@@ -10,6 +11,15 @@ import type { Ref } from "./model.js";
  * recording first, then only the played recordings' artist and album edges,
  * found by index. Going from each play to its edges instead, as GET /stats
  * does for its one top artist, took about 100 ms a card at 20,000 plays.
+ *
+ * Plays imported from Apple Music (#133) are one total per track, with
+ * Music's last play date when it has one (playCounts.ts). They count in
+ * full towards most played and towards rediscover's "played a lot", and
+ * their date is when the track was last played. On repeat counts plays
+ * inside the last 30 days, so it takes only single plays: a total whose
+ * last play fell in the window can't say when the others were. An artist
+ * whose plays have no date at all is never "gone quiet", since nobody
+ * knows when it was last played.
  *
  * The answer is kept until a play lands or the library changes, and for ten
  * minutes at most, since "the last 30 days" moves on by itself. */
@@ -52,15 +62,26 @@ function nodes(db: Database, ids: Iterable<number>): Map<number, Ref> {
   return out;
 }
 
+/** The later of two last-played days, either of which may be unknown. */
+function later(a: number | null, b: number | null): number | null {
+  return a == null ? b : b == null ? a : Math.max(a, b);
+}
+
 /** A Julian day as an ISO time. */
 function fromJulian(day: number): string {
   return new Date(Math.round((day - 2440587.5) * 86_400_000)).toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 export function listening(db: Database): Listening {
-  const newestPlay = (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM plays").get() as { id: number }).id;
+  // The total too: an import that only took totals away adds no row.
+  const plays = db
+    .prepare(`SELECT COALESCE(MAX(id), 0) AS id, COALESCE(${playTotal()}, 0) AS total FROM plays`)
+    .get() as {
+    id: number;
+    total: number;
+  };
   const newestEdge = (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM edges").get() as { id: number }).id;
-  const key = `${libraryRevision()}:${newestEdge}:${newestPlay}`;
+  const key = `${libraryRevision()}:${newestEdge}:${plays.id}:${plays.total}`;
   const cached = cache.get(db);
   if (cached && cached.key === key && Date.now() - cached.at < KEEP_MS) return cached.value;
   const value = readListening(db);
@@ -72,15 +93,16 @@ function readListening(db: Database): Listening {
   const now = (db.prepare("SELECT julianday('now') AS day").get() as { day: number }).day;
   const recordings = db
     .prepare(
-      `SELECT recording_node_id, COUNT(*), MAX(julianday(started_at)), SUM(julianday(started_at) >= ?)
+      `SELECT recording_node_id, ${playTotal()}, MAX(julianday(${playedAt()})),
+              SUM(${singlePlay()} AND julianday(${playedAt()}) >= ?)
          FROM plays GROUP BY recording_node_id`,
     )
-    .values(now - ON_REPEAT_DAYS) as [number, number, number | null, number][];
+    .values(now - ON_REPEAT_DAYS) as [number, number, number | null, number | null][];
   const byRecording = new Map(
-    recordings.map(([rec, plays, last, recent]) => [rec, { plays, last: last ?? 0, recent }]),
+    recordings.map(([rec, plays, last, recent]) => [rec, { plays, last, recent: recent ?? 0 }]),
   );
 
-  const artistPlays = new Map<number, { plays: number; last: number }>();
+  const artistPlays = new Map<number, { plays: number; last: number | null }>();
   const albumPlays = new Map<number, number>();
   const trackArtists = new Map<number, number[]>();
   for (const [rec, to, type] of db
@@ -99,7 +121,7 @@ function readListening(db: Database): Listening {
     const had = artistPlays.get(to);
     if (had) {
       had.plays += played.plays;
-      had.last = Math.max(had.last, played.last);
+      had.last = later(had.last, played.last);
     } else artistPlays.set(to, { plays: played.plays, last: played.last });
     trackArtists.set(rec, [...(trackArtists.get(rec) ?? []), to]);
   }
@@ -156,9 +178,12 @@ function readListening(db: Database): Listening {
       .filter(([id]) => names.has(id))
       .map(([id, r]) => ({ node: names.get(id)!, plays: r.recent, by: trackBy(id), focus: [id] })),
     rediscover: artists
-      .filter(([, a]) => a.plays >= REDISCOVER_MIN_PLAYS && now - a.last >= REDISCOVER_AFTER_DAYS)
-      .slice(0, ROWS)
-      .map(([id, a]) => ({ artist: names.get(id)!, plays: a.plays, lastPlayed: fromJulian(a.last), focus: [id] })),
+      .flatMap(([id, a]) =>
+        a.last != null && a.plays >= REDISCOVER_MIN_PLAYS && now - a.last >= REDISCOVER_AFTER_DAYS
+          ? [{ artist: names.get(id)!, plays: a.plays, lastPlayed: fromJulian(a.last), focus: [id] }]
+          : [],
+      )
+      .slice(0, ROWS),
     waiting: waiting(db, new Set(albumPlays.keys())),
   };
 }

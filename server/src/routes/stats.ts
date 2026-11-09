@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
 import { countLibraryArtists } from "./library.js";
+import { playTotal } from "../playCounts.js";
 
 type CountsRow = {
   artists: number;
@@ -34,7 +35,7 @@ function topByEdge(db: Database, edgeType: "performed_by" | "appears_on"): TopRo
   return (
     (db
       .prepare(
-        `SELECT n.id AS id, n.title AS title, COUNT(*) AS playCount
+        `SELECT n.id AS id, n.title AS title, ${playTotal("p")} AS playCount
          FROM plays p
          CROSS JOIN edges e ON e.from_node = p.recording_node_id AND e.type = ?
          JOIN nodes n ON n.id = e.to_node
@@ -50,7 +51,7 @@ function topTrack(db: Database): TopRow | null {
   return (
     (db
       .prepare(
-        `SELECT n.id AS id, n.title AS title, COUNT(*) AS playCount
+        `SELECT n.id AS id, n.title AS title, ${playTotal("p")} AS playCount
          FROM plays p
          JOIN nodes n ON n.id = p.recording_node_id
          GROUP BY p.recording_node_id
