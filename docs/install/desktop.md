@@ -53,6 +53,8 @@ AppImages need FUSE 2. On Ubuntu 24.04 that's `sudo apt install libfuse2t64`. Th
 sudo apt install ./legato_<version>_amd64.deb
 ```
 
+It adds Legato to your applications menu, and `legato-desktop` starts it from a terminal.
+
 ## Updates
 
 Legato asks GitHub whether there's a newer release when it starts, and then once a day. A newer one downloads in the background, then a note under the search bar says "Legato 0.3.0 is available — restart to update". Nothing restarts until you click it, because restarting stops the server that your phone or other devices may be playing from. The × hides that version until the next one comes out.

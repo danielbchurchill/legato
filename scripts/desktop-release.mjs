@@ -221,6 +221,7 @@ async function verify(args) {
   const target = targetOf(args);
   const signed = args.includes("--signed");
   const bundleDir = path.join(TAURI_DIR, "target", target.triple, "release", "bundle");
+  const binaryName = await mainBinaryName();
   const failures = [];
   const expect = (ok, what) => {
     console.log(`${ok ? "ok  " : "FAIL"}  ${what}`);
@@ -232,6 +233,7 @@ async function verify(args) {
     if (!app) throw new Error(`no .app in ${path.relative(REPO_ROOT, bundleDir)}/macos`);
     const contents = path.join(app, "Contents");
     const mainBinary = output("plutil", ["-extract", "CFBundleExecutable", "raw", path.join(contents, "Info.plist")]).trim();
+    expect(mainBinary === binaryName, `the app's executable is ${binaryName} (${mainBinary})`);
     const arch = MACHO_ARCH[target.triple];
     const code = {
       app: path.join(contents, "MacOS", mainBinary),
@@ -279,6 +281,16 @@ async function verify(args) {
     console.log(listing.split("\n").filter((line) => /usr\/(bin|lib|libexec)\//.test(line) && !line.endsWith("/")).join("\n"));
     expect(/\s(\.\/)?usr\/libexec\/[^/]+\/legato-server$/m.test(listing), ".deb has usr/libexec/<product>/legato-server");
     expect(!/\s(\.\/)?usr\/bin\/legato-server$/m.test(listing), ".deb puts no legato-server on PATH");
+    const onPath = [...listing.matchAll(/\s(?:\.\/)?usr\/bin\/([^/\s]+)$/gm)].map((m) => m[1]);
+    expect(onPath.length === 1 && onPath[0] === binaryName, `.deb puts only ${binaryName} on PATH (${onPath.join(", ") || "nothing"})`);
+    const desktopEntry = listing.match(/\s(?:\.\/)?(usr\/share\/applications\/[^/\s]+\.desktop)$/m)?.[1];
+    if (desktopEntry) {
+      const entry = output("sh", ["-c", `dpkg-deb --fsys-tarfile "$1" | tar -xOf - "./$2" 2>/dev/null || dpkg-deb --fsys-tarfile "$1" | tar -xOf - "$2"`, "sh", deb, desktopEntry]);
+      const exec = entry.match(/^Exec=(\S+)/m)?.[1];
+      expect(exec === binaryName, `its menu entry runs ${binaryName} (Exec=${exec})`);
+    } else {
+      expect(false, ".deb has a menu entry in usr/share/applications");
+    }
     for (const name of MEDIA_BINARIES) {
       expect(new RegExp(`/binaries/${target.triple}/${name}$`, "m").test(listing), `.deb has ${name} for ${target.triple}`);
     }
@@ -295,6 +307,7 @@ async function verify(args) {
       const files = output("find", [root, "-type", "f"]).split("\n");
       const find = (pattern) => files.find((file) => pattern.test(file));
       const code = {
+        [binaryName]: find(new RegExp(`/usr/bin/${binaryName}$`)),
         "legato-server": find(/\/usr\/libexec\/[^/]+\/legato-server$/),
         ffmpeg: find(new RegExp(`/usr/lib/[^/]+/binaries/${target.triple}/ffmpeg$`)),
         fpcalc: find(new RegExp(`/usr/lib/[^/]+/binaries/${target.triple}/fpcalc$`)),
@@ -314,6 +327,7 @@ async function verify(args) {
   } else {
     const installer = await only(path.join(bundleDir, "nsis"), "-setup.exe");
     const listing = output("7z", ["l", installer]);
+    expect(new RegExp(`(^|[\\\\/\\s])${binaryName}\\.exe$`, "m").test(listing), `installer has ${binaryName}.exe`);
     expect(/legato-server\.exe/.test(listing), "installer has legato-server.exe");
     for (const name of MEDIA_BINARIES) {
       expect(new RegExp(`binaries[\\\\/]${target.triple}[\\\\/]${name}\\.exe`).test(listing), `installer has ${name}.exe for ${target.triple}`);
@@ -420,6 +434,14 @@ async function launch(args) {
     expect(stopped, "the server stopped when the app did");
   }
   if (failures.length) throw new Error(`${failures.length} check${failures.length === 1 ? "" : "s"} failed: ${failures.join("; ")}`);
+}
+
+// The app's own executable: tauri.conf.json's mainBinaryName, which only
+// `tauri build` applies (a dev build stays `app`, after the Cargo package).
+async function mainBinaryName() {
+  const conf = JSON.parse(await readFile(path.join(TAURI_DIR, "tauri.conf.json"), "utf8"));
+  if (!conf.mainBinaryName) throw new Error("tauri.conf.json has no mainBinaryName");
+  return conf.mainBinaryName;
 }
 
 function sha256(file) {
