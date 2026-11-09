@@ -177,8 +177,10 @@ jobs:
         run: |
           shopt -s extglob
           ls -l dist-desktop
-          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" dist-desktop/!(latest.json|*.updater.json)
-          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" dist-desktop/latest.json
+          # --clobber, so re-running this job after a partial upload replaces
+          # what's there rather than failing on it.
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist-desktop/!(latest.json|*.updater.json)
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber dist-desktop/latest.json
 
   docker:
     # After `release`, not beside it: that job's migration boot check is the

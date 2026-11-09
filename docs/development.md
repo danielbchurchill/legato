@@ -107,6 +107,8 @@ A version tag starts `.github/workflows/release.yml`, and its `release` job down
 
 When it fails anyway, open the run in GitHub Actions and choose **Re-run failed jobs**. That's safe: nothing is published before the job's publish step, so a failed download leaves no release, image or tap bump behind. For v0.2.0, a rerun two minutes later passed. If one host keeps refusing across reruns, that source needs replacing in the script, as evermeet.cx was after v0.1.0.
 
+The desktop app (#129) fetches the same binaries in `desktop`'s `media` job, and builds alongside the server release rather than before it. So when a desktop job fails, the release is already up with the server archives, but no desktop bundles and no `latest.json`, which installed apps read as a failed check and try again the next day. **Re-run failed jobs** builds the missing ones and `desktop-publish` attaches them, replacing anything a failed upload left behind. A tag with a desktop signing secret missing fails in `preflight`, before anything is published.
+
 ## Platforms
 
 Development happens on Linux and macOS. `.github/workflows/build.yml` builds the desktop app for every platform a release ships (macOS arm64 and x64, Windows x64, Linux x64 and arm64) through `desktop.yml`, the workflow each release tag runs. Its Mac build is signed when the run has the desktop-signing secrets. Windows builds are unsigned until #483, so SmartScreen warns. Linux (x64 and arm64) is a main platform for both the app and the server. Installing a release, warnings included, is [docs/install/desktop.md](install/desktop.md).
