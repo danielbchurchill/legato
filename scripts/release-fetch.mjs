@@ -12,11 +12,15 @@
 //     page for both the .md5 and the archive (#443), a block or a challenge
 //     page for datacenter addresses. The md5 check then failed with
 //     "<!DOCTYPE" as the expected checksum, which pointed at the wrong cause.
+//   * osxexperts.net failed the desktop build's first run (#129) before
+//     answering at all: undici's bare "fetch failed", a reset connection or
+//     a TLS or DNS hiccup. The same request went through moments later.
 // No checksum, archive or API answer starts with "<", and no source labels
 // one text/html (checked against all four on 2026-11-08), so either means a
-// web page. A 429, a 5xx or a web page is asked again up to four more times,
-// waiting as long as Retry-After asks (capped at a minute) or 5, 15, 30 and 60
-// seconds. Anything else fails at once.
+// web page. A 429, a 5xx, a web page or a request that got no answer is
+// asked again up to four more times, waiting as long as Retry-After asks
+// (capped at a minute) or 5, 15, 30 and 60 seconds. Anything else fails at
+// once.
 
 import { createWriteStream } from "node:fs";
 import { mkdir, open } from "node:fs/promises";
@@ -60,7 +64,16 @@ function webPageError(url, tries) {
 // WEB_PAGE to have it asked for again.
 async function fetchWithRetry(url, retryDelaysMs, read) {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(url);
+    let res;
+    try {
+      res = await fetch(url);
+    } catch (err) {
+      if (attempt >= retryDelaysMs.length) throw err;
+      const cause = err.cause?.code ?? err.cause?.message ?? err.message;
+      console.log(`  [retry] GET ${url} -> ${cause}; trying again in ${Math.round(retryDelaysMs[attempt] / 1000)} s`);
+      await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]));
+      continue;
+    }
     let refused;
     if (res.status === 429 || res.status >= 500) {
       await res.body?.cancel();
