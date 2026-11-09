@@ -208,6 +208,8 @@ export function NowPlayingScreen({
       role="dialog"
       aria-modal="true"
       aria-label="Now playing"
+      // #412's away-from-home notice goes over it rather than waiting.
+      data-now-playing
       tabIndex={-1}
       onKeyDown={(e) => {
         if (e.key !== 'Escape') return

@@ -63,6 +63,9 @@ import { useCoverChanges } from './ui/coverVersion'
 import { usePhoneLayout } from './phone/phoneLayout'
 import { PhoneShell } from './phone/PhoneShell'
 import { closePhoneNode, openPhoneNode } from './phone/nodeDetail'
+import { useAwayNotice, useNoticeAnnouncement, useWhereaboutsFeed } from './connect/useAwayNotice'
+import { AwayNoticeDialog } from './connect/AwayNoticeDialog'
+import { NoticeAnnouncer } from './connect/AwayNoticeParts'
 
 /* "Shuffle library" queues this many tracks at most. The whole library would
  * mean resolving thousands of files before the first note; a few hundred is
@@ -213,6 +216,12 @@ function Workspace({
       stop: playback.stop,
     },
   })
+  // #412: the server's home/away answer for this device, and the notice it
+  // brings when a device on Tailscale leaves home still streaming originals.
+  // Never in the desktop app, which plays files from disk.
+  useWhereaboutsFeed()
+  const [awayAnnouncement, announceAway] = useNoticeAnnouncement()
+  const awayNotice = useAwayNotice(playback, announceAway)
   // #128: the install offer, shown once after the first track plays. Over
   // plain http it says why there's none instead (#316).
   useInstallOffer()
@@ -537,33 +546,37 @@ function Workspace({
     // The map is always the phone's ground; the library is a tab in its
     // sheet. Its first run is the map's: "Add your music" on the bare stage.
     return (
-      <PhoneShell
-        stage={settingsLoaded && hasLibrary ? renderMap(false) : null}
-        firstRun={settingsLoaded && !hasLibrary ? addMusic : undefined}
-        playback={playback}
-        playingArtist={playingArtist}
-        canShuffle={!unreachable && graph.nodes.some((n) => n.type === 'recording')}
-        onShuffleLibrary={shuffleLibrary}
-        onFocusNode={(id) => {
-          setSelectedNodeId(id)
-          canvasRef.current?.flyToNode(id)
-        }}
-        onFocusNodes={(ids) => {
-          setSelectedNodeId(null)
-          canvasRef.current?.focusNodes(ids)
-        }}
-        onSelectNode={setSelectedNodeId}
-        onCentreNode={(id, options) => canvasRef.current?.centreNodeAbove(id, options)}
-        selectedNodeId={selectedNodeId}
-        settings={settings}
-        updateSettings={updateSettings}
-        mapPresets={mapPresets}
-        themePreference={themePreference}
-        onSetThemePreference={onSetThemePreference}
-        searchOpen={searchOpen}
-        onSearchOpenChange={setSearchOpen}
-        unreachable={unreachable}
-      />
+      <>
+        <PhoneShell
+          stage={settingsLoaded && hasLibrary ? renderMap(false) : null}
+          firstRun={settingsLoaded && !hasLibrary ? addMusic : undefined}
+          playback={playback}
+          playingArtist={playingArtist}
+          canShuffle={!unreachable && graph.nodes.some((n) => n.type === 'recording')}
+          onShuffleLibrary={shuffleLibrary}
+          onFocusNode={(id) => {
+            setSelectedNodeId(id)
+            canvasRef.current?.flyToNode(id)
+          }}
+          onFocusNodes={(ids) => {
+            setSelectedNodeId(null)
+            canvasRef.current?.focusNodes(ids)
+          }}
+          onSelectNode={setSelectedNodeId}
+          onCentreNode={(id, options) => canvasRef.current?.centreNodeAbove(id, options)}
+          selectedNodeId={selectedNodeId}
+          settings={settings}
+          updateSettings={updateSettings}
+          mapPresets={mapPresets}
+          themePreference={themePreference}
+          onSetThemePreference={onSetThemePreference}
+          searchOpen={searchOpen}
+          onSearchOpenChange={setSearchOpen}
+          unreachable={unreachable}
+          awayNotice={awayNotice}
+        />
+        <NoticeAnnouncer message={awayAnnouncement} />
+      </>
     )
   }
 
@@ -665,6 +678,10 @@ function Workspace({
          * buffered keeps playing and can still be paused. */}
         {unreachable && <ServerUnreachableOverShell view={unreachable} />}
 
+        {/* #412: over the stage and panels too, under the player, which
+         * stays playable inside its focus trap. */}
+        {awayNotice && <AwayNoticeDialog view={awayNotice} />}
+
         {playerVisible ? (
           <Player
             title={playback.currentTitle ?? ''}
@@ -713,6 +730,7 @@ function Workspace({
           />
         )}
       </AppShell>
+      <NoticeAnnouncer message={awayAnnouncement} />
     </ShellLayoutContext.Provider>
   )
 }
