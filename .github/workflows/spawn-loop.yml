@@ -15,13 +15,13 @@ jobs:
   loop:
     runs-on: ubuntu-latest
     timeout-minutes: 50
-    # Second run: 1.4.2 didn't hang in the first one's 30 rounds, so more
-    # rounds, 1.4.3 beside it, and the whole suite as well as the spawn-heavy
-    # specs, since that's where the check job hung.
+    # Third run: 1.4.4 alone, on the branch with the tunnel spec's bounded
+    # close wait, to show it passes on the runner. (The second run had
+    # 1.4.2, 1.4.3 and 1.4.4, 90 rounds of these specs and 14 of the suite.)
     strategy:
       fail-fast: false
       matrix:
-        bun: ['1.4.2', '1.4.3', '1.4.4']
+        bun: ['1.4.4']
         suite: [spawn-a, spawn-b, full]
     env:
       ROUNDS: ${{ matrix.suite == 'full' && 14 || 45 }}
