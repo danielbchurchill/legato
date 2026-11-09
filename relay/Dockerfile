@@ -15,7 +15,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 # --- runtime ---
-FROM oven/bun:1.4.2-slim AS runtime
+FROM oven/bun:1.4.4-slim AS runtime
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./

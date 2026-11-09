@@ -68,7 +68,7 @@ Your music, its metadata, your playlists and your play history stay on your own 
 
 ## Building from source
 
-You need Node (the version in [`.nvmrc`](.nvmrc)), [Bun 1.4.2](https://bun.sh) and a Rust toolchain.
+You need Node (the version in [`.nvmrc`](.nvmrc)), [Bun 1.4.4](https://bun.sh) and a Rust toolchain.
 
 ```sh
 nvm use

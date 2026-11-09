@@ -22,7 +22,7 @@
 # The Bun stage needs its own --platform pin. `COPY --from=<image>` resolves
 # that image for the *target* platform, so copying straight out of
 # oven/bun hands an arm64 builder an x64 Bun it can't execute.
-FROM --platform=$BUILDPLATFORM oven/bun:1.4.2-slim AS bun
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.4-slim AS bun
 
 # Stands in for the `client` context when a build doesn't pass one, so
 # leaving off --build-context stops the build with the fix instead of a bare

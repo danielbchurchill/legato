@@ -65,10 +65,10 @@ const COMPILE_TARGET = {
   "aarch64-unknown-linux-gnu": "linux-arm64",
 };
 
-// The Bun release the server is built and tested against — the same version
-// .github/workflows/check.yml and release.yml pin via setup-bun. Bump all
-// three together.
-const BUN_VERSION = "1.4.2";
+// The Bun release the server is built and tested against. The workflows'
+// setup-bun steps, both Dockerfiles and the docs pin the same version; bump
+// them together (`grep -rn` for the old version finds every one).
+const BUN_VERSION = "1.4.4";
 
 // `npm --prefix server run compile` shells out to `bun`, and when it's missing
 // the only thing that surfaces is the shell's own `sh: 1: bun: not found`
