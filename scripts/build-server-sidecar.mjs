@@ -18,7 +18,8 @@
 // Run: node scripts/build-server-sidecar.mjs [--target <triple>]
 //      (or `npm run build:sidecar`)
 //
-// --if-missing: skip compiling if the destination file already exists.
+// --if-missing: skip compiling if the destination file already exists and
+// was compiled by the pinned Bun (see staleSidecar below).
 // tauri.conf.json's beforeDevCommand passes this — `tauri-build`'s build
 // script validates every bundle.externalBin path exists on *every* cargo
 // build, dev included (confirmed by reading tauri-build's source; it's not
@@ -70,6 +71,16 @@ const COMPILE_TARGET = {
 // them together (`grep -rn` for the old version finds every one).
 const BUN_VERSION = "1.4.4";
 
+function installCommand() {
+  return process.platform === "win32"
+    ? `iex "& {$(irm https://bun.sh/install.ps1)} -Version ${BUN_VERSION}"   (in PowerShell)`
+    : `curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"`;
+}
+
+function probeBun() {
+  return spawnSync("bun", ["--version"], { encoding: "utf8" });
+}
+
 // `npm --prefix server run compile` shells out to `bun`, and when it's missing
 // the only thing that surfaces is the shell's own `sh: 1: bun: not found`
 // (issue #187, first hit on the AIO) — nothing about why a desktop build
@@ -79,11 +90,7 @@ const BUN_VERSION = "1.4.4";
 // release would be worse than the mismatch itself.
 function checkBun() {
   const onWindows = process.platform === "win32";
-  const installCommand = onWindows
-    ? `iex "& {$(irm https://bun.sh/install.ps1)} -Version ${BUN_VERSION}"   (in PowerShell)`
-    : `curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"`;
-
-  const probe = spawnSync("bun", ["--version"], { encoding: "utf8" });
+  const probe = probeBun();
   if (probe.error || probe.status !== 0) {
     const bunHome = path.join(os.homedir(), ".bun", "bin");
     const pathHint = onWindows
@@ -97,7 +104,7 @@ function checkBun() {
       `the server sidecar needs Bun ${BUN_VERSION} to compile, and \`bun --version\` failed (${probe.error ? probe.error.code : `exit ${probe.status}`}).`,
       alreadyInstalled
         ? `Bun is already installed at ${bunHome} but isn't on PATH — add it:\n    ${pathHint}`
-        : `Install it with:\n    ${installCommand}\n  If Bun is already installed under ${bunHome}, it just needs adding to PATH:\n    ${pathHint}`,
+        : `Install it with:\n    ${installCommand()}\n  If Bun is already installed under ${bunHome}, it just needs adding to PATH:\n    ${pathHint}`,
       `Then re-run the build.`,
     ];
     throw new Error(lines.join("\n  "));
@@ -106,9 +113,39 @@ function checkBun() {
   const found = probe.stdout.trim();
   if (found !== BUN_VERSION) {
     console.warn(
-      `warning: found Bun ${found}, but the server is built and tested against ${BUN_VERSION} — continuing, but if the compile misbehaves, install the pinned version:\n    ${installCommand}`,
+      `warning: found Bun ${found}, but the server is built and tested against ${BUN_VERSION} — continuing, but if the compile misbehaves, install the pinned version:\n    ${installCommand()}`,
     );
   }
+}
+
+// Whether --if-missing should rebuild a sidecar that's already there. A pin
+// moves for a reason (#491: Bun 1.4.2's spawnSync could lose a child's
+// exit), and without this a sidecar compiled before the move would stay for
+// good. Run with BUN_BE_BUN=1, a compiled binary acts as the Bun that
+// compiled it, so `--version` names that Bun, with no stamp file in
+// binaries/, which the bundle copies whole. Returns why to rebuild, or null
+// to keep the file: kept when the pinned Bun built it, when it can't say (a
+// --target build for another platform doesn't run here), and when the Bun
+// on PATH built it or there's none, since a rebuild would change nothing.
+function staleSidecar(dest) {
+  const probe = spawnSync(dest, ["--version"], {
+    encoding: "utf8",
+    env: { ...process.env, BUN_BE_BUN: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 10_000,
+  });
+  const builtWith = probe.status === 0 ? probe.stdout.trim() : "";
+  if (!/^\d+\.\d+\.\d+$/.test(builtWith) || builtWith === BUN_VERSION) return null;
+
+  const onPath = probeBun();
+  const found = onPath.error || onPath.status !== 0 ? null : onPath.stdout.trim();
+  if (found === null || found === builtWith) {
+    console.warn(
+      `warning: the sidecar at ${path.relative(REPO_ROOT, dest)} was compiled by Bun ${builtWith}, not ${BUN_VERSION}. Keeping it: ${found ? `the Bun on PATH is ${found} too` : "there's no bun on PATH"}. Install Bun ${BUN_VERSION} and the next run rebuilds it:\n    ${installCommand()}`,
+    );
+    return null;
+  }
+  return `it was compiled by Bun ${builtWith}, not ${BUN_VERSION}`;
 }
 
 function hostTriple() {
@@ -149,8 +186,12 @@ async function main() {
   const dest = path.join(OUT_DIR, `legato-server-${triple}${exeSuffix}`);
 
   if (ifMissing && existsSync(dest)) {
-    console.log(`sidecar already built at ${path.relative(REPO_ROOT, dest)} — skipping (delete it, or omit --if-missing, to force a rebuild)`);
-    return;
+    const stale = staleSidecar(dest);
+    if (!stale) {
+      console.log(`sidecar already built at ${path.relative(REPO_ROOT, dest)} — skipping (delete it, or omit --if-missing, to force a rebuild)`);
+      return;
+    }
+    console.log(`rebuilding the sidecar at ${path.relative(REPO_ROOT, dest)}: ${stale}`);
   }
 
   // After the --if-missing skip on purpose: `npx tauri dev` on a machine that
