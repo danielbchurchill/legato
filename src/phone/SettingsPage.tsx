@@ -3,6 +3,8 @@ import { AccountAvatar } from '../auth/AccountAvatar'
 import { useAccount } from '../auth/accountContext'
 import { RELAY_SERVER_ID, SERVER_ORIGIN } from '../config/serverHost'
 import { neverUseRelay, setNeverUseRelay } from '../connect/connectionPath'
+import { AWAY_QUALITY_OPTIONS, awayFromHome, useAwayFromHome } from '../connect/awayFromHome'
+import { serverWords } from '../connect/awayNotice'
 import { readLastSeen } from '../connect/lastSeen'
 import { openConnectScreen } from '../connect/openConnect'
 import type { Settings } from '../hooks/useSettings'
@@ -80,9 +82,10 @@ export function SettingsPage({ settings, updateSettings, themePreference, onSetT
 
       <PageGroup
         label="playback"
-        note="With never use legato.fm on, this device only connects to a server directly. Away from home, a server on your home network is out of reach."
+        note={`Away from home is when ${serverWords(readLastSeen(SERVER_ORIGIN)?.name)} sees this device reach it over Tailscale from outside your home network. With never use legato.fm on, this device only connects to a server directly. Away from home, a server on your home network is out of reach.`}
       >
         <QualityRow />
+        <AwayRow />
         <NeverRelayRow />
       </PageGroup>
 
@@ -245,6 +248,44 @@ function QualityRow() {
         className="absolute inset-0 cursor-pointer appearance-none text-[16px] opacity-0"
       >
         {QUALITY_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+/* #412's Away from home, after the stream quality: tell me, standard while
+ * away, or the same as at home, in the platform's own picker as the stream
+ * quality's is. The notice's own choices set it too, so it follows the
+ * store (connect/awayFromHome.ts). */
+function AwayRow() {
+  const { quality } = useAwayFromHome()
+  const label = AWAY_QUALITY_OPTIONS.find((option) => option.value === quality)?.label ?? quality
+  return (
+    <div className="relative has-[select:focus-visible]:outline-3 has-[select:focus-visible]:outline-[color-mix(in_srgb,var(--color-ring)_50%,transparent)]">
+      <PageRow
+        label="Away from home"
+        chevron
+        trailing={
+          <RowValue>
+            <span className="truncate">{label}</span>
+          </RowValue>
+        }
+      />
+      <select
+        aria-label="Away from home"
+        value={quality}
+        onChange={(event) => {
+          const value = AWAY_QUALITY_OPTIONS.find((option) => option.value === event.target.value)?.value
+          if (value) awayFromHome.setQuality(value)
+        }}
+        // 16px, or iOS Safari zooms the page into it (#411).
+        className="absolute inset-0 cursor-pointer appearance-none text-[16px] opacity-0"
+      >
+        {AWAY_QUALITY_OPTIONS.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
           </option>

@@ -23,6 +23,7 @@ import { ServerFolderPicker } from '../library/ServerFolderPicker'
 import { formatLongDuration } from '../ui/format'
 import { SettingsGroup, SettingsRow } from './SettingsPrimitives'
 import { StreamQualityRow } from './StreamQualityRow'
+import { AwayFromHomeRow } from './AwayFromHomeRow'
 import { NeverRelayRow } from './NeverRelayRow'
 import { ServingGroup } from './ServingGroup'
 import { useRebuildMap } from './useRebuildMap'
@@ -596,6 +597,7 @@ export function LegatoSettings({
           />
         </SettingsRow>
         <StreamQualityRow />
+        <AwayFromHomeRow />
         <NeverRelayRow />
         <SettingsRow label="Output" align="start">
           {IS_TAURI ? (
