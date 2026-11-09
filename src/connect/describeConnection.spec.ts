@@ -1,6 +1,6 @@
 // Issue #118: what the rail's connection indicator says.
 import { describe, expect, it } from 'vitest'
-import { describeQuality, PATH_LABEL, pathSentence, qualityLabel } from './describeConnection'
+import { AWAY_WHY, describeQuality, PATH_LABEL, pathSentence, qualityLabel } from './describeConnection'
 import type { ServerPath } from './serverPath'
 
 const PATHS: ServerPath[] = ['embedded', 'this-device', 'home', 'relay', 'custom']
@@ -59,6 +59,26 @@ describe('the quality', () => {
     )
     expect(describeQuality('relay', { ...stream, next: 'opus96', drops: 1 }).sentence).toBe(
       'Streams as Opus at 96 kbps, lowered after the connection dropped.',
+    )
+  })
+
+  // #412: the why for standard while away, after a drop and before the
+  // Settings pick.
+  it('says when standard while away is why', () => {
+    expect(AWAY_WHY).toBe('while this device is away from home, as set in Settings')
+    expect(describeQuality('home', { ...stream, next: 'aac160', awayCapped: true })).toEqual({
+      label: 'AAC 160 kbps',
+      sentence: 'Streams as AAC at 160 kbps, while this device is away from home, as set in Settings.',
+    })
+    expect(describeQuality('home', { ...stream, next: 'opus160', preference: 'high', awayCapped: true }).sentence).toBe(
+      'Streams as Opus at 160 kbps, while this device is away from home, as set in Settings.',
+    )
+    expect(describeQuality('home', { ...stream, next: 'opus96', drops: 1, awayCapped: true }).sentence).toBe(
+      'Streams as Opus at 96 kbps, lowered after the connection dropped.',
+    )
+    // The playing track keeps the original; the next one is standard.
+    expect(describeQuality('home', { ...stream, playing: 'original', next: 'aac160', awayCapped: true }).sentence).toBe(
+      'This track streams at original quality. The next one streams as AAC at 160 kbps, while this device is away from home, as set in Settings.',
     )
   })
 

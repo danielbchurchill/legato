@@ -75,7 +75,13 @@ export type StreamFacts = {
   preference: QualityPreference
   /** Rungs given up after drops so far (quality.ts). */
   drops: number
+  /** #412's standard while away is what sets the next stream's start
+   * (quality.ts awayCapsQuality). */
+  awayCapped?: boolean
 }
+
+/** Why the next stream is standard while this device is away (#412). */
+export const AWAY_WHY = 'while this device is away from home, as set in Settings'
 
 /** The stream quality as a short label and a sentence. `stream` is null in
  * the desktop app, which plays files from disk, and streams the original
@@ -97,9 +103,11 @@ export function describeQuality(
   const why =
     stream.drops > 0
       ? 'lowered after the connection dropped'
-      : stream.preference !== 'auto'
-        ? 'as set in Settings'
-        : `the default ${DEFAULT_WHERE[path]}`
+      : stream.awayCapped
+        ? AWAY_WHY
+        : stream.preference !== 'auto'
+          ? 'as set in Settings'
+          : `the default ${DEFAULT_WHERE[path]}`
   const { playing, next } = stream
   // A drop or a new pick changes the next track, never the one playing
   // (#120), so the two can differ for a while.

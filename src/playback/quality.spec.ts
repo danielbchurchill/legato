@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  awayCapsQuality,
   chooseQuality,
   connectionPath,
   EARLY_END_MS,
@@ -78,6 +79,47 @@ describe('chooseQuality', () => {
 
   it('bottoms out at AAC 160 for an AAC browser, since the server has no AAC 96', () => {
     expect(chooseQuality({ path: 'relay', preference: 'auto', drops: 5, aac: true })).toBe('aac160')
+  })
+})
+
+// #412: standard while away. Only the server's 'away' turns it on; at home,
+// or while the server doesn't know, the device's own start applies.
+describe('chooseQuality, away from home', () => {
+  const home = { path: 'home', preference: 'auto', drops: 0, aac: false } as const
+
+  it('caps the start at standard while away, if that is the away pick', () => {
+    expect(chooseQuality({ ...home, away: true, awayPick: 'standard' })).toBe('opus160')
+    expect(chooseQuality({ ...home, aac: true, away: true, awayPick: 'standard' })).toBe('aac160')
+    expect(chooseQuality({ ...home, preference: 'original', away: true, awayPick: 'standard' })).toBe('opus160')
+    expect(chooseQuality({ ...home, preference: 'high', away: true, awayPick: 'standard' })).toBe('opus160')
+    // The tape asks for AAC whatever the browser (nextTapeRung).
+    expect(chooseQuality({ ...home, aac: true, away: true, awayPick: 'standard' })).toBe('aac160')
+  })
+
+  it('leaves a low pick low', () => {
+    expect(chooseQuality({ ...home, preference: 'low', away: true, awayPick: 'standard' })).toBe('opus96')
+  })
+
+  it('still steps down after a drop, from the capped start', () => {
+    expect(chooseQuality({ ...home, drops: 1, away: true, awayPick: 'standard' })).toBe('opus96')
+  })
+
+  it("is ignored at home, and while the server doesn't know", () => {
+    // 'home' and 'unknown' both arrive as away: false.
+    expect(chooseQuality({ ...home, away: false, awayPick: 'standard' })).toBe('original')
+    expect(chooseQuality({ ...home, preference: 'high', away: false, awayPick: 'standard' })).toBe('opus256')
+  })
+
+  it("changes nothing while away with tell me or same as home", () => {
+    expect(chooseQuality({ ...home, away: true, awayPick: 'tell' })).toBe('original')
+    expect(chooseQuality({ ...home, away: true, awayPick: 'same' })).toBe('original')
+  })
+
+  it('says when the cap is what set the start', () => {
+    expect(awayCapsQuality({ path: 'home', preference: 'auto', away: true, awayPick: 'standard' })).toBe(true)
+    expect(awayCapsQuality({ path: 'home', preference: 'standard', away: true, awayPick: 'standard' })).toBe(false)
+    expect(awayCapsQuality({ path: 'relay', preference: 'auto', away: true, awayPick: 'standard' })).toBe(false)
+    expect(awayCapsQuality({ path: 'home', preference: 'auto', away: false, awayPick: 'standard' })).toBe(false)
   })
 })
 
