@@ -40,6 +40,7 @@ jobs:
   # with the list in the header comment.
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       build: ${{ steps.diff.outputs.build }}
       docker: ${{ steps.diff.outputs.docker }}
@@ -101,6 +102,10 @@ jobs:
         platform: [macos-latest, windows-latest, ubuntu-latest]
 
     runs-on: ${{ matrix.platform }}
+    # Issue #491: no job here had a limit, so a hang would run for GitHub's
+    # six hours, at 10x on macOS. A build takes 3 to 5 minutes, about 9 with
+    # a cold Cargo cache.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -203,6 +208,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
+    # About a minute and a half from GitHub's layer cache, longer without it.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -227,6 +234,7 @@ jobs:
     needs: [changes, build, docker]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: build passed or wasn't needed
         env:

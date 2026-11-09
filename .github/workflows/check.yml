@@ -22,6 +22,11 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Issue #491: with no limit, a hung step held the job until someone
+    # noticed, or for GitHub's six hours. The whole job takes about 3.5
+    # minutes; the steps that have hung before get limits of their own, so
+    # the run fails at the step that stuck.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -41,7 +46,9 @@ jobs:
       # a test tone. Nothing else in this job needs system packages: no
       # Tauri bundling happens here, so none of webkit2gtk/appindicator/
       # rsvg/libasound2/etc are needed (see build.yml for those).
+      # About 30 seconds; once sat 20 minutes on a stuck mirror.
       - name: install ffmpeg
+        timeout-minutes: 5
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: install root dependencies
@@ -92,7 +99,9 @@ jobs:
       - name: type-check server
         run: npm --prefix server run typecheck
 
+      # About a minute and a half; has hung inside specs that spawn ffmpeg.
       - name: server test suite
+        timeout-minutes: 6
         run: npm --prefix server test
 
       # Issue #102's named risk: a compiled binary has no source tree, so a
