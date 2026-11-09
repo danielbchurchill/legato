@@ -175,3 +175,21 @@ export const SERVER_NAME = resolveServerName();
 // servers advertise unless asked. Nothing goes beyond the LAN, so it isn't
 // one of legato.fm/privacy's outbound requests.
 export const MDNS_ENABLED = process.env.LEGATO_MDNS?.trim().toLowerCase() !== "off";
+
+// Issue #412: the tailscale CLI, which the server asks how this machine's
+// tailscaled reaches each device on the tailnet (tailscale/status.ts), so a
+// device can be told it's away from home. LEGATO_TAILSCALE_PATH names one
+// that isn't on PATH. Otherwise it's `tailscale` on PATH, then, on a Mac,
+// the CLI inside Tailscale's app, where the App Store and standalone
+// installs keep it. With none of them, or no access to tailscaled (Docker
+// without its socket mounted), every device's answer is "don't know" and
+// nothing is shown. It's a local socket, not outbound network contact.
+export const MAC_TAILSCALE_APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+
+export function resolveTailscaleCommands(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string[] {
+  const configured = env.LEGATO_TAILSCALE_PATH?.trim();
+  if (configured) return [configured];
+  return platform === "darwin" ? ["tailscale", MAC_TAILSCALE_APP_CLI] : ["tailscale"];
+}
+
+export const TAILSCALE_COMMANDS = resolveTailscaleCommands();

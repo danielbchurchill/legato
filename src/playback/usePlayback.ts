@@ -7,6 +7,7 @@ import { nativeStreamUrl, noteTapeQuality, streamUrl, watchForDrops, watchForSta
 import { useMediaSession } from './mediaSession'
 import { canUseTape, TapePlayer, type TapePlayerHost } from './tapePlayer'
 import { notePlaybackStarted } from '../pwa/installOffer'
+import type { FileFacts } from '../connect/awayNotice'
 import {
   describePlaybackError,
   isNativePlaybackError,
@@ -21,6 +22,7 @@ type ResolvedTrack = {
   filePath: string
   format: string | null
   bitrate: number | null
+  sampleRate?: number | null
   durationMs: number | null
   replaygainTrackGain: number | null
   replaygainAlbumGain: number | null
@@ -124,6 +126,8 @@ type CachedTrack = {
   durationMs: number | null
   replaygainTrackGain: number | null
   replaygainAlbumGain: number | null
+  /** #412: what the away-from-home notice says the playing file is. */
+  facts: FileFacts
 }
 
 async function resolveTracks(recordingNodeIds: number[]): Promise<ResolvedTrack[]> {
@@ -390,6 +394,7 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
         durationMs: t.durationMs,
         replaygainTrackGain: t.replaygainTrackGain,
         replaygainAlbumGain: t.replaygainAlbumGain,
+        facts: { format: t.format, bitrate: t.bitrate, sampleRate: t.sampleRate ?? null },
       })
     }
   }, [])
@@ -1503,8 +1508,14 @@ export function usePlayback(replaygainMode: ReplayGainMode = 'track', repeatMode
     element: audioRef.current,
   })
 
+  // #412: the playing file's format, bitrate and sample rate, as the queue
+  // resolved them, for the away-from-home notice.
+  const playingFile =
+    status.currentRecordingNodeId != null ? (trackInfo.current.get(status.currentRecordingNodeId)?.facts ?? null) : null
+
   return {
     status,
+    playingFile,
     currentTitle,
     upNext,
     queueSource,

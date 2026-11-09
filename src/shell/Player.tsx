@@ -267,6 +267,8 @@ export function Player({
     <Surface
       role="region"
       aria-label="Player"
+      // Above a shell-layer dialog's wash, and reachable from it (#412).
+      dialogKeep
       // Clipped to its own bar. Nothing should need it: every set of parts
       // fits the width layout.ts picks it for.
       className="absolute bottom-[var(--inset)] z-20 flex h-[var(--player-height)] -translate-x-1/2 items-center overflow-hidden rounded-[var(--radius-panel)]"
@@ -504,6 +506,8 @@ export function IdlePlayer({ onShuffleLibrary, busy }: { onShuffleLibrary: () =>
     <Surface
       role="region"
       aria-label="Player"
+      // Above a shell-layer dialog's wash, and reachable from it (#412).
+      dialogKeep
       className="absolute bottom-[var(--inset)] z-20 flex w-max -translate-x-1/2 items-center justify-center overflow-hidden rounded-full"
       style={{
         left: layout.playerCx,

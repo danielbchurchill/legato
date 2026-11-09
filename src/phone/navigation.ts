@@ -107,9 +107,46 @@ function onPopState(event: PopStateEvent) {
   setPlace(placeIn(event.state))
 }
 
+/* The away-from-home notice (#412) is a history entry of its own, so
+ * Android's back closes it: the entry the phone was on, again, with
+ * NOTICE_KEY set. Nothing else carries the key on: an entry pushed while
+ * the notice's own was still current (its back not yet answered) isn't the
+ * notice's. */
+const NOTICE_KEY = 'legatoAwayNotice'
+
+function currentState(): Record<string, unknown> {
+  const state: unknown = history.state
+  if (state == null || typeof state !== 'object') return {}
+  const { [NOTICE_KEY]: _notice, ...rest } = state as Record<string, unknown>
+  return rest
+}
+
+/** Whether the current history entry is the notice's. */
+export function onNoticeEntry(): boolean {
+  const state: unknown = typeof history === 'undefined' ? null : history.state
+  return state != null && typeof state === 'object' && (state as Record<string, unknown>)[NOTICE_KEY] === true
+}
+
+/** Opens the notice's entry over wherever the phone is. */
+export function pushNoticeEntry() {
+  if (onNoticeEntry()) return
+  history.pushState({ ...currentState(), [NOTICE_KEY]: true }, '')
+}
+
+/** Leaves the notice's entry, as back would, when it's the current one. */
+export function leaveNoticeEntry() {
+  if (onNoticeEntry()) history.back()
+}
+
+/** After a reload, the entry the notice was open on is just where the
+ * phone was: the notice doesn't come back with it. */
+export function forgetNoticeEntry() {
+  if (onNoticeEntry()) history.replaceState(currentState(), '')
+}
+
 /* Goes somewhere new: a new history entry, or this one rewritten. */
 function go(next: Place, replace = false) {
-  const state: unknown = history.state
+  const state: unknown = currentState()
   const merged = { ...(state != null && typeof state === 'object' ? state : {}), [PAGES_KEY]: next.pages, [OVERLAYS_KEY]: next.overlays }
   if (replace) history.replaceState(merged, '')
   else history.pushState(merged, '')
@@ -210,7 +247,7 @@ export function useSheetOverlays(): readonly SheetOverlay[] {
 
 /** Opens a view in the sheet, in place of any already open. */
 export function openSheetView(next: SheetView) {
-  const state: unknown = history.state
+  const state: unknown = currentState()
   const entry = { ...(state != null && typeof state === 'object' ? state : {}), [VIEW_KEY]: next }
   if (view == null) history.pushState(entry, '')
   else history.replaceState(entry, '')
@@ -228,7 +265,7 @@ export function closeSheetView() {
  * showing them shows the view instead, so back from the view goes where
  * back from the top overlay would have. A playlist opened from search. */
 export function replaceOverlaysWithView(next: SheetView) {
-  const state: unknown = history.state
+  const state: unknown = currentState()
   history.replaceState({ ...(state != null && typeof state === 'object' ? state : {}), [OVERLAYS_KEY]: [], [VIEW_KEY]: next }, '')
   view = next
   setPlace({ ...place, overlays: [] })

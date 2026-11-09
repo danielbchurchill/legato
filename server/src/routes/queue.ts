@@ -8,6 +8,8 @@ type ResolvedTrack = {
   filePath: string;
   format: string | null;
   bitrate: number | null;
+  /** Issue #412: the away-from-home notice names it ("FLAC 44.1 kHz"). */
+  sampleRate: number | null;
   durationMs: number | null;
   replaygainTrackGain: number | null;
   replaygainAlbumGain: number | null;
@@ -28,7 +30,7 @@ type ResolvedTrack = {
 // shape that can't silently re-sort the caller's order out from under it.
 export function resolveQueueTracks(db: Database, ids: number[]): (ResolvedTrack | null)[] {
   const stmt = db.prepare(
-    `SELECT id, file_path, format, bitrate, duration_ms, replaygain_track_gain, replaygain_album_gain
+    `SELECT id, file_path, format, bitrate, sample_rate, duration_ms, replaygain_track_gain, replaygain_album_gain
      FROM files
      WHERE recording_node_id = ? AND missing_since IS NULL
      ORDER BY ${PLAYBACK_FILE_ORDER}
@@ -42,6 +44,7 @@ export function resolveQueueTracks(db: Database, ids: number[]): (ResolvedTrack 
           file_path: string;
           format: string | null;
           bitrate: number | null;
+          sample_rate: number | null;
           duration_ms: number | null;
           replaygain_track_gain: number | null;
           replaygain_album_gain: number | null;
@@ -54,6 +57,7 @@ export function resolveQueueTracks(db: Database, ids: number[]): (ResolvedTrack 
       filePath: file.file_path,
       format: file.format,
       bitrate: file.bitrate,
+      sampleRate: file.sample_rate,
       durationMs: file.duration_ms,
       replaygainTrackGain: file.replaygain_track_gain,
       replaygainAlbumGain: file.replaygain_album_gain,

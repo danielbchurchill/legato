@@ -1,5 +1,6 @@
 import { API_BASE as API } from '../config/serverHost'
 import { withMediaTicket } from '../auth/session'
+import { awayLadder, type AwayQuality } from '../connect/awayFromHome'
 import { getConnectionPath, type ConnectionPath } from '../connect/connectionPath'
 import { checkServerNow, inOutage, SERVER_ANSWERED_EVENT, SERVER_BACK_EVENT, serverFailingSince, serverTroubleSince } from '../connect/reconnect'
 import type { TapeRung } from './trackFeed'
@@ -79,20 +80,33 @@ function rungQuality(rung: Rung, aac: boolean): StreamQuality {
   }
 }
 
-/** The rung for the next track: the user's pick, or the path's default,
- * moved down once per drop so far and stopping at the bottom. */
-export function chooseQuality({
-  path,
-  preference,
-  drops,
-  aac,
-}: {
+type LadderInput = {
   path: ConnectionPath
   preference: QualityPreference
   drops: number
   aac: boolean
-}): StreamQuality {
-  const start = preference === 'auto' ? DEFAULT_RUNG[path] : preference
+  /** The server says this device is away from home (#412,
+   * connect/awayFromHome.ts). */
+  away?: boolean
+  /** Away from home, as set in Settings or the notice. */
+  awayPick?: AwayQuality
+}
+
+/** Whether "standard while away" (#412) is what sets the start: the server
+ * says this device is away, the pick is `standard`, and the device's own
+ * start (its pick, or the path's default) is above standard. At home, or
+ * while the server doesn't know, it never is. */
+export function awayCapsQuality({ path, preference, away = false, awayPick = 'tell' }: Omit<LadderInput, 'drops' | 'aac'>): boolean {
+  const own = preference === 'auto' ? DEFAULT_RUNG[path] : preference
+  return away && awayPick === 'standard' && LADDER.indexOf(own) < LADDER.indexOf('standard')
+}
+
+/** The rung for the next track: the user's pick, or the path's default,
+ * capped at standard while away if that's the away pick, then moved down
+ * once per drop so far and stopping at the bottom. A `low` pick stays low. */
+export function chooseQuality(input: LadderInput): StreamQuality {
+  const { path, preference, drops, aac } = input
+  const start = awayCapsQuality(input) ? 'standard' : preference === 'auto' ? DEFAULT_RUNG[path] : preference
   const index = Math.min(LADDER.indexOf(start) + drops, LADDER.length - 1)
   return rungQuality(LADDER[index], aac)
 }
@@ -166,6 +180,12 @@ function currentBrowser(): BrowserTraits {
 
 let aacForThisBrowser: boolean | null = null
 
+/** What #412's away-from-home pick adds to the ladder, now. */
+function awayInput(): { away: boolean; awayPick: AwayQuality } {
+  const { away, pick } = awayLadder()
+  return { away, awayPick: pick }
+}
+
 /** The quality the next stream asks for, on `path`. */
 export function nextStreamQuality(path: ConnectionPath = connectionPath()): StreamQuality {
   aacForThisBrowser ??= prefersAac(currentBrowser())
@@ -174,6 +194,7 @@ export function nextStreamQuality(path: ConnectionPath = connectionPath()): Stre
     preference: readQualityPreference(),
     drops: qualityState.drops,
     aac: aacForThisBrowser,
+    ...awayInput(),
   })
 }
 
@@ -182,7 +203,7 @@ export function nextStreamQuality(path: ConnectionPath = connectionPath()): Stre
  * original comes as fragmented MP4: its own frames, moved into another
  * container, not re-encoded (server/src/stream/quality.ts). */
 export function nextTapeRung(path: ConnectionPath = connectionPath()): TapeRung {
-  const quality = chooseQuality({ path, preference: readQualityPreference(), drops: qualityState.drops, aac: true })
+  const quality = chooseQuality({ path, preference: readQualityPreference(), drops: qualityState.drops, aac: true, ...awayInput() })
   return quality === 'original' ? 'original-fmp4' : (quality as Extract<StreamQuality, 'aac160' | 'aac256'>)
 }
 

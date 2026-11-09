@@ -16,11 +16,20 @@ type SurfaceProps = {
   /** Landmark role for the shell's own regions (`navigation`, `complementary`). */
   role?: string
   'aria-label'?: string
+  /** Stays reachable beside a shell-layer Dialog (#412): the player. */
+  dialogKeep?: boolean
 }
 
-export function Surface({ children, className = '', style, ref, role, 'aria-label': ariaLabel }: SurfaceProps) {
+export function Surface({ children, className = '', style, ref, role, 'aria-label': ariaLabel, dialogKeep }: SurfaceProps) {
   return (
-    <div ref={ref} role={role} aria-label={ariaLabel} className={`glass ${className}`} style={style}>
+    <div
+      ref={ref}
+      role={role}
+      aria-label={ariaLabel}
+      className={`glass ${className}`}
+      style={style}
+      data-dialog-keep={dialogKeep ? '' : undefined}
+    >
       {children}
     </div>
   )

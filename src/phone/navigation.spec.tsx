@@ -6,6 +6,9 @@ import {
   closePhonePages,
   closeSheetView,
   currentSheetOverlays,
+  forgetNoticeEntry,
+  onNoticeEntry,
+  pushNoticeEntry,
   openSheetView,
   popPhonePage,
   popPhonePageThen,
@@ -363,5 +366,27 @@ describe("the sheet's overlays", () => {
     popSheetOverlay()
     await back
     expect(overlays.at(-1)).toEqual([{ kind: 'map-options' }])
+  })
+})
+
+// #412: the away-from-home notice's own history entry.
+describe("the notice's entry", () => {
+  it('is the current entry again, marked, and nothing pushed after it is marked', () => {
+    history.replaceState(null, '')
+    pushPhonePage('settings')
+    pushNoticeEntry()
+    expect(onNoticeEntry()).toBe(true)
+    expect((history.state as { legatoPhonePages: string[] }).legatoPhonePages).toEqual(['settings'])
+    // Pushed before the notice's back was answered: not the notice's.
+    pushPhonePage('health')
+    expect(onNoticeEntry()).toBe(false)
+    expect((history.state as { legatoPhonePages: string[] }).legatoPhonePages).toEqual(['settings', 'health'])
+  })
+
+  it('is forgotten after a reload rather than reopening the notice', () => {
+    history.replaceState({ legatoPhonePages: [], legatoAwayNotice: true }, '')
+    forgetNoticeEntry()
+    expect(onNoticeEntry()).toBe(false)
+    expect(history.state).toEqual({ legatoPhonePages: [] })
   })
 })

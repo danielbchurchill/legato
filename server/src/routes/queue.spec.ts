@@ -87,4 +87,16 @@ describe("resolveQueueTracks", () => {
     expect(tracks[0]?.fileId).toBe(betterFileId);
     expect(tracks[0]?.bitrate).toBe(1411);
   });
+
+  // Issue #412: the away-from-home notice names the playing file's format
+  // as "FLAC 44.1 kHz", so the client needs the rate.
+  it("sends each file's sample rate, and null where the scan didn't read one", () => {
+    const withRate = seedFile("Rated");
+    const withoutRate = seedFile("Unrated");
+    db.prepare("UPDATE files SET sample_rate = 96000 WHERE id = ?").run(withRate.fileId);
+
+    const tracks = resolveQueueTracks(db, [withRate.nodeId, withoutRate.nodeId]);
+
+    expect(tracks.map((t) => t?.sampleRate)).toEqual([96000, null]);
+  });
 });

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AccountContext } from '../auth/accountContext'
 import { OPEN_CONNECT_EVENT } from '../connect/openConnect'
 import { neverUseRelay } from '../connect/connectionPath'
+import { awayFromHome } from '../connect/awayFromHome'
 import type { ServerVersion } from '../hooks/useServerReady'
 import { readQualityPreference } from '../playback/quality'
 import { UpdateOfferProvider } from '../shell/ServerUpdateNotice'
@@ -138,6 +139,34 @@ describe('Settings on the phone', () => {
     })
     expect(readQualityPreference()).toBe('standard')
     expect(container.textContent).toContain('standard · 160 kbps')
+  })
+
+  // #412: Away from home, after the stream quality.
+  it('picks Away from home from a native select, and follows the notice choosing it', async () => {
+    const { container } = await render()
+    const selects = [...container.querySelectorAll<HTMLSelectElement>('select')].map((s) => s.getAttribute('aria-label'))
+    expect(selects).toEqual(['Stream quality', 'Away from home'])
+    const select = container.querySelector<HTMLSelectElement>('select[aria-label="Away from home"]')!
+    expect(select.value).toBe('tell')
+    expect([...select.options].map((o) => o.textContent)).toEqual(['tell me', 'standard · 160 kbps', 'same as home'])
+    act(() => {
+      select.value = 'standard'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(localStorage.getItem('legato:away-quality')).toBe('standard')
+    expect(select.closest('div')!.textContent).toContain('standard · 160 kbps')
+    // The notice's keep original sets it too.
+    act(() => awayFromHome.setQuality('same'))
+    expect(select.value).toBe('same')
+    expect(select.closest('div')!.textContent).toContain('same as home')
+    act(() => awayFromHome.setQuality('tell'))
+  })
+
+  it("says what away from home means first in the playback card's note", async () => {
+    const { container } = await render()
+    expect(container.textContent).toContain(
+      'Away from home is when your server sees this device reach it over Tailscale from outside your home network. With never use legato.fm on, this device only connects to a server directly. Away from home, a server on your home network is out of reach.',
+    )
   })
 
   it("turns this device's never use legato.fm on and off", async () => {

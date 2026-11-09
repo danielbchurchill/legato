@@ -9,6 +9,7 @@ import { plural } from '../ui/format'
 import { useCoverColor, withAlpha } from '../ui/coverColor'
 import { useLibraryChanges, useLibraryStats } from '../library/useLibraryChanges'
 import { ServerUnreachableOverShell, type UnreachableView } from '../connect/ServerUnreachable'
+import type { AwayNoticeView } from '../connect/useAwayNotice'
 import type { MapPresetHistory } from '../hooks/useMapPresetHistory'
 import type { Settings } from '../hooks/useSettings'
 import type { ThemePreference } from '../hooks/useTheme'
@@ -22,6 +23,7 @@ import { PhoneLibrary } from './PhoneLibrary'
 import { PhonePages } from './PhonePages'
 import { NodeBody, NodeControls, NodeHeader } from './PhoneNode'
 import { SearchField, SearchResultsList } from './PhoneSearch'
+import { AwayNoticeSheet } from './AwayNoticeSheet'
 import { Sheet } from './Sheet'
 import { UpNextList } from './UpNextList'
 import { UpNextTransport } from './UpNextTransport'
@@ -115,6 +117,8 @@ type PhoneShellProps = {
   searchOpen: boolean
   onSearchOpenChange: (open: boolean) => void
   unreachable: UnreachableView | null
+  /** #412's away-from-home notice, or null where it never shows. */
+  awayNotice?: AwayNoticeView | null
 }
 
 export function PhoneShell({
@@ -136,6 +140,7 @@ export function PhoneShell({
   searchOpen,
   onSearchOpenChange,
   unreachable,
+  awayNotice = null,
 }: PhoneShellProps) {
   // An overlay, or a view open in the collections tab, is in the history,
   // so after a reload the sheet opens on it, as a pushed page stays open.
@@ -470,6 +475,10 @@ export function PhoneShell({
             }
           />
         )}
+
+        {/* #412: over everything above, the sheet at any detent, a pushed
+         * page and now playing alike. */}
+        {awayNotice && <AwayNoticeSheet view={awayNotice} playback={playback} track={track} />}
       </AppShell>
     </ShellLayoutContext.Provider>
   )
