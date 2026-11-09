@@ -405,6 +405,8 @@ async function launch(args) {
   app.on("exit", (code, signal) => {
     exited = signal ?? code;
   });
+  let serverPid = null;
+  let appPid = null;
   try {
     let body = null;
     for (const deadline = Date.now() + 120_000; Date.now() < deadline && exited === null; await sleep(1000)) {
@@ -414,9 +416,10 @@ async function launch(args) {
     if (body) {
       expect(body.installChannel === "desktop", `it runs as the desktop app's server (install channel ${body.installChannel})`);
       // The process listening on the port, not one found by name: a computer
-      // can be running another Legato.
-      const pid = output("lsof", ["-t", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN"]).trim().split("\n")[0];
-      const serverEnv = legatoEnv(pid, target.os);
+      // can be running another Legato. The app is its parent.
+      serverPid = Number(output("lsof", ["-t", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN"]).trim().split("\n")[0]);
+      appPid = Number(output("ps", ["-o", "ppid=", "-p", String(serverPid)]).trim());
+      const serverEnv = legatoEnv(serverPid, target.os);
       for (const [name, variable] of [
         ["ffmpeg", "LEGATO_FFMPEG_PATH"],
         ["fpcalc", "LEGATO_FPCALC_PATH"],
@@ -426,12 +429,34 @@ async function launch(args) {
       }
     }
   } finally {
-    // SIGTERM is what the app's own signal handler tears the server down on
-    // (server_process.rs), so the server should go with it.
-    if (exited === null) process.kill(-app.pid, "SIGTERM");
+    // SIGTERM to the app alone, which its own handler tears the server down
+    // on (server_process.rs). Not to everything this started: under
+    // xvfb-run that would take the display down with it, and GTK quits the
+    // app on a lost display before the handler runs.
+    if (appPid) {
+      try {
+        process.kill(appPid, "SIGTERM");
+      } catch {
+        // Already gone.
+      }
+    }
     let stopped = false;
     for (let i = 0; i < 20 && !(stopped = !(await health(port))); i++) await sleep(500);
-    expect(stopped, "the server stopped when the app did");
+    if (appPid) expect(stopped, "the server stopped when the app did");
+    // Then the rest: xvfb-run and its display, and a server left behind if
+    // the check above failed (it runs in a process group of its own).
+    try {
+      if (exited === null) process.kill(-app.pid, "SIGTERM");
+    } catch {
+      // Already gone.
+    }
+    if (!stopped && serverPid) {
+      try {
+        process.kill(-serverPid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
   }
   if (failures.length) throw new Error(`${failures.length} check${failures.length === 1 ? "" : "s"} failed: ${failures.join("; ")}`);
 }
