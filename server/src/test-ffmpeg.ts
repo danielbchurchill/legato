@@ -2,12 +2,18 @@
 // back what they made. Not a *.spec.ts, so `bun test` never runs it as a
 // suite of its own.
 //
-// Issue #491: a spec blocked in spawnSync on an ffmpeg that didn't exit
-// held the check job until someone cancelled it. When a test or hook times
-// out, bun test kills the child it's waiting on with that spawn's
-// killSignal, SIGTERM unless told otherwise. ffmpeg catches SIGTERM to
-// finish its output, so one that's stuck stays stuck, spawnSync never
-// returns, and neither does the run. So every run here:
+// Issue #491: specs blocked in spawnSync held the check job until someone
+// cancelled it. The cause was Bun's, not ffmpeg's. On Bun 1.4.2, a garbage
+// collection during one spawnSync could leave a later one waiting for ever
+// on a child that had already exited (oven-sh/bun#34069, fixed in 1.4.3).
+// It struck under `bun test --isolate`, in a spec that spawns only `bun -e`
+// as well as in ones that spawn ffmpeg, and the timeout below never fired.
+// The server is on a Bun with the fix.
+//
+// The rest still holds for a child that really does stall. When a test or
+// hook times out, bun test kills the child it's waiting on with that
+// spawn's killSignal, SIGTERM unless told otherwise, and ffmpeg catches
+// SIGTERM to finish its output. So every run here:
 //
 // - gives the child no stdin, only the bytes it's handed if there are any,
 //   and passes ffmpeg -nostdin, so nothing waits on a keyboard or on an
