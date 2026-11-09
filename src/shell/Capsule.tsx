@@ -1,7 +1,7 @@
 import { Icon, type IconName } from '../ui/Icon'
 import { Kbd } from '../ui/Kbd'
 import { Tabs } from '../ui/Tabs'
-import { ServerUpdatePill } from './ServerUpdateNotice'
+import { UpdatePill } from './DesktopUpdatePill'
 import { Surface } from './Surface'
 import { useShellLayout } from './layout'
 import { MOD_KEY_LABEL } from './keys'
@@ -98,9 +98,10 @@ export function Capsule({ view, onViewChange, onOpenSearch, hidden }: CapsulePro
           {parts.searchShortcut && <Kbd>{MOD_KEY_LABEL}K</Kbd>}
         </button>
       </Surface>
-      {/* A newer server release, under the capsule rather than over it
-       * (#405), and out of the palette's way while search is open. */}
-      <ServerUpdatePill hidden={hidden} />
+      {/* A newer release of this app (#129) or of the server (#110), under
+       * the capsule rather than over it (#405), and out of the palette's way
+       * while search is open. */}
+      <UpdatePill hidden={hidden} />
     </>
   )
 }

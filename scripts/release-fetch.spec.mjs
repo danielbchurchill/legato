@@ -98,6 +98,28 @@ describe("other answers", () => {
     expect(requests.get("/down.zip")).toBe(3);
   });
 
+  it("retries a request that got no answer at all, as when the connection drops (#129)", async () => {
+    answers.set("/ffmpeg9arm.zip", [{ body: XZ }]);
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((...args) => {
+      calls++;
+      if (calls === 1) return Promise.reject(new TypeError("fetch failed", { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) }));
+      return realFetch(...args);
+    });
+    const dest = path.join(dir, "ffmpeg9arm.zip");
+    await download(`${base}/ffmpeg9arm.zip`, dest, NO_WAIT);
+    expect(await readFile(dest)).toEqual(XZ);
+    expect(calls).toBe(2);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("-> ECONNRESET; trying again"));
+  });
+
+  it("gives up on a request that never gets an answer, with the original error", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+    await expect(fetchText(`${base}/never.md5`, NO_WAIT)).rejects.toThrow("fetch failed");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+  });
+
   it("fails at once on a 404, without retrying", async () => {
     await expect(fetchText(`${base}/gone.md5`, NO_WAIT)).rejects.toThrow(/-> HTTP 404$/);
     expect(requests.get("/gone.md5")).toBe(1);

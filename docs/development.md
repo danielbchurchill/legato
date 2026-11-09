@@ -46,6 +46,32 @@ LEGATO_PORT=8901 LEGATO_DATA_DIR=/tmp/legato-dev npm --prefix server run dev
 VITE_SERVER_PORT=8901 npx vite --port 5181 --strictPort
 ```
 
+## Working on the update notice
+
+A dev build never checks for updates on its own (`src-tauri/src/updater.rs`). To see the notice, serve a `latest.json` that offers a newer version and point the app at it. Its update has to be signed, so make a throwaway key and sign any file with it:
+
+```sh
+mkdir -p scratch.local/updater-stub && cd scratch.local/updater-stub
+npx tauri signer generate --ci -p stub -w stub.key
+head -c 1000000 /dev/urandom > update.bin
+npx tauri signer sign -f stub.key -p stub update.bin
+cat > latest.json <<EOF
+{ "version": "0.3.0", "platforms": { "darwin-aarch64": {
+  "url": "http://127.0.0.1:8971/update.bin", "signature": "$(cat update.bin.sig)" } } }
+EOF
+python3 -m http.server 8971 --bind 127.0.0.1
+```
+
+Use your own platform's key: `darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64` or `windows-x86_64`. Then, from the repo root:
+
+```sh
+LEGATO_UPDATER_ENDPOINT=http://127.0.0.1:8971/latest.json \
+LEGATO_UPDATER_PUBKEY="$(cat scratch.local/updater-stub/stub.key.pub)" \
+npm run dev:instance -- --server-port 8906 --vite-port 5186 --data-dir "$PWD/scratch.local/instance"
+```
+
+The notice shows under the search bar once the download has verified. In a dev build, "restart to update" doesn't install anything.
+
 ## Troubleshooting
 
 **Blank preview, failing API calls, or stale data.** Something else may already be serving on 8899 or 5173: an old run, or another checkout.
@@ -81,6 +107,8 @@ A version tag starts `.github/workflows/release.yml`, and its `release` job down
 
 When it fails anyway, open the run in GitHub Actions and choose **Re-run failed jobs**. That's safe: nothing is published before the job's publish step, so a failed download leaves no release, image or tap bump behind. For v0.2.0, a rerun two minutes later passed. If one host keeps refusing across reruns, that source needs replacing in the script, as evermeet.cx was after v0.1.0.
 
+The desktop app (#129) fetches the same binaries in `desktop`'s `media` job, and builds alongside the server release rather than before it. So when a desktop job fails, the release is already up with the server archives, but no desktop bundles and no `latest.json`, which installed apps read as a failed check and try again the next day. **Re-run failed jobs** builds the missing ones and `desktop-publish` attaches them, replacing anything a failed upload left behind. A tag with a desktop signing secret missing fails in `preflight`, before anything is published.
+
 ## Platforms
 
-Development happens on Linux and macOS. `.github/workflows/build.yml` builds the desktop app on macOS, Windows and Linux; its artifacts are unsigned installers, so Gatekeeper and SmartScreen will warn. Linux (x64 and arm64) is a main platform for both the app and the server.
+Development happens on Linux and macOS. `.github/workflows/build.yml` builds the desktop app for every platform a release ships (macOS arm64 and x64, Windows x64, Linux x64 and arm64) through `desktop.yml`, the workflow each release tag runs. Its Mac build is signed only on main and on release tags, the only refs the desktop-signing environment's keys are for; a pull request's is unsigned and says so. Windows builds are unsigned until #483, so SmartScreen warns. Linux (x64 and arm64) is a main platform for both the app and the server. Installing a release, warnings included, is [docs/install/desktop.md](install/desktop.md).

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The legato-server sidecar's entitlements in a signed macOS build (#129),
+     applied by scripts/desktop-release.mjs. These are the five Bun's docs
+     list for a compiled executable ("Code signing on macOS",
+     bun.com/docs/bundler/executables). Under the hardened runtime without
+     them, JavaScriptCore can't map executable memory, so the server runs
+     with its JIT off: about fifteen times slower on CPU-bound work, which is
+     what a scan and recompute are.
+
+     Only the sidecar gets them. The app itself is signed with the hardened
+     runtime and no entitlements, because WKWebView's JIT runs in WebKit's
+     own processes, and ffmpeg and fpcalc need none. -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-executable-page-protection</key>
+	<true/>
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

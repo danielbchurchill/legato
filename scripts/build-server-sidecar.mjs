@@ -9,11 +9,14 @@
 // the machine it runs on — see src-tauri/src/server_process.rs's
 // resolve_sidecar_binary and issue #103.
 //
-// Only ever targets the *host's own* triple — cross-compiling all five of
-// #102's release targets from one machine for a multi-platform release is
-// the release workflow's job (once it exists), not a local package build's.
+// Targets the host's own triple unless told otherwise. `--target <triple>`,
+// or the TAURI_ENV_TARGET_TRIPLE the Tauri CLI sets for beforeBuildCommand
+// under `tauri build --target`, picks another: the desktop release builds
+// the Intel Mac app on an Apple Silicon runner (#129, desktop.yml), and Bun
+// cross-compiles the server for it.
 //
-// Run: node scripts/build-server-sidecar.mjs   (or `npm run build:sidecar`)
+// Run: node scripts/build-server-sidecar.mjs [--target <triple>]
+//      (or `npm run build:sidecar`)
 //
 // --if-missing: skip compiling if the destination file already exists.
 // tauri.conf.json's beforeDevCommand passes this — `tauri-build`'s build
@@ -127,9 +130,20 @@ function hostTriple() {
   return triple;
 }
 
+// --target wins, then the Tauri CLI's target, then this machine's own.
+function targetTriple() {
+  const flag = process.argv.indexOf("--target");
+  const requested = flag === -1 ? process.env.TAURI_ENV_TARGET_TRIPLE : process.argv[flag + 1];
+  if (!requested) return hostTriple();
+  if (!COMPILE_TARGET[requested]) {
+    throw new Error(`no server sidecar target for ${requested}; the ones a server binary is built for are ${Object.keys(COMPILE_TARGET).join(", ")}`);
+  }
+  return requested;
+}
+
 async function main() {
   const ifMissing = process.argv.includes("--if-missing");
-  const triple = hostTriple();
+  const triple = targetTriple();
   const compileTarget = COMPILE_TARGET[triple];
   const exeSuffix = triple.includes("windows") ? ".exe" : "";
   const dest = path.join(OUT_DIR, `legato-server-${triple}${exeSuffix}`);

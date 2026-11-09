@@ -13,6 +13,7 @@ mod relay_sign_in;
 mod server_process;
 mod serving;
 mod tray;
+mod updater;
 use discovery::Discovery;
 use instance::Instance;
 use keep_awake::KeepAwake;
@@ -21,6 +22,7 @@ use playback::PlaybackState;
 use relay_sign_in::SignInState;
 use server_process::ServerProcess;
 use serving::{ProcessRunner, Serving, ServingState};
+use updater::DesktopUpdate;
 
 // Passed by the login item (tauri-plugin-autostart) so a launch at login
 // comes up in the tray only. A server starting with the session has no one
@@ -60,8 +62,10 @@ pub fn run() {
     // sends a webview link with target="_blank" to the browser, and
     // capabilities/default.json lets that open only Library health's
     // look-up links (#469): MusicBrainz, a Discogs search, Picard's site and
-    // a running Picard's /openalbum on this computer. Anything else stays
-    // shut.
+    // a running Picard's /openalbum on this computer. It also opens Apple's
+    // Music guide, which the Music import links to, and Legato's own release
+    // pages, where the update pill sends a .deb install (#129). Anything else
+    // stays shut.
     .plugin(tauri_plugin_opener::init())
     // Only Rust calls it, through serving.rs's commands; capabilities/
     // default.json grants the webview none of its own.
@@ -75,6 +79,10 @@ pub fn run() {
     .manage(MediaControlsState::default())
     .manage(SignInState::default())
     .manage(Discovery::default())
+    // The app's own updates (#129). updater.rs drives it from Rust, and
+    // capabilities/default.json grants the webview none of its commands.
+    .plugin(tauri_plugin_updater::Builder::new().build())
+    .manage(DesktopUpdate::default())
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
@@ -110,6 +118,10 @@ pub fn run() {
         }
         Err(e) => log::error!("[keep-awake] {e}"),
       }
+
+      // After the server: the first check runs on its own thread, and an
+      // update it finds is only installed when someone asks.
+      updater::start(app.handle());
 
       // The window starts hidden (tauri.conf.json, visible: false) so a
       // background launch never flashes it on screen.
@@ -154,6 +166,8 @@ pub fn run() {
       serving::serving_settings,
       serving::set_launch_at_login,
       serving::set_keep_awake,
+      updater::desktop_update,
+      updater::desktop_update_restart,
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")

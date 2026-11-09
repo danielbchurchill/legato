@@ -90,8 +90,9 @@ impl Instance {
   }
 
   /// Where the shell keeps files it can lose, such as the cover it hands
-  /// the OS's now-playing widget (media_controls.rs). An instance with its
-  /// own data dir keeps them there, as it does its settings.
+  /// the OS's now-playing widget (media_controls.rs) and a downloaded update
+  /// (updater.rs, #129). An instance with its own data dir keeps them there,
+  /// as it does its settings.
   pub fn cache_dir(&self, app: &AppHandle) -> Result<PathBuf, String> {
     match &self.data_dir {
       Some(dir) => Ok(dir.clone()),

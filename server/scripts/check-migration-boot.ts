@@ -26,7 +26,11 @@ if (!binaryPath) {
   process.exit(1);
 }
 
-const BOOT_TIMEOUT_MS = 15_000;
+// A native build answers in about a second, so this only decides how long
+// a broken one takes to fail. The Intel Mac app's server, checked under
+// Rosetta on an Apple Silicon runner, took 15 to 21 seconds to answer once
+// it was signed (#129): Rosetta translates every newly signed binary afresh.
+const BOOT_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 200;
 
 async function waitForHealth(port: number, deadline: number): Promise<void> {
@@ -65,8 +69,9 @@ async function main() {
   })();
 
   try {
-    await waitForHealth(port, Date.now() + BOOT_TIMEOUT_MS);
-    console.log("server booted and answered /api/v1/health");
+    const started = Date.now();
+    await waitForHealth(port, started + BOOT_TIMEOUT_MS);
+    console.log(`server booted and answered /api/v1/health after ${((Date.now() - started) / 1000).toFixed(1)} s`);
 
     const dbPath = path.join(dataDir, "legato.db");
     const db = openSqlite(dbPath);
@@ -91,7 +96,26 @@ async function main() {
       console.log("\n--- server stderr ---");
       console.log(stderrOutput.trim());
     }
-    await rm(dataDir, { recursive: true, force: true });
+    await removeDataDir(dataDir);
+  }
+}
+
+// Windows lets go of a killed process's files a moment after it exits, so
+// an immediate rm fails with EBUSY (the desktop build's Windows run, #129).
+// A temp dir that outlives a few tries is left for the OS: the check has
+// already passed or failed by then.
+async function removeDataDir(dir: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rm(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      if (attempt === 10) {
+        console.warn(`couldn't remove ${dir}: ${err instanceof Error ? err.message : err}`);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
   }
 }
 

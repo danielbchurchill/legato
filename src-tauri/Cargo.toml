@@ -42,6 +42,11 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 # MPNowPlayingInfoCenter on macOS, SMTC on Windows, MPRIS on Linux. MPRIS
 # through zbus, which is pure Rust, rather than libdbus and its headers.
 souvlaki = { version = "0.9", default-features = false, features = ["use_zbus"] }
+# Issue #129: the app's own updates (updater.rs), from the latest.json every
+# release carries, signed with the updater's own key. semver compares the
+# release the last check found with this build's version.
+tauri-plugin-updater = "2.14"
+semver = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # media_controls.rs looks for a D-Bus session bus before it starts MPRIS.
