@@ -131,7 +131,7 @@ problem; `fly status` should show the check passing a few seconds later.
 - `RELAY_DATA_DIR` is set in `fly.toml` and read by `relay/src/config.ts` —
   `relay/src/db.ts` stores the relay's SQLite database (accounts, sessions,
   pairing codes, tunnel credentials) at `$RELAY_DATA_DIR/relay.db`.
-- The runtime image is `oven/bun:1.4.2-slim`, not a Node image — `relay/`
+- The runtime image is `oven/bun:1.4.4-slim`, not a Node image — `relay/`
   runs on Bun (issue #101), the same adapter pattern `server/` uses
   (`relay/src/sqlite.ts` wraps `bun:sqlite`). Dependencies still install
   via `npm ci` in a separate `node:24.19.0-slim` build stage, since
