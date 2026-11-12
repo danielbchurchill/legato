@@ -210,10 +210,17 @@ impl DesktopUpdate {
     self.notice().is_some_and(|notice| notice.version == version)
   }
 
-  fn set(&self, ready: Ready) {
-    if let Ok(mut slot) = self.ready.lock() {
-      *slot = Some(ready);
+  /// Keeps the update, unless the switch is off. Read under the lock that
+  /// withdraw() takes, and set_update_check turns the switch off before it
+  /// withdraws, so an update that finishes downloading just as the check is
+  /// switched off is either refused here or withdrawn there, never kept.
+  fn set(&self, ready: Ready) -> bool {
+    let Ok(mut slot) = self.ready.lock() else { return false };
+    if !self.switched_on() {
+      return false;
     }
+    *slot = Some(ready);
+    true
   }
 
   /// Drops the ready update. Returns whether there was one.
@@ -343,12 +350,16 @@ async fn check(app: &AppHandle, plan: &Plan) -> Result<Option<String>, String> {
       Ready { notice: Notice { version: version.clone(), action: Action::Restart }, download: Some((update, file)) }
     }
   };
-  // Switched off while it downloaded: nothing to say about it.
-  if !state.switched_on() {
+  let notice = ready.notice.clone();
+  let download = ready.download.as_ref().map(|(_, file)| file.clone());
+  if !state.set(ready) {
+    // Switched off while it downloaded: nothing to say about it, and
+    // nothing left in the cache to install.
+    if let Some(file) = download {
+      let _ = std::fs::remove_file(file);
+    }
     return Ok(Some(version));
   }
-  let notice = ready.notice.clone();
-  state.set(ready);
   log::info!("[updater] Legato {version} is ready");
   let _ = app.emit(READY_EVENT, &notice);
   Ok(Some(version))
@@ -512,6 +523,30 @@ mod tests {
   fn refuses_a_stub_that_isnt_a_url() {
     let err = plan(true, &v("0.0.0"), ON, env(&[("LEGATO_UPDATER_ENDPOINT", "latest.json")])).unwrap_err();
     assert!(err.contains("isn't a URL"), "{err}");
+  }
+
+  fn link_ready(version: &str) -> Ready {
+    Ready { notice: Notice::link(version), download: None }
+  }
+
+  #[test]
+  fn an_update_found_as_the_switch_goes_off_is_never_kept() {
+    let state = DesktopUpdate::default();
+    assert!(state.set(link_ready("0.3.0")));
+    assert_eq!(state.notice().map(|n| n.version), Some("0.3.0".into()));
+
+    // Switching off: the switch first, then the update it had.
+    state.switched_on.store(false, Ordering::Relaxed);
+    assert!(state.withdraw());
+    assert_eq!(state.notice(), None);
+    // A download that finishes afterwards is refused.
+    assert!(!state.set(link_ready("0.3.1")));
+    assert_eq!(state.notice(), None);
+    assert!(!state.withdraw(), "nothing left to withdraw");
+
+    state.switched_on.store(true, Ordering::Relaxed);
+    assert!(state.set(link_ready("0.3.1")));
+    assert_eq!(state.notice().map(|n| n.version), Some("0.3.1".into()));
   }
 
   #[test]
