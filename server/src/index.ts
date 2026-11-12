@@ -34,6 +34,7 @@ import { insightsComputed } from "./insights/recompute.js";
 import { similarityComputed } from "./similarity/similarity.js";
 import { loadServerKey } from "./auth/serverKey.js";
 import { installPictures, Pictures } from "./account/pictures.js";
+import { stopWhenStdinCloses } from "./stdinLifeline.js";
 
 // Checked before anything else touches disk (openDb below creates the data
 // dir and runs migrations) — `legato-server --version` should work without
@@ -62,6 +63,17 @@ const app = Fastify({
   },
 });
 app.log.info(`legato-server ${VERSION} (${GIT_SHA})`);
+
+// Issue #373: a desktop app's server stops when the app is gone, however it
+// went (stdinLifeline.ts). The same path as a SIGTERM, so a server that
+// advertises over mDNS still says goodbye.
+stopWhenStdinCloses(() => {
+  try {
+    app.log.info("stdin closed: the desktop app that started this server is gone, so it's stopping");
+  } finally {
+    process.kill(process.pid, "SIGTERM");
+  }
+});
 
 // The logger comes up before openDb() so the pre-migration backup line
 // (issue #191) lands with the rest of startup, and so a backup that can't
