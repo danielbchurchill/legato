@@ -312,6 +312,174 @@ describe('InsightsPanel', () => {
     })
   })
 
+  describe('rows with witness tracks, and steps the map has no line for (#504)', () => {
+    // Mara Quinn produced Harbour Lights (track 11) and Velvet Signals
+    // (track 12). Ana Ruiz produced Paper Towers (track 13) and arranged
+    // Static Birds (track 14), and the map has no line for an arranger.
+    // Harbour Lights and Velvet Signals are on track 15 together, and Iron
+    // Coast Records put out an album each by Velvet Signals (21) and Paper
+    // Towers (22).
+    const harbour = ref(71, 'Harbour Lights')
+    const quinn = ref(75, 'Mara Quinn', 'credit')
+    const velvet = ref(78, 'Velvet Signals')
+    const ironCoast = ref(81, 'Iron Coast Records', 'label')
+    const towers = ref(84, 'Paper Towers')
+    const statics = ref(86, 'Static Birds')
+    const ruiz = ref(90, 'Ana Ruiz', 'credit')
+    const map = {
+      nodes: [
+        ...[71, 78, 84, 86].map((id) => ({ id, type: 'artist' })),
+        ...[75, 90].map((id) => ({ id, type: 'credit' })),
+        ...[11, 12, 13, 14, 15].map((id) => ({ id, type: 'recording' })),
+        ...[21, 22].map((id) => ({ id, type: 'release' })),
+      ],
+      edges: [
+        [11, 71],
+        [11, 75],
+        [12, 78],
+        [12, 75],
+        [12, 21],
+        [13, 84],
+        [13, 90],
+        [13, 22],
+        [14, 86],
+        [15, 71],
+        [15, 78],
+      ] as [number, number][],
+    }
+    const producersShown = { showCreditNodes: 'true' }
+    const rows = ready({
+      bridges: [
+        { person: quinn, roles: ['producer'], artists: [harbour, velvet], total: 2, ownRecords: false, focus: [75, 71, 78, 11, 12] },
+        {
+          person: ruiz,
+          roles: ['producer', 'arranger'],
+          artists: [towers, statics],
+          total: 2,
+          ownRecords: false,
+          focus: [90, 84, 86, 13, 14],
+        },
+      ],
+      sharedPeople: [{ artists: [harbour, velvet], people: [{ person: quinn, roles: ['producer'] }], focus: [71, 78, 75, 11, 12] }],
+      sharedLabels: [{ label: ironCoast, artists: [velvet, towers], total: 2, albums: 2, focus: [78, 84, 21, 22] }],
+      recordedTogether: [{ artists: [harbour, velvet], tracks: 1, focus: [71, 78, 15] }],
+    })
+    const rowMapButton = (container: HTMLElement, title: string, text: string) =>
+      [...section(container, title)!.querySelectorAll('li')]
+        .find((li) => li.textContent!.includes(text))!
+        .querySelector<HTMLButtonElement>('button[aria-label="Show on map"]')
+    const showRow = (container: HTMLElement, title: string, text: string) => act(() => rowMapButton(container, title, text)!.click())
+
+    it('lights a bridge through a hidden producer as its artists, with no track hanging off either', async () => {
+      answer = rows
+      const { container, onShowOnMap } = await render(map)
+      showRow(container, 'Bridges', 'Mara Quinn links')
+      expect(onShowOnMap).toHaveBeenLastCalledWith([71, 78])
+      showRow(container, 'Bridges', 'Ana Ruiz links')
+      expect(onShowOnMap).toHaveBeenLastCalledWith([84, 86])
+    })
+
+    it("lights a bridge's tracks once producers are shown, but none for a credit the map has no line for", async () => {
+      answer = rows
+      const { container, onShowOnMap } = await render({ ...map, settings: producersShown })
+      showRow(container, 'Bridges', 'Mara Quinn links')
+      expect(onShowOnMap).toHaveBeenLastCalledWith([75, 71, 78, 11, 12])
+      // Track 13 ties Ana Ruiz to Paper Towers. Track 14, which she
+      // arranged, would hang off Static Birds.
+      showRow(container, 'Bridges', 'Ana Ruiz links')
+      expect(onShowOnMap).toHaveBeenLastCalledWith([90, 84, 86, 13])
+    })
+
+    it('lights shared producers by the same rule', async () => {
+      answer = rows
+      const hidden = await render(map)
+      showRow(hidden.container, 'Shared producers', 'share Mara Quinn')
+      expect(hidden.onShowOnMap).toHaveBeenLastCalledWith([71, 78])
+      const shown = await render({ ...map, settings: producersShown })
+      showRow(shown.container, 'Shared producers', 'share Mara Quinn')
+      expect(shown.onShowOnMap).toHaveBeenLastCalledWith([71, 78, 75, 11, 12])
+    })
+
+    it("lights a shared label's artists, and neither album, since the map never draws a label", async () => {
+      answer = rows
+      const { container, onShowOnMap } = await render({ ...map, settings: producersShown })
+      showRow(container, 'Shared labels', 'Iron Coast Records')
+      expect(onShowOnMap).toHaveBeenLastCalledWith([78, 84])
+    })
+
+    it('lights the track two artists are on together, and nothing once artists are hidden', async () => {
+      answer = rows
+      const shown = await render(map)
+      showRow(shown.container, 'Recorded together', 'are on a track together')
+      expect(shown.onShowOnMap).toHaveBeenLastCalledWith([71, 78, 15])
+      // The track alone would tie nothing the map draws.
+      const hidden = await render({ ...map, settings: { showArtists: 'false' } })
+      expect(rowMapButton(hidden.container, 'Recorded together', 'are on a track together')).toBeNull()
+    })
+
+    const throughArranger = {
+      nodes: [statics, ruiz, towers],
+      links: [
+        { kind: 'arranger', artistFirst: true, weight: 1 },
+        { kind: 'producer', artistFirst: false, weight: 1 },
+      ],
+      focus: [86, 90, 84, 14, 13],
+    }
+    const card = (container: HTMLElement) => section(container, 'How are these connected?')!
+    const show = (container: HTMLElement) =>
+      act(() => card(container).querySelector<HTMLButtonElement>('button[aria-label="Show the way on the map"]')!.click())
+
+    it('names a step through an arranger the map draws, and lights no track for it', async () => {
+      answer = ready({ pathSuggestion: { from: statics, to: towers } })
+      path = throughArranger
+      const { container, onShowOnMap } = await render({ ...map, settings: producersShown })
+      expect(card(container).textContent).toContain("The map doesn't draw a line to Ana Ruiz, arranger, so that part of the way isn't lit.")
+      show(container)
+      // Both ends of the arranger step, and the producer step's track.
+      expect(onShowOnMap).toHaveBeenCalledWith([86, 90, 84, 13])
+    })
+
+    it('names a step with no line and a node the map leaves out in one sentence', async () => {
+      answer = ready({ pathSuggestion: { from: statics, to: velvet } })
+      path = {
+        nodes: [statics, ruiz, towers, ironCoast, velvet],
+        links: [
+          ...throughArranger.links,
+          { kind: 'label', artistFirst: true, weight: 1 },
+          { kind: 'label', artistFirst: false, weight: 1 },
+        ],
+        focus: [86, 90, 84, 81, 78, 14, 13, 22, 21],
+      }
+      const { container, onShowOnMap } = await render({ ...map, settings: producersShown })
+      expect(card(container).textContent).toContain(
+        "The map doesn't draw a line to Ana Ruiz, arranger, or Iron Coast Records, label, so those parts of the way aren't lit.",
+      )
+      show(container)
+      expect(onShowOnMap).toHaveBeenCalledWith([86, 90, 84, 78, 13])
+    })
+
+    it('names an arranger the map hides as hidden, not as a missing line', async () => {
+      answer = ready({ pathSuggestion: { from: statics, to: towers } })
+      path = throughArranger
+      const { container, onShowOnMap } = await render(map)
+      const text = card(container).textContent
+      expect(text).toContain("The map doesn't draw Ana Ruiz, arranger, producer, so that part of the way isn't lit.")
+      expect(text).not.toContain('a line to')
+      show(container)
+      expect(onShowOnMap).toHaveBeenCalledWith([86, 84])
+    })
+
+    it('names a step with no line on the phone too, as a pill', async () => {
+      answer = ready({ pathSuggestion: { from: statics, to: towers } })
+      path = throughArranger
+      const { container } = await render({ ...map, settings: producersShown, phone: true })
+      expect(card(container).textContent).toContain("The map doesn't draw a line to Ana Ruiz, arranger, so that part of the way isn't lit.")
+      const names = [...card(container).querySelectorAll('p button')].filter((b) => b.textContent === 'Ana Ruiz')
+      expect(names).toHaveLength(1)
+      expect(names[0]!.className).toContain('touch-target')
+    })
+  })
+
   it('says so when nothing joins the two', async () => {
     answer = ready({ pathSuggestion: { from: petty, to: beatles } })
     path = null

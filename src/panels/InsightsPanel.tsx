@@ -7,6 +7,7 @@ import { InsightsPath } from './InsightsPath'
 import { Card, Count, Name, Names, Row, Rows } from './InsightsParts'
 import {
   cardsWithSomethingToSay,
+  hubTies,
   monthYear,
   peakDecade,
   roleWords,
@@ -16,6 +17,7 @@ import {
   type CardId,
   type InsightsActions,
   type ReadyInsights,
+  type Tie,
 } from './insightsData'
 
 /* #468: Insights, the rail item under Library health. A set of cards about
@@ -24,6 +26,12 @@ import {
  * what's played and what's waiting. Each says it in a sentence. Every name
  * opens its details, and each row's map button lights what it's about on the
  * map. A card with nothing to say isn't drawn.
+ *
+ * #504: a row whose focus carries the tracks or albums that witness its
+ * ties (Bridges, Shared producers, Shared labels, Recorded together) says
+ * which of its ends each tie joins, and its map button lights by the path
+ * card's drawn-step rule: a tie through a producer the map options hide,
+ * or a label, lights no stub from each artist.
  *
  * The phone draws the same cards on its pushed page (PhonePages.tsx), as the
  * phone's grouped cards, with each name a pill on a 44px line so it takes a
@@ -113,6 +121,7 @@ const CARD: Record<CardId, (insights: ReadyInsights) => ReactNode> = {
           <Row
             key={row.person.id}
             focus={row.focus}
+            ties={hubTies(row.person.id)}
             meta={[roleWords(row.roles), row.ownRecords ? 'has records of their own' : null].filter(Boolean).join(' · ')}
           >
             <Name node={row.person} /> links <Names nodes={row.artists} total={row.total} />
@@ -155,6 +164,7 @@ const CARD: Record<CardId, (insights: ReadyInsights) => ReactNode> = {
           <Row
             key={`${row.artists[0].id}:${row.artists[1].id}`}
             focus={row.focus}
+            ties={() => row.people.flatMap(({ person }) => row.artists.map((artist): Tie => [artist.id, person.id]))}
             meta={
               [...new Set(row.people.flatMap((p) => p.roles))].length === 1
                 ? roleWords(row.people[0]!.roles)
@@ -172,7 +182,7 @@ const CARD: Record<CardId, (insights: ReadyInsights) => ReactNode> = {
     <Card title="Recorded together" about="Your artists on the same tracks.">
       <Rows>
         {recordedTogether.map((row) => (
-          <Row key={`${row.artists[0].id}:${row.artists[1].id}`} focus={row.focus}>
+          <Row key={`${row.artists[0].id}:${row.artists[1].id}`} focus={row.focus} ties={() => [[row.artists[0].id, row.artists[1].id]]}>
             <Name node={row.artists[0]} /> and <Name node={row.artists[1]} /> are on{' '}
             {row.tracks === 1 ? 'a track' : `${formatCount(row.tracks)} tracks`} together
           </Row>
@@ -185,7 +195,7 @@ const CARD: Record<CardId, (insights: ReadyInsights) => ReactNode> = {
     <Card title="Shared labels" about="Labels with more than one of your artists.">
       <Rows>
         {sharedLabels.map((row) => (
-          <Row key={row.label.id} focus={row.focus} meta={plural(row.albums, 'album')}>
+          <Row key={row.label.id} focus={row.focus} ties={hubTies(row.label.id)} meta={plural(row.albums, 'album')}>
             <Names nodes={row.artists} total={row.total} /> {row.total === 2 ? 'are both on' : 'are all on'} <Name node={row.label} />
           </Row>
         ))}

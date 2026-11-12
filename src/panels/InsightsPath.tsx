@@ -16,7 +16,11 @@ import { hiddenSteps, pathFocus, stepWords, useDrawn, type HiddenStep, type Path
  * never draws) stays unlit, and the card names what's missing, rather than
  * the map drawing a line for a tie that isn't an edge (DESIGN.md's edge
  * palette: every line on the map is a real relationship, coloured by its
- * type). */
+ * type).
+ *
+ * #504: so is a step through an arranger, a conductor or a remixer. The
+ * map may draw both its ends, but it has no edge type for those credits,
+ * so the card names the step and its track stays unlit. */
 
 export function InsightsPath({ suggestion }: { suggestion: { from: Ref; to: Ref } | null }) {
   const touch = useTouchLayout()
@@ -112,14 +116,17 @@ export function InsightsPath({ suggestion }: { suggestion: { from: Ref; to: Ref 
 
 /* "The map doesn't draw Mara Quinn, producer, or Iron Coast Records,
  * label, so those parts of the way aren't lit." Under the way, beside its
- * map button. Each name opens its details, as everywhere in Insights. */
+ * map button. Each name opens its details, as everywhere in Insights.
+ * #504: a node the map draws at the end of a step it has no line for is
+ * "a line to Ana Ruiz, arranger" in the same list. */
 function NotOnMap({ hidden, touch }: { hidden: HiddenStep[]; touch: boolean }) {
   return (
     <p className={`text-[var(--color-ink-2)] ${touch ? 'text-[13px] leading-[44px]' : 'mt-[6px] text-small'}`}>
       The map doesn't draw
-      {hidden.map(({ node, role }, i) => (
+      {hidden.map(({ node, role, line }, i) => (
         <Fragment key={node.id}>
           {i > 0 && i === hidden.length - 1 ? ' or ' : ' '}
+          {line && 'a line to '}
           <Name node={node} />, {role},
         </Fragment>
       ))}{' '}
