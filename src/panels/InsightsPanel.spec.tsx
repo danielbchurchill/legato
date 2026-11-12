@@ -312,7 +312,7 @@ describe('InsightsPanel', () => {
     })
   })
 
-  describe('rows with witness tracks (#504)', () => {
+  describe('rows with witness tracks, and steps the map has no line for (#504)', () => {
     // Mara Quinn produced Harbour Lights (track 11) and Velvet Signals
     // (track 12). Ana Ruiz produced Paper Towers (track 13) and arranged
     // Static Birds (track 14), and the map has no line for an arranger.
@@ -415,6 +415,68 @@ describe('InsightsPanel', () => {
       // The track alone would tie nothing the map draws.
       const hidden = await render({ ...map, settings: { showArtists: 'false' } })
       expect(rowMapButton(hidden.container, 'Recorded together', 'are on a track together')).toBeNull()
+    })
+
+    const throughArranger = {
+      nodes: [statics, ruiz, towers],
+      links: [
+        { kind: 'arranger', artistFirst: true, weight: 1 },
+        { kind: 'producer', artistFirst: false, weight: 1 },
+      ],
+      focus: [86, 90, 84, 14, 13],
+    }
+    const card = (container: HTMLElement) => section(container, 'How are these connected?')!
+    const show = (container: HTMLElement) =>
+      act(() => card(container).querySelector<HTMLButtonElement>('button[aria-label="Show the way on the map"]')!.click())
+
+    it('names a step through an arranger the map draws, and lights no track for it', async () => {
+      answer = ready({ pathSuggestion: { from: statics, to: towers } })
+      path = throughArranger
+      const { container, onShowOnMap } = await render({ ...map, settings: producersShown })
+      expect(card(container).textContent).toContain("The map doesn't draw a line to Ana Ruiz, arranger, so that part of the way isn't lit.")
+      show(container)
+      // Both ends of the arranger step, and the producer step's track.
+      expect(onShowOnMap).toHaveBeenCalledWith([86, 90, 84, 13])
+    })
+
+    it('names a step with no line and a node the map leaves out in one sentence', async () => {
+      answer = ready({ pathSuggestion: { from: statics, to: velvet } })
+      path = {
+        nodes: [statics, ruiz, towers, ironCoast, velvet],
+        links: [
+          ...throughArranger.links,
+          { kind: 'label', artistFirst: true, weight: 1 },
+          { kind: 'label', artistFirst: false, weight: 1 },
+        ],
+        focus: [86, 90, 84, 81, 78, 14, 13, 22, 21],
+      }
+      const { container, onShowOnMap } = await render({ ...map, settings: producersShown })
+      expect(card(container).textContent).toContain(
+        "The map doesn't draw a line to Ana Ruiz, arranger, or Iron Coast Records, label, so those parts of the way aren't lit.",
+      )
+      show(container)
+      expect(onShowOnMap).toHaveBeenCalledWith([86, 90, 84, 78, 13])
+    })
+
+    it('names an arranger the map hides as hidden, not as a missing line', async () => {
+      answer = ready({ pathSuggestion: { from: statics, to: towers } })
+      path = throughArranger
+      const { container, onShowOnMap } = await render(map)
+      const text = card(container).textContent
+      expect(text).toContain("The map doesn't draw Ana Ruiz, arranger, producer, so that part of the way isn't lit.")
+      expect(text).not.toContain('a line to')
+      show(container)
+      expect(onShowOnMap).toHaveBeenCalledWith([86, 84])
+    })
+
+    it('names a step with no line on the phone too, as a pill', async () => {
+      answer = ready({ pathSuggestion: { from: statics, to: towers } })
+      path = throughArranger
+      const { container } = await render({ ...map, settings: producersShown, phone: true })
+      expect(card(container).textContent).toContain("The map doesn't draw a line to Ana Ruiz, arranger, so that part of the way isn't lit.")
+      const names = [...card(container).querySelectorAll('p button')].filter((b) => b.textContent === 'Ana Ruiz')
+      expect(names).toHaveLength(1)
+      expect(names[0]!.className).toContain('touch-target')
     })
   })
 

@@ -189,26 +189,40 @@ export function stepWords({ kind, artistFirst, weight }: PathLink): string {
  * producer". */
 const ROLE_NOUN: Record<LinkKind, string> = { ...ROLE_WORD, mixer: 'mixer', with: 'artist' }
 
-/** A node on a path the map doesn't draw, and what it is on the way. */
-export type HiddenStep = { node: Ref; role: string }
+const roleNouns = (kinds: LinkKind[]) => [...new Set(kinds)].map((kind) => ROLE_NOUN[kind]).join(', ')
+
+/** #504: the credits the map has no line for. Their edges (arranged_by,
+ * conducted_by, remixed_by) aren't among the map's edge types (EDGE_TYPES
+ * in server/src/routes/nodes.ts), so a step through one can't be lit even
+ * when the map draws both of its ends. */
+export const NO_LINE_KINDS: ReadonlySet<LinkKind> = new Set<LinkKind>(['arranger', 'conductor', 'remixer'])
+
+/** A node on a path the map doesn't draw, and what it is on the way. With
+ * `line` (#504), the map draws the node, but not the line of a step to it. */
+export type HiddenStep = { node: Ref; role: string; line: boolean }
 
 /** #482: the nodes of a path the map leaves out (a producer while the map
  * options hide producers, a label, which the map never draws), each with
- * what it is to the artists either side of it. */
+ * what it is to the artists either side of it. #504: and the nodes it
+ * draws at the credited end of a step it has no line for (an arranger, a
+ * conductor, a remixer), when it draws the step's other end too. */
 export function hiddenSteps(path: Path, drawn: (id: number) => boolean): HiddenStep[] {
   const hidden: HiddenStep[] = []
   path.nodes.forEach((node, i) => {
-    if (drawn(node.id)) return
     // The node is the tie's other side when the artist side is its
     // neighbour: the node before it on the link in, the node after on the
     // link out.
-    const kinds = new Set<LinkKind>()
+    const sides: { kind: LinkKind; artist: number }[] = []
     const into = path.links[i - 1]
     const out = path.links[i]
-    if (into?.artistFirst) kinds.add(into.kind)
-    if (out && !out.artistFirst) kinds.add(out.kind)
-    const role = kinds.size > 0 ? [...kinds].map((kind) => ROLE_NOUN[kind]).join(', ') : node.type
-    hidden.push({ node, role })
+    if (into?.artistFirst) sides.push({ kind: into.kind, artist: path.nodes[i - 1]!.id })
+    if (out && !out.artistFirst) sides.push({ kind: out.kind, artist: path.nodes[i + 1]!.id })
+    if (!drawn(node.id)) {
+      hidden.push({ node, role: sides.length > 0 ? roleNouns(sides.map((side) => side.kind)) : node.type, line: false })
+      return
+    }
+    const unlined = sides.filter((side) => NO_LINE_KINDS.has(side.kind) && drawn(side.artist))
+    if (unlined.length > 0) hidden.push({ node, role: roleNouns(unlined.map((side) => side.kind)), line: true })
   })
   return hidden
 }
@@ -256,11 +270,12 @@ export function drawnFocus(
 }
 
 /** #482: what "show the way on the map" lights: the drawn-step rule, with
- * each step a tie. */
+ * each step a tie. #504: a step the map has no line for lights no track,
+ * so the lit way matches what the card names. */
 export function pathFocus(path: Path, drawn: (id: number) => boolean, edges: Iterable<{ from_node: number; to_node: number }>): number[] {
   const ends = path.nodes.map((node) => node.id)
   const onPath = new Set(ends)
-  const ties = path.links.map((_, i): Tie => [ends[i]!, ends[i + 1]!])
+  const ties = path.links.flatMap((link, i): Tie[] => (NO_LINE_KINDS.has(link.kind) ? [] : [[ends[i]!, ends[i + 1]!]]))
   return drawnFocus(
     ends,
     ties,

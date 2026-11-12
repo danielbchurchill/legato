@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
+import serverLinks from '../../server/src/insights/links.ts?raw'
+import serverNodes from '../../server/src/routes/nodes.ts?raw'
 import { RAIL_ITEMS, railOwner } from '../shell/panels'
-import { cardsWithSomethingToSay, peakDecade, roleWords, stepWords, webLine, type ReadyInsights } from './insightsData'
+import {
+  cardsWithSomethingToSay,
+  hiddenSteps,
+  NO_LINE_KINDS,
+  peakDecade,
+  roleWords,
+  stepWords,
+  webLine,
+  type ReadyInsights,
+} from './insightsData'
 
 describe('webLine', () => {
   it('says how much of the library is one web', () => {
@@ -32,6 +43,48 @@ describe('stepWords', () => {
     expect(stepWords({ kind: 'with', artistFirst: false, weight: 2 })).toBe('is on 2 tracks with')
     expect(stepWords({ kind: 'label', artistFirst: true, weight: 1 })).toBe('is on the label')
     expect(stepWords({ kind: 'label', artistFirst: false, weight: 1 })).toBe('also put out')
+  })
+})
+
+describe('hiddenSteps (#504)', () => {
+  const ref = (id: number, title: string, type = 'artist') => ({ id, title, type })
+  // Harbour Lights was conducted by Leo Park, who remixed Velvet Signals.
+  const harbour = ref(71, 'Harbour Lights')
+  const park = ref(92, 'Leo Park', 'credit')
+  const velvet = ref(78, 'Velvet Signals')
+  const path = {
+    nodes: [harbour, park, velvet],
+    links: [
+      { kind: 'conductor' as const, artistFirst: true, weight: 1 },
+      { kind: 'remixer' as const, artistFirst: false, weight: 1 },
+    ],
+    focus: [71, 92, 78],
+  }
+
+  it('names a conductor or remixer the map draws once, by every step it has no line for', () => {
+    expect(hiddenSteps(path, () => true)).toEqual([{ node: park, role: 'conductor, remixer', line: true }])
+  })
+
+  it("names only the steps whose other end the map draws, and an end it doesn't as hidden", () => {
+    expect(hiddenSteps(path, (id) => id !== 78)).toEqual([
+      { node: park, role: 'conductor', line: true },
+      { node: velvet, role: 'artist', line: false },
+    ])
+  })
+
+  it('names nothing for a credit the map has a line for', () => {
+    const produced = { ...path, links: path.links.map((link) => ({ ...link, kind: 'producer' as const })) }
+    expect(hiddenSteps(produced, () => true)).toEqual([])
+  })
+
+  it("has no line for exactly the credits whose edges aren't among the map's edge types", () => {
+    // The map's edge types (server/src/routes/nodes.ts) and the credit edge
+    // each kind of step comes from (server/src/insights/links.ts), read from
+    // the server's source so the two can't drift apart.
+    const drawn = new Set([...serverNodes.match(/const EDGE_TYPES = \[([\s\S]*?)\];/)![1]!.matchAll(/"(\w+)"/g)].map((m) => m[1]))
+    const credits = [...serverLinks.match(/export const CREDIT_KINDS[^{]*\{([\s\S]*?)\};/)![1]!.matchAll(/(\w+): "(\w+)"/g)]
+    expect(credits.length).toBeGreaterThan(0)
+    expect(new Set(credits.filter(([, edge]) => !drawn.has(edge!)).map(([, , kind]) => kind))).toEqual(NO_LINE_KINDS)
   })
 })
 
