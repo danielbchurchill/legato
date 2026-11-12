@@ -1,7 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { openDb } from "../db.js";
-import { indexOf, loadVectorIndex, rowOf, scoreRows } from "./vectorIndex.js";
-import { cosineSimilarity, encodeVector, sparseVector } from "./vectors.js";
+import { indexOf, loadVectorIndex, rowOf, scoreRows, SLICE_MS } from "./vectorIndex.js";
+import { cosineSimilarity, encodeVector, sparseVector, vectorNorm } from "./vectors.js";
 
 describe("loadVectorIndex", () => {
   it("reads every stored vector, over as many pages as it takes", async () => {
@@ -26,13 +26,43 @@ describe("loadVectorIndex", () => {
     const index = await loadVectorIndex(db);
     expect(index.ids.length).toBe(5_000);
     expect([...index.ids]).toEqual([...expected.keys()].sort((a, b) => a - b));
+    expect(index.offsets[0]).toBe(0);
+    expect(index.offsets[5_000]).toBe(index.dims.length);
+    expect(index.maxDim).toBe(112);
     for (const [id, { type, vector }] of expected) {
       const row = rowOf(index, id);
       const start = index.offsets[row]!;
       const end = index.offsets[row + 1]!;
       expect([...index.dims.subarray(start, end)]).toEqual([...vector.dims]);
       expect([...index.values.subarray(start, end)]).toEqual([...vector.values]);
+      expect(index.norms[row]).toBe(vectorNorm(vector));
       expect(index.types[index.kinds[row]!]).toBe(type);
+    }
+  });
+
+  // Issue #494: putting the arrays together in one go held a Pi's loop for
+  // 68 ms at 30,000 albums. Every step of it now lets the loop run once a
+  // slice is up, as reading the pages does. With the clock made to say a
+  // slice is always up, the loop runs after every page read and every page
+  // put together: five pages, so ten times at least, against seven before.
+  it("lets the loop run between the pages it puts together, not only between those it reads", async () => {
+    const db = openDb(":memory:");
+    const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id");
+    const store = db.prepare("INSERT INTO node_similarity_features (node_id, vector) VALUES (?, ?)");
+    db.transaction(() => {
+      for (let i = 0; i < 5_000; i++) store.run((node.get() as { id: number }).id, encodeVector(sparseVector([[1, 1]])));
+    })();
+
+    let clock = 0;
+    const now = spyOn(performance, "now").mockImplementation(() => (clock += SLICE_MS));
+    const yields = spyOn(globalThis, "setTimeout");
+    try {
+      const index = await loadVectorIndex(db);
+      expect(index.ids.length).toBe(5_000);
+      expect(yields.mock.calls.length).toBeGreaterThanOrEqual(10);
+    } finally {
+      now.mockRestore();
+      yields.mockRestore();
     }
   });
 

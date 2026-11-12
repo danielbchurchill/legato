@@ -45,56 +45,93 @@ export type VectorIndex = {
   maxDim: number;
 };
 
+/** One page of rows, packed the way the index packs them. `ends[r]` is where
+ *  row r's entries end in this page's dims and values. */
+type Page = { ids: Int32Array; kinds: Uint8Array; ends: Int32Array; dims: Int32Array; values: Float64Array; norms: Float64Array };
+
+type StoredRow = [nodeId: number, type: string, vector: Uint8Array];
+
+// Issue #494: building the index in one go held the loop for 68 ms on a
+// Raspberry Pi at 30,000 albums (2-6 ms on an M3): every row's norm, and
+// copies of every array, some of them from plain arrays of 330,000 numbers.
+// Growing the arrays as rows came in could also copy 12 MB inside a page.
+// Now each page is packed into arrays of its own size as it's read, norms
+// and all, and the index is put together from the pages one at a time, so
+// no step is bigger than a page.
 class Builder {
-  ids: number[] = [];
-  kinds: number[] = [];
   types: string[] = [];
-  offsets: number[] = [0];
-  dims = new Int32Array(1024);
-  values = new Float64Array(1024);
-  length = 0;
+  pages: Page[] = [];
+  rows = 0;
+  entries = 0;
   maxDim = 0;
 
-  add(id: number, type: string, bytes: Uint8Array): void {
-    const entries = encodedLength(bytes);
-    if (this.length + entries > this.dims.length) {
-      const capacity = Math.max(this.dims.length * 2, this.length + entries);
-      const dims = new Int32Array(capacity);
-      dims.set(this.dims.subarray(0, this.length));
-      const values = new Float64Array(capacity);
-      values.set(this.values.subarray(0, this.length));
-      this.dims = dims;
-      this.values = values;
+  addPage(rows: StoredRow[]): void {
+    if (rows.length === 0) return;
+    let entries = 0;
+    for (const [, , bytes] of rows) entries += encodedLength(bytes);
+    const page: Page = {
+      ids: new Int32Array(rows.length),
+      kinds: new Uint8Array(rows.length),
+      ends: new Int32Array(rows.length),
+      dims: new Int32Array(entries),
+      values: new Float64Array(entries),
+      norms: new Float64Array(rows.length),
+    };
+    let at = 0;
+    for (let r = 0; r < rows.length; r++) {
+      const [id, type, bytes] = rows[r]!;
+      decodeInto(bytes, page.dims, page.values, at);
+      const end = at + encodedLength(bytes);
+      let sum = 0;
+      for (let k = at; k < end; k++) {
+        sum += page.values[k]! * page.values[k]!;
+        if (page.dims[k]! > this.maxDim) this.maxDim = page.dims[k]!;
+      }
+      let kind = this.types.indexOf(type);
+      if (kind < 0) kind = this.types.push(type) - 1;
+      page.ids[r] = id;
+      page.kinds[r] = kind;
+      page.ends[r] = end;
+      page.norms[r] = Math.sqrt(sum);
+      at = end;
     }
-    decodeInto(bytes, this.dims, this.values, this.length);
-    for (let i = this.length; i < this.length + entries; i++) this.maxDim = Math.max(this.maxDim, this.dims[i]!);
-    this.length += entries;
-    let kind = this.types.indexOf(type);
-    if (kind < 0) kind = this.types.push(type) - 1;
-    this.ids.push(id);
-    this.kinds.push(kind);
-    this.offsets.push(this.length);
+    this.pages.push(page);
+    this.rows += rows.length;
+    this.entries += entries;
   }
 
-  build(): VectorIndex {
-    const offsets = Int32Array.from(this.offsets);
-    const values = this.values.slice(0, this.length);
-    const norms = new Float64Array(this.ids.length);
-    for (let r = 0; r < norms.length; r++) {
-      let sum = 0;
-      for (let k = offsets[r]!; k < offsets[r + 1]!; k++) sum += values[k]! * values[k]!;
-      norms[r] = Math.sqrt(sum);
-    }
-    return {
-      ids: Int32Array.from(this.ids),
-      kinds: Uint8Array.from(this.kinds),
+  /** Puts the index together from the pages, pausing (a `yield`) after the
+   *  two big allocations and after each page. */
+  *build(): Generator<void, VectorIndex> {
+    const dims = new Int32Array(this.entries);
+    yield;
+    const values = new Float64Array(this.entries);
+    yield;
+    const index: VectorIndex = {
+      ids: new Int32Array(this.rows),
+      kinds: new Uint8Array(this.rows),
       types: this.types,
-      offsets,
-      dims: this.dims.slice(0, this.length),
+      offsets: new Int32Array(this.rows + 1),
+      dims,
       values,
-      norms,
+      norms: new Float64Array(this.rows),
       maxDim: this.maxDim,
     };
+    let row = 0;
+    let entry = 0;
+    for (const page of this.pages) {
+      index.ids.set(page.ids, row);
+      index.kinds.set(page.kinds, row);
+      index.norms.set(page.norms, row);
+      index.dims.set(page.dims, entry);
+      index.values.set(page.values, entry);
+      for (let r = 0; r < page.ids.length; r++) index.offsets[row + r + 1] = entry + page.ends[r]!;
+      row += page.ids.length;
+      entry += page.dims.length;
+      yield;
+    }
+    this.pages = [];
+    return index;
   }
 }
 
@@ -102,8 +139,12 @@ class Builder {
  *  node id order. */
 export function indexOf(rows: { nodeId: number; type: string; vector: SparseVector }[]): VectorIndex {
   const builder = new Builder();
-  for (const { nodeId, type, vector } of rows) builder.add(nodeId, type, encodeVector(vector));
-  return builder.build();
+  builder.addPage(rows.map(({ nodeId, type, vector }) => [nodeId, type, encodeVector(vector)]));
+  const steps = builder.build();
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+  }
 }
 
 // Rows read per statement. A page is the most the loop can be held by one
@@ -126,18 +167,22 @@ export async function loadVectorIndex(db: Database): Promise<VectorIndex> {
   const builder = new Builder();
   const pacer = new Pacer();
   for (let after = 0; ; ) {
-    const rows = page.values(after, PAGE_ROWS) as [number, string, Uint8Array][];
-    for (const [id, type, bytes] of rows) builder.add(id, type, bytes);
+    const rows = page.values(after, PAGE_ROWS) as StoredRow[];
+    builder.addPage(rows);
     if (rows.length < PAGE_ROWS) break;
     after = rows[rows.length - 1]![0];
     await pacer.pace();
   }
-  // Building the index (1-4 ms here, on an M3) gets a slice of its own, and
-  // so does the ranking that waits on it, so neither adds to another's.
+  const steps = builder.build();
+  let step = steps.next();
+  while (!step.done) {
+    await pacer.pace();
+    step = steps.next();
+  }
+  // The ranking that waits on this gets a slice of its own, so it doesn't
+  // add to this one's.
   await yieldToLoop();
-  const index = builder.build();
-  await yieldToLoop();
-  return index;
+  return step.value;
 }
 
 /** The row holding `nodeId`'s vector, or -1. */
@@ -177,3 +222,4 @@ export async function scoreRows(
     visit(r, norm === 0 || norms[r] === 0 ? 0 : dot / (norm * norms[r]!));
   }
 }
+
