@@ -56,6 +56,7 @@ import m0053_release_rule_by_folder from "./0053_release_rule_by_folder.sql" wit
 import m0054_track_keys from "./0054_track_keys.sql" with { type: "text" };
 import m0055_sparse_similarity from "./0055_sparse_similarity.sql" with { type: "text" };
 import m0056_imported_play_counts from "./0056_imported_play_counts.sql" with { type: "text" };
+import m0057_local_edges_pending from "./0057_local_edges_pending.sql" with { type: "text" };
 
 export interface MigrationFile {
   version: number;
@@ -117,4 +118,5 @@ export const MIGRATIONS: MigrationFile[] = [
   { version: 54, file: "0054_track_keys.sql", sql: m0054_track_keys },
   { version: 55, file: "0055_sparse_similarity.sql", sql: m0055_sparse_similarity },
   { version: 56, file: "0056_imported_play_counts.sql", sql: m0056_imported_play_counts },
+  { version: 57, file: "0057_local_edges_pending.sql", sql: m0057_local_edges_pending },
 ];

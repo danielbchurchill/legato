@@ -26,6 +26,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { LOCAL_EDGE_RULES_HASH } from "../src/match/localEdgeRules.js";
 import { DEV_VERSION } from "../src/version.js";
 import { generateMigrationsManifest } from "./generate-migrations-manifest.mjs";
 
@@ -183,6 +184,8 @@ async function compileTarget(name: string, entrypoints: string[], version: strin
     define: {
       __LEGATO_VERSION__: JSON.stringify(version),
       __LEGATO_GIT_SHA__: JSON.stringify(gitSha),
+      // Issue #323: the binary has no source to hash (match/localEdgeRules.ts).
+      __LEGATO_LOCAL_EDGE_RULES__: JSON.stringify(LOCAL_EDGE_RULES_HASH),
     },
     compile: {
       target: target.bunTarget,

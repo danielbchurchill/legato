@@ -163,7 +163,7 @@ function insertEdge(db: Database, fromNode: number, toNode: number, type: string
 // source='local' specifically — never touches source='manual' rows, which
 // is the actual mechanism behind "manual edges survive re-scan" (M5).
 //
-// Issue #281: one transaction per call. recompute() derives every file on its own connection
+// Issue #281: one transaction per call. recompute() derives files on its own connection
 // (recompute.ts) while a scan, the watcher or the enrichment worker can be
 // deriving one on the request loop's, and two runs of the delete and the
 // inserts interleaving on one recording would leave its edges doubled.

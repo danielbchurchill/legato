@@ -13,6 +13,11 @@ import { deriveLocalEdges } from "./edges.js";
 // widening deriveLocalEdges produced zero released_on/produced_by/
 // engineered_by/featured_artist/collaborated_with edges, despite 221/338
 // files already carrying a label in tags_raw.
+//
+// Issue #323: no upgrade needs this any more. A recompute derives every
+// file again by itself whenever the rules have changed
+// (match/localEdgeRules.ts, match/localEdgesQueue.ts), on the first start of
+// the build that changed them. This stays as a tool, not a step.
 export function backfillLocalEdges(db: Database): number {
   const files = db.prepare("SELECT id FROM files WHERE missing_since IS NULL").all() as { id: number }[];
   for (const file of files) deriveLocalEdges(db, file.id);

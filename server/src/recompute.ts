@@ -1,6 +1,5 @@
 import type { Database } from "./sqlite.js";
-import { deriveLocalEdges } from "./match/edges.js";
-import { AlbumFolders } from "./match/releases.js";
+import { deriveChangedLocalEdges } from "./match/localEdgesQueue.js";
 import { mergeDuplicatePeople } from "./match/people.js";
 import { enqueueEnrichmentIfNeeded, enqueueLookupsInBound } from "./enrich/queue.js";
 import { recomputeEntities } from "./entities/aggregate.js";
@@ -25,16 +24,17 @@ import { refreshPlannerStatistics, reloadPlannerStatistics } from "./db.js";
 // changed this run. Meant to be the last one of these ever needed: the
 // next derived field lands here, not in a fifth backfill script.
 //
+// Issue #323: except the local edges, the one phase whose cost grew with
+// every file whether or not it changed (53 s of 136 s at 30,000 albums).
+// Those are derived for the files a change since the last run can move,
+// which migration 0057's triggers queue, and for every file once whenever
+// the rules they're derived by change (match/localEdgesQueue.ts). So the
+// guarantee above still holds for them, without a script.
+//
 // Issue #281: callers run this through recomputeOffThread() below, never
 // directly, so that the request loop keeps answering while it works.
 export function recompute(db: Database): void {
-  const files = db.prepare("SELECT id FROM files WHERE missing_since IS NULL").all() as { id: number }[];
-  // Each file is its own transaction (match/edges.ts); a piece of them
-  // commits together, rather than every statement on its own. Issue #465:
-  // which album a file is on depends on its album folder's other files, and
-  // each folder is read once for the whole pass.
-  const albums = new AlbumFolders(db);
-  writeInChunks(db, files, ({ id }) => deriveLocalEdges(db, id, albums));
+  deriveChangedLocalEdges(db);
 
   // Issue #273: one node per person. New credits already land on the artist
   // (match/edges.ts's findOrCreatePerson); this catches an artist node the
