@@ -75,6 +75,12 @@ jobs:
   release:
     needs: preflight
     runs-on: ubuntu-latest
+    # Issue #510: with no limit, a hung step would hold the tag's publish
+    # for GitHub's six hours. A good run takes about a minute and a half
+    # (v0.1.0 to v0.4.0); the longest, one of v0.1.0's failed tries (run
+    # 38283884690), took under three, retrying a host. The media fetch has a
+    # limit of its own.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -125,7 +131,12 @@ jobs:
       - name: migration boot check (compiled linux-x64-baseline binary, empty data dir)
         run: npm --prefix server run check:migration-boot -- dist/linux-x64-baseline/legato-server
 
+      # About 25 seconds. Each host that refuses gets about two minutes of
+      # retries (scripts/release-fetch.mjs), and v0.4.0's first try failed
+      # here after two minutes of them (run 42655142420). A download that
+      # stalls rather than refusing would otherwise wait out the job.
       - name: fetch ffmpeg + fpcalc for all five targets
+        timeout-minutes: 10
         run: node scripts/fetch-release-media-binaries.mjs
 
       - name: package per-target archives + SHA256SUMS
@@ -190,6 +201,9 @@ jobs:
     # binary shape. A tag that fails it shouldn't get an image either.
     needs: release
     runs-on: ubuntu-latest
+    # Issue #510: about three minutes (v0.1.0 to v0.4.0, at most 3.5), nearly
+    # all of it the build and push.
+    timeout-minutes: 30
     # Only this job writes packages. `release` keeps contents: write from
     # the top-level block and never gets a token that can push images.
     permissions:
@@ -226,7 +240,10 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
+      # Two to three minutes: both platforms built with no layer cache, the
+      # arm64 runtime stage's apt-get under QEMU, then pushed to GHCR.
       - name: build and push multi-arch image
+        timeout-minutes: 20
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: server
@@ -265,6 +282,8 @@ jobs:
     # formula: `brew upgrade` would hand them to everyone.
     if: vars.HOMEBREW_TAP_REPO != '' && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
+    # Issue #510: under half a minute (v0.1.0 to v0.4.0).
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
