@@ -213,35 +213,83 @@ export function hiddenSteps(path: Path, drawn: (id: number) => boolean): HiddenS
   return hidden
 }
 
-/** #482: what "show the way on the map" lights. Each node of the path the
- * map draws, and for each step whose two ends it draws, the track that ties
- * them: the one node of the path's focus that an edge joins to both. A step
- * with an end the map leaves out is left unlit, its track too, so nothing
- * lit stops at a node the map doesn't draw. */
-export function pathFocus(path: Path, drawn: (id: number) => boolean, edges: Iterable<{ from_node: number; to_node: number }>): number[] {
-  const lit = path.nodes.filter((node) => drawn(node.id)).map((node) => node.id)
-  const onPath = new Set(path.nodes.map((node) => node.id))
-  const witnesses = new Set(path.focus.filter((id) => !onPath.has(id) && drawn(id)))
-  if (witnesses.size > 0) {
-    // Which path nodes each track is joined to.
+/** Two ends of a row or a path (its artists, people and labels) that one of
+ * the tracks or albums in its focus ties together. */
+export type Tie = readonly [number, number]
+
+/** #482, #504: the drawn-step rule, for what a map button lights. Every one
+ * of `ends` the map draws lights. A track or album of `witnesses` lights
+ * only for a tie whose two ends the map draws, and only when the map's
+ * edges join it to both: it's the one that ties them, whatever order the
+ * server lists witnesses in. A tie with an end the map leaves out is left
+ * unlit, its witness too, so nothing lit stops at a node the map doesn't
+ * draw. It's a pass over every edge, so it's worked out on a click, not on
+ * every render. */
+export function drawnFocus(
+  ends: number[],
+  ties: readonly Tie[],
+  witnesses: number[],
+  drawn: (id: number) => boolean,
+  edges: Iterable<{ from_node: number; to_node: number }>,
+): number[] {
+  const lit = ends.filter(drawn)
+  const shown = ties.filter(([a, b]) => drawn(a) && drawn(b))
+  const candidates = new Set(witnesses.filter(drawn))
+  if (shown.length > 0 && candidates.size > 0) {
+    const tied = new Set(shown.flat())
+    // Which ends each witness is joined to.
     const joined = new Map<number, Set<number>>()
-    const join = (witness: number, node: number) => {
+    const join = (witness: number, end: number) => {
       const set = joined.get(witness) ?? new Set<number>()
-      set.add(node)
+      set.add(end)
       joined.set(witness, set)
     }
     for (const edge of edges) {
-      if (witnesses.has(edge.from_node) && onPath.has(edge.to_node)) join(edge.from_node, edge.to_node)
-      else if (witnesses.has(edge.to_node) && onPath.has(edge.from_node)) join(edge.to_node, edge.from_node)
+      if (candidates.has(edge.from_node) && tied.has(edge.to_node)) join(edge.from_node, edge.to_node)
+      else if (candidates.has(edge.to_node) && tied.has(edge.from_node)) join(edge.to_node, edge.from_node)
     }
-    for (let i = 0; i + 1 < path.nodes.length; i++) {
-      const a = path.nodes[i]!.id
-      const b = path.nodes[i + 1]!.id
-      if (!drawn(a) || !drawn(b)) continue
-      for (const witness of witnesses) if (joined.get(witness)?.has(a) && joined.get(witness)?.has(b)) lit.push(witness)
+    for (const [a, b] of shown) {
+      for (const witness of candidates) if (joined.get(witness)?.has(a) && joined.get(witness)?.has(b)) lit.push(witness)
     }
   }
   return [...new Set(lit)]
+}
+
+/** #482: what "show the way on the map" lights: the drawn-step rule, with
+ * each step a tie. */
+export function pathFocus(path: Path, drawn: (id: number) => boolean, edges: Iterable<{ from_node: number; to_node: number }>): number[] {
+  const ends = path.nodes.map((node) => node.id)
+  const onPath = new Set(ends)
+  const ties = path.links.map((_, i): Tie => [ends[i]!, ends[i + 1]!])
+  return drawnFocus(
+    ends,
+    ties,
+    path.focus.filter((id) => !onPath.has(id)),
+    drawn,
+    edges,
+  )
+}
+
+/** #504: the ties of a row about one person or label: theirs to each of
+ * the row's other ends. A Bridges row's person is tied to every artist
+ * they link, a shared label to every artist on it. */
+export function hubTies(hub: number): (ends: number[]) => Tie[] {
+  return (ends) => ends.filter((id) => id !== hub).map((id): Tie => [hub, id])
+}
+
+/* The kinds of node that witness a tie: the track a credit or a shared
+ * track is on, and the album a label put out (`witness` in
+ * server/src/insights/links.ts). No row's tie has one at either end. */
+const WITNESS_TYPES: ReadonlySet<string> = new Set(['recording', 'release'])
+
+/** #504: a row's focus, as its ends and the tracks and albums that witness
+ * its ties. `typeOf` is a node's kind on the map. A node the map has no
+ * place for is never lit, so which it's counted as doesn't matter. */
+export function splitFocus(focus: number[], typeOf: (id: number) => string | undefined): { ends: number[]; witnesses: number[] } {
+  const ends: number[] = []
+  const witnesses: number[] = []
+  for (const id of focus) (WITNESS_TYPES.has(typeOf(id) ?? '') ? witnesses : ends).push(id)
+  return { ends, witnesses }
 }
 
 /** "Mar 2026", for when something was last played. */

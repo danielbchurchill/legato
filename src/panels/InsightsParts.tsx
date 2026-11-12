@@ -1,9 +1,10 @@
 import { useContext, type ReactNode } from 'react'
+import { useGraph } from '../canvas/graphContext'
 import { CoverArt } from '../ui/CoverArt'
 import { IconButton } from '../ui/IconButton'
 import { plural } from '../ui/format'
 import { useTouchLayout } from '../ui/touchLayout'
-import { InsightsActionsContext, useDrawn, type Ref } from './insightsData'
+import { InsightsActionsContext, drawnFocus, splitFocus, useDrawn, type Ref, type Tie } from './insightsData'
 
 /* #468: what every Insights card is made of (InsightsPanel.tsx). On the
  * desktop a card is a wash card in the panel; on the phone's page it's one
@@ -37,8 +38,8 @@ function useOnMap(ids: number[]): number[] {
 }
 
 /** `lights`, when given, says what a click lights in place of `focus`'s
- * nodes on the map, worked out as it's clicked: a path's takes a pass over
- * every edge. */
+ * nodes on the map, worked out as it's clicked: a path's, or a row's with
+ * witnesses, takes a pass over every edge. */
 export function MapButton({ focus, label = 'Show on map', lights }: { focus: number[]; label?: string; lights?: () => number[] }) {
   const { onShowOnMap } = useContext(InsightsActionsContext)
   const touch = useTouchLayout()
@@ -57,22 +58,40 @@ export function MapButton({ focus, label = 'Show on map', lights }: { focus: num
   )
 }
 
+/** #504: what a row's map button lights. Without `ties`, the nodes of its
+ * focus the map draws. With them, the focus also carries the tracks or
+ * albums that witness the row's ties, and a click lights by the path card's
+ * drawn-step rule (drawnFocus), so a tie through a person the map hides
+ * lights no stub from each artist. The button shows while the map draws
+ * any of the row's ends. */
+function useRowLights(focus: number[], ties?: (ends: number[]) => readonly Tie[]): { ends: number[]; lights?: () => number[] } {
+  const { byId, edges } = useGraph()
+  const drawn = useDrawn()
+  if (!ties) return { ends: focus }
+  const { ends, witnesses } = splitFocus(focus, (id) => byId.get(id)?.type)
+  return { ends, lights: () => drawnFocus(ends, ties(ends), witnesses, drawn, edges) }
+}
+
 /** A row: a sentence, who it's by, a quieter line under it, and its map
- * button. */
+ * button. `ties`, for a row whose focus carries witnesses, pairs up its
+ * ends: the focus's nodes that aren't tracks or albums. */
 export function Row({
   children,
   by,
   meta,
   focus,
+  ties,
   cover,
 }: {
   children: ReactNode
   by?: Ref | null
   meta?: ReactNode
   focus: number[]
+  ties?: (ends: number[]) => readonly Tie[]
   cover?: number
 }) {
   const touch = useTouchLayout()
+  const { ends, lights } = useRowLights(focus, ties)
   return (
     <li className="flex items-start gap-[10px]">
       {cover != null && (
@@ -95,7 +114,7 @@ export function Row({
         )}
         {meta && <p className={`text-[var(--color-ink-2)] ${touch ? '-mt-[4px] text-[13px] leading-[18px]' : 'text-small'}`}>{meta}</p>}
       </div>
-      <MapButton focus={focus} />
+      <MapButton focus={ends} lights={lights} />
     </li>
   )
 }
