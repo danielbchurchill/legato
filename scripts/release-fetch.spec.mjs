@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { download, fetchText } from "./release-fetch.mjs";
+import { download, downloadFromFirst, fetchText } from "./release-fetch.mjs";
 
 // Issue #443: johnvansickle.com answered a release runner with HTTP 200 and
 // an HTML page for both the .md5 and the archive. A local server plays each
@@ -128,5 +128,94 @@ describe("other answers", () => {
   it("takes a JSON answer, which starts with a brace", async () => {
     answers.set("/releases/latest", [{ type: "application/json", body: '{"tag_name":"v1.6.0"}' }]);
     expect(JSON.parse(await fetchText(`${base}/releases/latest`, NO_WAIT)).tag_name).toBe("v1.6.0");
+  });
+});
+
+// Issue #513: osxexperts.net timed out on runners until builds failed, so
+// its zips come from a copy of our own first. Here "/copy/" plays the copy
+// and "/host/" osxexperts.net.
+describe("a copy of our own, then the source's host", () => {
+  const ZIP = Buffer.from("PK\u0003\u0004 the pinned build");
+  const OTHER = Buffer.from("PK\u0003\u0004 a different build");
+
+  // What fetch-release-media-binaries.mjs does with each, minus the unzip:
+  // the copy has to be the pinned build, the host's is taken either way.
+  const sources = (copyRetries = [0, 0]) => [
+    {
+      name: "our copy",
+      url: `${base}/copy/ffmpeg9arm-pin.zip`,
+      dest: path.join(dir, "copy.zip"),
+      retryDelaysMs: copyRetries,
+      check: async (file) => {
+        const bytes = await readFile(file);
+        if (!bytes.equals(ZIP)) throw new Error("the extracted ffmpeg's sha256 is something else, not the pinned one");
+        return { from: "copy", bytes };
+      },
+    },
+    {
+      name: "osxexperts.net",
+      url: `${base}/host/ffmpeg9arm.zip`,
+      dest: path.join(dir, "host.zip"),
+      retryDelaysMs: [0, 0],
+      check: async (file) => ({ from: "host", bytes: await readFile(file) }),
+    },
+  ];
+
+  it("takes the copy, and never asks the host", async () => {
+    answers.set("/copy/ffmpeg9arm-pin.zip", [{ body: ZIP }]);
+    answers.set("/host/ffmpeg9arm.zip", [{ body: ZIP }]);
+    expect(await downloadFromFirst(sources())).toEqual({ from: "copy", bytes: ZIP });
+    expect(requests.get("/copy/ffmpeg9arm-pin.zip")).toBe(1);
+    expect(requests.has("/host/ffmpeg9arm.zip")).toBe(false);
+  });
+
+  it("asks the host at once when there's no copy for this pin", async () => {
+    answers.set("/host/ffmpeg9arm.zip", [{ body: ZIP }]);
+    expect(await downloadFromFirst(sources())).toEqual({ from: "host", bytes: ZIP });
+    expect(requests.get("/copy/ffmpeg9arm-pin.zip")).toBe(1);
+    expect(requests.get("/host/ffmpeg9arm.zip")).toBe(1);
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringMatching(/\[fallback\] our copy didn't have it \(GET \S+ -> HTTP 404\); trying osxexperts\.net/),
+    );
+  });
+
+  it("asks the host after the copy's own retries when the copy keeps refusing", async () => {
+    answers.set("/copy/ffmpeg9arm-pin.zip", [{ status: 503, body: "" }]);
+    answers.set("/host/ffmpeg9arm.zip", [{ body: ZIP }]);
+    expect(await downloadFromFirst(sources([0]))).toEqual({ from: "host", bytes: ZIP });
+    expect(requests.get("/copy/ffmpeg9arm-pin.zip")).toBe(2);
+  });
+
+  it("asks the host when the copy isn't the pinned build", async () => {
+    answers.set("/copy/ffmpeg9arm-pin.zip", [{ body: OTHER }]);
+    answers.set("/host/ffmpeg9arm.zip", [{ body: ZIP }]);
+    expect(await downloadFromFirst(sources())).toEqual({ from: "host", bytes: ZIP });
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining("our copy didn't have it (the extracted ffmpeg's sha256 is something else"),
+    );
+  });
+
+  it("takes a copy that answers after a dropped connection, without asking the host", async () => {
+    answers.set("/copy/ffmpeg9arm-pin.zip", [{ body: ZIP }]);
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((...args) => {
+      calls++;
+      if (calls === 1) {
+        return Promise.reject(new TypeError("fetch failed", { cause: Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" }) }));
+      }
+      return realFetch(...args);
+    });
+    expect(await downloadFromFirst(sources())).toEqual({ from: "copy", bytes: ZIP });
+    expect(requests.has("/host/ffmpeg9arm.zip")).toBe(false);
+  });
+
+  it("fails saying what each source did when neither has it", async () => {
+    answers.set("/host/ffmpeg9arm.zip", [{ status: 502, body: "" }]);
+    const failure = downloadFromFirst(sources());
+    await expect(failure).rejects.toThrow(
+      /^no source had it\.\n {2}our copy: GET \S+ -> HTTP 404\n {2}osxexperts\.net: GET \S+ -> HTTP 502$/,
+    );
+    expect(requests.get("/host/ffmpeg9arm.zip")).toBe(3);
   });
 });
