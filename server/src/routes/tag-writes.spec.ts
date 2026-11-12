@@ -23,23 +23,29 @@ const { recompute } = await import("../recompute.js");
 // Issue #464, end to end: real files scanned into a database, edited
 // through the routes the details panel uses, written, and read back.
 
-let templates: { flac: string; wav: string; dir: string };
+let templates: { flac: string; wav: string };
+// Set before ffmpeg makes the templates in it, so afterAll removes it even
+// when that fails, and doesn't fail again itself (#509).
+let templateDir: string | undefined;
 let db: Database;
 let app: FastifyInstance;
 let dir: string;
 let rootId: number;
 
 beforeAll(() => {
-  const templateDir = mkdtempSync(path.join(tmpdir(), "legato-tag-edit-templates-"));
+  const made = mkdtempSync(path.join(tmpdir(), "legato-tag-edit-templates-"));
+  templateDir = made;
   const make = (name: string, extra: string[] = []) => {
-    const out = path.join(templateDir, name);
+    const out = path.join(made, name);
     runFfmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=0.2", ...extra, out]);
     return out;
   };
-  templates = { flac: make("t.flac"), wav: make("t.wav"), dir: templateDir };
+  templates = { flac: make("t.flac"), wav: make("t.wav") };
 });
 
-afterAll(() => rmSync(templates.dir, { recursive: true, force: true }));
+afterAll(() => {
+  if (templateDir) rmSync(templateDir, { recursive: true, force: true });
+});
 
 beforeEach(async () => {
   db = openDb(":memory:");
