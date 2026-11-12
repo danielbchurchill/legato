@@ -63,4 +63,8 @@ Legato asks GitHub whether there's a newer release when it starts, and then once
 
 The Mac app, the Windows installer and the AppImage update themselves. A `.deb` belongs to apt, so the note links to the release instead: download the new `.deb` and install it the same way.
 
-The check sends GitHub your IP address and nothing about your library. There's no setting to turn it off yet.
+The check sends GitHub your IP address and nothing about your library. It's the app's only request to GitHub: the server inside the app never checks for updates of its own, because the app updates both together.
+
+To turn it off, switch off **check** under **updates** in Legato's Settings. The app then makes no request to GitHub at all, when it starts or later, until you switch it back on, and you update by downloading the next release from the release page yourself. Turning it off also takes away a note that's already showing. Switching it back on starts the checks again without restarting the app.
+
+On a computer someone else manages, setting `LEGATO_UPDATE_CHECK=off` in the environment Legato starts in turns the check off whatever the switch says, and Settings shows it off. It's the same variable that turns off a headless server's own update check.
