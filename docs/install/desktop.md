@@ -57,6 +57,35 @@ sudo apt install ./legato_<version>_amd64.deb
 
 It adds Legato to your applications menu, and `legato-desktop` starts it from a terminal.
 
+## Using a server on another machine
+
+The app plays from the server it carries, but it can use a Legato server on another computer instead: a NAS, a Raspberry Pi, or another always-on machine running a headless install ([the ways to run it](../../README.md#ways-to-run-it): Docker, Synology, Unraid, the Linux install script or Homebrew). Everything you see, the map, the library, playlists and play history, then comes from that server.
+
+### Connecting
+
+1. Click your picture, or your initials, at the foot of the left rail to open **Account**. Under your name it says which server you're on, for example "on 127.0.0.1:8899", with **change server** beside it. Click **change server**. The sign-in screen has the same thing as **connect to a different server** at the bottom.
+2. The connect screen offers servers three ways:
+   - **on this network**: servers on your home network that announce themselves. A headless server does that unless it's set not to; another computer's desktop app doesn't. On a Mac this needs the Local Network permission from the first launch; if you turned it down, allow Legato in **System Settings → Privacy & Security → Local Network**. Click **connect** beside the server.
+   - **your servers**: once you sign in to legato.fm here, the servers linked to your account, each marked at home, through legato.fm, or offline.
+   - **an address**: type the server's IP address, its name on your network, or your own domain, then **connect**. Without a port Legato tries 8899, so a server on another port needs it, as in `192.168.1.20:8901`. A Tailscale address works the same way: the server's `100.x.y.z` address or its MagicDNS name, for example `nas.tailnet-name.ts.net`.
+3. The other server asks for its owner's password, the one set when that server was first set up, not this computer's. If you're signed in to legato.fm and the server is linked to your account, it connects without one.
+
+The app remembers the choice, so it opens on that server from then on.
+
+### How playback gets the files
+
+The app plays each track natively, starting from the file's path on the server, for example `/music/Artist/Album/01 Track.flac`. If that path exists on this computer, the app reads the file directly. If it doesn't, the app streams the original file from the server instead, the same bytes at full quality. So you don't need to mount anything: a server's library plays here as long as the app can reach the server. The connection indicator in the rail says which: "This track streams from the server at its original quality, because its file isn't on this computer."
+
+Mounting the library at the same path as the server sees it saves the stream, which helps over a slow link. The folders under **Settings → library** are the paths the server sees, and the mount has to match them exactly: a server on Linux with its music at `/mnt/music` needs `/mnt/music` here too. A file that's neither on this computer nor available from the server shows as unreachable in the player.
+
+### This computer's own server
+
+While the app uses another server, the server it carries keeps running. Your phone and other devices can still play from this computer, and the tray (the menu bar, on a Mac) works as before.
+
+### Going back
+
+Open **Account** and click **change server**, then **use this computer's server** at the bottom of the connect screen. You're still signed in there, so it opens straight away.
+
 ## Updates
 
 Legato asks GitHub whether there's a newer release when it starts, and then once a day. A newer one downloads in the background, then a note under the search bar says so, for example "Legato 0.4.1 is available — restart to update". Nothing restarts until you click it, because restarting stops the server that your phone or other devices may be playing from. The × hides that version until the next one comes out.
