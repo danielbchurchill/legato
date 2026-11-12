@@ -25,6 +25,7 @@ import { pruneBeyondMemberBoundIfDue } from "./enrich/members.js";
 import { foldArtistNameVariantsIfDue } from "./match/artistFold.js";
 import { refreshBridgeMembers } from "./entities/bridges.js";
 import { recomputeOffThread } from "./recompute.js";
+import { localEdgeRulesChanged } from "./match/localEdgesQueue.js";
 import { runDueJobs } from "./enrich/worker.js";
 import { GIT_SHA, VERSION } from "./version.js";
 import { startUpdateChecks } from "./update/check.js";
@@ -349,6 +350,15 @@ void trimStreamCacheOnStart(CACHE_DIR, (message) => app.log.info(message)).catch
 // below, or the artist fold's and album upgrade's after listen. A second
 // call would queue a whole second run. A start that finds vectors reads one
 // row.
+//
+// Issue #323: a recompute derives local edges only for the files whose
+// inputs changed, and for every file once when the rules it derives them by
+// change (match/localEdgesQueue.ts). A build whose rules differ from the
+// ones the library was last derived by, the first start after #323
+// included, runs one recompute after listen, unless one of these is
+// starting anyway.
+let recomputeStarting = false;
+const localEdgesOwed = localEdgeRulesChanged(db) && db.prepare("SELECT 1 FROM files LIMIT 1").get() != null;
 if (
   !similarityComputed(db) &&
   insightsComputed(db) &&
@@ -357,6 +367,7 @@ if (
   db.prepare("SELECT 1 FROM files LIMIT 1").get() != null
 ) {
   app.log.info("similarity: storing the similarity vectors sparsely, once, since this is the first start with them");
+  recomputeStarting = true;
   void recomputeOffThread(db).then(
     () => app.log.info("similarity: ready"),
     (err) => app.log.warn(`similarity: the recompute failed, and the next scan tries again: ${err instanceof Error ? err.message : String(err)}`),
@@ -368,6 +379,7 @@ if (!insightsComputed(db) && db.prepare("SELECT 1 FROM files LIMIT 1").get() != 
     app.log.info("insights: the recompute after the artist fold works out how the library connects");
   } else {
     app.log.info("insights: working out how the library connects, once, since this is the first start with Insights");
+    recomputeStarting = true;
     void recomputeOffThread(db).then(
       () => app.log.info("insights: ready"),
       (err) => app.log.warn(`insights: the recompute failed, and the next scan tries again: ${err instanceof Error ? err.message : String(err)}`),
@@ -390,6 +402,15 @@ app.listen({ port: PORT, host: "0.0.0.0" }, (err, address) => {
       app.log.error(
         `artists/albums: recompute after the upgrade failed: ${error instanceof Error ? error.message : String(error)}`,
       ),
+    );
+  } else if (localEdgesOwed && !recomputeStarting) {
+    // Issue #323: see localEdgesOwed above. On the Worker, through the one
+    // recompute queue, so a scan started meanwhile waits for it rather than
+    // running beside it.
+    app.log.info("local edges: the rules they're derived by changed, so every file's are derived again, once");
+    void recomputeOffThread(db).then(
+      () => app.log.info("local edges: derived for every file"),
+      (err) => app.log.warn(`local edges: the recompute failed, and the next one tries again: ${err instanceof Error ? err.message : String(err)}`),
     );
   }
 
