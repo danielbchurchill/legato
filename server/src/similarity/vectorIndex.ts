@@ -223,3 +223,63 @@ export async function scoreRows(
   }
 }
 
+/** scoreRows for several rows at once, in one pass over the index: `visit`
+ *  gets each row's scores against `from`'s rows, in from's order. Each score
+ *  is worked out exactly as scoreRows works it out, so they're the same
+ *  numbers. The array `visit` gets is reused for the next row. */
+export async function scoreRowsAgainstEach(
+  index: VectorIndex,
+  from: readonly number[],
+  kind: number,
+  include: (row: number) => boolean,
+  visit: (row: number, scores: Float64Array) => void,
+  pacer = new Pacer(),
+): Promise<void> {
+  // Issue #494: /dissimilar scored every candidate against each of its 12
+  // furthest, a pass each, and on a Raspberry Pi that took 400 ms for a
+  // track at 30,000 albums. Here the vectors are spread out side by side,
+  // so dimension d's values for all of them are together from d * stride
+  // on, and each row's few entries are read for four of them at a time,
+  // into four running sums. The stride is rounded up to a multiple of four,
+  // so the last group reads zeros past the end rather than past the array.
+  const width = from.length;
+  if (width === 0) return;
+  const stride = Math.ceil(width / 4) * 4;
+  const { kinds, offsets, dims, values, norms } = index;
+  const spread = new Float64Array((index.maxDim + 1) * stride);
+  const fromNorms = new Float64Array(stride);
+  for (let j = 0; j < width; j++) {
+    const row = from[j]!;
+    for (let k = offsets[row]!; k < offsets[row + 1]!; k++) spread[dims[k]! * stride + j] = values[k]!;
+    fromNorms[j] = norms[row]!;
+  }
+  const dots = new Float64Array(stride);
+  const scores = new Float64Array(width);
+  for (let r = 0; r < kinds.length; r++) {
+    if ((r & 1023) === 0) await pacer.pace();
+    if (kinds[r] !== kind || !include(r)) continue;
+    const start = offsets[r]!;
+    const end = offsets[r + 1]!;
+    for (let j = 0; j < stride; j += 4) {
+      let dot0 = 0;
+      let dot1 = 0;
+      let dot2 = 0;
+      let dot3 = 0;
+      for (let k = start; k < end; k++) {
+        const at = dims[k]! * stride + j;
+        const value = values[k]!;
+        dot0 += spread[at]! * value;
+        dot1 += spread[at + 1]! * value;
+        dot2 += spread[at + 2]! * value;
+        dot3 += spread[at + 3]! * value;
+      }
+      dots[j] = dot0;
+      dots[j + 1] = dot1;
+      dots[j + 2] = dot2;
+      dots[j + 3] = dot3;
+    }
+    const norm = norms[r]!;
+    for (let j = 0; j < width; j++) scores[j] = fromNorms[j] === 0 || norm === 0 ? 0 : dots[j]! / (fromNorms[j]! * norm);
+    visit(r, scores);
+  }
+}

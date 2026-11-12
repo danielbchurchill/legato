@@ -1,6 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { openDb } from "../db.js";
-import { indexOf, loadVectorIndex, rowOf, scoreRows, SLICE_MS } from "./vectorIndex.js";
+import { indexOf, loadVectorIndex, rowOf, scoreRows, scoreRowsAgainstEach, SLICE_MS } from "./vectorIndex.js";
 import { cosineSimilarity, encodeVector, sparseVector, vectorNorm } from "./vectors.js";
 
 describe("loadVectorIndex", () => {
@@ -91,6 +91,47 @@ describe("scoreRows", () => {
     expect(scores.map(([id]) => id)).toEqual([2, 9, 11]);
     for (const [id, score] of scores) {
       expect(score).toBeCloseTo(cosineSimilarity(vectors[0]!.vector, vectors.find((v) => v.nodeId === id)!.vector), 12);
+    }
+  });
+
+  // Issue #494: /dissimilar's coverage counts score every candidate against
+  // twelve rows in one pass. Each score must be the very number scoreRows
+  // gives, so the counts and the order they make don't move. Widths around
+  // the groups of four it sums in, and a row with no entries (norm 0).
+  it("scores against several rows at once exactly as scoreRows does against each", async () => {
+    const rows = Array.from({ length: 40 }, (_, i) => ({
+      nodeId: i + 1,
+      type: i % 5 === 0 ? "release" : "recording",
+      vector:
+        i === 7
+          ? sparseVector([])
+          : sparseVector([
+              [1 + (i % 3), 0.25 + (i % 4) / 3],
+              [5 + (i % 7), 1 / (1 + i)],
+              [20, i / 40],
+            ]),
+    }));
+    const big = indexOf(rows);
+    const kind = big.kinds[1]!;
+    const include = (row: number) => row !== 3;
+    for (const width of [1, 3, 4, 5, 12]) {
+      const from = Array.from({ length: width }, (_, j) => (j * 7 + 1) % rows.length);
+      const each: number[][] = [];
+      for (const row of from) {
+        const scores: number[] = [];
+        await scoreRows(big, row, kind, include, (_, score) => scores.push(score));
+        each.push(scores);
+      }
+      const together: number[][] = from.map(() => []);
+      const visited: number[] = [];
+      await scoreRowsAgainstEach(big, from, kind, include, (row, scores) => {
+        visited.push(row);
+        expect(scores.length).toBe(width);
+        scores.forEach((score, j) => together[j]!.push(score));
+      });
+      expect(together).toEqual(each);
+      expect(visited).not.toContain(3);
+      expect(visited.every((row) => big.kinds[row] === kind)).toBe(true);
     }
   });
 

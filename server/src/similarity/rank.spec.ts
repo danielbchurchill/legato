@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { rankMostDissimilar, rankMostSimilar, type CandidatePool } from "./rank.js";
-import { indexOf } from "./vectorIndex.js";
+import { indexOf, scoreRows } from "./vectorIndex.js";
 import { sparseVector } from "./vectors.js";
 
 // A pool from dense test vectors: the anchor is node 0, each candidate the
@@ -90,5 +90,39 @@ describe("rankMostDissimilar", () => {
   it("respects the requested count", async () => {
     const candidates = Array.from({ length: 10 }, (_, i) => [Math.cos(i), Math.sin(i)]);
     expect(await rankMostDissimilar(pool([1, 0], candidates), 3)).toHaveLength(3);
+  });
+
+  // Issue #494: the coverage counts are made in one pass for all of the
+  // furthest candidates instead of a pass each. The answer must be the one
+  // a pass each gave, scores, ties and all.
+  it("ranks as counting each candidate's company in a pass of its own did", async () => {
+    // Values in quarters, so some candidates tie on distance and on company.
+    const vectors = Array.from({ length: 200 }, (_, i) => [0, 1, 2, 3, 4, 5].map((d) => Math.round(Math.sin(i * (d + 1) * 1.7 + d) * 4) / 4));
+    const p = { ...pool([0.3, 0.1, 0.5, 0.2, 0, 0.4], vectors), include: (row: number) => row % 17 !== 5 };
+    const kind = p.index.kinds[0]!;
+    const include = (row: number) => row !== p.anchor && p.include(row);
+
+    // #489's rankMostDissimilar, with a scoreRows pass per candidate.
+    async function aPassEach(count: number) {
+      const scored: { row: number; distance: number }[] = [];
+      await scoreRows(p.index, p.anchor, kind, include, (row, score) => scored.push({ row, distance: 1 - score }));
+      const furthest = scored.sort((a, b) => b.distance - a.distance).slice(0, count * 4);
+      const ranked = [];
+      for (const { row, distance } of furthest) {
+        let coverage = 0;
+        await scoreRows(p.index, row, kind, include, (_, similarity) => {
+          if (similarity >= 0.5) coverage++;
+        });
+        ranked.push({ nodeId: p.index.ids[row]!, score: distance, coverage });
+      }
+      ranked.sort((a, b) => b.coverage - a.coverage || b.score - a.score);
+      return ranked.slice(0, count).map(({ nodeId, score }) => ({ nodeId, score }));
+    }
+
+    for (const count of [1, 3, 5]) {
+      const expected = await aPassEach(count);
+      expect(expected).toHaveLength(count);
+      expect(await rankMostDissimilar(p, count)).toEqual(expected);
+    }
   });
 });

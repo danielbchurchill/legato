@@ -1,4 +1,4 @@
-import { Pacer, scoreRows, type VectorIndex } from "./vectorIndex.js";
+import { Pacer, scoreRows, scoreRowsAgainstEach, type VectorIndex } from "./vectorIndex.js";
 
 export type RankedResult = { nodeId: number; score: number };
 
@@ -53,22 +53,20 @@ export async function rankMostDissimilar(pool: CandidatePool, count: number): Pr
   const furthest = keepBest(Math.max(count * POOL_MULTIPLIER, count), (a, b) => a > b);
   await scoreRows(index, anchor, kind, include, (row, score) => furthest.offer(row, 1 - score), pacer);
 
-  // A candidate's company counts every candidate, itself included.
-  const ranked = [];
-  for (const { row, score } of furthest.kept) {
-    let coverage = 0;
-    await scoreRows(
-      index,
-      row,
-      kind,
-      include,
-      (_, similarity) => {
-        if (similarity >= COVERAGE_SIMILARITY_THRESHOLD) coverage++;
-      },
-      pacer,
-    );
-    ranked.push({ nodeId: index.ids[row]!, score, coverage });
-  }
+  // A candidate's company counts every candidate, itself included. One pass
+  // counts it for all of the furthest at once (issue #494).
+  const coverage = new Int32Array(furthest.kept.length);
+  await scoreRowsAgainstEach(
+    index,
+    furthest.kept.map(({ row }) => row),
+    kind,
+    include,
+    (_, similarities) => {
+      for (let j = 0; j < similarities.length; j++) if (similarities[j]! >= COVERAGE_SIMILARITY_THRESHOLD) coverage[j]!++;
+    },
+    pacer,
+  );
+  const ranked = furthest.kept.map(({ row, score }, j) => ({ nodeId: index.ids[row]!, score, coverage: coverage[j]! }));
   return ranked
     .sort((a, b) => b.coverage - a.coverage || b.score - a.score)
     .slice(0, count)
