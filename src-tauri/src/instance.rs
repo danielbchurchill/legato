@@ -100,6 +100,15 @@ impl Instance {
     }
   }
 
+  /// Where the shell writes its own log (tauri_plugin_log, dev builds only).
+  /// An instance with its own data dir keeps it under that dir's `logs/`,
+  /// which is where the default instance's log already sits beside its data
+  /// on Linux, rather than appending to the default instance's log (issue
+  /// #344). None means the platform's app log dir.
+  pub fn log_dir(&self) -> Option<PathBuf> {
+    self.data_dir.as_ref().map(|dir| dir.join("logs"))
+  }
+
   /// WebKitGTK and WebView2 keep localStorage, cookies and cache in a
   /// directory, which Tauri defaults to the app local data dir. On Linux
   /// that's the same directory as the database, so an instance's own data
@@ -149,6 +158,7 @@ mod tests {
     assert_eq!(instance.window_title("Legato"), "Legato");
     assert_eq!(instance.webview_data_dir(), None);
     assert_eq!(instance.webview_store_id(), None);
+    assert_eq!(instance.log_dir(), None);
   }
 
   #[test]
@@ -164,6 +174,14 @@ mod tests {
     assert_eq!(instance, Instance { server_port: 8906, data_dir: Some(PathBuf::from(&dir)) });
     assert_eq!(instance.window_title("Legato"), "Legato :8906");
     assert_eq!(instance.webview_data_dir(), Some(PathBuf::from(&dir)));
+    assert_eq!(instance.log_dir(), Some(PathBuf::from(&dir).join("logs")));
+  }
+
+  #[test]
+  fn a_port_alone_logs_where_the_default_instance_does() {
+    // It shares the default instance's data dir, so its log stays with it.
+    let instance = Instance::from_env(true, env(&[("LEGATO_PORT", "8906")])).unwrap();
+    assert_eq!(instance.log_dir(), None);
   }
 
   #[test]

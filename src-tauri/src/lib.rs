@@ -85,9 +85,17 @@ pub fn run() {
     .manage(DesktopUpdate::default())
     .setup(|app| {
       if cfg!(debug_assertions) {
+        use tauri_plugin_log::{Target, TargetKind};
+        // The plugin's own default targets, stdout and the app log dir,
+        // except that an instance with its own data dir logs there (#344).
+        let file = match app.state::<Instance>().log_dir() {
+          Some(path) => TargetKind::Folder { path, file_name: None },
+          None => TargetKind::LogDir { file_name: None },
+        };
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
             .level(log::LevelFilter::Info)
+            .targets([Target::new(TargetKind::Stdout), Target::new(file)])
             .build(),
         )?;
       }

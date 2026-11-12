@@ -81,7 +81,7 @@ lsof -nP -iTCP:8899 -sTCP:LISTEN
 lsof -nP -iTCP:5173 -sTCP:LISTEN
 ```
 
-Killing the Tauri binary alone doesn't stop its child Vite or server processes. They run in their own process groups on purpose.
+Killing the Tauri binary alone doesn't stop Vite, which the Tauri CLI started. The server the binary started stops by itself once the binary is gone.
 
 **Server changes don't show up.** The server that `npx tauri dev` starts doesn't hot-reload. Restart the app, or use `npm run dev:server`, which does.
 

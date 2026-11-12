@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager};
@@ -132,6 +132,8 @@ pub fn spawn(app: &AppHandle) -> Result<Child, String> {
     // so the server it spawns skips the release check and shows no notice.
     .env("LEGATO_INSTALL_CHANNEL", "desktop");
 
+  stop_with_this_app(&mut cmd);
+
   // Issue #117: a headless server advertises itself over mDNS so clients
   // can find it, but this server goes wherever the laptop goes, and would
   // announce the machine's name on every network it joins, café Wi-Fi
@@ -172,6 +174,17 @@ pub fn spawn(app: &AppHandle) -> Result<Child, String> {
       format!("failed to spawn legato-server sidecar: {e}")
     }
   })
+}
+
+/// Issue #373: the server stops once this app is gone, however it goes
+/// (server/src/stdinLifeline.ts). Its stdin is a pipe of its own whose other
+/// end stays in the Child that ServerProcess holds until kill() has stopped
+/// it, so the kernel closes that end when this process dies, SIGKILL
+/// included. `tauri dev` kills the app that way to rebuild, and a crash or a
+/// force-quit never reaches kill() either. Without this the server would
+/// keep its port, in a process group that nothing else signals.
+fn stop_with_this_app(cmd: &mut Command) {
+  cmd.stdin(Stdio::piped()).env("LEGATO_EXIT_ON_STDIN_CLOSE", "1");
 }
 
 /// `tauri::RunEvent::Exit` only fires on a Tauri-driven graceful shutdown
@@ -235,5 +248,35 @@ mod tests {
     } else {
       assert_eq!(candidates.len(), 1);
     }
+  }
+
+  // The shell's half of #373's lifeline: each server gets the variable and a
+  // pipe of its own, which closes only when its Child lets go of it.
+  #[cfg(unix)]
+  #[test]
+  fn each_server_gets_a_stdin_of_its_own_that_ends_with_its_child() {
+    use std::io::Read;
+    let spawn = || {
+      let mut cmd = Command::new("sh");
+      cmd.args(["-c", r#"echo "$LEGATO_EXIT_ON_STDIN_CLOSE"; cat >/dev/null; echo ended"#]);
+      cmd.stdout(Stdio::piped());
+      stop_with_this_app(&mut cmd);
+      cmd.spawn().unwrap()
+    };
+    let mut first = spawn();
+    let mut second = spawn();
+
+    // What the kernel does to a killed app's end of the pipe.
+    drop(first.stdin.take());
+    let mut said = String::new();
+    first.stdout.take().unwrap().read_to_string(&mut said).unwrap();
+    assert_eq!(said, "1\nended\n");
+    assert!(first.wait().unwrap().success());
+
+    // The other server's pipe is still open: it hasn't seen an end.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(second.try_wait().unwrap().is_none(), "the second server's stdin ended with the first's");
+    drop(second.stdin.take());
+    assert!(second.wait().unwrap().success());
   }
 }
