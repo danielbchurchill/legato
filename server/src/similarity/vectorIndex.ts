@@ -185,6 +185,12 @@ export async function loadVectorIndex(db: Database): Promise<VectorIndex> {
   return step.value;
 }
 
+/** The memory the index's arrays take, in bytes. */
+export function indexBytes(index: VectorIndex): number {
+  const { ids, kinds, offsets, dims, values, norms } = index;
+  return ids.byteLength + kinds.byteLength + offsets.byteLength + dims.byteLength + values.byteLength + norms.byteLength;
+}
+
 /** The row holding `nodeId`'s vector, or -1. */
 export function rowOf(index: VectorIndex, nodeId: number): number {
   let lo = 0;

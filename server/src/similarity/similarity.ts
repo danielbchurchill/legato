@@ -198,7 +198,9 @@ export function similarityComputed(db: Database): boolean {
 // Issue #382: every vector, in memory, for as long as the stored ones stay
 // as they were. Read again, a slice at a time (vectorIndex.ts), the first
 // time it's asked for after a recompute has changed them. A request that
-// arrives meanwhile waits for the same read.
+// arrives meanwhile waits for the same read. Issue #494: the server reads
+// them as soon as it listens (preloadSimilarityVectors below), so a request
+// only waits for a read already under way.
 const indexes = new WeakMap<Database, { version: number; index: Promise<VectorIndex> }>();
 
 function vectorsFor(db: Database): Promise<VectorIndex> {
@@ -215,11 +217,19 @@ function vectorsFor(db: Database): Promise<VectorIndex> {
   return index;
 }
 
-/** Called once a recompute has finished: if a similarity strip has been
- *  asked for since the server started, its vectors are read again now, in
- *  the background, rather than by the next request. */
+/** Called once a recompute has finished: if the vectors have been read
+ *  since the server started, they're read again now, in the background,
+ *  rather than by the next request. */
 export function refreshSimilarityVectors(db: Database): void {
   if (indexes.has(db)) vectorsFor(db).catch(() => {});
+}
+
+/** Issue #494: reads the vectors now, in the background, so the first
+ *  ranking after a start doesn't wait for them (routes/similarity.ts calls
+ *  this once the server listens). From then on, a recompute that changes
+ *  them has them read again (refreshSimilarityVectors). */
+export function preloadSimilarityVectors(db: Database): Promise<VectorIndex> {
+  return vectorsFor(db);
 }
 
 async function rankAgainst(
