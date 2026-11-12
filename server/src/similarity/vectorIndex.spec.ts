@@ -1,6 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { openDb } from "../db.js";
-import { indexOf, loadVectorIndex, rowOf, scoreRows, scoreRowsAgainstEach, SLICE_MS } from "./vectorIndex.js";
+import { indexOf, loadVectorIndex, READ_SLICE_MS, rowOf, scoreRows, scoreRowsAgainstEach, SLICE_MS } from "./vectorIndex.js";
 import { cosineSimilarity, encodeVector, sparseVector, vectorNorm } from "./vectors.js";
 
 describe("loadVectorIndex", () => {
@@ -40,12 +40,9 @@ describe("loadVectorIndex", () => {
     }
   });
 
-  // Issue #494: putting the arrays together in one go held a Pi's loop for
-  // 68 ms at 30,000 albums. Every step of it now lets the loop run once a
-  // slice is up, as reading the pages does. With the clock made to say a
-  // slice is always up, the loop runs after every page read and every page
-  // put together: five pages, so ten times at least, against seven before.
-  it("lets the loop run between the pages it puts together, not only between those it reads", async () => {
+  /** Reads five pages of vectors with the clock moving `step` ms every time
+   *  it's read, and counts the times the read lets the loop run. */
+  async function yieldsReadingFivePages(step: number): Promise<number> {
     const db = openDb(":memory:");
     const node = db.prepare("INSERT INTO nodes (type, title) VALUES ('recording', 'x') RETURNING id");
     const store = db.prepare("INSERT INTO node_similarity_features (node_id, vector) VALUES (?, ?)");
@@ -54,16 +51,34 @@ describe("loadVectorIndex", () => {
     })();
 
     let clock = 0;
-    const now = spyOn(performance, "now").mockImplementation(() => (clock += SLICE_MS));
+    const now = spyOn(performance, "now").mockImplementation(() => (clock += step));
     const yields = spyOn(globalThis, "setTimeout");
     try {
       const index = await loadVectorIndex(db);
       expect(index.ids.length).toBe(5_000);
-      expect(yields.mock.calls.length).toBeGreaterThanOrEqual(10);
+      return yields.mock.calls.length;
     } finally {
       now.mockRestore();
       yields.mockRestore();
     }
+  }
+
+  // Issue #494: putting the arrays together in one go held a Pi's loop for
+  // 68 ms at 30,000 albums. Every step of it now lets the loop run once a
+  // slice is up, as reading the pages does. With the clock made to say a
+  // slice is always up, the loop runs after every page read and every page
+  // put together: five pages, so ten times at least, against seven before.
+  it("lets the loop run between the pages it puts together, not only between those it reads", async () => {
+    expect(await yieldsReadingFivePages(SLICE_MS)).toBeGreaterThanOrEqual(10);
+  });
+
+  // Issue #494: the read runs in the background, in slices half a ranking's
+  // length. A clock that moves just over READ_SLICE_MS each time it's read
+  // makes every chance to give way a slice's end: 12 of them, and the one
+  // before returning. In a ranking's 20 ms slices only every other one is.
+  it("gives way in slices of READ_SLICE_MS, not a ranking's SLICE_MS", async () => {
+    expect(READ_SLICE_MS).toBeLessThan(SLICE_MS);
+    expect(await yieldsReadingFivePages(READ_SLICE_MS + 1)).toBeGreaterThanOrEqual(12);
   });
 
   it("reads an empty table as an empty index", async () => {

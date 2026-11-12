@@ -12,20 +12,34 @@ import { decodeInto, encodedLength, encodeVector, type SparseVector } from "./ve
 // slower machine either.
 export const SLICE_MS = 20;
 
+// Issue #494: the read itself runs in the background now, as the server
+// starts listening and after a recompute, so it can afford to give way
+// more often than a request's own scoring. In 20 ms slices, a /health sent
+// to a real server during it waited up to 42 ms on an M3 (the Pi saw 68 ms
+// during #489's read); in 10 ms slices, up to 24 ms. It takes about as long
+// either way.
+export const READ_SLICE_MS = 10;
+
 // A timer, not setImmediate. On Bun 1.4.2, measured on the 30k library, a
 // loop yielding with setImmediate every 20 ms let a 1 ms interval run only
 // every other time, and a /health that arrived as the read began waited
 // 60-83 ms. With setTimeout(0), 22-26 ms and 23-51 ms.
 export const yieldToLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-/** Lets the loop run once SLICE_MS have gone by since it last did. One is
- *  shared by everything a request runs, so several passes in a row (the
- *  dissimilar ranking's) can't add up to a long hold between them. */
+/** Lets the loop run once a slice (SLICE_MS, unless it's given another
+ *  length) has gone by since it last did. One is shared by everything a
+ *  request runs, so several passes in a row (the dissimilar ranking's)
+ *  can't add up to a long hold between them. */
 export class Pacer {
   #sliceStarted = performance.now();
+  readonly #sliceMs: number;
+
+  constructor(sliceMs = SLICE_MS) {
+    this.#sliceMs = sliceMs;
+  }
 
   async pace(): Promise<void> {
-    if (performance.now() - this.#sliceStarted < SLICE_MS) return;
+    if (performance.now() - this.#sliceStarted < this.#sliceMs) return;
     await yieldToLoop();
     this.#sliceStarted = performance.now();
   }
@@ -149,7 +163,7 @@ export function indexOf(rows: { nodeId: number; type: string; vector: SparseVect
 
 // Rows read per statement. A page is the most the loop can be held by one
 // read: about 0.4 ms on an M3 with the file cached, decoding included.
-// Pages are read until SLICE_MS have gone by, then the loop runs. Sizing a
+// Pages are read until READ_SLICE_MS have gone by, then the loop runs. Sizing a
 // page to fill a slice instead let one grow to 50,000 rows, and a /health
 // sent to a freshly started server waited 1.5 s behind one.
 const PAGE_ROWS = 1000;
@@ -165,7 +179,7 @@ export async function loadVectorIndex(db: Database): Promise<VectorIndex> {
      WHERE f.node_id > ? ORDER BY f.node_id LIMIT ?`,
   );
   const builder = new Builder();
-  const pacer = new Pacer();
+  const pacer = new Pacer(READ_SLICE_MS);
   for (let after = 0; ; ) {
     const rows = page.values(after, PAGE_ROWS) as StoredRow[];
     builder.addPage(rows);
