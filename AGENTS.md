@@ -25,6 +25,7 @@ How to work on Legato: the layout, the conventions, and the non-obvious things t
 `npm run check:all` runs every local check, in order: the server's type check, server tests, vitest, build, lint, the sidecar build (skipped if one is already built, unless a Bun other than the pinned one built it), and `cargo test`. Run it before every PR. Relay changes also need `npm --prefix relay test`.
 
 - **Server tests:** `bun:test`, as `*.spec.ts` files next to the source. Use `openDb(":memory:")` for a database. The `Database` type comes from `server/src/sqlite.ts`, the only file that knows the engine is `bun:sqlite`. Don't import `better-sqlite3` or vitest in `server/`.
+- **The suite's data dir:** `server/bunfig.toml` preloads `server/src/test-preload.ts`, which points `LEGATO_DATA_DIR` at a fresh temporary directory for each spec file and removes it afterwards, so no spec writes to `~/.local/share/legato` (#506). It sets the test process's own `process.env` only: a Worker or `Bun.spawn` child gets the environment `bun test` started with, so a spec whose worker or child writes to the data dir passes `LEGATO_DATA_DIR` itself. CI runs the suite with an empty `HOME` and fails if anything lands in it.
 - **Server types:** `bun test` strips types without checking them, so `npm --prefix server run typecheck` (`tsc --noEmit`) checks them, in `check:all` and CI.
 - **App tests:** vitest, scoped to `src/**/*.spec.{ts,tsx}`.
 - **Lint:** oxlint (`.oxlintrc.json`), not eslint.

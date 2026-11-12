@@ -100,9 +100,26 @@ jobs:
         run: npm --prefix server run typecheck
 
       # About a minute and a half; has hung inside specs that spawn ffmpeg.
+      #
+      # Issue #506: with HOME an empty directory, and failing if anything
+      # lands in it. server/src/test-preload.ts gives every spec file a
+      # throwaway data dir, so a spec that writes to the default one
+      # (~/.local/share/legato), or anywhere else in a contributor's home,
+      # fails here. Bun's transpiler cache and npm's cache and logs would
+      # land in HOME too, so the first is off and the second goes elsewhere.
       - name: server test suite
         timeout-minutes: 6
-        run: npm --prefix server test
+        run: |
+          suite_home="$RUNNER_TEMP/server-suite-home"
+          mkdir "$suite_home"
+          HOME="$suite_home" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 npm_config_cache="$RUNNER_TEMP/npm-cache" \
+            npm --prefix server test
+          left="$(find "$suite_home" -mindepth 1)"
+          if [ -n "$left" ]; then
+            echo "::error::The server suite wrote into HOME, which it must leave alone (#506):"
+            echo "$left"
+            exit 1
+          fi
 
       # Issue #102's named risk: a compiled binary has no source tree, so a
       # broken or stale embed would boot clean and just silently have no
