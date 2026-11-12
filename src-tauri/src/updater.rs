@@ -14,6 +14,12 @@
 //! A .deb or .rpm belongs to the package manager, which the updater can't
 //! drive, so those installs get a link to the release instead.
 //!
+//! Settings has a switch for it, on by default and kept with the shell's own
+//! settings (serving.rs's ShellSettings), and LEGATO_UPDATE_CHECK=off turns
+//! it off for good, the variable that already stops the server's check, so
+//! one line does both on a managed install (#497). Off asks GitHub nothing,
+//! at launch or later. The switch takes effect without a restart.
+//!
 //! Off in a build from a checkout (version 0.0.0, which only the release
 //! workflow replaces), as the server's own check is. A dev build can be
 //! pointed at a stub with LEGATO_UPDATER_ENDPOINT, and LEGATO_UPDATER_PUBKEY
@@ -22,6 +28,8 @@
 //! update source.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -32,7 +40,7 @@ use tauri::{AppHandle, Emitter, Manager, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::instance::Instance;
-use crate::serving::ServingState;
+use crate::serving::{self, ServingState, ShellSettings};
 use crate::tray;
 
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -42,8 +50,13 @@ pub const CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 // catches up within the hour, as the server's check does.
 const WAKE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-/// What the webview hears when an update becomes ready.
+/// What the webview hears when an update becomes ready, and null when the
+/// switch is turned off and the update it had is withdrawn.
 pub const READY_EVENT: &str = "desktop-update://ready";
+
+/// The variable that turns the check off on a managed install. The server
+/// reads the same one (server/src/update/check.ts).
+pub const OFF_VAR: &str = "LEGATO_UPDATE_CHECK";
 
 const RELEASE_PAGE: &str = "https://github.com/danielbchurchill/legato/releases/tag/v";
 
@@ -86,11 +99,15 @@ pub fn install_kind(bundle: Option<BundleType>) -> Install {
   }
 }
 
-/// Where to look, decided once at launch.
+/// Where to look. Decided at launch, and again on every wake, since the
+/// switch can change while the app runs.
 #[derive(Debug, PartialEq)]
 pub enum Plan {
-  /// Not checking, and why.
+  /// Not checking while this app runs, and why.
   Off(&'static str),
+  /// Switched off in Settings. Nothing is asked, but switching it back on
+  /// starts checking again without a restart.
+  SwitchedOff,
   /// tauri.conf.json's endpoint and key: the latest GitHub release.
   Release,
   /// A dev build pointed at a stub, with the key the stub's files were
@@ -98,19 +115,30 @@ pub enum Plan {
   Stub { endpoint: Url, pubkey: Option<String> },
 }
 
-pub fn plan(dev: bool, version: &Version, var: impl Fn(&str) -> Option<String>) -> Result<Plan, String> {
+/// LEGATO_UPDATE_CHECK=off, read as the server reads it: any case, with
+/// spaces around it.
+pub fn off_by_environment(var: impl Fn(&str) -> Option<String>) -> bool {
+  var(OFF_VAR).is_some_and(|value| value.trim().eq_ignore_ascii_case("off"))
+}
+
+/// `switched_on` is Settings' switch. Whatever else stops the check wins
+/// over it, since those hold for as long as the app runs.
+pub fn plan(dev: bool, version: &Version, switched_on: bool, var: impl Fn(&str) -> Option<String>) -> Result<Plan, String> {
+  if off_by_environment(&var) {
+    return Ok(Plan::Off("LEGATO_UPDATE_CHECK=off"));
+  }
   let var = |name: &str| var(name).filter(|value| !value.is_empty());
   if dev {
     let Some(raw) = var("LEGATO_UPDATER_ENDPOINT") else {
       return Ok(Plan::Off("a dev build only checks a stub named by LEGATO_UPDATER_ENDPOINT"));
     };
     let endpoint = Url::parse(&raw).map_err(|e| format!("LEGATO_UPDATER_ENDPOINT={raw} isn't a URL: {e}"))?;
-    return Ok(Plan::Stub { endpoint, pubkey: var("LEGATO_UPDATER_PUBKEY") });
+    return Ok(if switched_on { Plan::Stub { endpoint, pubkey: var("LEGATO_UPDATER_PUBKEY") } } else { Plan::SwitchedOff });
   }
   if *version == Version::new(0, 0, 0) {
     return Ok(Plan::Off("built from a checkout rather than a release tag (version 0.0.0)"));
   }
-  Ok(Plan::Release)
+  Ok(if switched_on { Plan::Release } else { Plan::SwitchedOff })
 }
 
 /// The last check, kept in the shell's config dir so "at most once a day"
@@ -156,13 +184,26 @@ struct Ready {
   download: Option<(Update, PathBuf)>,
 }
 
-/// Managed state: the update that's ready, if any.
-#[derive(Default)]
-pub struct DesktopUpdate(Mutex<Option<Ready>>);
+/// Managed state: the update that's ready, if any, and the switch.
+pub struct DesktopUpdate {
+  ready: Mutex<Option<Ready>>,
+  /// Settings' switch, read by the worker on every wake. updater::start
+  /// sets it from the file before the first check.
+  switched_on: AtomicBool,
+  /// Wakes the worker when the switch goes back on, so the check doesn't
+  /// wait out the rest of the hour. None while no worker runs.
+  wake: Mutex<Option<Sender<()>>>,
+}
+
+impl Default for DesktopUpdate {
+  fn default() -> Self {
+    Self { ready: Mutex::new(None), switched_on: AtomicBool::new(true), wake: Mutex::new(None) }
+  }
+}
 
 impl DesktopUpdate {
   fn notice(&self) -> Option<Notice> {
-    self.0.lock().ok()?.as_ref().map(|ready| ready.notice.clone())
+    self.ready.lock().ok()?.as_ref().map(|ready| ready.notice.clone())
   }
 
   fn offers(&self, version: &str) -> bool {
@@ -170,13 +211,22 @@ impl DesktopUpdate {
   }
 
   fn set(&self, ready: Ready) {
-    if let Ok(mut slot) = self.0.lock() {
+    if let Ok(mut slot) = self.ready.lock() {
       *slot = Some(ready);
     }
   }
 
+  /// Drops the ready update. Returns whether there was one.
+  fn withdraw(&self) -> bool {
+    self.ready.lock().map(|mut slot| slot.take().is_some()).unwrap_or(false)
+  }
+
   fn download(&self) -> Option<(Update, PathBuf)> {
-    self.0.lock().ok()?.as_ref()?.download.clone()
+    self.ready.lock().ok()?.as_ref()?.download.clone()
+  }
+
+  fn switched_on(&self) -> bool {
+    self.switched_on.load(Ordering::Relaxed)
   }
 }
 
@@ -188,22 +238,33 @@ fn unix_now() -> u64 {
   SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+fn env_var(name: &str) -> Option<String> {
+  std::env::var(name).ok()
+}
+
 /// Starts the worker that checks at launch and then wakes hourly to see
 /// whether a day has passed. The first check runs off the main thread, so a
-/// slow or unreachable GitHub never holds up the window.
+/// slow or unreachable GitHub never holds up the window. Switched off, the
+/// worker still runs but asks nothing, so switching it on needs no restart.
 pub fn start(app: &AppHandle) {
   let current = app.package_info().version.clone();
-  let plan = match plan(tauri::is_dev(), &current, |name| std::env::var(name).ok()) {
+  let update = app.state::<DesktopUpdate>();
+  match serving::settings_file(app) {
+    Ok(settings) => update.switched_on.store(ShellSettings::load(&settings).update_check, Ordering::Relaxed),
+    Err(e) => log::error!("[updater] {e}"),
+  }
+  match plan(tauri::is_dev(), &current, update.switched_on(), env_var) {
     Ok(Plan::Off(why)) => {
       log::info!("[updater] not checking for updates: {why}");
       return;
     }
-    Ok(plan) => plan,
+    Ok(Plan::SwitchedOff) => log::info!("[updater] not checking for updates: switched off in Settings"),
+    Ok(_) => {}
     Err(e) => {
       log::error!("[updater] not checking for updates: {e}");
       return;
     }
-  };
+  }
   let file = match state_file(app) {
     Ok(file) => file,
     Err(e) => {
@@ -211,28 +272,42 @@ pub fn start(app: &AppHandle) {
       return;
     }
   };
+  let (wake, woken) = mpsc::channel();
+  if let Ok(mut slot) = update.wake.lock() {
+    *slot = Some(wake);
+  }
   let app = app.clone();
   std::thread::spawn(move || {
+    // At launch, or the first wake after the switch went back on: either
+    // way a download from an earlier run isn't in hand (CheckState::is_due).
     let mut launching = true;
     loop {
-      let previous = CheckState::load(&file);
-      let now = unix_now();
-      if previous.is_due(now, &current, launching) {
-        let latest_version = match tauri::async_runtime::block_on(check(&app, &plan)) {
-          Ok(found) => found,
-          // Offline, GitHub down, or no latest.json yet while a release is
-          // still uploading. Keep what the last answer said.
-          Err(e) => {
-            log::warn!("[updater] {e}");
-            previous.latest_version
+      // Again each time: the switch may have moved since the last wake.
+      // Nothing else plan() reads changes while the app runs.
+      let switched_on = app.state::<DesktopUpdate>().switched_on();
+      if let Ok(source @ (Plan::Release | Plan::Stub { .. })) = plan(tauri::is_dev(), &current, switched_on, env_var) {
+        let previous = CheckState::load(&file);
+        let now = unix_now();
+        if previous.is_due(now, &current, launching) {
+          let latest_version = match tauri::async_runtime::block_on(check(&app, &source)) {
+            Ok(found) => found,
+            // Offline, GitHub down, or no latest.json yet while a release is
+            // still uploading. Keep what the last answer said.
+            Err(e) => {
+              log::warn!("[updater] {e}");
+              previous.latest_version
+            }
+          };
+          if let Err(e) = (CheckState { checked_at: now, latest_version }).save(&file) {
+            log::error!("[updater] {e}");
           }
-        };
-        if let Err(e) = (CheckState { checked_at: now, latest_version }).save(&file) {
-          log::error!("[updater] {e}");
         }
+        launching = false;
+      } else {
+        launching = true;
       }
-      launching = false;
-      std::thread::sleep(WAKE_INTERVAL);
+      // An hour, or until the switch goes back on.
+      let _ = woken.recv_timeout(WAKE_INTERVAL);
     }
   });
 }
@@ -268,6 +343,10 @@ async fn check(app: &AppHandle, plan: &Plan) -> Result<Option<String>, String> {
       Ready { notice: Notice { version: version.clone(), action: Action::Restart }, download: Some((update, file)) }
     }
   };
+  // Switched off while it downloaded: nothing to say about it.
+  if !state.switched_on() {
+    return Ok(Some(version));
+  }
   let notice = ready.notice.clone();
   state.set(ready);
   log::info!("[updater] Legato {version} is ready");
@@ -275,10 +354,14 @@ async fn check(app: &AppHandle, plan: &Plan) -> Result<Option<String>, String> {
   Ok(Some(version))
 }
 
+fn download_dir(app: &AppHandle) -> Result<PathBuf, String> {
+  Ok(app.state::<Instance>().cache_dir(app)?.join("app-updates"))
+}
+
 /// On disk rather than in memory: a bundle carries the server, ffmpeg and
 /// fpcalc, and the app may run for days before anyone restarts it.
 fn save_download(app: &AppHandle, version: &str, bytes: &[u8]) -> Result<PathBuf, String> {
-  let dir = app.state::<Instance>().cache_dir(app)?.join("app-updates");
+  let dir = download_dir(app)?;
   // Only the newest download is ever installed.
   let _ = std::fs::remove_dir_all(&dir);
   std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't create {dir:?}: {e}"))?;
@@ -290,6 +373,43 @@ fn save_download(app: &AppHandle, version: &str, bytes: &[u8]) -> Result<PathBuf
 #[tauri::command]
 pub fn desktop_update(state: tauri::State<'_, DesktopUpdate>) -> Option<Notice> {
   state.notice()
+}
+
+/// What Settings shows. src/panels/UpdatesGroup.tsx mirrors this shape.
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckView {
+  /// The switch as this install keeps it.
+  pub enabled: bool,
+  /// LEGATO_UPDATE_CHECK=off is set, which the switch can't override.
+  pub off_by_environment: bool,
+}
+
+#[tauri::command]
+pub fn update_check_settings(state: tauri::State<'_, DesktopUpdate>) -> UpdateCheckView {
+  UpdateCheckView { enabled: state.switched_on(), off_by_environment: off_by_environment(env_var) }
+}
+
+/// Settings' switch. Off withdraws an update that's ready and deletes its
+/// download, so the pill goes and installing it can't fetch it again; on
+/// wakes the worker, which checks at once if a day has passed.
+#[tauri::command]
+pub fn set_update_check(app: AppHandle, state: tauri::State<'_, DesktopUpdate>, enabled: bool) -> Result<(), String> {
+  ShellSettings::change(&serving::settings_file(&app)?, |settings| settings.update_check = enabled)?;
+  state.switched_on.store(enabled, Ordering::Relaxed);
+  if enabled {
+    if let Ok(wake) = state.wake.lock() {
+      if let Some(wake) = wake.as_ref() {
+        let _ = wake.send(());
+      }
+    }
+  } else if state.withdraw() {
+    if let Ok(dir) = download_dir(&app) {
+      let _ = std::fs::remove_dir_all(dir);
+    }
+    let _ = app.emit(READY_EVENT, None::<Notice>);
+  }
+  Ok(())
 }
 
 /// "restart to update": installs the ready update and restarts into it.
@@ -357,42 +477,78 @@ mod tests {
   const DAY: u64 = 24 * 60 * 60;
   const NOW: u64 = 1_800_000_000;
 
+  const ON: bool = true;
+  const STUB: (&str, &str) = ("LEGATO_UPDATER_ENDPOINT", "http://127.0.0.1:8971/latest.json");
+
   #[test]
   fn a_release_build_checks_the_configured_endpoint() {
-    assert_eq!(plan(false, &v("0.3.0"), env(&[])).unwrap(), Plan::Release);
+    assert_eq!(plan(false, &v("0.3.0"), ON, env(&[])).unwrap(), Plan::Release);
   }
 
   #[test]
   fn a_build_from_a_checkout_never_checks() {
-    assert!(matches!(plan(false, &v("0.0.0"), env(&[])).unwrap(), Plan::Off(_)));
+    assert!(matches!(plan(false, &v("0.0.0"), ON, env(&[])).unwrap(), Plan::Off(_)));
   }
 
   #[test]
   fn an_installed_app_ignores_the_dev_overrides() {
     let vars = env(&[("LEGATO_UPDATER_ENDPOINT", "http://127.0.0.1:9/latest.json"), ("LEGATO_UPDATER_PUBKEY", "x")]);
-    assert_eq!(plan(false, &v("0.3.0"), vars).unwrap(), Plan::Release);
+    assert_eq!(plan(false, &v("0.3.0"), ON, vars).unwrap(), Plan::Release);
   }
 
   #[test]
   fn dev_checks_only_a_stub() {
-    assert!(matches!(plan(true, &v("0.0.0"), env(&[])).unwrap(), Plan::Off(_)));
-    assert!(matches!(plan(true, &v("0.0.0"), env(&[("LEGATO_UPDATER_ENDPOINT", "")])).unwrap(), Plan::Off(_)));
+    assert!(matches!(plan(true, &v("0.0.0"), ON, env(&[])).unwrap(), Plan::Off(_)));
+    assert!(matches!(plan(true, &v("0.0.0"), ON, env(&[("LEGATO_UPDATER_ENDPOINT", "")])).unwrap(), Plan::Off(_)));
 
-    let stub = plan(true, &v("0.0.0"), env(&[("LEGATO_UPDATER_ENDPOINT", "http://127.0.0.1:8971/latest.json")]));
+    let stub = plan(true, &v("0.0.0"), ON, env(&[STUB]));
     assert_eq!(stub.unwrap(), Plan::Stub { endpoint: Url::parse("http://127.0.0.1:8971/latest.json").unwrap(), pubkey: None });
 
-    let keyed = plan(
-      true,
-      &v("0.0.0"),
-      env(&[("LEGATO_UPDATER_ENDPOINT", "http://127.0.0.1:8971/latest.json"), ("LEGATO_UPDATER_PUBKEY", "dW50cnVzdGVk")]),
-    );
+    let keyed = plan(true, &v("0.0.0"), ON, env(&[STUB, ("LEGATO_UPDATER_PUBKEY", "dW50cnVzdGVk")]));
     assert!(matches!(keyed.unwrap(), Plan::Stub { pubkey: Some(key), .. } if key == "dW50cnVzdGVk"));
   }
 
   #[test]
   fn refuses_a_stub_that_isnt_a_url() {
-    let err = plan(true, &v("0.0.0"), env(&[("LEGATO_UPDATER_ENDPOINT", "latest.json")])).unwrap_err();
+    let err = plan(true, &v("0.0.0"), ON, env(&[("LEGATO_UPDATER_ENDPOINT", "latest.json")])).unwrap_err();
     assert!(err.contains("isn't a URL"), "{err}");
+  }
+
+  #[test]
+  fn switched_off_in_settings_asks_nothing_until_switched_back_on() {
+    assert_eq!(plan(false, &v("0.3.0"), false, env(&[])).unwrap(), Plan::SwitchedOff);
+    assert_eq!(plan(false, &v("0.3.0"), true, env(&[])).unwrap(), Plan::Release);
+    // A dev build's stub obeys the switch too, so the switch can be tried
+    // against one.
+    assert_eq!(plan(true, &v("0.0.0"), false, env(&[STUB])).unwrap(), Plan::SwitchedOff);
+  }
+
+  #[test]
+  fn the_switch_doesnt_wake_a_check_that_was_never_going_to_run() {
+    // Off for the whole run, so there's no worker to keep for the switch.
+    assert!(matches!(plan(false, &v("0.0.0"), false, env(&[])).unwrap(), Plan::Off(_)));
+    assert!(matches!(plan(true, &v("0.0.0"), false, env(&[])).unwrap(), Plan::Off(_)));
+  }
+
+  #[test]
+  fn the_servers_variable_turns_it_off_whatever_the_switch_says() {
+    for value in ["off", "OFF", " Off "] {
+      let vars = env(&[("LEGATO_UPDATE_CHECK", value)]);
+      assert_eq!(plan(false, &v("0.3.0"), ON, &vars).unwrap(), Plan::Off("LEGATO_UPDATE_CHECK=off"), "{value:?}");
+      assert_eq!(plan(false, &v("0.3.0"), false, &vars).unwrap(), Plan::Off("LEGATO_UPDATE_CHECK=off"), "{value:?}");
+      assert!(off_by_environment(&vars), "{value:?}");
+    }
+    // A stub too: off means no request at all.
+    assert!(matches!(plan(true, &v("0.0.0"), ON, env(&[STUB, ("LEGATO_UPDATE_CHECK", "off")])).unwrap(), Plan::Off(_)));
+  }
+
+  #[test]
+  fn only_off_turns_it_off() {
+    for value in ["", "on", "0", "false", "no"] {
+      let vars = env(&[("LEGATO_UPDATE_CHECK", value)]);
+      assert_eq!(plan(false, &v("0.3.0"), ON, &vars).unwrap(), Plan::Release, "{value:?}");
+      assert!(!off_by_environment(&vars), "{value:?}");
+    }
   }
 
   #[test]

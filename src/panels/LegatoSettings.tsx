@@ -26,6 +26,7 @@ import { StreamQualityRow } from './StreamQualityRow'
 import { AwayFromHomeRow } from './AwayFromHomeRow'
 import { NeverRelayRow } from './NeverRelayRow'
 import { ServingGroup } from './ServingGroup'
+import { UpdatesGroup } from './UpdatesGroup'
 import { useRebuildMap } from './useRebuildMap'
 import { deviceForSaved, type AudioDevice } from '../playback/audioDevices'
 
@@ -586,6 +587,7 @@ export function LegatoSettings({
       </SettingsGroup>
 
       <ServingGroup />
+      <UpdatesGroup />
 
       <SettingsGroup title="playback">
         <SettingsRow label="Volume levelling">
