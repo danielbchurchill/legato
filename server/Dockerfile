@@ -85,6 +85,13 @@ FROM debian:bookworm-slim AS runtime
 # kernel drops default-action signals aimed at PID 1. Without it
 # `docker stop` hangs for its full timeout and then SIGKILLs. tini also
 # reaps the ffmpeg/fpcalc children.
+#
+# No `tailscale` CLI, on purpose (#511). The away-from-home answer (#412)
+# needs the host's tailscaled socket and host networking anyway, and anyone
+# with tailscaled on the host has its CLI, which matches the daemon's
+# version. Shipping one would add about 32 MB to the image (16-18 MB to
+# the download) for the few who use it. docs/install/docker.md mounts the
+# host's.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg libchromaprint-tools tini \
     && rm -rf /var/lib/apt/lists/*

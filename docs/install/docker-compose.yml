@@ -35,6 +35,14 @@ services:
       # unset. Otherwise Docker would create an empty, root-owned folder at
       # the fallback path and Legato would scan nothing.
       - "${LEGATO_MUSIC_DIR:?set LEGATO_MUSIC_DIR to your music folder, or replace this line with the path}:/music:ro"
+      # Away from home, for phones that reach Legato over Tailscale: the
+      # host's Tailscale socket folder and its `tailscale` command, so the
+      # server can ask whether each device is at home. Both need
+      # `network_mode: host` in place of the ports: block above; on Docker's
+      # bridge network the server would take a phone at home for one away.
+      # See "Away from home, over Tailscale" in docker.md.
+      # - /var/run/tailscale:/var/run/tailscale:ro
+      # - /usr/bin/tailscale:/usr/local/bin/tailscale:ro
 
 volumes:
   legato-data:

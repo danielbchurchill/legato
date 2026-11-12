@@ -74,6 +74,44 @@ Host networking needs Docker Engine on Linux: a NAS, a Raspberry Pi, any Linux m
 
 Name the server with `LEGATO_SERVER_NAME`, whichever network it's on. The compose file has the line, commented out. Without it, the apps show the container's hostname: a random id like `15f18b3fbcac` on the bridge network, or the host's own name with host networking.
 
+## Away from home, over Tailscale
+
+If your phone reaches Legato over Tailscale, say behind `tailscale serve` on the host as [https.md](https.md) describes, Legato can tell it when it's left home. A tailnet address counts as being at home wherever the phone is, so it keeps streaming every track as its original file, about 400 MB an hour for a CD-quality FLAC on mobile data. The server finds out where each device is by asking the host's Tailscale (`tailscale status --json`, which talks to tailscaled on the host and nothing else). Once it can, a device away from home gets the notice offering **standard while away**, the **Away from home** choice in Settings takes effect, and the connection indicator in a desktop browser says "Away from home".
+
+The container can't ask as it comes. Until it can, every device counts as "don't know": nothing breaks, the notice never shows, and Away from home in Settings changes nothing. It needs three things:
+
+1. **Host networking**, as in [Appearing on the connect screen](#appearing-on-the-connect-screen): replace the `ports:` block with `network_mode: host`. On Docker's bridge network the server can't work out which device is asking, or where it is:
+   - `tailscale serve` passes each request to the host's own address, `127.0.0.1`, and names the device in a header. Docker hands the request on from its own network instead, so the server sees it come from Docker and doesn't trust the header. Every device reads "don't know".
+   - A device that opens the host's tailnet address directly is seen, but the server compares where Tailscale reaches it against the networks *it* is on. On the bridge network that's only Docker's own, never your home network, so a phone on your Wi-Fi would read as away.
+2. **The host's Tailscale socket.** Mount the folder that holds it, read-only. On most Linux hosts that's `/var/run/tailscale`. Mount the folder rather than the `tailscaled.sock` file in it: tailscaled makes a new socket every time it restarts, after an upgrade say, and a mount of the old file goes on pointing at it until the container is recreated.
+3. **A `tailscale` command inside the container.** The image doesn't include one, so mount the host's (`command -v tailscale` on the host says where it is). Mounted at `/usr/local/bin/tailscale` it's found by itself; anywhere else, set `LEGATO_TAILSCALE_PATH` to where it is inside the container. Tailscale's own packages, from [pkgs.tailscale.com](https://pkgs.tailscale.com/stable/) (Debian, Ubuntu, Raspberry Pi OS, Fedora and others), are a single self-contained file that runs in the container as it is. Some distributions build their own that needs the host's libraries. If yours does, the check below says `no such file or directory`: download the static build for your machine from that page, unpack it, and mount its `tailscale` instead.
+
+Together, in `docker-compose.yml`:
+
+```yaml
+    network_mode: host
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+    volumes:
+      - legato-data:/data
+      - "${LEGATO_MUSIC_DIR:?...}:/music:ro"
+      - /var/run/tailscale:/var/run/tailscale:ro
+      - /usr/bin/tailscale:/usr/local/bin/tailscale:ro
+```
+
+The compose file has the two mounts, commented out. Then `docker compose up -d` to recreate the container. To check, ask Tailscale from inside it as the user the server runs as, your `PUID` (1026 in the example above):
+
+```sh
+docker compose exec --user 1026 legato tailscale status
+```
+
+It lists your tailnet's devices, as `tailscale status` on the host does. `failed to connect to local tailscaled` means the socket folder isn't mounted, or tailscaled isn't running on the host. `executable file not found` means the command isn't mounted where the server looks, and `no such file or directory` that it needs libraries the container doesn't have (see 3 above). The server logs the same reasons once a device on the tailnet opens Legato, in a line that starts `tailscale: can't tell whether devices on the tailnet are at home`; for either of the last two it says `no tailscale CLI found`.
+
+**What the container may do with it.** The server only ever reads Tailscale's status, and tailscaled lets any user on the host do that. It doesn't let them change anything, so the container can't either, `:ro` or not: that's tailscaled's own check, by user id. The exception is when `PUID` is the user you made Tailscale's operator, which [https.md](https.md) suggests as a way to run `tailscale serve` without `sudo`: the operator may change Tailscale's settings, and so then could anything running in the container. Legato never does. If you'd rather it couldn't, use `sudo tailscale serve` and clear the operator with `sudo tailscale set --operator=`.
+
+None of this works in Docker Desktop, on macOS, Windows or Linux: its containers run in a virtual machine, where neither host networking nor the host's Tailscale is your computer's own.
+
 ## How much disk the stream cache takes
 
 When a browser or phone plays a track at a lower quality, or the web player asks for it as MP4, the server converts it once and keeps the result in `/data/streams`, so the next play starts straight away. The cache has a budget of 4 GB, every quality together. Past that, the tracks played longest ago go first. Nothing played in the last 10 minutes is removed, so the cache can be over its budget for a little while.
