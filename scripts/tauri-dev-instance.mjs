@@ -100,6 +100,12 @@ console.log(`dev:instance: server on ${serverPort}, Vite on ${vitePort}, data di
 // group in the background that reads the terminal is stopped. Windows has
 // no process groups, and Ctrl-C there already reaches every process on the
 // console.
+//
+// The app's server is in a process group of the app's own
+// (src-tauri/src/server_process.rs), out of this one's reach. The app stops
+// it, and when the app is killed outright, as the CLI does to rebuild it
+// after a Rust change, the server stops by itself (#373). So
+// scripts/check-dev-instance-stop.mjs checks every stop after a rebuild.
 const ownGroup = process.platform !== "win32";
 
 // The CLI's own entry point, run with this Node: no npx, and so no shell
