@@ -12,7 +12,7 @@ import type { DesktopUpdate } from './desktopUpdate'
 
 const shell = vi.hoisted(() => ({
   ready: null as DesktopUpdate | null,
-  emit: null as ((update: DesktopUpdate) => void) | null,
+  emit: null as ((update: DesktopUpdate | null) => void) | null,
   restart: vi.fn<() => Promise<void>>(),
 }))
 
@@ -25,7 +25,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   }),
 }))
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn((event: string, handler: (e: { payload: DesktopUpdate }) => void) => {
+  listen: vi.fn((event: string, handler: (e: { payload: DesktopUpdate | null }) => void) => {
     if (event === 'desktop-update://ready') shell.emit = (payload) => handler({ payload })
     return Promise.resolve(() => {
       shell.emit = null
@@ -127,6 +127,14 @@ describe("the desktop app's own update", () => {
     const { status } = await renderShell()
     act(() => shell.emit!(RESTART))
     expect(status()?.textContent).toBe('Legato 0.3.0 is available — restart to update')
+  })
+
+  it('goes when Settings switches the check off and the shell withdraws it (#497)', async () => {
+    shell.ready = RESTART
+    const { status } = await renderShell()
+    expect(status()?.textContent).toBe('Legato 0.3.0 is available — restart to update')
+    act(() => shell.emit!(null))
+    expect(status()).toBeNull()
   })
 
   it('restarts only when asked', async () => {

@@ -168,6 +168,8 @@ pub fn run() {
       serving::set_keep_awake,
       updater::desktop_update,
       updater::desktop_update_restart,
+      updater::update_check_settings,
+      updater::set_update_check,
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application")

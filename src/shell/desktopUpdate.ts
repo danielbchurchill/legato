@@ -61,7 +61,8 @@ export function useDesktopUpdate(): DesktopUpdate | null {
         if (live && ready) setUpdate(ready)
       })
       .catch(() => undefined)
-    const unlisten = listen<DesktopUpdate>(READY_EVENT, (event) => setUpdate(event.payload))
+    // Null when Settings switched the check off and withdrew it (#497).
+    const unlisten = listen<DesktopUpdate | null>(READY_EVENT, (event) => setUpdate(event.payload))
     return () => {
       live = false
       void unlisten.then((stop) => stop())

@@ -125,17 +125,36 @@ impl ServingState {
 /// device, while "keep *this* computer awake" only means anything here. Launch at
 /// login isn't stored here at all: the OS's own login item is the truth,
 /// and the plugin reads it back.
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ShellSettings {
   pub keep_awake: bool,
+  /// Whether the app asks GitHub for its own updates (#497, updater.rs).
+  /// Kept here rather than in the server's settings because it's this
+  /// install's check: the server it talks to may be on another machine.
+  pub update_check: bool,
+}
+
+/// What a missing file, or a field it doesn't have yet, means: keep-awake
+/// is opt-in, and the update check is on.
+impl Default for ShellSettings {
+  fn default() -> Self {
+    Self { keep_awake: false, update_check: true }
+  }
 }
 
 impl ShellSettings {
-  /// A missing or unreadable file means defaults: keep-awake is opt-in,
-  /// and a corrupt file must not stop the app from starting.
+  /// A missing or unreadable file means defaults, and a corrupt file must
+  /// not stop the app from starting.
   pub fn load(file: &Path) -> Self {
     std::fs::read_to_string(file).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+  }
+
+  /// Changes one setting and keeps the others as the file has them.
+  pub fn change(file: &Path, apply: impl FnOnce(&mut Self)) -> Result<(), String> {
+    let mut settings = Self::load(file);
+    apply(&mut settings);
+    settings.save(file)
   }
 
   pub fn save(&self, file: &Path) -> Result<(), String> {
@@ -194,7 +213,7 @@ pub fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<(), String> 
 
 #[tauri::command]
 pub fn set_keep_awake(app: AppHandle, state: tauri::State<'_, ServingState>, enabled: bool) -> Result<(), String> {
-  ShellSettings { keep_awake: enabled }.save(&state.settings_file)?;
+  ShellSettings::change(&state.settings_file, |settings| settings.keep_awake = enabled)?;
   state.keep_awake.store(enabled, Ordering::Relaxed);
   keep_awake::wake(&app);
   Ok(())
@@ -286,13 +305,37 @@ mod tests {
     let dir = std::env::temp_dir().join(format!("legato-serving-test-{}", std::process::id()));
     let file = dir.join("nested").join("shell-settings.json");
 
-    assert_eq!(ShellSettings::load(&file), ShellSettings { keep_awake: false }, "missing file");
-    ShellSettings { keep_awake: true }.save(&file).unwrap();
-    assert_eq!(ShellSettings::load(&file), ShellSettings { keep_awake: true });
+    assert_eq!(ShellSettings::load(&file), ShellSettings { keep_awake: false, update_check: true }, "missing file");
+    ShellSettings { keep_awake: true, update_check: true }.save(&file).unwrap();
+    assert_eq!(ShellSettings::load(&file), ShellSettings { keep_awake: true, update_check: true });
 
     std::fs::write(&file, "{ not json").unwrap();
     assert_eq!(ShellSettings::load(&file), ShellSettings::default(), "corrupt file");
 
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn a_file_from_before_the_update_switch_keeps_the_check_on() {
+    let dir = std::env::temp_dir().join(format!("legato-serving-test-old-{}", std::process::id()));
+    let file = dir.join("shell-settings.json");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&file, r#"{ "keepAwake": true }"#).unwrap();
+    assert_eq!(ShellSettings::load(&file), ShellSettings { keep_awake: true, update_check: true });
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn changing_one_setting_keeps_the_other() {
+    let dir = std::env::temp_dir().join(format!("legato-serving-test-change-{}", std::process::id()));
+    let file = dir.join("shell-settings.json");
+
+    ShellSettings::change(&file, |s| s.update_check = false).unwrap();
+    ShellSettings::change(&file, |s| s.keep_awake = true).unwrap();
+    assert_eq!(ShellSettings::load(&file), ShellSettings { keep_awake: true, update_check: false });
+
+    ShellSettings::change(&file, |s| s.keep_awake = false).unwrap();
+    assert!(!ShellSettings::load(&file).update_check, "turning keep-awake off turned the update check back on");
     std::fs::remove_dir_all(&dir).unwrap();
   }
 }
