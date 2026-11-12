@@ -1,4 +1,5 @@
 import type { QualityPreference, StreamQuality } from '../playback/quality'
+import type { Whereabouts } from './awayFromHome'
 import type { ServerPath } from './serverPath'
 
 /* What the rail's connection indicator says (issue #118, plan 03's
@@ -16,10 +17,29 @@ export const PATH_LABEL: Record<ServerPath, string> = {
   custom: 'Custom address',
 }
 
+/** What the indicator says in place of the path while the server says this
+ * device is away from home (#495). */
+export const AWAY_LABEL = 'Away from home'
+
+/** The tooltip's first half and the popover's heading: the path's name, or
+ * "Away from home" while the server's answer for this device is `away`
+ * (#412, awayFromHome.ts). A Tailscale address counts as the home path
+ * (serverPath.ts) wherever the device is, so the answer is what tells a
+ * train from the sofa. `home` and `unknown` leave the path's name. Like the
+ * quality ladder's standard while away, it doesn't look at the path: the
+ * server only says `away` for a device it sees on the tailnet. */
+export function placeLabel(path: ServerPath, where: Whereabouts): string {
+  return where === 'away' ? AWAY_LABEL : PATH_LABEL[path]
+}
+
 /** One sentence on what the path means. `name` is what the server calls
- * itself, once known. */
-export function pathSentence(path: ServerPath, name: string | null): string {
+ * itself, once known. While the server's answer is `away` (#495) it says
+ * that instead, in the words of the phone's Away from home note (DESIGN.md),
+ * since a heading of "Away from home" over "on your home network" would
+ * contradict itself. */
+export function pathSentence(path: ServerPath, name: string | null, where: Whereabouts = 'unknown'): string {
   const server = name ?? 'your server'
+  if (where === 'away') return `Connected to ${server} over Tailscale, from outside your home network.`
   switch (path) {
     case 'embedded':
       return "Connected to Legato's own server, running on this computer."
@@ -78,10 +98,18 @@ export type StreamFacts = {
   /** #412's standard while away is what sets the next stream's start
    * (quality.ts awayCapsQuality). */
   awayCapped?: boolean
+  /** The server's answer for this device is `away` (#495). With nothing
+   * else moving the ladder, the start is the same as at home. */
+  away?: boolean
 }
 
 /** Why the next stream is standard while this device is away (#412). */
 export const AWAY_WHY = 'while this device is away from home, as set in Settings'
+
+/** Why it's the path's default while this device is away and nothing else
+ * moved it (#495): "the default on your home network" would say the device
+ * is at home. */
+export const AWAY_SAME_WHY = 'the same as at home'
 
 /** The stream quality as a short label and a sentence. `stream` is null in
  * the desktop app, which plays files from disk, and streams the original
@@ -107,7 +135,9 @@ export function describeQuality(
         ? AWAY_WHY
         : stream.preference !== 'auto'
           ? 'as set in Settings'
-          : `the default ${DEFAULT_WHERE[path]}`
+          : stream.away
+            ? AWAY_SAME_WHY
+            : `the default ${DEFAULT_WHERE[path]}`
   const { playing, next } = stream
   // A drop or a new pick changes the next track, never the one playing
   // (#120), so the two can differ for a while.

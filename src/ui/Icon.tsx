@@ -92,7 +92,7 @@ import volumeMute from '../assets/icons/volume-mute.svg?raw'
  *
  * `computer`, `home`, `cloud` and `globe` are the rail's connection
  * indicator (#118), one per path: this computer, the home network, through
- * legato.fm, and a custom address.
+ * legato.fm, and a custom address. `globe` is also away from home (#495).
  *
  * `arrow-left` is Android's back, in the top app bar of a pushed page on
  * the phone (#389). iOS's back is the chevron, as each platform draws it.

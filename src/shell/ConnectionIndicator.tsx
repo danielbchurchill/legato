@@ -1,5 +1,6 @@
+import { useAwayFromHome, type Whereabouts } from '../connect/awayFromHome'
 import { neverUseRelay } from '../connect/connectionPath'
-import { PATH_LABEL, pathSentence } from '../connect/describeConnection'
+import { pathSentence, placeLabel } from '../connect/describeConnection'
 import { readLastSeen } from '../connect/lastSeen'
 import type { ServerPath } from '../connect/serverPath'
 import { SERVER_ORIGIN } from '../config/serverHost'
@@ -17,6 +18,11 @@ import { railButtonClass } from './railButton'
  * original". A click or tap opens the explanation: why it's that path, what
  * the quality is and why, and this device's "never use the relay".
  *
+ * While the server says this device is away from home (#495), the glyph is
+ * `globe` and the name "Away from home · original", whatever the path: a
+ * Tailscale address counts as the home path even on a train. The popover's
+ * heading and sentences say so too (describeConnection.ts).
+ *
  * The path and the quality come from the connection-path store
  * (connect/connectionPath.ts) and quality.ts's state, through
  * useStreamQuality, so the indicator changes as they do: a new track, a
@@ -29,6 +35,11 @@ const PATH_ICON: Record<ServerPath, IconName> = {
   home: 'home',
   relay: 'cloud',
   custom: 'globe',
+}
+
+/** The glyph for the path, or `globe` while this device is away (#495). */
+function placeIcon(path: ServerPath, where: Whereabouts): IconName {
+  return where === 'away' ? 'globe' : PATH_ICON[path]
 }
 
 type ConnectionIndicatorProps = {
@@ -44,7 +55,11 @@ type ConnectionIndicatorProps = {
 
 export function ConnectionIndicator({ embedded, currentFileId, streaming, onOpenSettings }: ConnectionIndicatorProps) {
   const { path, ...quality } = useStreamQuality({ embedded, currentFileId, streaming })
-  const label = `${PATH_LABEL[path]} · ${quality.label}`
+  // The server's home/away answer for this device (#412). The desktop app
+  // never asks for it, so there it stays `unknown`.
+  const { where } = useAwayFromHome()
+  const place = placeLabel(path, where)
+  const label = `${place} · ${quality.label}`
   // The address is data worth showing where it's the server's own. The
   // desktop app's server and the relay's are implementation details.
   const address = path === 'embedded' || path === 'relay' ? null : new URL(SERVER_ORIGIN).host
@@ -57,18 +72,18 @@ export function ConnectionIndicator({ embedded, currentFileId, streaming, onOpen
       trigger={({ open, ...trigger }) => (
         <Tooltip label={label} placement="right" disabled={open}>
           <button type="button" aria-label={label} {...trigger} className={railButtonClass(open)}>
-            <Icon name={PATH_ICON[path]} size={22} />
+            <Icon name={placeIcon(path, where)} size={22} />
           </button>
         </Tooltip>
       )}
     >
       {(close) => (
         <div className="flex flex-col gap-[6px] text-left">
-          <h2 className="text-heading text-[var(--color-ink)]">{PATH_LABEL[path]}</h2>
+          <h2 className="text-heading text-[var(--color-ink)]">{place}</h2>
           {/* What the server called itself when it last answered
            * (useServerReady.ts writes it down). */}
           <p className="text-secondary [text-wrap:pretty] text-[var(--color-ink-2)]">
-            {pathSentence(path, readLastSeen(SERVER_ORIGIN)?.name ?? null)}
+            {pathSentence(path, readLastSeen(SERVER_ORIGIN)?.name ?? null, where)}
           </p>
           {address && <p className="mono text-[var(--color-ink-3)]">{address}</p>}
           <p className="text-secondary [text-wrap:pretty] text-[var(--color-ink-2)]">{quality.sentence}</p>
