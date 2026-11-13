@@ -44,6 +44,7 @@ export function useStreamQuality({
           preference: stream.preference,
           drops: stream.drops,
           awayCapped: awayCapsQuality({ path: connection, preference: stream.preference, away: away.away, awayPick: away.pick }),
+          away: away.away,
         },
     streaming,
   )

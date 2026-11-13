@@ -1,6 +1,6 @@
 // Issue #118: what the rail's connection indicator says.
 import { describe, expect, it } from 'vitest'
-import { AWAY_WHY, describeQuality, PATH_LABEL, pathSentence, qualityLabel } from './describeConnection'
+import { AWAY_LABEL, AWAY_SAME_WHY, AWAY_WHY, describeQuality, PATH_LABEL, pathSentence, placeLabel, qualityLabel } from './describeConnection'
 import type { ServerPath } from './serverPath'
 
 const PATHS: ServerPath[] = ['embedded', 'this-device', 'home', 'relay', 'custom']
@@ -24,6 +24,39 @@ describe('the path', () => {
     expect(pathSentence('custom', 'musicbox')).toBe(
       'Connected to musicbox directly, at an address that works away from home too, such as a domain.',
     )
+  })
+})
+
+// #495: the server's home/away answer for this device (#412).
+describe('the place', () => {
+  it("says the path's name at home and while the server doesn't know", () => {
+    for (const path of PATHS) {
+      expect(placeLabel(path, 'home')).toBe(PATH_LABEL[path])
+      expect(placeLabel(path, 'unknown')).toBe(PATH_LABEL[path])
+    }
+    expect(placeLabel('home', 'home')).toBe('Home network')
+    expect(placeLabel('home', 'unknown')).toBe('Home network')
+  })
+
+  it('says away from home in place of the path while the answer is away', () => {
+    expect(AWAY_LABEL).toBe('Away from home')
+    // A Tailscale address is the home path, wherever the device is.
+    expect(placeLabel('home', 'away')).toBe('Away from home')
+    expect(placeLabel('custom', 'away')).toBe('Away from home')
+  })
+
+  it("says what the path means at home and while the server doesn't know", () => {
+    for (const path of PATHS) {
+      expect(pathSentence(path, 'musicbox', 'home')).toBe(pathSentence(path, 'musicbox'))
+      expect(pathSentence(path, 'musicbox', 'unknown')).toBe(pathSentence(path, 'musicbox'))
+    }
+    expect(pathSentence('home', 'musicbox', 'home')).toBe('Connected to musicbox directly, on your home network.')
+    expect(pathSentence('home', 'musicbox', 'unknown')).toBe('Connected to musicbox directly, on your home network.')
+  })
+
+  it("says it's over Tailscale from outside the home network while the answer is away", () => {
+    expect(pathSentence('home', 'musicbox', 'away')).toBe('Connected to musicbox over Tailscale, from outside your home network.')
+    expect(pathSentence('home', null, 'away')).toBe('Connected to your server over Tailscale, from outside your home network.')
   })
 })
 
@@ -79,6 +112,28 @@ describe('the quality', () => {
     // The playing track keeps the original; the next one is standard.
     expect(describeQuality('home', { ...stream, playing: 'original', next: 'aac160', awayCapped: true }).sentence).toBe(
       'This track streams at original quality. The next one streams as AAC at 160 kbps, while this device is away from home, as set in Settings.',
+    )
+  })
+
+  // #495: away from home, with nothing else moving the ladder.
+  it("says the start is the same as at home while away, and the path's default at home or unknown", () => {
+    expect(AWAY_SAME_WHY).toBe('the same as at home')
+    expect(describeQuality('home', { ...stream, away: true })).toEqual({
+      label: 'original',
+      sentence: 'Streams at original quality, the same as at home.',
+    })
+    // Home and unknown are both `away: false` by the time they get here.
+    expect(describeQuality('home', { ...stream, away: false }).sentence).toBe(
+      'Streams at original quality, the default on your home network.',
+    )
+    expect(describeQuality('home', { ...stream, playing: 'original', next: 'aac160', drops: 1, away: true }).sentence).toBe(
+      'This track streams at original quality. The next one streams as AAC at 160 kbps, lowered after the connection dropped.',
+    )
+    expect(describeQuality('home', { ...stream, next: 'aac160', awayCapped: true, away: true }).sentence).toBe(
+      'Streams as AAC at 160 kbps, while this device is away from home, as set in Settings.',
+    )
+    expect(describeQuality('home', { ...stream, next: 'opus256', preference: 'high', away: true }).sentence).toBe(
+      'Streams as Opus at 256 kbps, as set in Settings.',
     )
   })
 

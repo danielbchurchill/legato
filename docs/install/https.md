@@ -19,7 +19,7 @@ You need Tailscale on the server and on the phone, signed in to the same tailnet
    tailscale serve --bg 8899
    ```
 
-   It prints the address, `https://<machine>.<tailnet>.ts.net`, and keeps serving it after a reboot. On Linux, run it with `sudo`, or once run `sudo tailscale set --operator=$USER` so your user can change Tailscale's settings. If Legato runs in Docker, give the host port (`LEGATO_HOST_PORT`, 8899 unless you changed it).
+   It prints the address, `https://<machine>.<tailnet>.ts.net`, and keeps serving it after a reboot. On Linux, run it with `sudo`, or once run `sudo tailscale set --operator=$USER` so your user can change Tailscale's settings. If Legato runs in Docker, give the host port (`LEGATO_HOST_PORT`, 8899 unless you changed it), and see [docker.md](docker.md#away-from-home-over-tailscale) for what the container needs to tell a phone it's away from home.
 
 2. Open that address on any device on the tailnet. The very first visit can take a few seconds while Tailscale fetches the certificate.
 
