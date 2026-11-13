@@ -52,11 +52,16 @@ class Statement<ReturnType = unknown> {
   }
 }
 
+/** readonly: a connection that can't write. Issue #494's vector read opens
+ *  one on its Worker. A plain path, never a file: URI, which Bun's own
+ *  SQLite on Linux refuses. */
+export type OpenOptions = { readonly?: boolean };
+
 export class Database {
   readonly #inner: BunDatabase;
 
-  constructor(path: string) {
-    this.#inner = new BunDatabase(path, { strict: true });
+  constructor(path: string, options: OpenOptions = {}) {
+    this.#inner = new BunDatabase(path, { strict: true, ...(options.readonly ? { readonly: true } : {}) });
   }
 
   // The path this connection opened: ":memory:" (or "") for an in-memory
@@ -104,6 +109,6 @@ export class Database {
 }
 
 // dbPath is ":memory:" in tests, a real file path in production.
-export function openSqlite(dbPath: string): Database {
-  return new Database(dbPath);
+export function openSqlite(dbPath: string, options: OpenOptions = {}): Database {
+  return new Database(dbPath, options);
 }

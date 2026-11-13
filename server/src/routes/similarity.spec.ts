@@ -53,4 +53,46 @@ describe("GET /nodes/:id/similar", () => {
     const artistAnswer = await app.inject({ method: "GET", url: `/api/v1/nodes/${artist}/similar` });
     expect(artistAnswer.json()).toEqual([]);
   });
+
+  // Issue #494: the first request after a start used to read every vector
+  // itself, 1.9 s on a Raspberry Pi at 30,000 albums. The server reads them
+  // as it starts listening. Here the stored vectors other than the anchor's
+  // go once that read has had time to finish, without a recompute to say so:
+  // the first request still finds the other tracks, so it answered from
+  // what was read before it came.
+  it("reads the vectors once the server listens, so the first request doesn't", async () => {
+    const db = openDb(":memory:");
+    const app = Fastify();
+    await app.register(similarityRoutes(db), { prefix: "/api/v1" });
+    const artist = (db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', 'The Beatles') RETURNING id").get() as { id: number }).id;
+    const anchor = track(db, "Come Together", artist);
+    const other = track(db, "Something", artist);
+    recomputeSimilarityFeatures(db);
+
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      db.prepare("DELETE FROM node_similarity_features WHERE node_id != ?").run(anchor);
+      const answer = await app.inject({ method: "GET", url: `/api/v1/nodes/${anchor}/similar` });
+      expect((answer.json() as { id: number }[]).map((r) => r.id)).toEqual([other]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reads nothing until it listens, so app.inject alone never does", async () => {
+    const db = openDb(":memory:");
+    const app = Fastify();
+    await app.register(similarityRoutes(db), { prefix: "/api/v1" });
+    const artist = (db.prepare("INSERT INTO nodes (type, title) VALUES ('artist', 'The Beatles') RETURNING id").get() as { id: number }).id;
+    const anchor = track(db, "Come Together", artist);
+    track(db, "Something", artist);
+    recomputeSimilarityFeatures(db);
+    await app.ready();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    db.prepare("DELETE FROM node_similarity_features WHERE node_id != ?").run(anchor);
+    const answer = await app.inject({ method: "GET", url: `/api/v1/nodes/${anchor}/similar` });
+    expect(answer.json()).toEqual([]);
+  });
 });

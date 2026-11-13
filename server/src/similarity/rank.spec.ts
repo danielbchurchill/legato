@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { rankMostDissimilar, rankMostSimilar, type CandidatePool } from "./rank.js";
-import { indexOf } from "./vectorIndex.js";
+import { indexOf, scoreRows } from "./vectorIndex.js";
 import { sparseVector } from "./vectors.js";
 
 // A pool from dense test vectors: the anchor is node 0, each candidate the
@@ -13,7 +13,7 @@ function pool(anchor: number[], candidates: number[][]): CandidatePool {
       vector: sparseVector(values.map((value, i) => [i + 1, value])),
     })),
   );
-  return { index, anchor: 0, include: () => true };
+  return { index, anchor: 0, leaveOut: [] };
 }
 
 describe("rankMostSimilar", () => {
@@ -41,9 +41,9 @@ describe("rankMostSimilar", () => {
     expect(ranked.map((r) => r.nodeId)).toEqual([2, 4, 1, 3]);
   });
 
-  it("ranks only what the pool includes, and never the anchor", async () => {
+  it("ranks only what the pool doesn't leave out, and never the anchor", async () => {
     const p = pool([1, 0], [[1, 0], [0.9, 0.1], [0, 1]]);
-    const ranked = await rankMostSimilar({ ...p, include: (row) => p.index.ids[row] !== 1 }, 5);
+    const ranked = await rankMostSimilar({ ...p, leaveOut: [1] }, 5);
     expect(ranked.map((r) => r.nodeId)).toEqual([2, 3]);
   });
 
@@ -53,7 +53,7 @@ describe("rankMostSimilar", () => {
       { nodeId: 2, type: "recording", vector: sparseVector([[1, 1]]) },
       { nodeId: 3, type: "release", vector: sparseVector([[1, 0.5], [2, 1]]) },
     ]);
-    const ranked = await rankMostSimilar({ index, anchor: 0, include: () => true }, 5);
+    const ranked = await rankMostSimilar({ index, anchor: 0, leaveOut: [] }, 5);
     expect(ranked.map((r) => r.nodeId)).toEqual([3]);
   });
 });
@@ -90,5 +90,46 @@ describe("rankMostDissimilar", () => {
   it("respects the requested count", async () => {
     const candidates = Array.from({ length: 10 }, (_, i) => [Math.cos(i), Math.sin(i)]);
     expect(await rankMostDissimilar(pool([1, 0], candidates), 3)).toHaveLength(3);
+  });
+
+  // Issue #494: the coverage counts are made in one pass for all of the
+  // furthest candidates instead of a pass each. The answer must be the one
+  // a pass each gave, scores, ties and all.
+  it("ranks as counting each candidate's company in a pass of its own did", async () => {
+    // Values in quarters, so some candidates tie on distance and on company.
+    const vectors = Array.from({ length: 200 }, (_, i) => [0, 1, 2, 3, 4, 5].map((d) => Math.round(Math.sin(i * (d + 1) * 1.7 + d) * 4) / 4));
+    // Node ids are row numbers here (pool() above), so this leaves out
+    // every 17th row from the fifth.
+    const p = { ...pool([0.3, 0.1, 0.5, 0.2, 0, 0.4], vectors), leaveOut: vectors.map((_, i) => i + 1).filter((id) => id % 17 === 5) };
+    const kind = p.index.kinds[0]!;
+    const leaveOut = new Uint8Array(p.index.ids.length);
+    for (const row of [p.anchor, ...p.leaveOut]) leaveOut[row] = 1;
+    const scoresFrom = async (row: number) => {
+      const scores = new Float64Array(p.index.ids.length);
+      await scoreRows(p.index, row, kind, leaveOut, scores);
+      return scores;
+    };
+
+    // #489's rankMostDissimilar, with a scoreRows pass per candidate and a
+    // stable sort.
+    async function aPassEach(count: number) {
+      const scored = [...(await scoresFrom(p.anchor))]
+        .map((score, row) => ({ row, distance: 1 - score }))
+        .filter(({ distance }) => !Number.isNaN(distance));
+      const furthest = scored.sort((a, b) => b.distance - a.distance).slice(0, count * 4);
+      const ranked = [];
+      for (const { row, distance } of furthest) {
+        const coverage = [...(await scoresFrom(row))].filter((similarity) => similarity >= 0.5).length;
+        ranked.push({ nodeId: p.index.ids[row]!, score: distance, coverage });
+      }
+      ranked.sort((a, b) => b.coverage - a.coverage || b.score - a.score);
+      return ranked.slice(0, count).map(({ nodeId, score }) => ({ nodeId, score }));
+    }
+
+    for (const count of [1, 3, 5]) {
+      const expected = await aPassEach(count);
+      expect(expected).toHaveLength(count);
+      expect(await rankMostDissimilar(p, count)).toEqual(expected);
+    }
   });
 });

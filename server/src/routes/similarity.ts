@@ -1,6 +1,7 @@
 import type { Database } from "../sqlite.js";
 import type { FastifyInstance } from "fastify";
-import { findMostDissimilar, findMostSimilar } from "../similarity/similarity.js";
+import { findMostDissimilar, findMostSimilar, preloadSimilarityVectors } from "../similarity/similarity.js";
+import { indexBytes } from "../similarity/vectorIndex.js";
 import { resolveCoverForNode } from "../cover/extract.js";
 
 type RankedResult = { nodeId: number; score: number };
@@ -38,6 +39,26 @@ function hydrate(db: Database, ranked: RankedResult[]) {
 
 export function similarityRoutes(db: Database) {
   return async function routes(app: FastifyInstance) {
+    // Issue #494: the vectors both routes rank against are read as soon as
+    // the server listens, in the background and a slice at a time, rather
+    // than by the first request, which on a Raspberry Pi at 30,000 albums
+    // waited 1.9 s for them. That keeps them in memory on every server,
+    // whether or not anything asks: about 800 bytes an album, 24 MB of arrays
+    // at 30,000. Not awaited, so listening doesn't wait for it. app.inject
+    // (the specs) never listens, so it never runs there.
+    app.addHook("onListen", () => {
+      preloadSimilarityVectors(db).then(
+        ({ index, readMs, warmUpMs }) => {
+          if (index.ids.length === 0) return;
+          app.log.info(
+            `similarity: ${index.ids.length} vectors in memory (${(indexBytes(index) / 1e6).toFixed(1)} MB), read in ${Math.round(readMs)} ms, then ranked once in ${Math.round(warmUpMs)} ms to warm up`,
+          );
+        },
+        (err) =>
+          app.log.warn(`similarity: reading the vectors failed, and the first ranking tries again: ${err instanceof Error ? err.message : String(err)}`),
+      );
+    });
+
     app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
       "/nodes/:id/similar",
       async (request, reply) => {
