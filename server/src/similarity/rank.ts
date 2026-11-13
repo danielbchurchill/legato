@@ -1,37 +1,47 @@
-import { Pacer, scoreRows, scoreRowsAgainstEach, type VectorIndex } from "./vectorIndex.js";
+import { countNear, Pacer, rowOf, scoreRows, type VectorIndex } from "./vectorIndex.js";
 
 export type RankedResult = { nodeId: number; score: number };
 
-/** Who's ranked: the rows of the anchor's type that `include` keeps. The
- *  anchor's own row is never one of them. */
-export type CandidatePool = { index: VectorIndex; anchor: number; include: (row: number) => boolean };
+/** Who's ranked: the rows of the anchor's type, but for the nodes in
+ *  `leaveOut`. The anchor's own row is never one of them. */
+export type CandidatePool = { index: VectorIndex; anchor: number; leaveOut: Iterable<number> };
 
-function poolFilter(pool: CandidatePool): (row: number) => boolean {
-  return (row) => row !== pool.anchor && pool.include(row);
+/** The rows a ranking leaves out, as scoreRows and countNear take them:
+ *  the anchor's and those of the pool's leaveOut nodes. */
+function leaveOutMask(pool: CandidatePool): Uint8Array {
+  const mask = new Uint8Array(pool.index.ids.length);
+  mask[pool.anchor] = 1;
+  for (const nodeId of pool.leaveOut) {
+    const row = rowOf(pool.index, nodeId);
+    if (row >= 0) mask[row] = 1;
+  }
+  return mask;
 }
 
-// The best `count` by `better`, kept in order as rows arrive. A row that
-// ties one already kept goes after it, so ties keep row (node id) order, as
-// a stable sort over every candidate did.
-function keepBest(count: number, better: (a: number, b: number) => boolean) {
+// The best `count` rows of `scores`, highest first, NaN (not a candidate)
+// left out; with `distance`, the highest 1 - score. A row that ties one
+// already kept goes after it, so ties keep row (node id) order, as a stable
+// sort over every candidate did.
+function best(scores: Float64Array, count: number, distance: boolean): { row: number; score: number }[] {
   const kept: { row: number; score: number }[] = [];
-  return {
-    kept,
-    offer(row: number, score: number) {
-      if (count <= 0 || (kept.length === count && !better(score, kept[count - 1]!.score))) return;
-      let at = kept.length;
-      while (at > 0 && better(score, kept[at - 1]!.score)) at--;
-      kept.splice(at, 0, { row, score });
-      if (kept.length > count) kept.pop();
-    },
-  };
+  if (count <= 0) return kept;
+  for (let row = 0; row < scores.length; row++) {
+    if (Number.isNaN(scores[row]!)) continue;
+    const score = distance ? 1 - scores[row]! : scores[row]!;
+    if (kept.length === count && !(score > kept[count - 1]!.score)) continue;
+    let at = kept.length;
+    while (at > 0 && score > kept[at - 1]!.score) at--;
+    kept.splice(at, 0, { row, score });
+    if (kept.length > count) kept.pop();
+  }
+  return kept;
 }
 
 export async function rankMostSimilar(pool: CandidatePool, count: number): Promise<RankedResult[]> {
   const { index, anchor } = pool;
-  const best = keepBest(count, (a, b) => a > b);
-  await scoreRows(index, anchor, index.kinds[anchor]!, poolFilter(pool), best.offer);
-  return best.kept.map(({ row, score }) => ({ nodeId: index.ids[row]!, score }));
+  const scores = new Float64Array(index.ids.length);
+  await scoreRows(index, anchor, index.kinds[anchor]!, leaveOutMask(pool), scores);
+  return best(scores, count, false).map(({ row, score }) => ({ nodeId: index.ids[row]!, score }));
 }
 
 // "Completely different" isn't just the single furthest node — the purely
@@ -48,26 +58,24 @@ const POOL_MULTIPLIER = 4;
 export async function rankMostDissimilar(pool: CandidatePool, count: number): Promise<RankedResult[]> {
   const { index, anchor } = pool;
   const kind = index.kinds[anchor]!;
-  const include = poolFilter(pool);
+  const leaveOut = leaveOutMask(pool);
   const pacer = new Pacer();
-  const furthest = keepBest(Math.max(count * POOL_MULTIPLIER, count), (a, b) => a > b);
-  await scoreRows(index, anchor, kind, include, (row, score) => furthest.offer(row, 1 - score), pacer);
+  const scores = new Float64Array(index.ids.length);
+  await scoreRows(index, anchor, kind, leaveOut, scores, pacer);
+  const furthest = best(scores, Math.max(count * POOL_MULTIPLIER, count), true);
 
   // A candidate's company counts every candidate, itself included. One pass
   // counts it for all of the furthest at once (issue #494).
-  const coverage = new Int32Array(furthest.kept.length);
-  await scoreRowsAgainstEach(
+  const coverage = await countNear(
     index,
-    furthest.kept.map(({ row }) => row),
+    furthest.map(({ row }) => row),
     kind,
-    include,
-    (_, similarities) => {
-      for (let j = 0; j < similarities.length; j++) if (similarities[j]! >= COVERAGE_SIMILARITY_THRESHOLD) coverage[j]!++;
-    },
+    leaveOut,
+    COVERAGE_SIMILARITY_THRESHOLD,
     pacer,
   );
-  const ranked = furthest.kept.map(({ row, score }, j) => ({ nodeId: index.ids[row]!, score, coverage: coverage[j]! }));
-  return ranked
+  return furthest
+    .map(({ row, score }, j) => ({ nodeId: index.ids[row]!, score, coverage: coverage[j]! }))
     .sort((a, b) => b.coverage - a.coverage || b.score - a.score)
     .slice(0, count)
     .map(({ nodeId, score }) => ({ nodeId, score }));

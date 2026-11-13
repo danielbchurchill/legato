@@ -1,6 +1,6 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { openDb } from "../db.js";
-import { indexOf, loadVectorIndex, READ_SLICE_MS, rowOf, scoreRows, scoreRowsAgainstEach, SLICE_MS } from "./vectorIndex.js";
+import { countNear, indexOf, loadVectorIndex, READ_SLICE_MS, rowOf, scoreRows, SLICE_MS, type VectorIndex } from "./vectorIndex.js";
 import { cosineSimilarity, encodeVector, sparseVector, vectorNorm } from "./vectors.js";
 
 describe("loadVectorIndex", () => {
@@ -98,22 +98,25 @@ describe("scoreRows", () => {
   ];
   const index = indexOf(vectors);
 
-  it("scores every row of the type it's given that the filter keeps, as cosineSimilarity does", async () => {
-    const scores: [number, number][] = [];
-    await scoreRows(index, rowOf(index, 2), index.kinds[rowOf(index, 2)]!, (row) => index.ids[row] !== 8, (row, score) =>
-      scores.push([index.ids[row]!, score]),
-    );
-    expect(scores.map(([id]) => id)).toEqual([2, 9, 11]);
-    for (const [id, score] of scores) {
-      expect(score).toBeCloseTo(cosineSimilarity(vectors[0]!.vector, vectors.find((v) => v.nodeId === id)!.vector), 12);
+  it("scores every row of the type it's given that the mask doesn't leave out, as cosineSimilarity does", async () => {
+    const leaveOut = new Uint8Array(index.ids.length);
+    leaveOut[rowOf(index, 8)] = 1;
+    const scores = new Float64Array(index.ids.length).fill(-1);
+    await scoreRows(index, rowOf(index, 2), index.kinds[rowOf(index, 2)]!, leaveOut, scores);
+    const scored = [...index.ids].filter((_, row) => !Number.isNaN(scores[row]));
+    expect(scored).toEqual([2, 9, 11]);
+    for (const id of scored) {
+      expect(scores[rowOf(index, id)]).toBeCloseTo(cosineSimilarity(vectors[0]!.vector, vectors.find((v) => v.nodeId === id)!.vector), 12);
     }
   });
 
   // Issue #494: /dissimilar's coverage counts score every candidate against
   // twelve rows in one pass. Each score must be the very number scoreRows
-  // gives, so the counts and the order they make don't move. Widths around
-  // the groups of four it sums in, and a row with no entries (norm 0).
-  it("scores against several rows at once exactly as scoreRows does against each", async () => {
+  // gives, so the counts and the order they make don't move: at every
+  // threshold scoreRows' scores put a boundary on (each score, and the next
+  // number up), countNear counts what they count. Widths around the groups
+  // of four it sums in, a row with no entries (norm 0), and a row left out.
+  it("counts, for several rows at once, the rows near each as scoreRows' scores do", async () => {
     const rows = Array.from({ length: 40 }, (_, i) => ({
       nodeId: i + 1,
       type: i % 5 === 0 ? "release" : "recording",
@@ -128,26 +131,26 @@ describe("scoreRows", () => {
     }));
     const big = indexOf(rows);
     const kind = big.kinds[1]!;
-    const include = (row: number) => row !== 3;
+    const leaveOut = new Uint8Array(big.ids.length);
+    leaveOut[3] = 1;
+    // scoreRows' scores are cosineSimilarity's to the last bit, as #489's
+    // were, so a ranking's order can't move.
+    for (const from of [1, 2, 7, 13]) {
+      const expected = rows
+        .filter((_, r) => big.kinds[r] === kind && leaveOut[r] === 0)
+        .map((row) => cosineSimilarity(rows[from]!.vector, row.vector));
+      expect(await scoresFrom(big, from, kind, leaveOut)).toEqual(expected);
+    }
     for (const width of [1, 3, 4, 5, 12]) {
       const from = Array.from({ length: width }, (_, j) => (j * 7 + 1) % rows.length);
-      const each: number[][] = [];
-      for (const row of from) {
-        const scores: number[] = [];
-        await scoreRows(big, row, kind, include, (_, score) => scores.push(score));
-        each.push(scores);
+      const each = await Promise.all(from.map((row) => scoresFrom(big, row, kind, leaveOut)));
+      const thresholds = new Set(each.flat().flatMap((score) => [score, nextUp(score)]));
+      for (const threshold of thresholds) {
+        const counts = await countNear(big, from, kind, leaveOut, threshold);
+        expect([...counts]).toEqual(each.map((scores) => scores.filter((score) => score >= threshold).length));
       }
-      const together: number[][] = from.map(() => []);
-      const visited: number[] = [];
-      await scoreRowsAgainstEach(big, from, kind, include, (row, scores) => {
-        visited.push(row);
-        expect(scores.length).toBe(width);
-        scores.forEach((score, j) => together[j]!.push(score));
-      });
-      expect(together).toEqual(each);
-      expect(visited).not.toContain(3);
-      expect(visited.every((row) => big.kinds[row] === kind)).toBe(true);
     }
+    expect([...(await countNear(big, [], kind, leaveOut, 0.5))]).toEqual([]);
   });
 
   it("finds a row by node id", () => {
@@ -156,3 +159,19 @@ describe("scoreRows", () => {
     expect(rowOf(index, 12)).toBe(-1);
   });
 });
+
+/** scoreRows' scores for the rows it scores, in row order. */
+async function scoresFrom(index: VectorIndex, from: number, kind: number, leaveOut: Uint8Array): Promise<number[]> {
+  const scores = new Float64Array(index.ids.length);
+  await scoreRows(index, from, kind, leaveOut, scores);
+  return [...scores].filter((score) => !Number.isNaN(score));
+}
+
+/** The smallest double above `x`. */
+function nextUp(x: number): number {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, x === 0 ? 0 : x);
+  const bits = view.getBigInt64(0);
+  view.setBigInt64(0, x >= 0 ? bits + 1n : bits - 1n);
+  return view.getFloat64(0);
+}

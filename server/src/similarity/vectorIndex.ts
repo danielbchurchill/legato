@@ -219,67 +219,121 @@ export function rowOf(index: VectorIndex, nodeId: number): number {
   return -1;
 }
 
-/** Calls `visit` with the cosine similarity of row `from` to every row of
- *  `kind` that `include` keeps, in row order. The vector at `from` is
- *  spread out once, so each row costs only its own few entries. */
+// Issue #494: on a Raspberry Pi at 30,000 albums, /dissimilar for a track
+// ran its first two calls after a start at more than twice the speed of the
+// rest (368 and 345 ms, then 148-173). JavaScriptCore had compiled the
+// scoring loops with that request's callbacks built in, the filter and the
+// function each score went to, and the next request's callbacks, new
+// closures, threw the compiled code away. So the loops here take no
+// callbacks: the rows a ranking leaves out come as a mask, and the scores
+// go into an array (scoreRows) or are counted where they're worked out
+// (countNear). Each loop is also a plain function, called once for each
+// CHUNK_ROWS rows by the async one that gives way between them, rather than
+// a loop inside the async function itself.
+const CHUNK_ROWS = 1024;
+
+/** Writes into `scores` the cosine similarity of row `from` to every row
+ *  of `kind` that `leaveOut` doesn't mark (non-zero), and NaN for every
+ *  other row. The vector at `from` is spread out once, so each row costs
+ *  only its own few entries. */
 export async function scoreRows(
   index: VectorIndex,
   from: number,
   kind: number,
-  include: (row: number) => boolean,
-  visit: (row: number, score: number) => void,
+  leaveOut: Uint8Array,
+  scores: Float64Array,
   pacer = new Pacer(),
 ): Promise<void> {
   const spread = new Float64Array(index.maxDim + 1);
   for (let k = index.offsets[from]!; k < index.offsets[from + 1]!; k++) spread[index.dims[k]!] = index.values[k]!;
   const norm = index.norms[from]!;
-  const { kinds, offsets, dims, values, norms } = index;
-  for (let r = 0; r < kinds.length; r++) {
-    if ((r & 1023) === 0) await pacer.pace();
-    if (kinds[r] !== kind || !include(r)) continue;
-    let dot = 0;
-    for (let k = offsets[r]!; k < offsets[r + 1]!; k++) dot += spread[dims[k]!]! * values[k]!;
-    visit(r, norm === 0 || norms[r] === 0 ? 0 : dot / (norm * norms[r]!));
+  for (let first = 0; first < index.kinds.length; first += CHUNK_ROWS) {
+    await pacer.pace();
+    scoreChunk(index, spread, norm, kind, leaveOut, scores, first, Math.min(first + CHUNK_ROWS, index.kinds.length));
   }
 }
 
-/** scoreRows for several rows at once, in one pass over the index: `visit`
- *  gets each row's scores against `from`'s rows, in from's order. Each score
- *  is worked out exactly as scoreRows works it out, so they're the same
- *  numbers. The array `visit` gets is reused for the next row. */
-export async function scoreRowsAgainstEach(
+function scoreChunk(
+  index: VectorIndex,
+  spread: Float64Array,
+  norm: number,
+  kind: number,
+  leaveOut: Uint8Array,
+  scores: Float64Array,
+  first: number,
+  end: number,
+): void {
+  const { kinds, offsets, dims, values, norms } = index;
+  for (let r = first; r < end; r++) {
+    if (kinds[r] !== kind || leaveOut[r] !== 0) {
+      scores[r] = NaN;
+      continue;
+    }
+    let dot = 0;
+    for (let k = offsets[r]!; k < offsets[r + 1]!; k++) dot += spread[dims[k]!]! * values[k]!;
+    scores[r] = cosine(dot, norm, norms[r]!);
+  }
+}
+
+/** The cosine of two vectors from their dot product and norms, 0 when
+ *  either is all zeros. */
+function cosine(dot: number, normA: number, normB: number): number {
+  return normA === 0 || normB === 0 ? 0 : dot / (normA * normB);
+}
+
+/** For each of `from`'s rows, how many rows of `kind` that `leaveOut`
+ *  doesn't mark have a cosine similarity to it of at least `threshold`, in
+ *  one pass over the index. Each similarity is worked out exactly as
+ *  scoreRows works it out, so the counts are the ones its scores give. */
+export async function countNear(
   index: VectorIndex,
   from: readonly number[],
   kind: number,
-  include: (row: number) => boolean,
-  visit: (row: number, scores: Float64Array) => void,
+  leaveOut: Uint8Array,
+  threshold: number,
   pacer = new Pacer(),
-): Promise<void> {
+): Promise<Int32Array> {
   // Issue #494: /dissimilar scored every candidate against each of its 12
   // furthest, a pass each, and on a Raspberry Pi that took 400 ms for a
   // track at 30,000 albums. Here the vectors are spread out side by side,
   // so dimension d's values for all of them are together from d * stride
   // on, and each row's few entries are read for four of them at a time,
-  // into four running sums. The stride is rounded up to a multiple of four,
-  // so the last group reads zeros past the end rather than past the array.
+  // into four running sums. The stride is rounded up to a multiple of four;
+  // the extra columns are all zeros, and their counts are dropped.
   const width = from.length;
-  if (width === 0) return;
   const stride = Math.ceil(width / 4) * 4;
-  const { kinds, offsets, dims, values, norms } = index;
-  const spread = new Float64Array((index.maxDim + 1) * stride);
-  const fromNorms = new Float64Array(stride);
+  const near: Near = {
+    spread: new Float64Array((index.maxDim + 1) * stride),
+    stride,
+    fromNorms: new Float64Array(stride),
+    threshold,
+    counts: new Int32Array(stride),
+  };
+  const { offsets, dims, values, norms } = index;
   for (let j = 0; j < width; j++) {
     const row = from[j]!;
-    for (let k = offsets[row]!; k < offsets[row + 1]!; k++) spread[dims[k]! * stride + j] = values[k]!;
-    fromNorms[j] = norms[row]!;
+    for (let k = offsets[row]!; k < offsets[row + 1]!; k++) near.spread[dims[k]! * stride + j] = values[k]!;
+    near.fromNorms[j] = norms[row]!;
   }
-  const dots = new Float64Array(stride);
-  const scores = new Float64Array(width);
-  for (let r = 0; r < kinds.length; r++) {
-    if ((r & 1023) === 0) await pacer.pace();
-    if (kinds[r] !== kind || !include(r)) continue;
+  if (width > 0) {
+    for (let first = 0; first < index.kinds.length; first += CHUNK_ROWS) {
+      await pacer.pace();
+      countChunk(index, near, kind, leaveOut, first, Math.min(first + CHUNK_ROWS, index.kinds.length));
+    }
+  }
+  return near.counts.slice(0, width);
+}
+
+type Near = { spread: Float64Array; stride: number; fromNorms: Float64Array; threshold: number; counts: Int32Array };
+
+function countChunk(index: VectorIndex, near: Near, kind: number, leaveOut: Uint8Array, first: number, last: number): void {
+  const { kinds, offsets, dims, values, norms } = index;
+  const { spread, stride, fromNorms, threshold, counts } = near;
+  for (let r = first; r < last; r++) {
+    if (kinds[r] !== kind || leaveOut[r] !== 0) continue;
     const start = offsets[r]!;
     const end = offsets[r + 1]!;
+    const norm = norms[r]!;
     for (let j = 0; j < stride; j += 4) {
       let dot0 = 0;
       let dot1 = 0;
@@ -293,13 +347,10 @@ export async function scoreRowsAgainstEach(
         dot2 += spread[at + 2]! * value;
         dot3 += spread[at + 3]! * value;
       }
-      dots[j] = dot0;
-      dots[j + 1] = dot1;
-      dots[j + 2] = dot2;
-      dots[j + 3] = dot3;
+      if (cosine(dot0, fromNorms[j]!, norm) >= threshold) counts[j]!++;
+      if (cosine(dot1, fromNorms[j + 1]!, norm) >= threshold) counts[j + 1]!++;
+      if (cosine(dot2, fromNorms[j + 2]!, norm) >= threshold) counts[j + 2]!++;
+      if (cosine(dot3, fromNorms[j + 3]!, norm) >= threshold) counts[j + 3]!++;
     }
-    const norm = norms[r]!;
-    for (let j = 0; j < width; j++) scores[j] = fromNorms[j] === 0 || norm === 0 ? 0 : dots[j]! / (fromNorms[j]! * norm);
-    visit(r, scores);
   }
 }

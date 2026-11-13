@@ -13,7 +13,7 @@ function pool(anchor: number[], candidates: number[][]): CandidatePool {
       vector: sparseVector(values.map((value, i) => [i + 1, value])),
     })),
   );
-  return { index, anchor: 0, include: () => true };
+  return { index, anchor: 0, leaveOut: [] };
 }
 
 describe("rankMostSimilar", () => {
@@ -41,9 +41,9 @@ describe("rankMostSimilar", () => {
     expect(ranked.map((r) => r.nodeId)).toEqual([2, 4, 1, 3]);
   });
 
-  it("ranks only what the pool includes, and never the anchor", async () => {
+  it("ranks only what the pool doesn't leave out, and never the anchor", async () => {
     const p = pool([1, 0], [[1, 0], [0.9, 0.1], [0, 1]]);
-    const ranked = await rankMostSimilar({ ...p, include: (row) => p.index.ids[row] !== 1 }, 5);
+    const ranked = await rankMostSimilar({ ...p, leaveOut: [1] }, 5);
     expect(ranked.map((r) => r.nodeId)).toEqual([2, 3]);
   });
 
@@ -53,7 +53,7 @@ describe("rankMostSimilar", () => {
       { nodeId: 2, type: "recording", vector: sparseVector([[1, 1]]) },
       { nodeId: 3, type: "release", vector: sparseVector([[1, 0.5], [2, 1]]) },
     ]);
-    const ranked = await rankMostSimilar({ index, anchor: 0, include: () => true }, 5);
+    const ranked = await rankMostSimilar({ index, anchor: 0, leaveOut: [] }, 5);
     expect(ranked.map((r) => r.nodeId)).toEqual([3]);
   });
 });
@@ -98,21 +98,28 @@ describe("rankMostDissimilar", () => {
   it("ranks as counting each candidate's company in a pass of its own did", async () => {
     // Values in quarters, so some candidates tie on distance and on company.
     const vectors = Array.from({ length: 200 }, (_, i) => [0, 1, 2, 3, 4, 5].map((d) => Math.round(Math.sin(i * (d + 1) * 1.7 + d) * 4) / 4));
-    const p = { ...pool([0.3, 0.1, 0.5, 0.2, 0, 0.4], vectors), include: (row: number) => row % 17 !== 5 };
+    // Node ids are row numbers here (pool() above), so this leaves out
+    // every 17th row from the fifth.
+    const p = { ...pool([0.3, 0.1, 0.5, 0.2, 0, 0.4], vectors), leaveOut: vectors.map((_, i) => i + 1).filter((id) => id % 17 === 5) };
     const kind = p.index.kinds[0]!;
-    const include = (row: number) => row !== p.anchor && p.include(row);
+    const leaveOut = new Uint8Array(p.index.ids.length);
+    for (const row of [p.anchor, ...p.leaveOut]) leaveOut[row] = 1;
+    const scoresFrom = async (row: number) => {
+      const scores = new Float64Array(p.index.ids.length);
+      await scoreRows(p.index, row, kind, leaveOut, scores);
+      return scores;
+    };
 
-    // #489's rankMostDissimilar, with a scoreRows pass per candidate.
+    // #489's rankMostDissimilar, with a scoreRows pass per candidate and a
+    // stable sort.
     async function aPassEach(count: number) {
-      const scored: { row: number; distance: number }[] = [];
-      await scoreRows(p.index, p.anchor, kind, include, (row, score) => scored.push({ row, distance: 1 - score }));
+      const scored = [...(await scoresFrom(p.anchor))]
+        .map((score, row) => ({ row, distance: 1 - score }))
+        .filter(({ distance }) => !Number.isNaN(distance));
       const furthest = scored.sort((a, b) => b.distance - a.distance).slice(0, count * 4);
       const ranked = [];
       for (const { row, distance } of furthest) {
-        let coverage = 0;
-        await scoreRows(p.index, row, kind, include, (_, similarity) => {
-          if (similarity >= 0.5) coverage++;
-        });
+        const coverage = [...(await scoresFrom(row))].filter((similarity) => similarity >= 0.5).length;
         ranked.push({ nodeId: p.index.ids[row]!, score: distance, coverage });
       }
       ranked.sort((a, b) => b.coverage - a.coverage || b.score - a.score);

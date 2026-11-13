@@ -267,7 +267,7 @@ async function rankAgainst(
   // comparable to each other — an album's "more like this" should be
   // other albums, a track's other tracks. rankFn only ranks rows of the
   // anchor's own type.
-  return rankFn({ index, anchor, include: (row) => !sameRelease.has(index.ids[row]!) }, limit);
+  return rankFn({ index, anchor, leaveOut: sameRelease }, limit);
 }
 
 export function findMostSimilar(db: Database, nodeId: number, limit = 3): Promise<RankedResult[]> {
