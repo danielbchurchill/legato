@@ -138,6 +138,13 @@ describe('Sheet', () => {
     )
     const mini = container.querySelector('[data-mini]')!
     const handle = container.querySelector<HTMLButtonElement>('section > div > button')!
+    // Each event 16ms after the last, as a 60Hz pointer sends them: the
+    // sheet reads the release's speed from their timeStamps. jsdom stamps an
+    // event with Date.now() when it's made, so without these the speed was
+    // however long the renders between them took, and 0 when both moves
+    // fell in the same millisecond, which put the sheet back at peek (#512).
+    // Not 0 itself: React reads a timeStamp of 0 as none and uses Date.now().
+    let now = 1000
     const drag = (from: Element) => {
       for (const [type, y] of [
         ['pointerdown', 800],
@@ -147,6 +154,7 @@ describe('Sheet', () => {
       ] as const) {
         const event = new MouseEvent(type, { bubbles: true, clientX: 195, clientY: y, button: 0 })
         Object.defineProperty(event, 'pointerId', { value: 1 })
+        Object.defineProperty(event, 'timeStamp', { value: (now += 16) })
         act(() => from.dispatchEvent(event))
       }
     }

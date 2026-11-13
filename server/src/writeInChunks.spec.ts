@@ -79,7 +79,24 @@ describe("writeInChunks", () => {
   // Issue #281: the case that failed on a 30,000-album library. A worker
   // writing pieces back to back starved a write on this thread until its
   // busy timeout ran out.
+  //
+  // Issue #379: counted in pieces, not milliseconds, which a busy CI runner
+  // stretched past the old 250 ms bound. Each row is a piece of its own
+  // (a budget of 1 ms), so the rows a write waited through are the pieces
+  // it waited through. Pieces that short leave the lock free for most of
+  // each piece-and-pause, so a write gets in at the first pause or the one
+  // after, while SQLite still retries every few milliseconds. In 50 ms
+  // pieces, a write that missed the first pause on a loaded runner fell
+  // back on retries 100 ms apart, which a piece-and-pause of about as long
+  // kept landing inside pieces for half a second. Without the pauses, or in
+  // one piece, the writes wait between them for nearly every piece, even
+  // when one slips in between two.
   it("lets a write from another connection in while recompute's worker writes piece after piece", async () => {
+    const PIECES = 30;
+    const ROW_MS = 10;
+    // A slow machine makes this thread wait longer, not fail: the count
+    // below says whether it waited too long.
+    db.exec("PRAGMA busy_timeout = 60000");
     const writer = new Worker(
       URL.createObjectURL(
         new Blob([
@@ -89,45 +106,47 @@ describe("writeInChunks", () => {
              const db = openConnection(event.data, 60000);
              pauseBetweenChunks();
              const insert = db.prepare("INSERT INTO t (x) VALUES (?)");
-             const rows = Array.from({ length: 40 }, (_, i) => i);
+             const rows = Array.from({ length: ${PIECES} }, (_, i) => i);
              let first = true;
              writeInChunks(db, rows, (x) => {
                if (first) { postMessage("writing"); first = false; }
                insert.run(x);
-               Bun.sleepSync(10);
-             });
+               Bun.sleepSync(${ROW_MS});
+             }, 1);
              db.close();
              postMessage("done");
            };`,
         ]),
       ),
     );
-    const messages: string[] = [];
     let resolveWriting!: () => void;
     let resolveDone!: () => void;
     const writing = new Promise<void>((resolve) => (resolveWriting = resolve));
     const done = new Promise<void>((resolve) => (resolveDone = resolve));
     writer.onmessage = (event: MessageEvent<string>) => {
-      messages.push(event.data);
       if (event.data === "writing") resolveWriting();
       if (event.data === "done") resolveDone();
     };
     writer.postMessage(path.join(dir, "test.db"));
     await writing;
 
-    // Five writes while the worker spends 400 ms writing 50 ms pieces.
-    const waits: number[] = [];
-    for (let i = 0; i < 5; i++) {
-      const started = performance.now();
-      insert(-1);
-      waits.push(performance.now() - started);
+    // Five writes while the worker writes its pieces, each noting how many
+    // of them were in when it started to wait.
+    const committed = () => (db.prepare("SELECT COUNT(*) AS n FROM t WHERE x >= 0").get() as { n: number }).n;
+    const writes: { x: number; before: number }[] = [];
+    for (let x = -1; x >= -5; x--) {
+      writes.push({ x, before: committed() });
+      insert(x);
       await Bun.sleep(20);
     }
     await done;
     writer.terminate();
+    expect(count()).toBe(PIECES + 5);
 
-    expect(count()).toBe(45);
-    expect(Math.max(...waits)).toBeLessThan(250);
+    // The rows in the order they got the lock, how many of the worker's
+    // pieces each write waited through, and how many all five did.
+    const order = (db.prepare("SELECT x FROM t ORDER BY rowid").all() as { x: number }[]).map((row) => row.x);
+    const waitedThrough = writes.map(({ x, before }) => order.slice(0, order.indexOf(x)).filter((y) => y >= 0).length - before);
+    expect(waitedThrough.reduce((sum, n) => sum + n)).toBeLessThan(PIECES / 2);
   });
 });
-

@@ -55,8 +55,14 @@ const media: { name: string; brand: string; bytes: Buffer }[] = [];
 const realSpawn = childProcess.spawn;
 const spawned = spyOn(childProcess, "spawn");
 
+// What beforeAll has started so far, stopped by afterAll in reverse. Issue
+// #509: when a fixture fails part-way, afterAll stops only what's there,
+// so the run reports the fixture's failure and not a second one from here.
+const started: (() => unknown)[] = [];
+
 beforeAll(async () => {
   await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
+  started.push(() => new Promise<void>((resolve) => listener.close(() => resolve())));
   writeFileSync(secret, "not for ffmpeg");
   playlist = Buffer.from(
     [
@@ -88,6 +94,7 @@ beforeAll(async () => {
   const db = openDb(":memory:");
   releaseId = (db.prepare("INSERT INTO nodes (type, title) VALUES ('release', 'Rumours') RETURNING id").get() as { id: number }).id;
   coverApp = Fastify();
+  started.push(() => coverApp.close());
   coverApp.addContentTypeParser(/^image\/.*/, { parseAs: "buffer" }, (_request, body, done) => done(null, body));
   await coverApp.register(coverRoutes(db), { prefix: "/api/v1" });
 
@@ -96,14 +103,13 @@ beforeAll(async () => {
   pictures = new Pictures(accountDb, { dir: path.join(dataDir, "avatars") });
   installPictures(accountDb, pictures);
   pictureApp = (await buildTestApp(accountDb)).app;
+  started.push(() => pictureApp.close());
   owner = (await createOwnerForTest(pictureApp)).token;
 });
 
 afterAll(async () => {
   spawned.mockRestore();
-  await coverApp.close();
-  await pictureApp.close();
-  await new Promise<void>((resolve) => listener.close(() => resolve()));
+  while (started.length) await started.pop()!();
   rmSync(dataDir, { recursive: true, force: true });
 });
 

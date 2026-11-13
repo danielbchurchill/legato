@@ -1,0 +1,4 @@
+[test]
+# Gives every spec file a throwaway data dir before it imports anything
+# (issue #506). See src/test-preload.ts.
+preload = ["./src/test-preload.ts"]
