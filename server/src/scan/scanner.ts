@@ -667,8 +667,9 @@ async function runLayoutStage(
 
   // B-1: everything derived from what scan found, recomputed
   // unconditionally for every file currently in the library — not just
-  // the ones this run changed. Idempotent (see seed.ts's seed_version
-  // guard, deriveLocalEdges' delete-then-reinsert) on a no-op re-scan, and
+  // the ones this run changed, except local edges, which since #323 are
+  // derived for the album folders this run (or anything else) changed.
+  // Idempotent (see seed.ts's seed_version guard) on a no-op re-scan, and
   // still needed after an incremental scan: newly-added files still have
   // to get positions, entity aggregation, and similarity edges to show up
   // in the graph at all. Issue #281: off the request loop, so the server

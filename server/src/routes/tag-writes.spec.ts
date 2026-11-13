@@ -243,6 +243,24 @@ describe("editing a track", () => {
     expect((await review(track.recordingId, { title: "  " })).status).toBe(400);
     expect((await review(track.recordingId, {})).status).toBe(400);
   });
+
+  // Issue #323: the write is derived as it's read back (tagwrite/refresh.ts),
+  // and the recompute after it derives the files beside it, whose album the
+  // write can move too.
+  it("moves the files beside it when its new number splits their folder into two artists' albums", async () => {
+    const tracks = await addTracks(4, (n) => ({ title: `Song ${n}`, artist: n <= 2 ? "Pearl" : "Quartz", album: "Greatest Hits", trackNo: n }));
+    recompute(db);
+    const albumOf = (track: Track) => linked(track.recordingId, "appears_on")[0]!.id;
+    expect(new Set(tracks.map(albumOf)).size).toBe(1);
+
+    await edit(tracks[2]!.recordingId, { trackNo: 1 });
+    recompute(db);
+
+    const [pearl1, pearl2, quartz3, quartz4] = tracks.map(albumOf);
+    expect(pearl1).toBe(pearl2!);
+    expect(quartz3).toBe(quartz4!);
+    expect(pearl1).not.toBe(quartz3!);
+  });
 });
 
 describe("editing an album", () => {
