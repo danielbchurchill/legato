@@ -47,12 +47,11 @@ export function similarityRoutes(db: Database) {
     // at 30,000. Not awaited, so listening doesn't wait for it. app.inject
     // (the specs) never listens, so it never runs there.
     app.addHook("onListen", () => {
-      const started = performance.now();
       preloadSimilarityVectors(db).then(
-        (index) => {
+        ({ index, readMs, warmUpMs }) => {
           if (index.ids.length === 0) return;
           app.log.info(
-            `similarity: ${index.ids.length} vectors in memory (${(indexBytes(index) / 1e6).toFixed(1)} MB), read in ${Math.round(performance.now() - started)} ms`,
+            `similarity: ${index.ids.length} vectors in memory (${(indexBytes(index) / 1e6).toFixed(1)} MB), read in ${Math.round(readMs)} ms, then ranked once in ${Math.round(warmUpMs)} ms to warm up`,
           );
         },
         (err) =>

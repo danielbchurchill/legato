@@ -227,9 +227,27 @@ export function refreshSimilarityVectors(db: Database): void {
 /** Issue #494: reads the vectors now, in the background, so the first
  *  ranking after a start doesn't wait for them (routes/similarity.ts calls
  *  this once the server listens). From then on, a recompute that changes
- *  them has them read again (refreshSimilarityVectors). */
-export function preloadSimilarityVectors(db: Database): Promise<VectorIndex> {
-  return vectorsFor(db);
+ *  them has them read again (refreshSimilarityVectors). Then it ranks once,
+ *  so the first request doesn't wait for the scoring to be compiled. */
+export async function preloadSimilarityVectors(db: Database): Promise<{ index: VectorIndex; readMs: number; warmUpMs: number }> {
+  const started = performance.now();
+  const index = await vectorsFor(db);
+  const read = performance.now();
+  await warmUp(index);
+  return { index, readMs: read - started, warmUpMs: performance.now() - read };
+}
+
+// Issue #494: JavaScriptCore compiles the scoring loops (vectorIndex.ts)
+// the first time they run hot, so the first ranking after a start runs
+// them slower than the rest while it does. One /dissimilar ranking runs
+// every loop a request does (scoreRows, best() and countNear's) over every
+// row, sliced as a request is. A track, because most rows are tracks. Once
+// per process: the compiled code outlives a read.
+async function warmUp(index: VectorIndex): Promise<void> {
+  if (index.ids.length === 0) return;
+  const recording = index.types.indexOf("recording");
+  const anchor = recording < 0 ? 0 : index.kinds.indexOf(recording);
+  await rankMostDissimilar({ index, anchor, leaveOut: [] }, 3);
 }
 
 async function rankAgainst(
