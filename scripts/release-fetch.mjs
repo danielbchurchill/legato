@@ -15,6 +15,10 @@
 //   * osxexperts.net failed the desktop build's first run (#129) before
 //     answering at all: undici's bare "fetch failed", a reset connection or
 //     a TLS or DNS hiccup. The same request went through moments later.
+//     It went on timing out: main's build on 9081383 (run 42659411416)
+//     and v0.4.0's release (run 42655142420) each gave up after four
+//     ETIMEDOUTs over two minutes. So its zips now come from a copy of our
+//     own first, with osxexperts.net after it (downloadFromFirst, #513).
 // No checksum, archive or API answer starts with "<", and no source labels
 // one text/html (checked against all four on 2026-11-08), so either means a
 // web page. A 429, a 5xx, a web page or a request that got no answer is
@@ -109,6 +113,35 @@ export async function download(url, destPath, { retryDelaysMs = RETRY_DELAYS_MS 
     await pipeline(Readable.fromWeb(res.body), createWriteStream(destPath));
     return startsWithTag((await firstBytes(destPath, 256)).toString("utf8")) ? WEB_PAGE : undefined;
   });
+}
+
+// A copy of our own is on GitHub, which rarely refuses, and the source's
+// own host comes after it, so the copy gets two quick retries rather than
+// two minutes of them before the host is tried.
+export const COPY_RETRY_DELAYS_MS = [5_000, 15_000];
+
+// Downloads from the first source that has the file (#513): our own copy of
+// it, then the host it came from. Each source is
+//   { name, url, dest, retryDelaysMs?, check }
+// and is downloaded to its own `dest` with download()'s retries. Then
+// check(dest) looks at the file and returns what the caller wants from it,
+// or throws when it isn't the file wanted. A download that fails, or a
+// check that throws, moves on to the next source; when none has it, the
+// error lists what each one did.
+export async function downloadFromFirst(sources) {
+  const failures = [];
+  for (const [i, source] of sources.entries()) {
+    try {
+      console.log(`  fetching ${source.url} (${source.name})`);
+      await download(source.url, source.dest, { retryDelaysMs: source.retryDelaysMs ?? RETRY_DELAYS_MS });
+      return await source.check(source.dest);
+    } catch (err) {
+      failures.push(`${source.name}: ${err.message}`);
+      const next = sources[i + 1];
+      if (next) console.log(`  [fallback] ${source.name} didn't have it (${err.message.split("\n")[0]}); trying ${next.name}`);
+    }
+  }
+  throw new Error(`no source had it.\n  ${failures.join("\n  ")}`);
 }
 
 export async function fetchText(url, { retryDelaysMs = RETRY_DELAYS_MS } = {}) {

@@ -23,10 +23,15 @@
 // ---------------------------------------------------------------------------
 // Sources:
 //
+// Both Mac ffmpeg builds come from our own copy of osxexperts.net's zip
+// first, then from osxexperts.net, which has timed out on a runner often
+// enough to fail builds and a release (#513). See MAC_FFMPEG_COPY below.
+//
 // ffmpeg / darwin-arm64 — osxexperts.net, same as fetch-media-binaries.mjs
 //   (see that file's header for why: no arm64 build from ffmpeg.org or
 //   evermeet.cx exists). sha256-checked against a pinned reference, soft
 //   warning only on mismatch — this source's URL is unversioned and drifts.
+//   Our copy is the pinned build, so it has to match.
 //
 // ffmpeg / darwin-x64-baseline — osxexperts.net's Intel build
 //   (ffmpeg80intel.zip, ffmpeg 8.0), sha256-checked against the hash the
@@ -67,7 +72,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 // Retries a refusal (a 429, a 5xx, or a web page in place of the file)
 // before failing; see that file for why.
-import { download, fetchText } from "./release-fetch.mjs";
+import { COPY_RETRY_DELAYS_MS, download, downloadFromFirst, fetchText } from "./release-fetch.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -82,6 +87,38 @@ const OSXEXPERTS_FFMPEG_ARM64_SHA256 = "591260c945d0eef150e3bf82b0ef988bd36a9cec
 // binary, matched against a real download on 2026-10-12.
 const OSXEXPERTS_FFMPEG_X64_URL = "https://www.osxexperts.net/ffmpeg80intel.zip";
 const OSXEXPERTS_FFMPEG_X64_SHA256 = "df3f1e3facdc1ae0ad0bd898cdfb072fbc9641bf47b11f172844525a05db8d11";
+
+// Our own copy of both zips above (#513), as assets of this repository's
+// media-binaries release: each zip exactly as osxexperts.net serves it,
+// named <zip>-<pinned sha256>.zip. The name carries the pin, so a changed
+// pin finds no copy (a 404, asked once) and falls back to osxexperts.net
+// until the new zip is uploaded. The release is a prerelease never marked
+// latest, so releases/latest (install.sh, the desktop updater, the site)
+// never names it, and the server's update check skips both prereleases and
+// tags that aren't versions.
+//
+// When a pin above changes, upload the zip it pins, with gh signed in to an
+// account that can write this repository's releases:
+//
+//   zip=ffmpeg9arm                       # or ffmpeg80intel
+//   sha=<the new pin>
+//   cd "$(mktemp -d)"
+//   curl -fsSLo "$zip.zip" "https://www.osxexperts.net/$zip.zip"
+//   unzip -q "$zip.zip" -d x && shasum -a 256 x/ffmpeg   # has to print $sha
+//   cp "$zip.zip" "$zip-$sha.zip"
+//   gh release upload media-binaries "$zip-$sha.zip" --repo danielbchurchill/legato
+//
+// Keep the old asset: rerunning an older tag's build still asks for it. If
+// the release itself is ever gone, it was made with
+//
+//   gh release create media-binaries --repo danielbchurchill/legato \
+//     --prerelease --latest=false --target main \
+//     --title "Media binaries for CI (not a Legato release)" --notes-file notes.md
+//
+// where notes.md says what each zip is and where it came from, that this
+// isn't a Legato release, and carries THIRD_PARTY_NOTICES.md's FFmpeg
+// licence note; then the upload above for each pin.
+const MAC_FFMPEG_COPY = "https://github.com/danielbchurchill/legato/releases/download/media-binaries";
 
 const RELEASE_TARGETS = ["linux-x64-baseline", "linux-arm64", "darwin-arm64", "darwin-x64-baseline", "windows-x64-baseline"];
 const WINDOWS_TARGETS = new Set(["windows-x64-baseline"]);
@@ -127,24 +164,36 @@ async function findFile(root, basename) {
   return null;
 }
 
+// Our copy first, then osxexperts.net (see MAC_FFMPEG_COPY). The copy is
+// the pinned build, so its ffmpeg has to match the pin even where
+// osxexperts.net's only gets a warning.
 async function fetchFfmpegOsxExperts(workDir, { url, sha256, strict }) {
-  console.log("  source: osxexperts.net (community, sha256-checked)");
-  console.log(`  fetching ${url}`);
-  const zipPath = path.join(workDir, "ffmpeg-osxexperts.zip");
-  await download(url, zipPath);
-  const extractDir = path.join(workDir, "extracted");
-  await extractArchive(zipPath, extractDir);
-  const bin = await findFile(extractDir, "ffmpeg");
-  if (!bin) throw new Error("osxexperts.net zip did not contain an 'ffmpeg' binary");
-  const actual = await hashFile("sha256", bin);
-  if (actual === sha256) {
-    console.log("  [ok] sha256 matches the reference");
-  } else if (strict) {
-    throw new Error(`${url}: the extracted ffmpeg's sha256 is ${actual}, not the published ${sha256}`);
-  } else {
-    console.warn(`  [warn] sha256 mismatch against the pinned reference — osxexperts.net's unversioned URL likely shipped a newer build.`);
-  }
-  return bin;
+  console.log("  source: our copy of osxexperts.net's zip, then osxexperts.net (community, sha256-checked)");
+  const ffmpegIn = (name, mustMatch) => async (zipPath) => {
+    const extractDir = path.join(workDir, `${name}-extracted`);
+    await extractArchive(zipPath, extractDir);
+    const bin = await findFile(extractDir, "ffmpeg");
+    if (!bin) throw new Error("the zip has no 'ffmpeg' binary");
+    const actual = await hashFile("sha256", bin);
+    if (actual === sha256) {
+      console.log("  [ok] sha256 matches the reference");
+    } else if (mustMatch) {
+      throw new Error(`the extracted ffmpeg's sha256 is ${actual}, not the pinned ${sha256}`);
+    } else {
+      console.warn(`  [warn] sha256 mismatch against the pinned reference — osxexperts.net's unversioned URL likely shipped a newer build.`);
+    }
+    return bin;
+  };
+  return downloadFromFirst([
+    {
+      name: "our copy",
+      url: `${MAC_FFMPEG_COPY}/${path.posix.basename(url, ".zip")}-${sha256}.zip`,
+      dest: path.join(workDir, "copy.zip"),
+      retryDelaysMs: COPY_RETRY_DELAYS_MS,
+      check: ffmpegIn("copy", true),
+    },
+    { name: "osxexperts.net", url, dest: path.join(workDir, "osxexperts.zip"), check: ffmpegIn("osxexperts", strict) },
+  ]);
 }
 
 async function fetchFfmpegGyan(workDir) {
