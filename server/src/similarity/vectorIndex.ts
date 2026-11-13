@@ -168,8 +168,10 @@ export function indexOf(rows: { nodeId: number; type: string; vector: SparseVect
 // sent to a freshly started server waited 1.5 s behind one.
 const PAGE_ROWS = 1000;
 
-/** Reads every stored vector, a page at a time. */
-export async function loadVectorIndex(db: Database): Promise<VectorIndex> {
+/** Reads every stored vector, a page at a time, giving way every `sliceMs`.
+ *  On the request loop that's READ_SLICE_MS; vectorReadWorker.ts, with no
+ *  loop of its own to keep, gives Infinity. */
+export async function loadVectorIndex(db: Database, sliceMs = READ_SLICE_MS): Promise<VectorIndex> {
   // CROSS JOIN keeps the vectors as the outer loop. With a plain JOIN,
   // SQLite carries `node_id > ?` over to nodes.id, walks nodes from there
   // and sorts what it finds for the ORDER BY: every page read the rest of
@@ -179,7 +181,7 @@ export async function loadVectorIndex(db: Database): Promise<VectorIndex> {
      WHERE f.node_id > ? ORDER BY f.node_id LIMIT ?`,
   );
   const builder = new Builder();
-  const pacer = new Pacer(READ_SLICE_MS);
+  const pacer = new Pacer(sliceMs);
   for (let after = 0; ; ) {
     const rows = page.values(after, PAGE_ROWS) as StoredRow[];
     builder.addPage(rows);

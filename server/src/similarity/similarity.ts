@@ -8,7 +8,8 @@ import {
   type RecordingFeatureInput,
 } from "./features.js";
 import { rankMostDissimilar, rankMostSimilar, type RankedResult } from "./rank.js";
-import { loadVectorIndex, rowOf, type VectorIndex } from "./vectorIndex.js";
+import { rowOf, type VectorIndex } from "./vectorIndex.js";
+import { readVectorIndex } from "./vectorRead.js";
 import { centroid, encodeVector, sameBytes, type SparseVector } from "./vectors.js";
 
 /** What a recompute changed: vectors written and vectors removed. */
@@ -200,14 +201,18 @@ export function similarityComputed(db: Database): boolean {
 // time it's asked for after a recompute has changed them. A request that
 // arrives meanwhile waits for the same read. Issue #494: the server reads
 // them as soon as it listens (preloadSimilarityVectors below), so a request
-// only waits for a read already under way.
+// only waits for a read already under way. The read runs on a Worker
+// (vectorRead.ts), and one at a time: a read for a newer version starts
+// once the one under way has finished.
 const indexes = new WeakMap<Database, { version: number; index: Promise<VectorIndex> }>();
+const lastRead = new WeakMap<Database, Promise<unknown>>();
 
 function vectorsFor(db: Database): Promise<VectorIndex> {
   const version = similarityVersion(db);
   const cached = indexes.get(db);
   if (cached?.version === version) return cached.index;
-  const index = loadVectorIndex(db);
+  const index = (lastRead.get(db) ?? Promise.resolve()).catch(() => {}).then(() => readVectorIndex(db));
+  lastRead.set(db, index);
   const entry = { version, index };
   indexes.set(db, entry);
   // A read that failed is tried again by the next request, not kept.
@@ -224,17 +229,31 @@ export function refreshSimilarityVectors(db: Database): void {
   if (indexes.has(db)) vectorsFor(db).catch(() => {});
 }
 
+export type Preload = { index: VectorIndex; readMs: number; warmUpMs: number };
+const preloads = new WeakMap<Database, Promise<Preload>>();
+
 /** Issue #494: reads the vectors now, in the background, so the first
  *  ranking after a start doesn't wait for them (routes/similarity.ts calls
  *  this once the server listens). From then on, a recompute that changes
  *  them has them read again (refreshSimilarityVectors). Then it ranks once,
- *  so the first request doesn't wait for the scoring to be compiled. */
-export async function preloadSimilarityVectors(db: Database): Promise<{ index: VectorIndex; readMs: number; warmUpMs: number }> {
-  const started = performance.now();
-  const index = await vectorsFor(db);
-  const read = performance.now();
-  await warmUp(index);
-  return { index, readMs: read - started, warmUpMs: performance.now() - read };
+ *  on the request loop, so the first request doesn't wait for the scoring
+ *  to be compiled. Once per connection: a second call gets the first's. */
+export function preloadSimilarityVectors(db: Database): Promise<Preload> {
+  const existing = preloads.get(db);
+  if (existing) return existing;
+  const preload = (async () => {
+    const started = performance.now();
+    const index = await vectorsFor(db);
+    const read = performance.now();
+    await warmUp(index);
+    return { index, readMs: read - started, warmUpMs: performance.now() - read };
+  })();
+  preloads.set(db, preload);
+  // One that failed can be tried again.
+  preload.catch(() => {
+    if (preloads.get(db) === preload) preloads.delete(db);
+  });
+  return preload;
 }
 
 // Issue #494: JavaScriptCore compiles the scoring loops (vectorIndex.ts)
